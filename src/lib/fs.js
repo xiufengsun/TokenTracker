@@ -6,11 +6,20 @@ async function ensureDir(p) {
   await fs.mkdir(p, { recursive: true });
 }
 
-async function writeFileAtomic(filePath, content) {
+async function writeFileAtomic(filePath, content, { mode } = {}) {
   const dir = path.dirname(filePath);
   await ensureDir(dir);
-  const tmp = `${filePath}.tmp.${Date.now()}`;
-  await fs.writeFile(tmp, content, { encoding: "utf8" });
+  // Include a UUID so two writes in the same millisecond do not share a tmp
+  // path (Date.now() alone collides under concurrent writers).
+  const tmp = `${filePath}.tmp.${Date.now()}.${crypto.randomUUID()}`;
+  // mode only applies to newly created files; passing it keeps the tmp file
+  // private from creation instead of relying on a later chmod that a crash
+  // between write and chmod would skip.
+  await fs.writeFile(
+    tmp,
+    content,
+    mode == null ? { encoding: "utf8" } : { encoding: "utf8", mode },
+  );
   await fs.rename(tmp, filePath);
 }
 

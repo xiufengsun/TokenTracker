@@ -2739,6 +2739,63 @@ function createLocalApiHandler({ queuePath }) {
       return true;
     }
 
+    // --- subscription manager (manual billing plans, issue #460) ---
+    // User-entered renewal/expiry dates. Local-only store that lives next to
+    // queue.jsonl; distinct from usage-limits window resets and the
+    // auto-detected subscriptions in subscriptions.js.
+    if (p === "/functions/tokentracker-subscription-manager") {
+      const method = String(req.method || "GET").toUpperCase();
+      const manager = require("./subscription-manager");
+      const trackerDir = path.dirname(qp);
+      try {
+        if (method === "GET") {
+          json(res, { subscriptions: await manager.listSubscriptions({ trackerDir }) });
+          return true;
+        }
+        if (method === "POST") {
+          if (!isAuthorizedLocalMutation(req)) {
+            json(res, { ok: false, error: "Unauthorized" }, 401);
+            return true;
+          }
+          const body = await readJsonBody(req);
+          if (body?.action === "create") {
+            json(res, {
+              ok: true,
+              subscription: await manager.createSubscription({
+                trackerDir,
+                fields: body.subscription || body,
+              }),
+            });
+            return true;
+          }
+          if (body?.action === "update") {
+            json(res, {
+              ok: true,
+              subscription: await manager.updateSubscription({
+                trackerDir,
+                id: body.id,
+                fields: body.subscription || body,
+              }),
+            });
+            return true;
+          }
+          if (body?.action === "delete") {
+            json(res, {
+              ok: true,
+              ...(await manager.deleteSubscription({ trackerDir, id: body.id })),
+            });
+            return true;
+          }
+          json(res, { ok: false, error: "Unknown subscription-manager action" }, 400);
+          return true;
+        }
+        json(res, { ok: false, error: "Method Not Allowed" }, 405);
+      } catch (error) {
+        json(res, { ok: false, error: error?.message || "Subscription operation failed" }, 400);
+      }
+      return true;
+    }
+
     // --- skills manager ---
     if (p === "/functions/tokentracker-skills") {
       const method = String(req.method || "GET").toUpperCase();

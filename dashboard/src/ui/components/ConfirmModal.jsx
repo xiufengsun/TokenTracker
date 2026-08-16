@@ -12,6 +12,7 @@ export function ConfirmModal({
   open,
   title,
   description,
+  error = null,
   confirmLabel,
   cancelLabel,
   destructive = false,
@@ -37,6 +38,11 @@ export function ConfirmModal({
               <Dialog.Description className="mt-2 text-sm leading-6 text-oai-gray-600 dark:text-oai-gray-300">
                 {description}
               </Dialog.Description>
+            ) : null}
+            {error ? (
+              <p className="mt-2 text-sm leading-6 text-red-600 dark:text-red-400" role="alert">
+                {error}
+              </p>
             ) : null}
             <div className="mt-5 flex justify-end gap-2">
               <Button

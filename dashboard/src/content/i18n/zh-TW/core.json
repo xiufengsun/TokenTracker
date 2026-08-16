@@ -221,6 +221,7 @@
   "limits.settings.display_mode_used": "已用",
   "limits.settings.display_mode_remaining": "剩餘",
   "limits.page.openSettings": "顯示設定",
+  "limits.page.openSubscriptions": "訂閱管理",
   "nav.group.general": "常規",
   "nav.group.tools": "工具",
   "nav.group.account": "賬戶",

@@ -304,6 +304,7 @@
   "limits.settings.display_mode_used": "已用",
   "limits.settings.display_mode_remaining": "剩余",
   "limits.page.openSettings": "显示设置",
+  "limits.page.openSubscriptions": "订阅管理",
   "nav.group.general": "常规",
   "nav.group.tools": "工具",
   "nav.group.account": "账户",

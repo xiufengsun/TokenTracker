@@ -1472,3 +1472,36 @@ landing.v3.how.scene.files_changed,landing,LandingPage,HowItWorksSection,scene_f
 landing.v3.how.scene.session_title,landing,LandingPage,HowItWorksSection,scene_session_title,"session log · last turn",,active
 landing.v3.how.scene.appended,landing,LandingPage,HowItWorksSection,scene_appended,"appended locally",,active
 landing.v3.how.scene.total_tokens,landing,LandingPage,HowItWorksSection,scene_total_tokens,"total tokens",,active
+subscriptions.add,ui,LimitsPage,SubscriptionSettingsCard,add,"Add subscription",,active
+subscriptions.edit,ui,LimitsPage,SubscriptionSettingsCard,edit,"Edit",,active
+subscriptions.delete,ui,LimitsPage,SubscriptionSettingsCard,delete,"Delete",,active
+subscriptions.save,ui,LimitsPage,SubscriptionSettingsCard,save,"Save",,active
+subscriptions.confirm_delete_title,ui,LimitsPage,SubscriptionSettingsCard,confirm_delete_title,"Delete this subscription?",,active
+subscriptions.delete_error,ui,LimitsPage,SubscriptionSettingsCard,delete_error,"Failed to delete. Please try again.",,active
+subscriptions.form.service,ui,LimitsPage,SubscriptionSettingsCard,form_service,"Service",,active
+subscriptions.form.service_placeholder,ui,LimitsPage,SubscriptionSettingsCard,form_service_placeholder,"e.g. GPT, Claude",,active
+subscriptions.form.plan,ui,LimitsPage,SubscriptionSettingsCard,form_plan,"Plan",,active
+subscriptions.form.plan_placeholder,ui,LimitsPage,SubscriptionSettingsCard,form_plan_placeholder,"e.g. Plus, Pro",,active
+subscriptions.form.auto_renew,ui,LimitsPage,SubscriptionSettingsCard,form_auto_renew,"Auto-renew",,active
+subscriptions.form.auto_renew_hint,ui,LimitsPage,SubscriptionSettingsCard,form_auto_renew_hint,"When off, the date is treated as the final expiry.",,active
+subscriptions.form.next_billing,ui,LimitsPage,SubscriptionSettingsCard,form_next_billing,"Next renewal / expiry",,active
+subscriptions.form.cycle,ui,LimitsPage,SubscriptionSettingsCard,form_cycle,"Billing cycle",,active
+subscriptions.form.cycle_weekly,ui,LimitsPage,SubscriptionSettingsCard,form_cycle_weekly,"Weekly",,active
+subscriptions.form.cycle_monthly,ui,LimitsPage,SubscriptionSettingsCard,form_cycle_monthly,"Monthly",,active
+subscriptions.form.cycle_yearly,ui,LimitsPage,SubscriptionSettingsCard,form_cycle_yearly,"Yearly",,active
+subscriptions.form.error,ui,LimitsPage,SubscriptionSettingsCard,form_error,"Something went wrong. Please try again.",,active
+subscriptions.status.auto_renew,ui,LimitsPage,SubscriptionSettingsCard,status_auto_renew,"Auto-renew on",,active
+subscriptions.status.manual,ui,LimitsPage,SubscriptionSettingsCard,status_manual,"Auto-renew off",,active
+subscriptions.label.renews_at,ui,LimitsPage,SubscriptionSettingsCard,label_renews_at,"Next renewal",,active
+subscriptions.label.expires_at,ui,LimitsPage,SubscriptionSettingsCard,label_expires_at,"Expires",,active
+subscriptions.countdown,ui,LimitsPage,SubscriptionSettingsCard,countdown,"in {{days}}d {{hours}}h {{minutes}}m",,active
+subscriptions.expired,ui,LimitsPage,SubscriptionSettingsCard,expired,"Expired",,active
+subscriptions.empty.title,ui,LimitsPage,SubscriptionSettingsCard,empty_title,"No subscriptions yet",,active
+subscriptions.empty.body,ui,LimitsPage,SubscriptionSettingsCard,empty_body,"Add a plan to keep an eye on its next renewal or expiry date.",,active
+subscriptions.load_error,ui,LimitsPage,LimitsPage,load_error,"Failed to load subscriptions.",,active
+subscriptions.inline.label,ui,LimitsPage,UsageLimitsPanel,inline_label,"Subscription",,active
+subscriptions.badge.auto_renew,ui,LimitsPage,UsageLimitsPanel,badge_auto_renew,"Auto-renew",,active
+subscriptions.badge.stops,ui,LimitsPage,UsageLimitsPanel,badge_stops,"Stops at expiry",,active
+subscriptions.form.provider,ui,LimitsPage,SubscriptionSettingsCard,form_provider,"Linked tool",,active
+subscriptions.form.provider_none,ui,LimitsPage,SubscriptionSettingsCard,form_provider_none,"Not linked",,active
+limits.page.openSubscriptions,ui,LimitsPage,LimitsPage,open_subscriptions,"Subscriptions",,active

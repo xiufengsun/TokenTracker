@@ -1189,6 +1189,10 @@ function localDataApiPlugin() {
         const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
         const isRepoPetApi = url.pathname === "/api/local-auth"
           || url.pathname === "/functions/tokentracker-pets"
+          // The subscription store schema/shape evolves with this checkout
+          // (cycle field, corrupt-store backups); a stale packaged app on
+          // :7680 would 404 the Limits-page subscription UI in dev mode.
+          || url.pathname === "/functions/tokentracker-subscription-manager"
           || url.pathname === "/api/pets/import"
           || url.pathname.startsWith("/api/pets/local/")
           || url.pathname.startsWith("/api/pets/codex/");
