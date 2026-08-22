@@ -1245,14 +1245,12 @@ limits.label.qoder_cn_ultimate,ui,LimitsPage,UsageLimitsPanel,qoder_cn_ultimate,
 limits.qoder_calls.detail,ui,LimitsPage,UsageLimitsPanel,qoder_calls_detail,"{{used}} / {{limit}} calls used · {{remaining}} left",,active
 limits.hover.expires_at,ui,LimitsPage,UsageLimitsPanel,hover_expires_at,"Expires {{time}}",,active
 limits.opencodeGo.setupHint.title,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_title,"Connect OpenCode Go",,active
-limits.opencodeGo.setupHint.subtitle,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_subtitle,"Limits read from your signed-in opencode.ai session (no public API).",,active
-limits.opencodeGo.setupHint.step1,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_step1,"Sign in and open your Go workspace.",,active
+limits.opencodeGo.setupHint.subtitle,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_subtitle,"Reads your OpenCode Go usage from the official API (opencode.ai/zen/go/v1/usage).",,active
+limits.opencodeGo.setupHint.step1,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_step1,"Sign in at opencode.ai and subscribe to Go.",,active
 limits.opencodeGo.setupHint.cta,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_cta,"Open opencode.ai",,active
-limits.opencodeGo.setupHint.step2,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_step2,"Copy the auth cookie (and optionally workspace ID) from that page:",,active
-limits.opencodeGo.setupHint.step2_workspace,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_step2_workspace,"Workspace ID (optional): the wrk_… segment in the page URL.",,active
-limits.opencodeGo.setupHint.step2_cookie,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_step2_cookie,"auth cookie (required): DevTools ▸ Application ▸ Cookies ▸ opencode.ai ▸ auth.",,active
-limits.opencodeGo.setupHint.step3,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_step3,"Add to your shell profile, then restart the tracker:",,active
-limits.opencodeGo.setupHint.note_app,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_note_app,"macOS app: set with launchctl setenv, then reopen the app.",,active
+limits.opencodeGo.setupHint.step2,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_step2,"Create and copy an API key in the console.",,active
+limits.opencodeGo.setupHint.step3,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_step3,"Run this command, paste your API key (input stays invisible), then restart TokenTracker:",,active
+limits.opencodeGo.setupHint.note_app,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_note_app,"macOS app: use the launchctl setenv line, then reopen the app.",,active
 limits.opencodeGo.setupHint.copy,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_copy,"Copy",,active
 limits.opencodeGo.setupHint.copied,ui,LimitsPage,UsageLimitsPanel,opencode_go_hint_copied,"Copied",,active
 settings.menubar.updates.checking,ui,SettingsPage,NativeAppFooter,updates_checking,"Checking...","正在检测...",active

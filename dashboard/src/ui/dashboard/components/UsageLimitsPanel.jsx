@@ -619,16 +619,18 @@ function ExternalArrow() {
   );
 }
 
-// OpenCode Go has no public quota API (anomalyco/opencode#16017), so limits are
-// read from the user's signed-in opencode.ai session via two env vars. The
-// macOS/Windows apps have no settings field for these yet, so this inline guide
-// shows up wherever OpenCode Go is enabled but unconfigured (or the cookie has
-// gone stale): sign in, grab two values, paste them in.
+// OpenCode Go limits come from OpenCode's official authenticated usage API
+// (GET /zen/go/v1/usage, Bearer OPENCODE_GO_API_KEY) once the user subscribes.
+// The macOS/Windows apps have no settings field for it yet, so this inline
+// guide shows up wherever OpenCode Go is enabled but unconfigured (or errored):
+// sign in, create an API key in the console, paste it into a copyable command.
+// No credential ever passes through TokenTracker itself.
 function OpenCodeGoSetupHint() {
   const [copied, setCopied] = useState(false);
   const snippet = [
-    'export OPENCODE_GO_AUTH_COOKIE="..."',
-    '# Optional: export OPENCODE_GO_WORKSPACE_ID="wrk_..." (Only if auto-discovery fails)',
+    "read -r -s OPENCODE_GO_API_KEY",
+    "export OPENCODE_GO_API_KEY",
+    'launchctl setenv OPENCODE_GO_API_KEY "$OPENCODE_GO_API_KEY"',
   ].join("\n");
 
   const onCopy = async (e) => {
@@ -663,10 +665,6 @@ function OpenCodeGoSetupHint() {
         </HintStep>
         <HintStep n="2">
           <div>{copy("limits.opencodeGo.setupHint.step2")}</div>
-          <ul className="mt-1 space-y-0.5 text-oai-gray-500 dark:text-oai-gray-400">
-            <li>{copy("limits.opencodeGo.setupHint.step2_workspace")}</li>
-            <li>{copy("limits.opencodeGo.setupHint.step2_cookie")}</li>
-          </ul>
         </HintStep>
         <HintStep n="3">
           <div className="flex items-center gap-2">

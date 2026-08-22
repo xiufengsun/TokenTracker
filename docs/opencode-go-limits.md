@@ -43,7 +43,7 @@ curl -sS https://opencode.ai/zen/go/v1/usage \
   -H "Authorization: Bearer $OPENCODE_GO_API_KEY"
 ```
 
-A successful response contains `rollingUsage`, `weeklyUsage`, and `monthlyUsage` objects. Each includes `usagePercent` and `resetInSec`; the service may also include `status` and top-level `useBalance`. `src/lib/opencode-go-limits.js` converts those fields into the provider-panel contract:
+A successful response contains the three usage windows in either of two shapes: the early spec `rollingUsage`/`weeklyUsage`/`monthlyUsage` with `usagePercent` + `resetInSec`, or the live nested shape `{ usage: { rolling: { percent, resetsAt }, ... } }`. Both shapes are parsed as of the nested-shape parser fix (PR pending merge at the time of writing); the service may also include `status` and top-level `useBalance`. `src/lib/opencode-go-limits.js` converts those fields into the provider-panel contract:
 
 ```json
 {

@@ -36,6 +36,7 @@ beforeEach(() => {
 
 afterEach(() => {
   getContextSpy?.mockRestore();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -194,6 +195,35 @@ describe("UsageLimitsPanel", () => {
     rerender(<UsageLimitsPanel opencodeGo={{ configured: false }} order={["opencodeGo"]} />);
     expect(screen.getByText("OpenCode Go")).toBeInTheDocument();
     expect(screen.getByText("Not connected")).toBeInTheDocument();
+
+    // Setup hint teaches the official API key flow (follow-up to the closed
+    // PR about OpenCode Go direct fill).
+    expect(screen.getByText("Connect OpenCode Go")).toBeInTheDocument();
+    expect(screen.getByText(/Sign in at opencode.ai and subscribe to Go\./)).toBeInTheDocument();
+    expect(screen.getByText(/Create and copy an API key in the console\./)).toBeInTheDocument();
+    expect(screen.getByText(/Run this command, paste your API key \(input stays invisible\)/)).toBeInTheDocument();
+  });
+
+  it("copies an API-key setup snippet without sending the key anywhere", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+
+    render(<UsageLimitsPanel opencodeGo={{ configured: false }} order={["opencodeGo"]} />);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledTimes(1);
+    });
+    const snippet = writeText.mock.calls[0][0];
+    // The snippet reads the key interactively (`read -r -s`) so it never lands
+    // in shell history, then exports it for both the shell profile path and
+    // the macOS app (launchctl) path. It is a template only: no real key.
+    expect(snippet).toContain("read -r -s OPENCODE_GO_API_KEY");
+    expect(snippet).toContain("export OPENCODE_GO_API_KEY");
+    expect(snippet).toContain('launchctl setenv OPENCODE_GO_API_KEY "$OPENCODE_GO_API_KEY"');
+    expect(snippet).not.toMatch(/sk-/);
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
   });
 
   it("does not describe a pace marker when the provider cannot render one (issue 445)", () => {
