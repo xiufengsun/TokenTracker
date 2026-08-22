@@ -283,6 +283,52 @@ describe("fetchOpencodeGoLimits", () => {
     assert.equal(out.primary_window?.used_percent, 42);
   });
 
+  it("parses the live API shape {usage:{rolling:{percent,resetsAt}}}", async () => {
+    const out = await fetchOpencodeGoLimits({
+      env: apiCfg,
+      fetchImpl: async () =>
+        jsonResponse(200, {
+          useBalance: false,
+          usage: {
+            rolling: { percent: 42, resetsAt: "2026-08-21T18:00:00.000Z" },
+            weekly: { percent: 18, resetsAt: "2026-08-24T00:00:00.000Z" },
+            monthly: { percent: 7, resetsAt: "2026-09-01T00:00:00.000Z" },
+          },
+        }),
+      nowMs: Date.parse("2026-08-21T14:45:35.000Z"),
+    });
+
+    assert.equal(out.error, null);
+    assert.equal(out.source, "api");
+    assert.equal(out.primary_window?.used_percent, 42);
+    assert.equal(out.primary_window?.reset_at, "2026-08-21T18:00:00.000Z");
+    assert.equal(out.secondary_window?.used_percent, 18);
+    assert.equal(out.tertiary_window?.used_percent, 7);
+  });
+
+  it("falls back to a valid legacy window when the modern window is incomplete", async () => {
+    const out = await fetchOpencodeGoLimits({
+      env: apiCfg,
+      fetchImpl: async () =>
+        jsonResponse(200, {
+          useBalance: false,
+          // Modern rolling present but unusable on its own (percent without
+          // any reset info) -> buildWindow() returns null; the resolver must
+          // fall through to the legacy window instead of dropping it.
+          usage: { rolling: { percent: 99 } },
+          rollingUsage: { status: "ok", usagePercent: 42, resetInSec: 12345 },
+        }),
+      nowMs: 1_700_000_000_000,
+    });
+
+    assert.equal(out.error, null);
+    assert.equal(out.primary_window?.used_percent, 42, "legacy rolling must survive");
+    assert.equal(
+      out.primary_window?.reset_at,
+      new Date(1_700_000_000_000 + 12345_000).toISOString(),
+    );
+  });
+
   it("returns actionable authentication errors from the official API", async () => {
     const unauthorized = await fetchOpencodeGoLimits({
       env: apiCfg,

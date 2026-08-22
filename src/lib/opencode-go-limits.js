@@ -543,21 +543,39 @@ async function fetchOpencodeGoApiLimits({ apiKey, fetchImpl, nowMs, timeoutMs })
     };
   }
 
-  const rolling = buildWindow({
-    usagePercent: payload?.rollingUsage?.usagePercent,
-    resetInSec: payload?.rollingUsage?.resetInSec,
-    nowMs,
-  });
-  const weekly = buildWindow({
-    usagePercent: payload?.weeklyUsage?.usagePercent,
-    resetInSec: payload?.weeklyUsage?.resetInSec,
-    nowMs,
-  });
-  const monthly = buildWindow({
-    usagePercent: payload?.monthlyUsage?.usagePercent,
-    resetInSec: payload?.monthlyUsage?.resetInSec,
-    nowMs,
-  });
+  // Upstream has shipped two shapes:
+  // - Early spec (anomalyco/opencode#16513): { rollingUsage: { usagePercent, resetInSec } ... }
+  // - Live API (2026-08): { usage: { rolling: { percent, resetsAt }, weekly: {}, monthly: {} } }
+  const resolveApiWindow = (legacy, modern) => {
+    if (modern && typeof modern === "object") {
+      const pct = modern.percent ?? modern.usagePercent ?? modern.usage_percent;
+      const resetsAt = modern.resetsAt ?? modern.resets_at ?? modern.resetAt ?? modern.reset_at;
+      if (pct != null || resetsAt != null) {
+        const resetInSec = (() => {
+          if (typeof modern.resetInSec === "number" || typeof modern.resetInSec === "string") return Number(modern.resetInSec);
+          if (typeof modern.reset_in_sec === "number" || typeof modern.reset_in_sec === "string") return Number(modern.reset_in_sec);
+          if (typeof resetsAt === "string" && resetsAt) {
+            const ts = Date.parse(resetsAt);
+            if (Number.isFinite(ts)) return Math.max(0, Math.floor((ts - nowMs) / 1000));
+          }
+          return undefined;
+        })();
+        const modernWindow = buildWindow({ usagePercent: pct, resetInSec, nowMs });
+        // Only prefer the modern window when it actually parsed; an incomplete
+        // modern object (e.g. percent without reset info) must fall through to
+        // a valid legacy window instead of losing it.
+        if (modernWindow) return modernWindow;
+      }
+    }
+    if (legacy && typeof legacy === "object") {
+      return buildWindow({ usagePercent: legacy.usagePercent ?? legacy.percent, resetInSec: legacy.resetInSec ?? legacy.reset_in_sec, nowMs });
+    }
+    return null;
+  };
+
+  const rolling = resolveApiWindow(payload?.rollingUsage, payload?.usage?.rolling ?? payload?.rolling);
+  const weekly = resolveApiWindow(payload?.weeklyUsage, payload?.usage?.weekly ?? payload?.weekly);
+  const monthly = resolveApiWindow(payload?.monthlyUsage, payload?.usage?.monthly ?? payload?.monthly);
 
   if (!rolling && !weekly && !monthly) {
     return {
