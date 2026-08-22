@@ -130,6 +130,49 @@ final class DynamicIslandLayoutPolicyTests: XCTestCase {
         )
     }
 
+    func testFullscreenSettleDelaysAreShortBoundedAndIncreasing() {
+        let delays = DynamicIslandFullscreenRetryPolicy.settleDelays
+
+        // Bounded burst, not a heartbeat: 2-4 delays, each short.
+        XCTAssertGreaterThanOrEqual(delays.count, 2)
+        XCTAssertLessThanOrEqual(delays.count, 4)
+        for delay in delays {
+            XCTAssertGreaterThan(delay, 0)
+            XCTAssertLessThanOrEqual(delay, 1.5)
+        }
+        XCTAssertEqual(delays, delays.sorted(), "delays should back off, not tick at a fixed rate")
+    }
+
+    func testForceShowWhenRestoringDuringMidHide() {
+        // The user exits full-screen during a hide animation: the panel is
+        // still on screen mid-collapse, so the restore path must force-show
+        // through the `isPanelVisible && panel.isVisible` guard.
+        XCTAssertTrue(
+            DynamicIslandRestorePolicy.mustForceShowDuringDismissal(
+                shouldShowPanel: true,
+                isVisibilityDismissing: true
+            )
+        )
+        XCTAssertFalse(
+            DynamicIslandRestorePolicy.mustForceShowDuringDismissal(
+                shouldShowPanel: true,
+                isVisibilityDismissing: false
+            )
+        )
+        XCTAssertFalse(
+            DynamicIslandRestorePolicy.mustForceShowDuringDismissal(
+                shouldShowPanel: false,
+                isVisibilityDismissing: true
+            )
+        )
+        XCTAssertFalse(
+            DynamicIslandRestorePolicy.mustForceShowDuringDismissal(
+                shouldShowPanel: false,
+                isVisibilityDismissing: false
+            )
+        )
+    }
+
     func testHideCompletionIncludesCompositorSettleDelay() {
         XCTAssertEqual(
             DynamicIslandVisibilityPolicy.hideCompletionDelay,

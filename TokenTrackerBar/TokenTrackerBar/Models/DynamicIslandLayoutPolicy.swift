@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 
 /// Pure layout policy shared by the Dynamic Island controller and view.
 ///
@@ -125,6 +126,37 @@ enum DynamicIslandFullscreenPolicy {
         if windowCoversIslandScreen == true { return true }
         if screenCount > 1 { return false }
         return presentationLooksFullscreen
+    }
+}
+
+/// Coalesced settle schedule for re-reading the full-screen window list after
+/// an environment signal (space change, activation, presentation-options
+/// change). Extracted so the schedule is unit-testable and the controller
+/// never hardcodes it.
+enum DynamicIslandFullscreenRetryPolicy {
+    /// Delays for a bounded re-read burst fired after an environment signal.
+    /// A space-change notification can fire before the covering window is
+    /// dropped from the window list, so the first read (and often the second)
+    /// can still be stale; these delays give the window server time to
+    /// settle. Bounded, not a heartbeat: native full-screen enter/exit both
+    /// fire an observer, so a retry never has to survive an arbitrary gap
+    /// with no signal — it only has to outlast the window list's own catch-up
+    /// window after one has already fired.
+    static let settleDelays: [TimeInterval] = [0.15, 0.45, 1.0]
+}
+
+/// Restore-path decision during a mid-flight hide. When the island should
+/// show but a hide animation is still settling, the controller must force
+/// show() rather than letting the `isPanelVisible && panel.isVisible` guard
+/// skip it — the panel is still on screen mid-collapse and would otherwise
+/// stay hidden until the next environment change.
+enum DynamicIslandRestorePolicy {
+    /// Whether the restore path must force-show through a mid-flight hide.
+    static func mustForceShowDuringDismissal(
+        shouldShowPanel: Bool,
+        isVisibilityDismissing: Bool
+    ) -> Bool {
+        shouldShowPanel && isVisibilityDismissing
     }
 }
 
