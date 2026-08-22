@@ -197,6 +197,72 @@ describe("collectOpencodeGoLocal (real fixture DB)", { skip: !sqlite }, () => {
   });
 });
 
+// opencode2 (OpenCode v2 beta) rewrote the storage layer: the `message` table
+// became `session_message` (role is now a `type` column) and the provider
+// moved under `$.model.providerID`. The local cost estimate must keep working
+// against both generations sharing the same file.
+describe("collectOpencodeGoLocal (opencode2 session_message fixture)", { skip: !sqlite }, () => {
+  let tmpDir;
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-go-v2-test-"));
+    buildV2FixtureDb(tmpDir);
+  });
+  after(() => {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch (_e) {
+      /* best effort */
+    }
+  });
+
+  function makeSessionMessageRow(db, { id, providerID, type, cost, createdMs }) {
+    const data = JSON.stringify({
+      model: { id: "x-preview-f-free", providerID },
+      type,
+      cost,
+      time: { created: createdMs },
+    });
+    db.prepare(
+      "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, 0, ?, ?, ?)",
+    ).run(id, "sess_v2_1", type, createdMs, createdMs, data);
+  }
+
+  function buildV2FixtureDb(dir) {
+    const dbPath = path.join(dir, "opencode.db");
+    const db = new sqlite.DatabaseSync(dbPath);
+    db.exec(
+      "CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)",
+    );
+    const weekStart = weekStartMs(NOW_MS);
+    const monthStart = Date.UTC(2026, 5, 1);
+
+    const rows = [
+      // Mirrors the v1 fixture layout so window math stays comparable.
+      { id: "A", providerID: "opencode-go", type: "assistant", cost: 6.0, createdMs: NOW_MS - 1 * HOUR },
+      { id: "B", providerID: "opencode-go", type: "assistant", cost: 3.0, createdMs: NOW_MS - 6 * HOUR },
+      { id: "C", providerID: "opencode-go", type: "assistant", cost: 12.0, createdMs: monthStart + 1 * HOUR },
+      { id: "D", providerID: "opencode-go", type: "assistant", cost: 100.0, createdMs: monthStart - 1 * HOUR },
+      // Nested provider filter must exclude non-Go providers…
+      { id: "E", providerID: "opencode", type: "assistant", cost: 50.0, createdMs: NOW_MS - 1 * HOUR },
+      // …and the `type` column replaces the old role filter.
+      { id: "F", providerID: "opencode-go", type: "user", cost: 50.0, createdMs: NOW_MS - 1 * HOUR },
+    ];
+    for (const r of rows) makeSessionMessageRow(db, r);
+    db.close();
+    assert.ok(monthStart + 1 * HOUR < weekStart, "fixture: C must precede the week start");
+  }
+
+  it("sums opencode-go cost per window from the session_message table", async () => {
+    const out = await collectOpencodeGoLocal({ env: { OPENCODE_HOME: tmpDir }, nowMs: NOW_MS });
+    assert.ok(out, "expected a local result");
+    assert.equal(out.source, "local");
+    // Same expectations as the v1 fixture: A / A+B / A+B+C.
+    assert.equal(out.primary_window.used_percent, 50);
+    assert.equal(out.secondary_window.used_percent, 30);
+    assert.equal(out.tertiary_window.used_percent, 35);
+  });
+});
+
 describe("fetchOpencodeGoLimits source selection (real fixture DB)", { skip: !sqlite }, () => {
   let tmpDir;
   before(() => {

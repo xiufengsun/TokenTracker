@@ -414,7 +414,18 @@ function buildLocalWindow({ used, limit, resetMs }) {
 // so we sum in SQLite and return a single row rather than streaming every
 // opencode-go turn into JS — keeps the limits poll cheap, cf. the spawnSync
 // freeze lesson).
-function buildGoAggregateSql({ sessionStart, weekStart, weekEnd, monthStart, monthEnd }) {
+//
+// Two schema generations share the same file (see src/lib/rollout.js):
+//   v1 keeps the `message` table with `$.role`/flat `$.providerID`.
+//   v2 (`opencode2`) moved messages to `session_message` (role is now the
+//     `type` column) and nests the provider under `$.model.providerID`.
+function buildGoAggregateSql({ sessionStart, weekStart, weekEnd, monthStart, monthEnd }, variant = "v1") {
+  const isV2 = variant === "v2";
+  const table = isV2 ? "session_message" : "message";
+  const rolePredicate = isV2 ? "type = 'assistant'" : "json_extract(data,'$.role') = 'assistant'";
+  const providerPredicate = isV2
+    ? "json_extract(data,'$.model.providerID') = 'opencode-go'"
+    : "json_extract(data,'$.providerID') = 'opencode-go'";
   return (
     "SELECT " +
     `COALESCE(SUM(CASE WHEN createdMs >= ${sessionStart} THEN cost ELSE 0 END), 0) AS sessionCost, ` +
@@ -425,13 +436,38 @@ function buildGoAggregateSql({ sessionStart, weekStart, weekEnd, monthStart, mon
     "FROM (" +
     "SELECT CAST(COALESCE(json_extract(data,'$.time.created'), time_created) AS INTEGER) AS createdMs, " +
     "CAST(json_extract(data,'$.cost') AS REAL) AS cost " +
-    "FROM message " +
+    `FROM ${table} ` +
     "WHERE json_valid(data) " +
-    "AND json_extract(data,'$.providerID') = 'opencode-go' " +
-    "AND json_extract(data,'$.role') = 'assistant' " +
+    `AND ${providerPredicate} ` +
+    `AND ${rolePredicate} ` +
     "AND json_type(data,'$.cost') IN ('integer','real')" +
     ")"
   );
+}
+
+// Detect which message-table generation a database carries ("v1" / "v2" /
+// null when sqlite_master cannot be read, e.g. mocked readers in tests).
+// A database carrying BOTH tables resolves to "v1" on purpose: unlike the
+// message parser (which dedups rows by sessionID|messageID), this aggregate is
+// a blind SUM with no key to dedup on, so unioning two generations could
+// double-count cost if the tables overlap. Undercounting an opt-in estimate is
+// the safe side of that trade.
+async function detectOpencodeDbGeneration(dbPath, sqliteOptions = {}) {
+  let rows;
+  try {
+    rows = await readSqliteJsonRowsAsync(
+      dbPath,
+      `SELECT name FROM sqlite_master WHERE type='table' AND name IN ('message','session_message')`,
+      { label: "OpenCode Go", timeout: 5_000, ...sqliteOptions },
+    );
+  } catch (_e) {
+    return null;
+  }
+  if (!Array.isArray(rows)) return null;
+  const names = new Set(rows.map((r) => String(r?.name || "").trim()).filter(Boolean));
+  if (names.size === 0) return null;
+  if (!names.has("message") && names.has("session_message")) return "v2";
+  return "v1";
 }
 
 // Returns { source:'local', primary/secondary/tertiary_window } or null when no
@@ -445,32 +481,42 @@ async function collectOpencodeGoLocal({ home, env = process.env, nowMs = Date.no
   const weekStart = weekStartMs(nowMs);
   const weekEnd = weekStart + WEEK_MS;
   const { startMs: monthStart, endMs: monthEnd } = monthBoundsMs(nowMs);
-  const sql = buildGoAggregateSql({ sessionStart, weekStart, weekEnd, monthStart, monthEnd });
+  const windowArgs = { sessionStart, weekStart, weekEnd, monthStart, monthEnd };
 
   let agg = null;
   for (const dbPath of paths) {
-    let rows;
-    try {
-      rows = await readSqliteJsonRowsAsync(dbPath, sql, {
-        label: "OpenCode Go",
-        timeout: 5_000,
-        ...sqliteOptions,
-      });
-    } catch (_e) {
-      continue;
-    }
-    const row = rows && rows[0];
-    if (!row) continue;
-    const rowCount = Number(row.rowCount) || 0;
-    if (rowCount <= 0) continue;
-    if (!agg) agg = { sessionCost: 0, weeklyCost: 0, monthlyCost: 0, sessionOldest: null, rowCount: 0 };
-    agg.sessionCost += Number(row.sessionCost) || 0;
-    agg.weeklyCost += Number(row.weeklyCost) || 0;
-    agg.monthlyCost += Number(row.monthlyCost) || 0;
-    agg.rowCount += rowCount;
-    const oldest = row.sessionOldest == null ? null : Number(row.sessionOldest);
-    if (oldest != null && Number.isFinite(oldest)) {
-      agg.sessionOldest = agg.sessionOldest == null ? oldest : Math.min(agg.sessionOldest, oldest);
+    // Each database can be a different OpenCode generation. When sqlite_master
+    // is unreadable, fall back to v1-then-v2 so the legacy query runs first.
+    const generation = await detectOpencodeDbGeneration(dbPath, sqliteOptions);
+    const variants = generation === "v2" ? ["v2"] : generation === "v1" ? ["v1"] : ["v1", "v2"];
+
+    for (const variant of variants) {
+      const sql = buildGoAggregateSql(windowArgs, variant);
+      let rows;
+      try {
+        rows = await readSqliteJsonRowsAsync(dbPath, sql, {
+          label: "OpenCode Go",
+          timeout: 5_000,
+          throwOnReadFailure: true,
+          ...sqliteOptions,
+        });
+      } catch (_e) {
+        continue;
+      }
+      const row = rows && rows[0];
+      if (!row) continue;
+      const rowCount = Number(row.rowCount) || 0;
+      if (rowCount <= 0) continue;
+      if (!agg) agg = { sessionCost: 0, weeklyCost: 0, monthlyCost: 0, sessionOldest: null, rowCount: 0 };
+      agg.sessionCost += Number(row.sessionCost) || 0;
+      agg.weeklyCost += Number(row.weeklyCost) || 0;
+      agg.monthlyCost += Number(row.monthlyCost) || 0;
+      agg.rowCount += rowCount;
+      const oldest = row.sessionOldest == null ? null : Number(row.sessionOldest);
+      if (oldest != null && Number.isFinite(oldest)) {
+        agg.sessionOldest = agg.sessionOldest == null ? oldest : Math.min(agg.sessionOldest, oldest);
+      }
+      break; // this database answered — don't re-run the other schema on it
     }
   }
   if (!agg || agg.rowCount <= 0) return null;
