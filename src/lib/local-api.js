@@ -1936,6 +1936,9 @@ function createLocalApiHandler({ queuePath }) {
         const publishAccount =
           background && body.publishAccount === true && getCloudSyncPref();
         const allLocalSources = background && body.allLocalSources === true;
+        if (background && body.nativeOnlyWsl === true) {
+          extraEnv.TOKENTRACKER_WSL_MODE = "native-only";
+        }
         if (typeof body.deviceToken === "string" && body.deviceToken.trim()) {
           extraEnv.TOKENTRACKER_DEVICE_TOKEN = body.deviceToken.trim();
         }

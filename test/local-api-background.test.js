@@ -156,7 +156,7 @@ function installDeviceTokenFetch(fetchCalls) {
 }
 
 test("local-api forwards strict boolean auto background sync", async () => {
-  const call = await runLocalSync({ auto: true, background: true });
+  const call = await runLocalSync({ auto: true, background: true, nativeOnlyWsl: true });
   const args = call.args;
   assert.deepEqual(args.slice(-4), [
     path.join(process.cwd(), "bin/tracker.js"),
@@ -164,6 +164,7 @@ test("local-api forwards strict boolean auto background sync", async () => {
     "--auto",
     "--background",
   ]);
+  assert.equal(call.options.env.TOKENTRACKER_WSL_MODE, "native-only");
 });
 
 test("local-api treats lightweight true as background alias", async () => {
@@ -216,6 +217,33 @@ test("local-api background and lightweight require boolean true", async () => {
       "--auto",
       "--wait-for-lock",
     ]);
+  }
+});
+
+test("local-api only propagates native-only WSL for strict boolean background requests", async () => {
+  const previousWslMode = process.env.TOKENTRACKER_WSL_MODE;
+  delete process.env.TOKENTRACKER_WSL_MODE;
+
+  try {
+    const cases = [
+      {
+        body: { auto: true, background: true, nativeOnlyWsl: true },
+        expected: "native-only",
+      },
+      { body: { auto: true, background: true, nativeOnlyWsl: false }, expected: undefined },
+      { body: { auto: true, background: true, nativeOnlyWsl: "true" }, expected: undefined },
+      { body: { auto: true, background: false, nativeOnlyWsl: true }, expected: undefined },
+      { body: { auto: true, nativeOnlyWsl: true }, expected: undefined },
+      { body: { nativeOnlyWsl: true }, expected: undefined },
+    ];
+
+    for (const { body, expected } of cases) {
+      const call = await runLocalSync(body);
+      assert.equal(call.options.env.TOKENTRACKER_WSL_MODE, expected, JSON.stringify(body));
+    }
+  } finally {
+    if (previousWslMode === undefined) delete process.env.TOKENTRACKER_WSL_MODE;
+    else process.env.TOKENTRACKER_WSL_MODE = previousWslMode;
   }
 });
 

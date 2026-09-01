@@ -9,8 +9,9 @@ function read(relPath) {
   return fs.readFileSync(path.join(repoRoot, relPath), "utf8");
 }
 
-test("Windows background sync stays native-only while manual sync preserves WSL mode", () => {
+test("Windows background and manual sync keep separate execution paths", () => {
   const serverManager = read("TokenTrackerWin/ServerManager.cs");
+  const publisher = read("TokenTrackerWin/LocalSyncPublisher.cs");
   const trayContext = read("TokenTrackerWin/TrayApplicationContext.cs");
 
   assert.match(
@@ -30,32 +31,44 @@ test("Windows background sync stays native-only while manual sync preserves WSL 
   );
   assert.match(
     serverManager,
-    /public void TriggerBackgroundSync\(\)[\s\S]*StartSync\(auto: true\);/,
-    "Windows background sync should select the auto path",
+    /public void TriggerBackgroundSync\(\)[\s\S]*RunBackgroundSyncAsync\(cts\)/,
+    "Windows background sync should select the asynchronous local API path",
   );
   assert.match(
     serverManager,
-    /auto\s*\?\s*new\[\]\s*\{\s*"sync",\s*"--auto",\s*"--background"\s*\}\s*:\s*new\[\]\s*\{\s*"sync"\s*\}/,
-    "Windows background args should use sync --auto --background while manual sync remains plain sync",
+    /new LocalSyncPublisher\(\s*LocalSyncHttp,\s*BaseUrl\s*\)\.PublishAsync\(/,
+    "Windows background sync should authenticate before posting all background flags",
   );
+  assert.match(
+    publisher,
+    /\/api\/local-auth/,
+    "The extracted publisher should own the authenticated background request",
+  );
+  assert.match(publisher, /\/functions\/tokentracker-local-sync/);
+  assert.match(publisher, /nativeOnlyWsl/);
+  const backgroundMethod = serverManager.match(
+    /public void TriggerBackgroundSync\(\)[\s\S]*?\n    \}\r?\n\r?\n    private bool StartDirectSync/,
+  )?.[0];
+  assert.ok(backgroundMethod, "background sync method should remain discoverable");
   assert.doesNotMatch(
-    serverManager,
-    /new\[\]\s*\{\s*"sync",\s*"--auto"\s*\}/,
-    "Windows background sync must not retain the bare sync --auto pattern",
+    backgroundMethod,
+    /StartDirectSync\(\)/,
+    "Windows background sync must not launch a second direct tracker process",
   );
   assert.match(
     serverManager,
-    /StartTrackerProcess\(\s*runtime\.Value\.NodePath,\s*runtime\.Value\.EntryPath,\s*auto,\s*args\)/,
-    "Only the auto/background sync path should request native-only WSL isolation",
+    /public void TriggerSync\(\)[\s\S]*StartDirectSync\(\)/,
+    "Manual sync should keep the direct tracker process path",
+  );
+  assert.match(
+    serverManager,
+    /var args = new\[\] \{ "sync" \};[\s\S]*StartTrackerProcess\([\s\S]*\n\s*false,\s*args\)/,
+    "Manual sync should remain exhaustive plain sync and preserve the user's WSL mode",
   );
   assert.match(
     serverManager,
     /if \(forceNativeOnlyWslMode\)[\s\S]*psi\.Environment\["TOKENTRACKER_WSL_MODE"\]\s*=\s*"native-only";/,
-    "The Windows child launcher should override WSL mode for isolated background syncs",
+    "The child launcher should retain the explicit WSL environment hook for authorized paths",
   );
-  assert.match(
-    serverManager,
-    /StartTrackerProcess\(\s*nodePath,\s*entryPath,\s*false,\s*"serve"/,
-    "The long-lived server must not receive the background-only WSL override",
-  );
+  assert.match(serverManager, /StartTrackerProcess\(\s*nodePath,\s*entryPath,\s*false,\s*"serve"/);
 });
