@@ -9,14 +9,14 @@ import {
 } from "../lib/native-bridge";
 
 /**
- * Read/write menu-bar app preferences via the WKWebView NativeBridge.
+ * Read/write desktop app preferences via the WKWebView/WebView2 native bridge.
  *
  * Returns:
  *   { available, settings, setSetting, runAction, refresh }
  *
- * `available` is true only when running inside the native macOS app
- * AND the bridge handler is wired up. SettingsPage uses it to gate the
- * "Menu Bar App" section so it stays hidden in browser/cloud mode.
+ * `available` is true only when running inside a native desktop app and the
+ * bridge is wired up. SettingsPage uses it to gate the "App & Updates" section
+ * so it stays hidden in browser/cloud mode.
  */
 export function useNativeSettings() {
   const [settings, setSettings] = useState(null);

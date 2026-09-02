@@ -8,11 +8,13 @@ import { showToast } from "../../ui/components/Toast.jsx";
 import { STATUSPAGE_URL } from "../../lib/config";
 import { copy } from "../../lib/copy";
 import { cn } from "../../lib/cn";
+import { isNativeWindowsApp } from "../../lib/native-bridge.js";
 import { SectionCard, SettingsRow, ToggleSwitch } from "./Controls.jsx";
 
 export function MenuBarSection() {
   const { available, settings, setSetting, runAction } = useNativeSettings();
   if (!available) return null;
+  const isWindows = isNativeWindowsApp();
 
   // showStats + animatedIcon live on the Widgets page (Menu Bar section) where
   // they sit next to the live preview. This section keeps only the system-level
@@ -28,41 +30,45 @@ export function MenuBarSection() {
 
   return (
     <SectionCard title={copy("settings.section.menubar")}>
-      <SettingsRow
-        label={copy("settings.menubar.appearance")}
-        hint={copy("settings.menubar.appearanceHint")}
-        control={
-          <Link
-            to="/widgets"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-oai-gray-200 px-3 text-xs font-medium text-oai-gray-700 no-underline transition-colors hover:bg-oai-gray-100 dark:border-oai-gray-800 dark:text-oai-gray-300 dark:hover:bg-oai-gray-800"
-          >
-            {copy("settings.menubar.appearanceLink")}
-            <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
-          </Link>
-        }
-      />
-      <SettingsRow
-        label={copy("settings.menubar.toastOnReset")}
-        hint={copy("settings.menubar.toastOnResetHint")}
-        control={
-          <ToggleSwitch
-            checked={toastOnReset}
-            onChange={() => setSetting("toastOnReset", !toastOnReset)}
-            ariaLabel={copy("settings.menubar.toastOnReset")}
+      {!isWindows ? (
+        <>
+          <SettingsRow
+            label={copy("settings.menubar.appearance")}
+            hint={copy("settings.menubar.appearanceHint")}
+            control={
+              <Link
+                to="/widgets"
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-oai-gray-200 px-3 text-xs font-medium text-oai-gray-700 no-underline transition-colors hover:bg-oai-gray-100 dark:border-oai-gray-800 dark:text-oai-gray-300 dark:hover:bg-oai-gray-800"
+              >
+                {copy("settings.menubar.appearanceLink")}
+                <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+              </Link>
+            }
           />
-        }
-      />
-      <SettingsRow
-        label={copy("settings.menubar.confettiOnReset")}
-        hint={copy("settings.menubar.confettiOnResetHint")}
-        control={
-          <ToggleSwitch
-            checked={confettiOnReset}
-            onChange={() => setSetting("confettiOnReset", !confettiOnReset)}
-            ariaLabel={copy("settings.menubar.confettiOnReset")}
+          <SettingsRow
+            label={copy("settings.menubar.toastOnReset")}
+            hint={copy("settings.menubar.toastOnResetHint")}
+            control={
+              <ToggleSwitch
+                checked={toastOnReset}
+                onChange={() => setSetting("toastOnReset", !toastOnReset)}
+                ariaLabel={copy("settings.menubar.toastOnReset")}
+              />
+            }
           />
-        }
-      />
+          <SettingsRow
+            label={copy("settings.menubar.confettiOnReset")}
+            hint={copy("settings.menubar.confettiOnResetHint")}
+            control={
+              <ToggleSwitch
+                checked={confettiOnReset}
+                onChange={() => setSetting("confettiOnReset", !confettiOnReset)}
+                ariaLabel={copy("settings.menubar.confettiOnReset")}
+              />
+            }
+          />
+        </>
+      ) : null}
       {launchAtLoginSupported ? (
         <SettingsRow
           label={copy("settings.menubar.launchAtLogin")}
@@ -139,6 +145,7 @@ function hasUpdate(current, latest) {
 export function NativeAppFooter() {
   const { available, settings, runAction } = useNativeSettings();
   const showNativeInfo = available && settings?.version;
+  const nativePlatform = settings?.platform || "macos";
   const [checking, setChecking] = React.useState(false);
   const [updateModal, setUpdateModal] = React.useState({
     open: false,
@@ -189,7 +196,14 @@ export function NativeAppFooter() {
       <div className="flex flex-wrap items-center justify-center gap-2">
         {showNativeInfo ? (
           <>
-            <span>{copy("settings.menubar.updates.footerCombined", { barVersion: settings.version, coreVersion: currentVersion })}</span>
+            <span>
+              {nativePlatform === "windows"
+                ? copy("settings.menubar.updates.footerCore", { version: settings.version })
+                : copy("settings.menubar.updates.footerCombined", {
+                    barVersion: settings.version,
+                    coreVersion: currentVersion,
+                  })}
+            </span>
             <span aria-hidden>·</span>
             <button
               type="button"

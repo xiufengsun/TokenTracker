@@ -63,12 +63,19 @@ internal sealed class UpdateChecker
     /// <summary>
     /// Check GitHub for a newer release. <paramref name="silent"/> launch checks are
     /// skipped for dev builds (no embedded server next to the exe) so a developer run
-    /// is never nudged to "update" to an official release.
+    /// is never nudged to "update" to an official release. Installed builds perform
+    /// the download/install hand-off automatically when the preference is enabled;
+    /// manual checks remain available regardless of the preference.
     /// </summary>
     public async Task<CheckOutcome> CheckAsync(bool silent)
     {
         if (State is UpdateState.Checking or UpdateState.Downloading or UpdateState.Installing)
             return CheckOutcome.Skipped;
+        if (silent && !AutoUpdatePolicy.IsEnabled())
+        {
+            Diag.Log("update", "silent check skipped: automatic updates disabled");
+            return CheckOutcome.Skipped;
+        }
         if (silent && !IsInstalledBuild())
         {
             Diag.Log("update", "silent check skipped: not an installed build");
@@ -93,6 +100,13 @@ internal sealed class UpdateChecker
                 _setupSize = release.Value.SetupSize;
                 SetState(UpdateState.UpdateAvailable);
                 Diag.Log("update", $"update available current={CurrentVersion} latest={latest}");
+                if (silent && AutoUpdatePolicy.IsEnabled())
+                {
+                    // The launch-time check is the unattended path. Start the same
+                    // resumable installer flow used by the tray action; it asks the
+                    // tray to quit only after the download is complete.
+                    _ = DownloadAndInstallAsync();
+                }
                 return CheckOutcome.UpdateAvailable;
             }
 
@@ -106,6 +120,13 @@ internal sealed class UpdateChecker
             SetState(UpdateState.Idle);
             return CheckOutcome.Failed;
         }
+    }
+
+    /// <summary>Whether launch-time checks may download and install releases.</summary>
+    public bool AutoUpdateEnabled
+    {
+        get => AutoUpdatePolicy.IsEnabled();
+        set => AutoUpdatePolicy.SetEnabled(value);
     }
 
     /// <summary>

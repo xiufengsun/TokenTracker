@@ -65,6 +65,12 @@ internal sealed class DashboardWindow : Window
 
     public event Action? PetSettingsRequested;
     public event Action<string, string?>? PetSettingChanged;
+    /// <summary>Raised when the dashboard asks for the native settings snapshot.</summary>
+    public event Action? NativeSettingsRequested;
+    /// <summary>Raised when the dashboard changes a native setting.</summary>
+    public event Action<string, object?>? NativeSettingChanged;
+    /// <summary>Raised when the dashboard invokes a native action.</summary>
+    public event Action<string>? NativeActionRequested;
     public event Action<string, string>? NotificationRequested;
     public event Action<DashboardWindow>? ReleasedForIdle;
 
@@ -322,6 +328,23 @@ internal sealed class DashboardWindow : Window
                     else if (t.GetString() == "authCompleted")
                     {
                         CompleteNativeOAuth();
+                    }
+                    else if (t.GetString() == "getSettings")
+                    {
+                        NativeSettingsRequested?.Invoke();
+                    }
+                    else if (t.GetString() == "setSetting"
+                             && doc.RootElement.TryGetProperty("key", out var settingKey)
+                             && doc.RootElement.TryGetProperty("value", out var settingValue))
+                    {
+                        if (settingKey.GetString() is { } key)
+                            NativeSettingChanged?.Invoke(key, JsonValueToObject(settingValue));
+                    }
+                    else if (t.GetString() == "action"
+                             && doc.RootElement.TryGetProperty("name", out var actionName)
+                             && actionName.GetString() is { } name)
+                    {
+                        NativeActionRequested?.Invoke(name);
                     }
                     else if (t.GetString() == "nativeSetting"
                              && doc.RootElement.TryGetProperty("key", out var k)
@@ -671,6 +694,33 @@ internal sealed class DashboardWindow : Window
         {
             // A completed/restarted flow or app shutdown owns the next transition.
         }
+    }
+
+    /// <summary>Push the native settings snapshot to the dashboard WebView.</summary>
+    public void PushNativeSettings(object settings)
+    {
+        if (!_coreReady) return;
+        var json = JsonSerializer.Serialize(settings);
+        try
+        {
+            _ = _webView.CoreWebView2.ExecuteScriptAsync(
+                $"window.dispatchEvent(new CustomEvent('native:settings', {{detail:{json}}}));");
+        }
+        catch { /* page is navigating */ }
+    }
+
+    private static object? JsonValueToObject(JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Number when value.TryGetInt64(out var integer) => integer,
+            JsonValueKind.Number when value.TryGetDouble(out var number) => number,
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Null or JsonValueKind.Undefined => null,
+            _ => value.GetRawText(),
+        };
     }
 
     private void CompleteNativeOAuth()

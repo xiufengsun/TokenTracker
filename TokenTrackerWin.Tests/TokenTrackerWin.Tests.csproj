@@ -20,6 +20,7 @@
   <ItemGroup>
     <Compile Include="../TokenTrackerWin/ChildProcessProxy.cs" Link="ChildProcessProxy.cs" />
     <Compile Include="../TokenTrackerWin/ResumableDownloader.cs" Link="ResumableDownloader.cs" />
+    <Compile Include="../TokenTrackerWin/AutoUpdatePolicy.cs" Link="AutoUpdatePolicy.cs" />
   </ItemGroup>
 
 </Project>

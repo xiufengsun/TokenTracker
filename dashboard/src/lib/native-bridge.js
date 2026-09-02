@@ -1,7 +1,8 @@
 /**
  * Bridge helpers for talking to the macOS TokenTrackerBar host via WKWebView's
- * `window.webkit.messageHandlers.nativeBridge`. The native side dispatches a
- * `native:settings` CustomEvent on `window` whenever state changes.
+ * `window.webkit.messageHandlers.nativeBridge` or the Windows WebView2 host via
+ * `window.chrome.webview`. The native side dispatches a `native:settings`
+ * CustomEvent on `window` whenever state changes.
  *
  * Safe no-ops in browser/cloud mode.
  */
@@ -81,31 +82,39 @@ function getHandler() {
 }
 
 export function isBridgeAvailable() {
-  return Boolean(getHandler());
+  if (typeof window === "undefined") return false;
+  return Boolean(getHandler() || window.chrome?.webview);
 }
 
 function post(message) {
   const handler = getHandler();
-  if (!handler) return false;
-  try {
-    handler.postMessage(message);
-    return true;
-  } catch (err) {
-    console.warn("[tokentracker] nativeBridge post failed:", err);
-    return false;
+  if (handler) {
+    try {
+      handler.postMessage(message);
+      return true;
+    } catch (err) {
+      console.warn("[tokentracker] nativeBridge post failed:", err);
+      return false;
+    }
   }
+
+  // WebView2 exposes a single JSON message channel instead of WKWebView's
+  // messageHandlers namespace. Keep the public bridge API identical so native
+  // settings work on both desktop platforms.
+  if (typeof window !== "undefined" && window.chrome?.webview) {
+    try {
+      window.chrome.webview.postMessage(typeof message === "string" ? message : JSON.stringify(message));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 /** Post a generic message to either native host. */
 export function postNativeMessage(message) {
-  if (post(message)) return true;
-  if (typeof window === "undefined" || !window.chrome?.webview) return false;
-  try {
-    window.chrome.webview.postMessage(JSON.stringify(message));
-    return true;
-  } catch {
-    return false;
-  }
+  return post(message);
 }
 
 export function notifyNative({ title, body, id }) {

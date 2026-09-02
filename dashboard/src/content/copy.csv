@@ -458,10 +458,17 @@ nav.settings,shared,*,Sidebar,nav_settings,"Settings",,active
 header.auth.open_settings,shared,*,InsforgeUserHeaderControls,open_settings,"Open settings",,active
 settings.page.title,ui,SettingsPage,SettingsPage,title,"Settings",,active
 settings.page.subtitle,ui,SettingsPage,SettingsPage,subtitle,"Manage your account, appearance, and display preferences.",,active
+settings.nav.group.personal,ui,SettingsPage,SettingsPage,nav_group_personal,"Personal",,active
+settings.nav.group.app,ui,SettingsPage,SettingsPage,nav_group_app,"App",,active
+settings.nav.group.developer,ui,SettingsPage,SettingsPage,nav_group_developer,"Developer",,active
 settings.section.appearance,ui,SettingsPage,SettingsPage,sec_appearance,"Appearance",,active
+settings.section.appearance.description,ui,SettingsPage,SettingsPage,sec_appearance_description,"Theme, language, currency, and number formatting.",,active
 settings.section.account,ui,SettingsPage,SettingsPage,sec_account,"Account",,active
-settings.section.limits,ui,SettingsPage,SettingsPage,sec_limits,"Limits Display",,active
+settings.section.account.description,ui,SettingsPage,SettingsPage,sec_account_description,"Cloud sync, public profile, and account details.",,active
+settings.section.limits,ui,SettingsPage,SettingsPage,sec_limits,"Usage & Limits",,active
+settings.section.limits.description,ui,SettingsPage,SettingsPage,sec_limits_description,"Choose how usage is shown and configure limit providers.",,active
 settings.section.network,ui,SettingsPage,NetworkSection,sec_network,"Network",,active
+settings.section.network.description,ui,SettingsPage,NetworkSection,sec_network_description,"Control the proxy used for cloud sync and diagnostics.",,active
 settings.network.mode.label,ui,SettingsPage,NetworkSection,mode_label,"Outbound proxy",,active
 settings.network.mode.hint,ui,SettingsPage,NetworkSection,mode_hint,"Choose how Token Tracker reaches the internet for cloud sync. App updates always follow the system proxy.",,active
 settings.network.mode.system,ui,SettingsPage,NetworkSection,mode_system,"System",,active
@@ -514,6 +521,7 @@ settings.labs.sessions.label,ui,SettingsPage,LabsSection,sessions_label,"Session
 settings.labs.sessions.hint,ui,SettingsPage,LabsSection,sessions_hint,"Analyze metadata-only edit coverage, first-pass delivery, and cost per edit across Claude and Codex.",,active
 settings.labs.sessions.aria,ui,SettingsPage,LabsSection,sessions_aria,"Toggle session efficiency analysis",,active
 settings.section.labs,ui,SettingsPage,LabsSection,sec_labs,"Labs",,active
+settings.section.labs.description,ui,SettingsPage,LabsSection,sec_labs_description,"Try experimental insights before they become standard features.",,active
 qpd.card.title,ui,DashboardView,QualityPerDollarCard,title,"Quality & Avg Cost/PR",,active
 qpd.card.badge,ui,DashboardView,QualityPerDollarCard,badge,"BETA",,active
 qpd.card.subtitle,ui,DashboardView,QualityPerDollarCard,subtitle,"Avg token cost per delivery, from merged PRs and AI-attributed commits.",,active
@@ -596,7 +604,8 @@ leaderboard.summary.view_profile,ui,LeaderboardPage,LeaderboardMeChip,summary_vi
 settings.account.signOut,ui,SettingsPage,SettingsPage,sign_out,"Sign out",,active
 settings.account.signIn,ui,SettingsPage,SettingsPage,sign_in,"Sign in",,active
 settings.account.signedOutHint,ui,SettingsPage,SettingsPage,signed_out_hint,"Sign in to manage cloud sync and leaderboard preferences.",,active
-settings.section.menubar,ui,SettingsPage,SettingsPage,sec_menubar,"Menu Bar App",,active
+settings.section.menubar,ui,SettingsPage,SettingsPage,sec_menubar,"App & Updates",,active
+settings.section.menubar.description,ui,SettingsPage,SettingsPage,sec_menubar_description,"Manage background sync, startup behavior, and app updates.",,active
 settings.menubar.showStats,ui,SettingsPage,SettingsPage,mb_show_stats,"Show stats in menu bar",,active
 settings.menubar.showStatsHint,ui,SettingsPage,SettingsPage,mb_show_stats_hint,"Display today's token count and cost beside the menu bar icon.",,active
 pet.menubar.title,ui,PetPage,PetPage,pet_menubar_title,"Run in the menu bar",,active

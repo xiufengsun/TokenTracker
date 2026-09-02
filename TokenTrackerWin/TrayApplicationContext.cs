@@ -63,6 +63,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private UsagePoller.UsageStats? _lastStats;
     private string? _lastLimitsJson;
+    private bool _isSyncing;
     private string _localePreference = NativeLocalization.CurrentPreference;
     private string _themePreference = NativeTheme.CurrentPreference;
     private TrayStrings _strings = TrayStrings.For(NativeLocalization.CurrentResolvedLocale);
@@ -223,9 +224,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _ = _server.EnsureServerRunningAsync();
 
         // Click-to-update: keep the menu item in sync with the checker, quit when it's
-        // ready to hand off to the installer, and run one quiet check on launch (the
-        // checker self-skips dev builds and only surfaces availability — never auto-installs).
-        _updateChecker.Changed += () => PostToUi(RefreshUpdateMenuItem);
+        // ready to hand off to the installer, and run one quiet check on launch. The
+        // checker self-skips dev builds; installed builds auto-install when enabled.
+        _updateChecker.Changed += () => PostToUi(() =>
+        {
+            RefreshUpdateMenuItem();
+            PushDashboardNativeSettings();
+        });
         _updateChecker.QuitRequested += () => PostToUi(Quit);
         _ = _updateChecker.CheckAsync(silent: true);
 
@@ -616,6 +621,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _dashboard.ThemeChanged += () => PostToUi(RefreshThemeFromDashboard);
         _dashboard.PetSettingsRequested += () => PostToUi(PushDashboardPetSettings);
         _dashboard.PetSettingChanged += (key, value) => PostToUi(() => ApplyDashboardPetSetting(key, value));
+        _dashboard.NativeSettingsRequested += () => PostToUi(PushDashboardNativeSettings);
+        _dashboard.NativeSettingChanged += (key, value) => PostToUi(() => ApplyDashboardNativeSetting(key, value));
+        _dashboard.NativeActionRequested += name => PostToUi(() => RunDashboardNativeAction(name));
         _dashboard.NotificationRequested += (title, body) => PostToUi(() =>
             _trayIcon.ShowBalloonTip(7000, title, body, ToolTipIcon.Warning));
     }
@@ -679,6 +687,76 @@ internal sealed class TrayApplicationContext : ApplicationContext
             PetWindow.CurrentSize,
             PetWindow.CurrentCharacter,
             PetWindow.CurrentBotColor);
+    }
+
+    /// <summary>Send the Windows-native settings consumed by the dashboard.</summary>
+    private void PushDashboardNativeSettings()
+    {
+        if (_dashboard is null) return;
+
+        string? updateStatus = _updateChecker.State switch
+        {
+            UpdateChecker.UpdateState.Checking => _updateStrings.Checking,
+            UpdateChecker.UpdateState.UpdateAvailable => string.Format(
+                _updateStrings.UpdateNow, _updateChecker.LatestVersion ?? ""),
+            UpdateChecker.UpdateState.Downloading => string.Format(
+                _updateStrings.Downloading, _updateChecker.ProgressPercent),
+            UpdateChecker.UpdateState.Installing => _updateStrings.Installing,
+            _ => null,
+        };
+
+        _dashboard.PushNativeSettings(new
+        {
+            platform = "windows",
+            autoUpdateEnabled = _updateChecker.AutoUpdateEnabled,
+            launchAtLogin = LaunchAtStartup.IsEnabled,
+            // Startup can still be toggled from the tray menu; keep the
+            // macOS-specific settings row out of the Windows page.
+            launchAtLoginSupported = false,
+            updateStatus,
+            updateBusy = _updateChecker.State is UpdateChecker.UpdateState.Checking
+                or UpdateChecker.UpdateState.Downloading
+                or UpdateChecker.UpdateState.Installing,
+            isSyncing = _isSyncing,
+            version = _updateChecker.CurrentVersion,
+            // These capabilities are macOS-only. Omitting their controls keeps the
+            // Windows settings page focused on features that are actually supported.
+            dynamicIslandSupported = false,
+            widgetsSupported = false,
+        });
+    }
+
+    private void ApplyDashboardNativeSetting(string key, object? value)
+    {
+        switch (key)
+        {
+            case "autoUpdateEnabled" when value is bool enabled:
+                _updateChecker.AutoUpdateEnabled = enabled;
+                break;
+            case "launchAtLogin" when value is bool launch:
+                if (launch) LaunchAtStartup.Enable();
+                else LaunchAtStartup.Disable();
+                break;
+            default:
+                return;
+        }
+        PushDashboardNativeSettings();
+    }
+
+    private void RunDashboardNativeAction(string name)
+    {
+        switch (name)
+        {
+            case "syncNow":
+                _server.TriggerSync();
+                break;
+            case "checkForUpdates":
+                OnCheckUpdatesClicked();
+                break;
+            case "openAbout":
+                OpenInBrowser(Constants.GitHubUrl);
+                break;
+        }
     }
 
     /// <summary>
@@ -785,6 +863,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
             case UpdateChecker.UpdateState.UpdateAvailable:
                 _checkUpdatesItem.Text = string.Format(_updateStrings.UpdateNow, _updateChecker.LatestVersion);
                 _checkUpdatesItem.Enabled = true;
+                if (_updateChecker.AutoUpdateEnabled && _updateChecker.State == UpdateChecker.UpdateState.UpdateAvailable)
+                {
+                    // An enabled automatic check will immediately start the
+                    // background installer, so a "click the tray to update"
+                    // balloon would be both noisy and misleading.
+                    break;
+                }
                 if (!_updateBalloonShown)
                 {
                     _updateBalloonShown = true;
@@ -838,13 +923,23 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void OnSyncStarted()
     {
-        PostToUi(() => _petWindow?.ApplySyncing(true));
+        _isSyncing = true;
+        PostToUi(() =>
+        {
+            _petWindow?.ApplySyncing(true);
+            PushDashboardNativeSettings();
+        });
     }
 
     private void OnSyncCompleted()
     {
+        _isSyncing = false;
         _poller.RefreshNow();
-        PostToUi(() => _petWindow?.ApplySyncing(false));
+        PostToUi(() =>
+        {
+            _petWindow?.ApplySyncing(false);
+            PushDashboardNativeSettings();
+        });
     }
 
     private void OnStatsUpdated(UsagePoller.UsageStats stats)
