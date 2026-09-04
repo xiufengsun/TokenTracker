@@ -41,6 +41,39 @@ async function writeEveryCodeRollout(codeHome, date, uuid, totalTokens) {
   return filePath;
 }
 
+async function writeAcodeRollout(acodeHome, date, uuid, totalTokens) {
+  const [year, month, day] = date.split("-");
+  const dir = path.join(acodeHome, "sessions", year, month, day);
+  await fs.mkdir(dir, { recursive: true });
+  const filePath = path.join(dir, `rollout-${date}T00-00-00-${uuid}.jsonl`);
+  const body = [
+    JSON.stringify({
+      type: "turn_context",
+      timestamp: `${date}T00:00:00.000Z`,
+      payload: { model: "xopglm52" },
+    }),
+    tokenCountLine({ ts: `${date}T00:00:01.000Z`, totalTokens }),
+  ].join("\n") + "\n";
+  await fs.writeFile(filePath, body, "utf8");
+  return filePath;
+}
+
+async function writeArchivedAcodeRollout(acodeHome, date, uuid, totalTokens) {
+  const dir = path.join(acodeHome, "archived_sessions");
+  await fs.mkdir(dir, { recursive: true });
+  const filePath = path.join(dir, `rollout-${date}T00-00-00-${uuid}.jsonl`);
+  const body = [
+    JSON.stringify({
+      type: "turn_context",
+      timestamp: `${date}T00:00:00.000Z`,
+      payload: { model: "xopglm52" },
+    }),
+    tokenCountLine({ ts: `${date}T00:00:01.000Z`, totalTokens }),
+  ].join("\n") + "\n";
+  await fs.writeFile(filePath, body, "utf8");
+  return filePath;
+}
+
 async function writeArchivedCodexRollout(codexHome, date, uuid, totalTokens) {
   const dir = path.join(codexHome, "archived_sessions", "nested", uuid);
   await fs.mkdir(dir, { recursive: true });
@@ -104,6 +137,7 @@ async function withTempSyncEnv(fn) {
     USERPROFILE: process.env.USERPROFILE,
     CODEX_HOME: process.env.CODEX_HOME,
     CODE_HOME: process.env.CODE_HOME,
+    TOKENTRACKER_ACODE_HOME: process.env.TOKENTRACKER_ACODE_HOME,
     GEMINI_HOME: process.env.GEMINI_HOME,
     OPENCODE_HOME: process.env.OPENCODE_HOME,
     XDG_DATA_HOME: process.env.XDG_DATA_HOME,
@@ -122,6 +156,7 @@ async function withTempSyncEnv(fn) {
     process.env.USERPROFILE = home;
     process.env.CODEX_HOME = path.join(home, ".codex");
     process.env.CODE_HOME = path.join(home, ".code");
+    process.env.TOKENTRACKER_ACODE_HOME = path.join(home, ".acode");
     process.env.GEMINI_HOME = path.join(home, ".gemini");
     process.env.OPENCODE_HOME = path.join(home, ".opencode");
     process.env.XDG_DATA_HOME = path.join(home, ".local", "share");
@@ -327,6 +362,23 @@ test("Codex notify sync accepts an explicit null context", async () => {
   });
 });
 
+test("Codex notify sync does not create Acode inventory state", async () => {
+  await withTempSyncEnv(async (home) => {
+    await writeCodexRollout(
+      process.env.CODEX_HOME,
+      "2026-06-30",
+      "019f16bd-1007-7000-8000-aaaaaaaaaaaa",
+      41,
+    );
+
+    await cmdSync(["--auto", "--from-notify", "--source=codex"]);
+
+    const cursors = await readCursors(home);
+    assert.ok(cursors.codexDayInventoryCache);
+    assert.equal(Object.hasOwn(cursors, "acodeDayInventoryCache"), false);
+  });
+});
+
 test("background auto sync still includes Every Code sessions", async () => {
   await withTempSyncEnv(async (home) => {
     const codeHome = process.env.CODE_HOME;
@@ -337,6 +389,74 @@ test("background auto sync still includes Every Code sessions", async () => {
     const queue = await readQueue(home);
     assert.match(queue, /"source":"every-code"/);
     assert.match(queue, /"total_tokens":42/);
+  });
+});
+
+test("background auto sync includes live Acode sessions but skips archives", async () => {
+  await withTempSyncEnv(async (home) => {
+    const acodeHome = process.env.TOKENTRACKER_ACODE_HOME;
+    await writeAcodeRollout(acodeHome, "2026-06-30", "019f16bd-1100-7000-8000-aaaaaaaaaaaa", 43);
+    await writeArchivedAcodeRollout(acodeHome, "2026-06-30", "019f16bd-1101-7000-8000-aaaaaaaaaaaa", 47);
+
+    await cmdSync(["--auto", "--background"]);
+
+    const rows = (await readQueue(home)).trim().split("\n").map(JSON.parse);
+    const acodeRows = rows.filter((row) => row.source === "acode");
+    assert.equal(acodeRows.length, 1);
+    assert.equal(acodeRows[0].model, "xopglm52");
+    assert.equal(acodeRows[0].total_tokens, 43);
+  });
+});
+
+test("Acode notify sync only scans Acode sessions", async () => {
+  await withTempSyncEnv(async (home) => {
+    await writeCodexRollout(
+      process.env.CODEX_HOME,
+      "2026-06-30",
+      "019f16bd-1102-7000-8000-aaaaaaaaaaaa",
+      53,
+    );
+    await writeAcodeRollout(
+      process.env.TOKENTRACKER_ACODE_HOME,
+      "2026-06-30",
+      "019f16bd-1103-7000-8000-aaaaaaaaaaaa",
+      59,
+    );
+
+    await cmdSync(["--auto", "--from-notify", "--source=acode"]);
+
+    const rows = (await readQueue(home)).trim().split("\n").map(JSON.parse);
+    assert.deepEqual(rows.map((row) => row.source), ["acode"]);
+    assert.equal(rows[0].total_tokens, 59);
+  });
+});
+
+test("full sync scans Acode archives without recounting a live session copy", async () => {
+  await withTempSyncEnv(async (home) => {
+    const acodeHome = process.env.TOKENTRACKER_ACODE_HOME;
+    const duplicateUuid = "019f16bd-1104-7000-8000-aaaaaaaaaaaa";
+    const liveFile = await writeAcodeRollout(acodeHome, "2026-06-30", duplicateUuid, 61);
+    const archivedDuplicate = path.join(
+      acodeHome,
+      "archived_sessions",
+      path.basename(liveFile),
+    );
+    await fs.mkdir(path.dirname(archivedDuplicate), { recursive: true });
+    await fs.copyFile(liveFile, archivedDuplicate);
+    await writeArchivedAcodeRollout(
+      acodeHome,
+      "2026-06-30",
+      "019f16bd-1105-7000-8000-aaaaaaaaaaaa",
+      67,
+    );
+
+    await cmdSync([]);
+
+    const rows = (await readQueue(home)).trim().split("\n").map(JSON.parse);
+    const acodeRows = rows.filter((row) => row.source === "acode");
+    assert.equal(acodeRows.at(-1).total_tokens, 128);
+    const cursors = await readCursors(home);
+    assert.equal(cursors.acodeHashes.length, 2);
   });
 });
 

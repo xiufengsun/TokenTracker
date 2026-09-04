@@ -6,7 +6,7 @@
 
 ### 모든 CLI에서 AI에 쓰는 비용을 정확히 파악
 
-**36개의 AI 코딩 도구**에서 토큰 수치를 자동으로 수집하고 로컬에서 집계해, 실제 비용 추세를 아름다운 대시보드에서 확인. 클라우드 계정 불필요, API Key 불필요, 셋업 불필요 — 명령 한 줄이면 끝.
+**37개의 AI 코딩 도구**에서 토큰 수치를 자동으로 수집하고 로컬에서 집계해, 실제 비용 추세를 아름다운 대시보드에서 확인. 클라우드 계정 불필요, API Key 불필요, 셋업 불필요 — 명령 한 줄이면 끝.
 
 [![npm version](https://img.shields.io/npm/v/tokentracker-cli.svg?color=blue)](https://www.npmjs.com/package/tokentracker-cli)
 [![npm downloads](https://img.shields.io/npm/dm/tokentracker-cli.svg?color=brightgreen)](https://www.npmjs.com/package/tokentracker-cli)
@@ -51,7 +51,7 @@ npx tokentracker-cli
 - 📊 사용 추세, 모델별 분석, 비용 분석을 보여주는 `localhost:7680`의 로컬 대시보드
 - 🔌 설치된 모든 지원 AI 도구에 대한 hook 자동 감지
 - 🏠 100% 로컬 — 계정 없음, API Key 없음, 네트워크 호출 없음 (옵션 리더보드 제외)
-- 🧩 *옵션:* 250+개의 공개 Skill을 둘러보고 Claude · Codex · Gemini · OpenCode · Hermes 간에 동기화할 수 있는 Skills 탭
+- 🧩 *옵션:* 250+개의 공개 Skill을 둘러보고 Claude · Codex · AStudio · Gemini · OpenCode · Hermes 간에 동기화할 수 있는 Skills 탭
 
 > **네이티브 데스크톱 앱이 필요하다면?**
 > - **macOS** — [`TokenTrackerBar.dmg` 다운로드](https://github.com/xiufengsun/TokenTracker/releases/latest/download/TokenTrackerBar.dmg) → Applications로 드래그. 데스크톱 위젯, 메뉴바 상태 아이콘, WKWebView 안의 동일한 대시보드를 포함합니다.
@@ -88,7 +88,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ## ✨ 기능
 
-- 🔌 **36개의 AI 도구 기본 지원** — Claude Code, Codex CLI, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, Grok Build, oh-my-pi, pi, Dots, Prime Agent, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio
+- 🔌 **37개의 AI 도구 기본 지원** — Claude Code, Codex CLI, AStudio, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, Grok Build, oh-my-pi, pi, Dots, Prime Agent, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio
 - 🏠 **100% 로컬** — 토큰 데이터가 기기를 떠나지 않습니다. 계정 없음, API Key 없음.
 - 🚀 **제로 설정** — 첫 실행 시 Hook 자동 설치. 0에서 대시보드까지 30초.
 - 📊 **아름다운 대시보드** — 사용 추세, 모델별 비용 분석, GitHub 스타일 활동 히트맵, 프로젝트 귀속 정보
@@ -99,7 +99,7 @@ brew install xiufengsun/tokentracker/tokentracker
 - 💰 **비용 엔진** — [LiteLLM](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)을 통해 2,200+개 모델 가격 책정 (매일 자동 갱신) + 틈새 도구 (Kiro, Cursor Composer, Kimi, CodeBuddy hy3)를 위한 수동 큐레이션 오버라이드; 24시간 디스크 캐시 + 번들된 오프라인 스냅샷으로 인터넷 없이도 정확한 USD 표시. 벤더가 공식 가격을 공개하지 않은 모델 (예: Tencent hy3-preview)은 토큰만 추적되며 벤더가 요율을 공개할 때까지 비용은 $0으로 표시됩니다.
 - 🌐 **옵션 리더보드** — 전 세계 개발자들과 비교; 컬럼을 드래그하여 관심 있는 프로바이더에 집중 (옵트인, 참여하려면 사인인 필요)
 - 🔄 **기기 간 계정 뷰** — 클라우드 동기화를 켜면 작업하는 모든 기기(노트북 + 데스크톱 + 서버)의 사용량을 하나의 뷰로 통합 — 총량·트렌드·히트맵·모델 분석을 모두 기기 통합으로 집계 (옵트인, 사인인 필요; 기본 로컬 전용 경험은 즉시·오프라인 유지)
-- 🧩 **옵션 Skills 탭** — `anthropics/skills`, `ComposioHQ/awesome-claude-skills`, `skills.sh` 그리고 직접 추가한 임의의 GitHub 저장소에서 250+개의 공개 Skill을 둘러보고, 타겟 이름을 지정해 Claude / Codex / Gemini / OpenCode / Hermes에 동기화. 원클릭 Undo 지원.
+- 🧩 **옵션 Skills 탭** — `anthropics/skills`, `ComposioHQ/awesome-claude-skills`, `skills.sh` 그리고 직접 추가한 임의의 GitHub 저장소에서 250+개의 공개 Skill을 둘러보고, 타겟 이름을 지정해 Claude / Codex / AStudio / Gemini / OpenCode / Hermes에 동기화. 원클릭 Undo 지원.
 - 🔒 **프라이버시 우선** — 토큰 수치와 타임스탬프만. 프롬프트, 응답, 파일 내용은 절대 다루지 않음.
 
 ---
@@ -142,7 +142,7 @@ brew install xiufengsun/tokentracker/tokentracker
 <tr>
 <td colspan="2">
 
-**Skills Manager** — GitHub와 `skills.sh`에서 250+개의 공개 Skill을 둘러보고, 한 번 설치하면 Claude / Codex / Gemini / OpenCode / Hermes에 동기화. 타겟별 토글, 원클릭 Undo, 수동 파일 복사 불필요.
+**Skills Manager** — GitHub와 `skills.sh`에서 250+개의 공개 Skill을 둘러보고, 한 번 설치하면 Claude / Codex / AStudio / Gemini / OpenCode / Hermes에 동기화. 타겟별 토글, 원클릭 Undo, 수동 파일 복사 불필요.
 
 <img src="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/skills.png" alt="Skills Manager" />
 
@@ -167,6 +167,7 @@ brew install xiufengsun/tokentracker/tokentracker
 |---|---|---|
 | **Claude Code** | ✅ 자동 | `settings.json`의 SessionEnd hook |
 | **Codex CLI** | ✅ 자동 | `config.toml`의 TOML notify hook |
+| **AStudio** | ✅ 자동 | `config.toml`에 TOML notify hook 작성 |
 | **Cursor** | ✅ 자동 | API + SQLite 인증 토큰 |
 | **Kiro** | ✅ 자동 | SQLite + JSONL 하이브리드 |
 | **Gemini CLI** | ✅ 자동 | SessionEnd hook |
@@ -204,7 +205,7 @@ brew install xiufengsun/tokentracker/tokentracker
 | **TRAE Work CN** | ✅ 자동 | **명시적인 옵트인이 필요합니다: `TOKENTRACKER_TRAE_CN_USAGE=1` 을 설정하세요.** 사용량을 읽으면 로컬에 저장된 로그인 인증이 TRAE의 내부 API로 전송되므로, 켜기 전에는 아무것도 전송되지 않습니다. 켠 뒤에는: 로컬 TRAE Work CN 인증이 있을 때 실행 가능한 비백그라운드 동기화 중에 macOS의 로그인된 앱에서 session-token 사용량을 읽습니다. 내부 API는 변경될 수 있습니다 |
 
 > **플러그인이나 hook을 수동으로 설치해야 하나요?** 아니요. `tokentracker` (또는 `tokentracker init`)가 첫 실행에서 모든 것을 처리합니다:
-> - **Hook 기반** 도구 (Claude Code, Codex, Gemini, Every Code, **CodeBuddy**, **WorkBuddy**, **Grok Build**) — 도구 자체의 설정에 SessionEnd hook 또는 TOML notify 엔트리를 작성합니다.
+> - **Hook 기반** 도구 (Claude Code, Codex, AStudio, Gemini, Every Code, **CodeBuddy**, **WorkBuddy**, **Grok Build**) — 도구 자체의 설정에 SessionEnd hook 또는 TOML notify 엔트리를 작성합니다.
 > - **플러그인 기반** 도구 (OpenCode, **OpenClaw**) — 플러그인은 npm 패키지 안에 포함되어 있습니다. OpenClaw 세션 플러그인은 `~/.tokentracker/tracker/openclaw-plugin/openclaw-session-sync/`에 있으며, OpenClaw 자체 CLI로 링크하고 활성화한 뒤 동기화를 트리거하는 세션 종료 이벤트를 허용하도록 `hooks.allowConversationAccess=true`를 설정합니다. 다운로드, 드래그 앤 드롭 불필요.
 > - **패시브 리더** (Cursor, Kiro, Hermes, Kimi Code, Copilot, **Grok Build**, **oh-my-pi**, **pi**, **Craft Agents**, **Reasonix**, **Kilo CLI**, **Kilo Code**, **Roo Code**, **Antigravity**, **Zed Agent**, **Goose**, **Droid**, **Mimo Code**, **ZCode**, **LM Studio**, **Unsloth Studio**, **AnythingLLM Desktop**, **Claude Science**, **DeepSeek Harness**) — 이들 도구에는 아무것도 설치하지 않습니다. 도구가 이미 생성하는 파일 (SQLite DB, JSONL, OTEL export, session logs)만 읽습니다. Copilot App / CLI 사용량은 `~/.copilot/session-store.db`에서 요청별로 읽습니다. `data.db`는 레거시 마이그레이션 기준선으로 한 번만 사용하며 store가 정식 소스가 된 뒤에는 관찰 전용으로 유지됩니다. Chat 확장과 이전 CLI는 계속 OTEL을 사용하며, TokenTracker가 겹치는 요청을 한 번만 집계합니다. 마이그레이션 전 혼합 App/CLI 기록에서 모델을 안전하게 분리할 수 없는 잔여분은 추정 모델 대신 `github-copilot-legacy` 집계로 보존합니다.
 > - **Grok Build 추정** — 현재 로컬 텔레메트리는 `updates.jsonl`의 누적 `totalTokens`를 노출하지만, 안정적인 프롬프트/출력/캐시 분할은 제공하지 않습니다; `signals.json`은 `contextTokensUsed` 스냅샷을 사용한 폴백으로 남아 있습니다. 호출별 사용 상세 정보가 제공될 때까지 TokenTracker는 Grok 비용을 추정합니다.
@@ -221,7 +222,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 |                          | **TokenTracker** | ccusage     | Cursor stats |
 |--------------------------|:---:|:---:|:---:|
-| **지원하는 AI 도구 수**   | **36**           | 1 (Claude)  | 1 (Cursor)   |
+| **지원하는 AI 도구 수**   | **37**           | 1 (Claude)  | 1 (Cursor)   |
 | **로컬 우선, 계정 불필요** | ✅            | ✅           | ❌            |
 | **네이티브 데스크톱 앱** | ✅ macOS + Windows | ❌          | ❌            |
 | **데스크톱 위젯**        | ✅ 4종            | ❌           | ❌            |
@@ -233,7 +234,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ```mermaid
 flowchart LR
-    A["AI coding tools<br/>Claude Code · Codex · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE Work CN · LM Studio · Unsloth Studio"]
+    A["AI coding tools<br/>Claude Code · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE Work CN · LM Studio · Unsloth Studio"]
     A -->|hooks trigger| B[Token Tracker]
     B -->|parse logs<br/>30-min UTC buckets| C[(Local SQLite)]
     C --> D[Web Dashboard]
@@ -275,6 +276,7 @@ flowchart LR
 | `TOKENTRACKER_DISABLE_GIT_ATTRIBUTION` | Git 커밋 연결 비활성화(`1`이면 비활성화). 연결 기능은 각 세션의 작업 디렉터리에서 `git log`를 실행합니다. 비활성화하면 TokenTracker가 프로젝트 디렉터리에 전혀 접근하지 않습니다(Outcomes에는 수동 기록만 표시) | — |
 | `TOKENTRACKER_GIT_ATTRIBUTION_PROTECTED_DIRS` | Git 연결이 macOS 보호 위치에 접근하도록 허용(`1`이면 허용). 기본적으로 `~/Documents`, `~/Downloads`, `~/Desktop`, `~/Library`, 미디어 폴더, `/Volumes` 아래의 세션은 건너뜁니다. macOS가 위치마다 별도의 접근 허용 대화상자를 띄우기 때문입니다. 해당 위치에 저장소를 두고 있고 권한을 허용해도 괜찮을 때만 켜세요 | — |
 | `CODEX_HOME` | Codex CLI 디렉토리 오버라이드 | `~/.codex` |
+| `TOKENTRACKER_ACODE_HOME` | AStudio 디렉토리 오버라이드 | `~/.acode` |
 | `GEMINI_HOME` | Gemini CLI 디렉토리 오버라이드 | `~/.gemini` |
 
 ---

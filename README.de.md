@@ -6,7 +6,7 @@
 
 ### Sieh genau, was du für KI ausgibst – über jedes CLI hinweg
 
-Sammle automatisch Token-Zahlen von **36 KI-Coding-Tools**, aggregiere sie lokal und sieh echte Kostentrends in einem schönen Dashboard. Kein Cloud-Konto, keine API-Keys, kein Setup – nur ein Befehl.
+Sammle automatisch Token-Zahlen von **37 KI-Coding-Tools**, aggregiere sie lokal und sieh echte Kostentrends in einem schönen Dashboard. Kein Cloud-Konto, keine API-Keys, kein Setup – nur ein Befehl.
 
 [![npm version](https://img.shields.io/npm/v/tokentracker-cli.svg?color=blue)](https://www.npmjs.com/package/tokentracker-cli)
 [![npm downloads](https://img.shields.io/npm/dm/tokentracker-cli.svg?color=brightgreen)](https://www.npmjs.com/package/tokentracker-cli)
@@ -52,7 +52,7 @@ Das war's. Beim ersten Start werden Hooks installiert, deine Daten synchronisier
 - 📊 Ein lokales Dashboard auf `localhost:7680` mit Nutzungstrends, Modellaufschlüsselung, Kostenanalyse
 - 🔌 Auto-erkannte Hooks für jedes installierte KI-Tool
 - 🏠 100 % lokal – kein Konto, keine API-Keys, keine Netzwerkaufrufe (außer optionalem Leaderboard)
-- 🧩 *Optional:* Ein Skills-Tab zum Durchsuchen von 250+ öffentlichen Skills – synchronisiert über Claude · Codex · Grok · Antigravity · Gemini · OpenCode · Hermes
+- 🧩 *Optional:* Ein Skills-Tab zum Durchsuchen von 250+ öffentlichen Skills – synchronisiert über Claude · Codex · AStudio · Grok · Antigravity · Gemini · OpenCode · Hermes
 
 > **Möchtest du eine native Desktop-App?**
 > - **macOS** — [Lade `TokenTrackerBar.dmg` herunter](https://github.com/xiufengsun/TokenTracker/releases/latest/download/TokenTrackerBar.dmg) → in Programme ziehen. Menüleisten-Symbol, Desktop-Widgets und das Dashboard in einer WKWebView.
@@ -88,7 +88,7 @@ Aktualisieren mit `brew upgrade --cask xiufengsun/tokentracker/tokentracker`. De
 
 ## ✨ Features
 
-- 🔌 **36 KI-Tools out of the box** — Claude Code, Codex CLI, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, Grok Build, oh-my-pi, pi, Dots, Prime Agent, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio
+- 🔌 **37 KI-Tools out of the box** — Claude Code, Codex CLI, AStudio, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, Grok Build, oh-my-pi, pi, Dots, Prime Agent, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio
 - 🏠 **100 % lokal** — Token-Daten verlassen nie deinen Rechner. Kein Konto, keine API-Keys.
 - 🚀 **Zero Config** — Hooks installieren sich beim ersten Start automatisch. Von null zum Dashboard in 30 Sekunden.
 - 📊 **Schönes Dashboard** — Nutzungstrends, Kostenaufschlüsselung nach Modell, GitHub-ähnliche Aktivitäts-Heatmap, Projektzuordnung
@@ -98,7 +98,7 @@ Aktualisieren mit `brew upgrade --cask xiufengsun/tokentracker/tokentracker`. De
 - 🟢 **Service-Statusseite** — Live-Betriebs- und Störungsstatus von 8 offiziellen Provider-Statusseiten
 - 💰 **Kosten-Engine** — 2.200+ Modelle bepreist via [LiteLLM](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) (täglich aktualisiert) + kuratierte Overrides für Nischen-Tools; 24h-Disk-Cache + Offline-Snapshot für genaue USD-Angaben ohne Internetverbindung. Modelle ohne veröffentlichte Preise (z. B. Tencent hy3-preview) werden nach Token erfasst, zeigen aber 0 $ Kosten bis der Anbieter einen Preis veröffentlicht.
 - 🌐 **Optionales Leaderboard** — Vergleiche dich mit Entwicklern weltweit; Spalten per Drag-and-Drop neu anordnen (Opt-in, Anmeldung erforderlich)
-- 🧩 **Optionaler Skills-Tab** — 250+ öffentliche Skills von `anthropics/skills`, `ComposioHQ/awesome-claude-skills`, `skills.sh` und jedem GitHub-Repo durchsuchen; mit einem Klick über Claude / Codex / Grok / Antigravity / Gemini / OpenCode / Hermes synchronisieren
+- 🧩 **Optionaler Skills-Tab** — 250+ öffentliche Skills von `anthropics/skills`, `ComposioHQ/awesome-claude-skills`, `skills.sh` und jedem GitHub-Repo durchsuchen; mit einem Klick über Claude / Codex / AStudio / Grok / Antigravity / Gemini / OpenCode / Hermes synchronisieren
 - 🔒 **Privacy-First** — Nur Token-Zahlen und Zeitstempel. Nie Prompts, Responses oder Dateiinhalte.
 
 ---
@@ -166,6 +166,7 @@ Aktualisieren mit `brew upgrade --cask xiufengsun/tokentracker/tokentracker`. De
 |---|---|---|
 | **Claude Code** | ✅ Auto | SessionEnd-Hook in `settings.json` |
 | **Codex CLI** | ✅ Auto | TOML-Notify-Hook in `config.toml` |
+| **AStudio** | ✅ Auto | TOML-Notify-Hook in `config.toml` |
 | **Cursor** | ✅ Auto | API + SQLite-Auth-Token |
 | **Kiro** | ✅ Auto | SQLite + JSONL hybrid |
 | **Gemini CLI** | ✅ Auto | SessionEnd-Hook |
@@ -201,7 +202,7 @@ Aktualisieren mit `brew upgrade --cask xiufengsun/tokentracker/tokentracker`. De
 | **TRAE Work CN** | ✅ Auto | **Erfordert eine ausdrückliche Zustimmung: `TOKENTRACKER_TRAE_CN_USAGE=1` setzen.** Das Lesen der Nutzung überträgt die lokal gespeicherte Anmeldeautorisierung an die interne API von TRAE, daher wird nichts gesendet, bevor du es aktivierst. Danach: liest bei vorhandener lokaler TRAE Work CN-Anmeldung während eines zulässigen Syncs außerhalb des Hintergrundbetriebs unter macOS die Session-Token-Nutzung der angemeldeten App; die interne API kann sich ändern |
 
 > **Muss ich Plugins oder Hooks manuell installieren?** Nein. `tokentracker` (oder `tokentracker init`) erledigt alles beim ersten Start:
-> - **Hook-basiert** (Claude Code, Codex, Gemini, Every Code, CodeBuddy, WorkBuddy, Grok Build) — wir schreiben einen SessionEnd-Hook oder TOML-Notify-Eintrag in die Konfiguration des Tools.
+> - **Hook-basiert** (Claude Code, Codex, AStudio, Gemini, Every Code, CodeBuddy, WorkBuddy, Grok Build) — wir schreiben einen SessionEnd-Hook oder TOML-Notify-Eintrag in die Konfiguration des Tools.
 > - **Plugin-basiert** (OpenCode, OpenClaw) — das Plugin ist im npm-Paket enthalten (`~/.tokentracker/app/openclaw-plugin/`). Wir verlinken es per CLI (`openclaw plugins install --link …` + `enable`). Kein Download, kein Drag-and-Drop.
 > - **Passive Reader** (Cursor, Kiro, Hermes, Kimi Code, Copilot, Grok Build, oh-my-pi, pi, Craft Agents, Kilo CLI, Kilo Code, Roo Code, Antigravity, Zed Agent, Goose, Droid, Mimo Code, ZCode, LM Studio, Unsloth Studio, AnythingLLM Desktop, Claude Science) — wir installieren nichts in diesen Tools. Wir lesen nur Dateien, die sie bereits produzieren (SQLite-DB, JSONL, OTEL-Export, Session-Logs). Die Nutzung von Copilot App / CLI wird pro Anfrage aus `~/.copilot/session-store.db` gelesen; `data.db` liefert einmalig die Legacy-Migrationsbasis und bleibt nach der kanonischen Übernahme des Stores schreibgeschützt im Beobachtungsmodus, während Chat-Erweiterung und ältere CLI-Versionen weiterhin OTEL verwenden. TokenTracker koordiniert diese Quellen, damit überlappende Anfragen nur einmal gezählt werden. Gemischte App/CLI-Historie vor der Übernahme bleibt als `github-copilot-legacy`-Aggregat erhalten, statt einem geratenen Anfrage-Modell zugeordnet zu werden.
 >
@@ -215,11 +216,11 @@ Fehlt dein Tool? [Erstelle ein Issue](https://github.com/xiufengsun/TokenTracker
 
 ## 🆚 Warum TokenTracker?
 
-> **Suchst du eine ccusage-Alternative mit GUI?** TokenTracker unterstützt 36 Tools (nicht nur Claude Code), bietet native macOS- und Windows-Apps + Desktop-Widgets und dedupliziert Token-Datensätze korrekt über alle Provider hinweg – damit deine Zahlen mit dem Billing der Provider übereinstimmen.
+> **Suchst du eine ccusage-Alternative mit GUI?** TokenTracker unterstützt 37 Tools (nicht nur Claude Code), bietet native macOS- und Windows-Apps + Desktop-Widgets und dedupliziert Token-Datensätze korrekt über alle Provider hinweg – damit deine Zahlen mit dem Billing der Provider übereinstimmen.
 
 | | **TokenTracker** | ccusage | Cursor Stats |
 |---|---|---|---|
-| **Unterstützte KI-Tools** | **36** | 1 (Claude) | 1 (Cursor) |
+| **Unterstützte KI-Tools** | **37** | 1 (Claude) | 1 (Cursor) |
 | **Lokal, kein Konto** | ✅ | ✅ | ❌ |
 | **Native Desktop-App** | ✅ macOS + Windows | ❌ | ❌ |
 | **Desktop-Widgets** | ✅ 4 Widgets | ❌ | ❌ |
@@ -234,7 +235,7 @@ Fehlt dein Tool? [Erstelle ein Issue](https://github.com/xiufengsun/TokenTracker
 
 ```mermaid
 flowchart LR
-    A["KI-Coding-Tools<br/>Claude · Codex · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE Work CN · LM Studio · Unsloth Studio"]
+    A["KI-Coding-Tools<br/>Claude · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE Work CN · LM Studio · Unsloth Studio"]
     A -->|Hooks lösen aus| B[Token Tracker]
     B -->|Logs parsen<br/>30-Min-UTC-Buckets| C[(Lokales SQLite)]
     C --> D[Web-Dashboard]
@@ -277,6 +278,7 @@ Die meisten Nutzer brauchen das nie – die Standardwerte sind sinnvoll. Für fo
 | `TOKENTRACKER_GIT_ATTRIBUTION_PROTECTED_DIRS` | Der Git-Zuordnung Zugriff auf TCC-geschützte macOS-Orte erlauben (`1` zum Erlauben). Standardmäßig werden Sitzungen unter `~/Documents`, `~/Downloads`, `~/Desktop`, `~/Library`, den Medienordnern und `/Volumes` übersprungen, weil macOS für jeden Ort einen eigenen Zugriffsdialog anzeigt. Nur aktivieren, wenn du dort Repositories liegen hast und den Zugriff gewähren möchtest | — |
 | `TOKENTRACKER_WSL_MODE` | WSL-Installations-Auflösungsverhalten unter Windows (zur Aggregation von nativen und WSL-Installationen). `wsl-first` (bevorzugt WSL), `native-first`, `wsl-only`, `native-only`, `both` (aggregiert beide Installationen) | `wsl-first` |
 | `CODEX_HOME` | Codex CLI-Verzeichnis überschreiben | `~/.codex` |
+| `TOKENTRACKER_ACODE_HOME` | AStudio-Verzeichnis überschreiben | `~/.acode` |
 | `GEMINI_HOME` | Gemini CLI-Verzeichnis überschreiben | `~/.gemini` |
 | `TOKENTRACKER_GROK_HOME` | Grok Build-Verzeichnis für Grok-Integration und Skills-Manager | `~/.grok` |
 | `GROK_HOME` | Legacy-Grok-Build-Verzeichnis, falls `TOKENTRACKER_GROK_HOME` nicht gesetzt | `~/.grok` |

@@ -1,6 +1,7 @@
 import { copy } from "./copy";
 
 const SPECIAL_PROVIDER_NAMES = {
+  acode: "AStudio",
   anythingllm: "AnythingLLM",
   claudescience: "Claude Science",
   pianthropic: "Pi · Anthropic",

@@ -253,15 +253,96 @@ async function parseRolloutIncremental({
     typeof codexEventStore.add === "function"
       ? codexEventStore
       : null;
-  const prevCodexHashes = Array.isArray(cursors?.codexHashes) ? cursors.codexHashes : [];
-  if (!externalCodexEventStore && !Array.isArray(cursors.codexHashes)) {
-    cursors.codexHashes = prevCodexHashes;
-  }
-  let seenCodexEvents = null;
-  let newCodexEventKeys = null;
-  let newCodexEventKeySet = null;
-  let appendOnlyCodexEvents = null;
-  let historicalCodexEvents = null;
+  const createRolloutEventDedup = ({ cursorKey, externalEventStore = null }) => {
+    const previousHashes = Array.isArray(cursors?.[cursorKey]) ? cursors[cursorKey] : [];
+    if (!externalEventStore && !Array.isArray(cursors[cursorKey])) {
+      cursors[cursorKey] = previousHashes;
+    }
+    let seenEvents = null;
+    let newEventKeys = null;
+    let newEventKeySet = null;
+    let appendOnlyEvents = null;
+    let historicalEvents = null;
+
+    const ensureNewEventKeys = () => {
+      if (!newEventKeys) newEventKeys = [];
+      if (!newEventKeySet) newEventKeySet = new Set();
+    };
+    const recordNewEvent = (key) => {
+      ensureNewEventKeys();
+      if (newEventKeySet.has(key)) return;
+      newEventKeySet.add(key);
+      newEventKeys.push(key);
+      if (seenEvents) seenEvents.add(key);
+      externalEventStore?.add(key);
+    };
+    const getAppendOnlyEvents = () => {
+      if (!appendOnlyEvents) {
+        appendOnlyEvents = {
+          has(key) {
+            return Boolean(newEventKeySet?.has(key) || seenEvents?.has(key));
+          },
+          add: recordNewEvent,
+        };
+      }
+      return appendOnlyEvents;
+    };
+    const getHistoricalEvents = () => {
+      if (externalEventStore) {
+        if (!historicalEvents) {
+          historicalEvents = {
+            has(key) {
+              return Boolean(newEventKeySet?.has(key) || externalEventStore.has(key));
+            },
+            add: recordNewEvent,
+          };
+        }
+        return historicalEvents;
+      }
+      if (!seenEvents) {
+        seenEvents = new Set(previousHashes);
+        for (const key of newEventKeys || []) seenEvents.add(key);
+        if (syncDiagnostics && cursorKey === "codexHashes") {
+          syncDiagnostics.hash_set_constructions += 1;
+        }
+      }
+      if (!historicalEvents) {
+        historicalEvents = {
+          has: (key) => seenEvents.has(key),
+          add: recordNewEvent,
+        };
+      }
+      return historicalEvents;
+    };
+
+    return {
+      getAppendOnlyEvents,
+      getHistoricalEvents,
+      persist() {
+        if (!externalEventStore) {
+          for (const key of newEventKeys || []) previousHashes.push(key);
+        }
+      },
+      size() {
+        return externalEventStore
+          ? Number(externalEventStore.size || 0)
+          : Array.isArray(cursors[cursorKey])
+            ? cursors[cursorKey].length
+            : previousHashes.length;
+      },
+    };
+  };
+  const codexEventDedup = createRolloutEventDedup({
+    cursorKey: "codexHashes",
+    externalEventStore: externalCodexEventStore,
+  });
+  let acodeEventDedup = null;
+  const getAcodeEventDedup = () => {
+    if (!acodeEventDedup) {
+      acodeEventDedup = createRolloutEventDedup({ cursorKey: "acodeHashes" });
+    }
+    return acodeEventDedup;
+  };
   let cursorSessionPaths = null;
   if (syncDiagnostics) {
     const codexParseCandidates = (Array.isArray(rolloutFiles) ? rolloutFiles : []).reduce((count, entry) => {
@@ -284,65 +365,9 @@ async function parseRolloutIncremental({
       hash_set_constructions: 0,
       hash_array_materializations: 0,
       hash_array_materialized_items: 0,
-      codex_hash_count: externalCodexEventStore
-        ? Number(externalCodexEventStore.size || 0)
-        : prevCodexHashes.length,
+      codex_hash_count: codexEventDedup.size(),
     });
   }
-  const ensureNewCodexEventKeys = () => {
-    if (!newCodexEventKeys) newCodexEventKeys = [];
-    if (!newCodexEventKeySet) newCodexEventKeySet = new Set();
-  };
-  const recordNewCodexEvent = (key) => {
-    ensureNewCodexEventKeys();
-    if (newCodexEventKeySet.has(key)) return;
-    newCodexEventKeySet.add(key);
-    newCodexEventKeys.push(key);
-    if (seenCodexEvents) seenCodexEvents.add(key);
-    externalCodexEventStore?.add(key);
-  };
-  const getAppendOnlyCodexEvents = () => {
-    if (!appendOnlyCodexEvents) {
-      appendOnlyCodexEvents = {
-        has(key) {
-          return Boolean(
-            newCodexEventKeySet?.has(key) ||
-            seenCodexEvents?.has(key)
-          );
-        },
-        add: recordNewCodexEvent,
-      };
-    }
-    return appendOnlyCodexEvents;
-  };
-  const getHistoricalCodexEvents = () => {
-    if (externalCodexEventStore) {
-      if (!historicalCodexEvents) {
-        historicalCodexEvents = {
-          has(key) {
-            return Boolean(
-              newCodexEventKeySet?.has(key) ||
-              externalCodexEventStore.has(key)
-            );
-          },
-          add: recordNewCodexEvent,
-        };
-      }
-      return historicalCodexEvents;
-    }
-    if (!seenCodexEvents) {
-      seenCodexEvents = new Set(prevCodexHashes);
-      for (const key of newCodexEventKeys || []) seenCodexEvents.add(key);
-      if (syncDiagnostics) syncDiagnostics.hash_set_constructions += 1;
-    }
-    if (!historicalCodexEvents) {
-      historicalCodexEvents = {
-        has: (key) => seenCodexEvents.has(key),
-        add: recordNewCodexEvent,
-      };
-    }
-    return historicalCodexEvents;
-  };
   const getCursorSessionPaths = () => {
     if (cursorSessionPaths) return cursorSessionPaths;
     cursorSessionPaths = new Map();
@@ -354,7 +379,7 @@ async function parseRolloutIncremental({
     }
     return cursorSessionPaths;
   };
-  const needsHistoricalCodexDedup = ({
+  const needsHistoricalRolloutDedup = ({
     filePath,
     prev,
     sameInode,
@@ -420,7 +445,7 @@ async function parseRolloutIncremental({
     const prevOffset = sameInode ? prev.offset || 0 : 0;
     const truncated = sameInode && prevOffset > st.size;
     const rebuildingCodexBaseline = Boolean(
-      fileSource === DEFAULT_SOURCE &&
+      (fileSource === DEFAULT_SOURCE || fileSource === "acode") &&
       sameInode &&
       !truncated &&
       prevOffset > 0 &&
@@ -436,7 +461,8 @@ async function parseRolloutIncremental({
       : null;
     const lastModel = sameInode && !truncated ? prev.lastModel || null : null;
 
-    const codexProjectFastPath = projectEnabled && fileSource === DEFAULT_SOURCE;
+    const codexProjectFastPath =
+      projectEnabled && (fileSource === DEFAULT_SOURCE || fileSource === "acode");
     const projectOffset = sameInode && !truncated ? Number(prev.projectOffset || 0) : 0;
     const projectUpToDate =
       codexProjectFastPath &&
@@ -487,8 +513,13 @@ async function parseRolloutIncremental({
     if (syncDiagnostics && !projectContextOnlyScan && fileSource === DEFAULT_SOURCE) {
       syncDiagnostics.content_files_read += 1;
     }
-    const codexEventTracker = fileSource === DEFAULT_SOURCE
-      ? (needsHistoricalCodexDedup({
+    const rolloutEventDedup = fileSource === DEFAULT_SOURCE
+      ? codexEventDedup
+      : fileSource === "acode"
+        ? getAcodeEventDedup()
+        : null;
+    const codexEventTracker = rolloutEventDedup
+      ? (needsHistoricalRolloutDedup({
           filePath,
           prev,
           sameInode,
@@ -496,8 +527,8 @@ async function parseRolloutIncremental({
           startOffset,
           rebuildingBaseline: rebuildingCodexBaseline,
         })
-          ? getHistoricalCodexEvents
-          : getAppendOnlyCodexEvents)
+          ? rolloutEventDedup.getHistoricalEvents
+          : rolloutEventDedup.getAppendOnlyEvents)
       : null;
     const result = projectContextOnlyScan
       ? await scanRolloutProjectFileContexts({
@@ -575,15 +606,10 @@ async function parseRolloutIncremental({
   const projectBucketsQueued = projectEnabled
     ? await enqueueTouchedProjectBuckets({ projectQueuePath, projectState, projectTouchedBuckets })
     : 0;
-  if (!externalCodexEventStore) {
-    for (const key of newCodexEventKeys || []) prevCodexHashes.push(key);
-  }
+  codexEventDedup.persist();
+  acodeEventDedup?.persist();
   if (syncDiagnostics) {
-    syncDiagnostics.codex_hash_count = externalCodexEventStore
-      ? Number(externalCodexEventStore.size || 0)
-      : Array.isArray(cursors.codexHashes)
-        ? cursors.codexHashes.length
-        : prevCodexHashes.length;
+    syncDiagnostics.codex_hash_count = codexEventDedup.size();
   }
   hourlyState.updatedAt = new Date().toISOString();
   cursors.hourly = hourlyState;
@@ -2171,7 +2197,7 @@ async function parseRolloutFile({
     if (!delta || isAllZeroUsage(delta)) continue;
     delta.conversation_count = 1;
 
-    // Forked Codex rollouts replay the parent session's entire token history
+    // Forked Codex and Acode rollouts replay the parent session's entire token history
     // into the child file the moment the fork is created. The date guard below
     // (current_date < rolloutDate) catches cross-day forks, but same-day forks
     // share the parent's current_date and slip through it. The replay is written
@@ -2187,9 +2213,13 @@ async function parseRolloutFile({
     // counted (a bounded, <1% residual over-count); dropping real usage is the
     // worse failure, so we bias against it. `usageDeltaState` is already advanced above,
     // keeping the cumulative lineage correct for the live turns we keep.
-    // Scoped to forked codex rollouts. (issue #169 follow-up.)
+    // Scoped to forked Codex/Acode rollouts. (issue #169 follow-up.)
     let forkedReplaySkip = false;
-    if (isForkedRollout && source === DEFAULT_SOURCE && replayPrefixActive) {
+    if (
+      isForkedRollout &&
+      (source === DEFAULT_SOURCE || source === "acode") &&
+      replayPrefixActive
+    ) {
       const tokenMs = Date.parse(tokenTimestamp);
       // Fail open on anything the burst heuristic was not measured against:
       // an unparseable timestamp or a backwards clock step permanently ends
@@ -2199,13 +2229,13 @@ async function parseRolloutFile({
       if (!Number.isFinite(tokenMs) || (prevForkedTokenMs !== null && tokenMs < prevForkedTokenMs)) {
         replayPrefixActive = false;
       } else {
-        if (prevForkedTokenMs !== null && tokenMs - prevForkedTokenMs >= CODEX_FORK_REPLAY_GAP_MS) {
+        if (prevForkedTokenMs !== null && tokenMs - prevForkedTokenMs >= FORK_REPLAY_GAP_MS) {
           replayPrefixActive = false;
         }
         forkedReplaySkip =
           replayPrefixActive &&
           prevForkedTokenMs !== null &&
-          tokenMs - prevForkedTokenMs < CODEX_FORK_REPLAY_GAP_MS;
+          tokenMs - prevForkedTokenMs < FORK_REPLAY_GAP_MS;
         prevForkedTokenMs = tokenMs;
       }
     }
@@ -2231,14 +2261,12 @@ async function parseRolloutFile({
     // are still counted. Key = sessionUUID:eventTimestamp (both stable across the
     // rewrite and across a sessions/ -> archived_sessions/ move).
     //
-    // Scoped to the `codex` source: Codex-Manager (the tool that does the atomic
-    // rewrite) manages Codex. Other rollout-format sources (e.g. every-code) have
-    // their own model re-alignment that legitimately re-reads prior events, which
-    // this dedup would otherwise suppress.
+    // Apply event deduplication only to Codex and Acode. Every Code and other sources
+    // reread events to realign models.
     const codexEvents = typeof seenCodexEvents === "function"
       ? seenCodexEvents()
       : seenCodexEvents;
-    if (codexEvents && source === "codex") {
+    if (codexEvents && (source === "codex" || source === "acode")) {
       const dedupKey = `${sessionId || filePath}:${tokenTimestamp}`;
       if (codexEvents.has(dedupKey)) continue;
       codexEvents.add(dedupKey);
@@ -3755,7 +3783,7 @@ function normalizeIsoDate(value) {
 // toward the low end because merging a real fast turn (under-count) is worse than
 // leaving a slow replay counted (bounded over-count). See the skip site in
 // parseRolloutFile. (issue #169 follow-up.)
-const CODEX_FORK_REPLAY_GAP_MS = 500;
+const FORK_REPLAY_GAP_MS = 500;
 
 function isForkedReplayToken({ isForkedRollout, rolloutDate, currentDate }) {
   return Boolean(isForkedRollout && rolloutDate && currentDate && currentDate < rolloutDate);

@@ -58,7 +58,12 @@ test("notify handler hides detached background sync windows on Windows", () => {
   );
 });
 
-async function runGeneratedNotifyHandler({ trackerDir, notify, args = ["--source=codex", "turn-ended"] }) {
+async function runGeneratedNotifyHandler({
+  trackerDir,
+  notify,
+  args = ["--source=codex", "turn-ended"],
+  originalSource = "codex",
+}) {
   await fs.mkdir(trackerDir, { recursive: true });
   const notifyPath = path.join(trackerDir, "notify.cjs");
   await fs.writeFile(
@@ -68,7 +73,10 @@ async function runGeneratedNotifyHandler({ trackerDir, notify, args = ["--source
   );
   await fs.chmod(notifyPath, 0o755);
   await fs.writeFile(
-    path.join(trackerDir, "codex_notify_original.json"),
+    path.join(
+      trackerDir,
+      originalSource === "acode" ? "acode_notify_original.json" : "codex_notify_original.json",
+    ),
     JSON.stringify({ notify, capturedAt: new Date().toISOString() }),
     "utf8",
   );
@@ -1103,6 +1111,32 @@ test("notify handler still chains normal original notify commands", async () => 
   }
 });
 
+test("notify handler chains the independent Acode original notify", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-acode-notify-chain-"));
+  try {
+    const markerPath = path.join(tmp, "acode-marker");
+    const shimPath = path.join(tmp, "acode-notify.js");
+    await fs.writeFile(
+      shimPath,
+      `require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, process.argv.slice(2).join('|'));\n`,
+      "utf8",
+    );
+
+    await runGeneratedNotifyHandler({
+      trackerDir: path.join(tmp, "tracker-acode"),
+      notify: [process.execPath, shimPath],
+      args: ["--source=acode", "turn-ended"],
+      originalSource: "acode",
+    });
+
+    const marker = await waitForFile(markerPath, { timeoutMs: 5000 });
+    assert.ok(marker, "expected Acode chained notify marker to be written");
+    assert.ok(marker.includes("turn-ended"));
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("init preserves existing config fields and custom URLs", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-init-config-"));
   let restoreHome = () => {};
@@ -1508,6 +1542,53 @@ test("init then uninstall restores original Every Code notify (when config exist
     else process.env.CODEX_HOME = prevCodexHome;
     if (prevCodeHome === undefined) delete process.env.CODE_HOME;
     else process.env.CODE_HOME = prevCodeHome;
+    if (prevToken === undefined) delete process.env.TOKENTRACKER_DEVICE_TOKEN;
+    else process.env.TOKENTRACKER_DEVICE_TOKEN = prevToken;
+    if (prevOpencodeConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR;
+    else process.env.OPENCODE_CONFIG_DIR = prevOpencodeConfigDir;
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("init then uninstall restores original Acode notify", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-acode-init-uninstall-"));
+  let restoreHome = () => {};
+  const prevCodexHome = process.env.CODEX_HOME;
+  const prevAcodeHome = process.env.TOKENTRACKER_ACODE_HOME;
+  const prevToken = process.env.TOKENTRACKER_DEVICE_TOKEN;
+  const prevOpencodeConfigDir = process.env.OPENCODE_CONFIG_DIR;
+  const prevWrite = process.stdout.write;
+
+  try {
+    restoreHome = withHome(tmp);
+    process.env.CODEX_HOME = path.join(tmp, ".codex");
+    process.env.TOKENTRACKER_ACODE_HOME = path.join(tmp, ".acode");
+    delete process.env.TOKENTRACKER_DEVICE_TOKEN;
+    process.env.OPENCODE_CONFIG_DIR = path.join(tmp, ".config", "opencode");
+    await fs.mkdir(process.env.CODEX_HOME, { recursive: true });
+    await fs.mkdir(process.env.TOKENTRACKER_ACODE_HOME, { recursive: true });
+    await fs.writeFile(path.join(process.env.CODEX_HOME, "config.toml"), "# empty\n", "utf8");
+    const acodeConfigPath = path.join(process.env.TOKENTRACKER_ACODE_HOME, "config.toml");
+    await fs.writeFile(acodeConfigPath, 'notify = ["echo", "hello-acode"]\n', "utf8");
+
+    process.stdout.write = () => true;
+    await cmdInit(["--yes", "--no-auth", "--no-open", "--base-url", "https://example.invalid"]);
+
+    const installed = await fs.readFile(acodeConfigPath, "utf8");
+    assert.match(installed, /notify\s*=\s*\[[^\n]*notify\.cjs[^\n]*--source=acode[^\n]*\]/);
+    assert.doesNotMatch(installed, /hello-acode/);
+
+    await cmdUninstall([]);
+
+    const restored = await fs.readFile(acodeConfigPath, "utf8");
+    assert.match(restored, /notify = \["echo", "hello-acode"\]/);
+  } finally {
+    process.stdout.write = prevWrite;
+    restoreHome();
+    if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = prevCodexHome;
+    if (prevAcodeHome === undefined) delete process.env.TOKENTRACKER_ACODE_HOME;
+    else process.env.TOKENTRACKER_ACODE_HOME = prevAcodeHome;
     if (prevToken === undefined) delete process.env.TOKENTRACKER_DEVICE_TOKEN;
     else process.env.TOKENTRACKER_DEVICE_TOKEN = prevToken;
     if (prevOpencodeConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR;

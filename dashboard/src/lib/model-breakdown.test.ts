@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAllModels, buildFleetData } from "./model-breakdown";
+import { buildAllModels, buildFleetData, buildTopModels } from "./model-breakdown";
 
 describe("buildFleetData", () => {
   it("keeps two decimal places for small provider percentages", () => {
@@ -69,6 +69,58 @@ describe("buildFleetData", () => {
         models: { model_id: "not-an-array" },
       }],
     })).not.toThrow();
+  });
+
+  it("uses raw AStudio service IDs as model display names", () => {
+    const response = {
+      sources: [
+        {
+          source: "acode",
+          totals: { billable_total_tokens: 150 },
+          models: [
+            {
+              model: "xopdeepseekv4flash0731",
+              model_id: "xopdeepseekv4flash0731",
+              totals: { billable_total_tokens: 100 },
+            },
+            {
+              model: "xopglm52",
+              model_id: "xopglm52",
+              totals: { billable_total_tokens: 40 },
+            },
+            {
+              model: "custom-service-id",
+              model_id: "custom-service-id",
+              totals: { billable_total_tokens: 10 },
+            },
+          ],
+        },
+        {
+          source: "codex",
+          totals: { billable_total_tokens: 5 },
+          models: [
+            {
+              model: "xopglm52",
+              model_id: "xopglm52",
+              totals: { billable_total_tokens: 5 },
+            },
+          ],
+        },
+      ],
+    };
+
+    const fleet = buildFleetData(response);
+    expect(fleet[0].models.map(({ id, name }: any) => ({ id, name }))).toEqual([
+      { id: "xopdeepseekv4flash0731", name: "xopdeepseekv4flash0731" },
+      { id: "xopglm52", name: "xopglm52" },
+      { id: "custom-service-id", name: "custom-service-id" },
+    ]);
+    expect(fleet[1].models[0]).toMatchObject({ id: "xopglm52", name: "xopglm52" });
+    expect(buildTopModels(response, { limit: 4 }).map(({ name }: any) => name)).toEqual([
+      "xopdeepseekv4flash0731",
+      "xopglm52",
+      "custom-service-id",
+    ]);
   });
 });
 

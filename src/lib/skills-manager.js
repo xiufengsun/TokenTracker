@@ -15,6 +15,7 @@ const DEFAULT_REPOS = [
 const TARGETS = {
   claude: { id: "claude", label: "Claude", dir: () => path.join(os.homedir(), ".claude", "skills") },
   codex: { id: "codex", label: "Codex", dir: () => path.join(resolveCodexHome(), "skills") },
+  acode: { id: "acode", label: "AStudio", dir: () => path.join(resolveAcodeHome(), "skills") },
   grok: { id: "grok", label: "Grok", dir: () => path.join(resolveGrokHome(process.env), "skills") },
   antigravity: { id: "antigravity", label: "Antigravity", dirs: () => resolveAntigravitySkillDirs(process.env) },
   gemini: { id: "gemini", label: "Gemini", dir: () => path.join(os.homedir(), ".gemini", "skills") },
@@ -30,6 +31,10 @@ const TARGETS = {
 
 function resolveCodexHome() {
   return String(process.env.CODEX_HOME || "").trim() || path.join(os.homedir(), ".codex");
+}
+
+function resolveAcodeHome() {
+  return String(process.env.TOKENTRACKER_ACODE_HOME || "").trim() || path.join(os.homedir(), ".acode");
 }
 
 function resolveZcodeHome() {

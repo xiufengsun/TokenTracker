@@ -555,6 +555,80 @@ test("parseRolloutIncremental does not double-count a session moved sessions/ ->
   }
 });
 
+test("parseRolloutIncremental deduplicates Acode live and archived session copies independently", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-acode-rollout-"));
+  try {
+    const uuid = "019b4e04-2bd1-7661-b050-066f82a96567";
+    const liveDir = path.join(tmp, ".acode", "sessions", "2026", "08", "31");
+    const archiveDir = path.join(tmp, ".acode", "archived_sessions");
+    await fs.mkdir(liveDir, { recursive: true });
+    await fs.mkdir(archiveDir, { recursive: true });
+    const fileName = `rollout-2026-08-31T00-00-00-${uuid}.jsonl`;
+    const liveFile = path.join(liveDir, fileName);
+    const archiveFile = path.join(archiveDir, fileName);
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = {
+      version: 1,
+      files: {},
+      codexHashes: ["codex-session:2026-08-31T00:00:01.000Z"],
+      updatedAt: null,
+    };
+    const usage = {
+      input_tokens: 100,
+      cached_input_tokens: 40,
+      output_tokens: 20,
+      reasoning_output_tokens: 5,
+      total_tokens: 120,
+    };
+    const body = [
+      buildTurnContextLine({ model: "xopglm52" }),
+      buildTokenCountLine({ ts: "2026-08-31T00:00:01.000Z", last: usage, total: usage }),
+    ].join("\n") + "\n";
+    await fs.writeFile(liveFile, body, "utf8");
+    await fs.writeFile(archiveFile, body, "utf8");
+
+    await parseRolloutIncremental({
+      rolloutFiles: [{ path: liveFile, source: "acode" }],
+      cursors,
+      queuePath,
+    });
+    const afterLive = Object.entries(cursors.hourly.buckets)
+      .filter(([key]) => key.startsWith("acode|"))
+      .reduce((sum, [, bucket]) => sum + bucket.totals.total_tokens, 0);
+    assert.equal(afterLive, usage.total_tokens);
+
+    await parseRolloutIncremental({
+      rolloutFiles: [{ path: archiveFile, source: "acode" }],
+      cursors,
+      queuePath,
+    });
+    const afterArchive = Object.entries(cursors.hourly.buckets)
+      .filter(([key]) => key.startsWith("acode|"))
+      .reduce((sum, [, bucket]) => sum + bucket.totals.total_tokens, 0);
+    assert.equal(afterArchive, afterLive);
+    assert.equal(cursors.acodeHashes.length, 1);
+    assert.deepEqual(cursors.codexHashes, ["codex-session:2026-08-31T00:00:01.000Z"]);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseRolloutIncremental leaves Acode dedup state absent when no Acode files participate", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-acode-cursor-"));
+  try {
+    const cursors = { version: 1, files: {}, updatedAt: null };
+    await parseRolloutIncremental({
+      rolloutFiles: [],
+      cursors,
+      queuePath: path.join(tmp, "queue.jsonl"),
+      source: "codex",
+    });
+    assert.equal(Object.hasOwn(cursors, "acodeHashes"), false);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("parseRolloutIncremental prefers cumulative total_token_usage delta over larger last_token_usage", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-rollout-"));
   try {
@@ -2058,6 +2132,74 @@ test("parseRolloutIncremental skips same-day forked replay burst (issue #169 fol
     assert.equal(total, r0.total_tokens + live.total_tokens);
     // Cumulative baseline advanced across the skipped rows so the live delta is intact.
     assert.deepEqual(cursors.files[rolloutPath].lastTotal, cum(r0, r1, r2, live));
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseRolloutIncremental skips same-day forked replay burst for Acode", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-acode-rollout-"));
+  try {
+    const rolloutPath = path.join(tmp, "rollout-2026-06-09T20-46-23-fork.jsonl");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+    const usage = (input, output) => ({
+      input_tokens: input,
+      cached_input_tokens: 0,
+      output_tokens: output,
+      reasoning_output_tokens: 0,
+      total_tokens: input + output,
+    });
+    const add = (left, right) => ({
+      input_tokens: left.input_tokens + right.input_tokens,
+      cached_input_tokens: 0,
+      output_tokens: left.output_tokens + right.output_tokens,
+      reasoning_output_tokens: 0,
+      total_tokens: left.total_tokens + right.total_tokens,
+    });
+    const replay0 = usage(100, 10);
+    const replay1 = usage(200, 20);
+    const live = usage(7, 3);
+    const replayTotal = add(replay0, replay1);
+    const liveTotal = add(replayTotal, live);
+
+    const lines = [
+      buildSessionMetaLine({
+        model: "xopglm53",
+        cwd: tmp,
+        forkedFromId: "019e095c-c041-7b40-b7cb-43ddb153086c",
+      }),
+      buildTurnContextLine({ model: "xopglm53", cwd: tmp, currentDate: "2026-06-09" }),
+      buildTokenCountLine({
+        ts: "2026-06-09T20:46:23.100Z",
+        last: replay0,
+        total: replay0,
+      }),
+      buildTokenCountLine({
+        ts: "2026-06-09T20:46:23.101Z",
+        last: replay1,
+        total: replayTotal,
+      }),
+      buildTokenCountLine({
+        ts: "2026-06-09T20:46:53.102Z",
+        last: live,
+        total: liveTotal,
+      }),
+    ];
+    await fs.writeFile(rolloutPath, lines.join("\n") + "\n", "utf8");
+
+    const res = await parseRolloutIncremental({
+      rolloutFiles: [{ path: rolloutPath, source: "acode" }],
+      cursors,
+      queuePath,
+    });
+    assert.equal(res.eventsAggregated, 2);
+
+    const queued = await readJsonLines(queuePath);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].source, "acode");
+    assert.equal(queued[0].total_tokens, replay0.total_tokens + live.total_tokens);
+    assert.deepEqual(cursors.files[rolloutPath].lastTotal, liveTotal);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

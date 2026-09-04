@@ -22,6 +22,11 @@ describe("formatProviderDisplayName", () => {
     expect(formatProviderDisplayName("")).toBe("");
   });
 
+  it("uses the AStudio product name", () => {
+    expect(formatProviderDisplayName("acode")).toBe("AStudio");
+    expect(formatProviderDisplayName("ACODE")).toBe("AStudio");
+  });
+
   it("gives Pi routed providers distinct readable names", () => {
     expect(formatProviderDisplayName("pi-anthropic")).toBe("Pi · Anthropic");
     expect(formatProviderDisplayName("PI-GITHUB-COPILOT")).toBe("Pi · GitHub Copilot");

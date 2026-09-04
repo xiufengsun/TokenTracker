@@ -107,6 +107,15 @@ test("detectPassiveProviders: codex with naked sessions/ dir", () => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test("detectPassiveProviders: acode with naked sessions/ dir", () => {
+  const home = tmpHome();
+  fs.mkdirSync(path.join(home, ".acode", "sessions"), { recursive: true });
+  const out = detectPassiveProviders({ home, hookStatus: { acode_notify: false } });
+  const acode = out.find((p) => p.name === "acode");
+  assert.equal(acode.passive, true);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test("isPassiveModeActive: false when no provider is passive", () => {
   const out = [
     { name: "claude", passive: false },

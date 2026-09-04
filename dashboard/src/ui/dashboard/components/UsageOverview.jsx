@@ -73,6 +73,7 @@ function parseAnimatedCounterValue(displayValue) {
 
 // Provider color mapping for visual distinction
 const PROVIDER_COLORS = {
+  ACODE: "var(--brand-primary-light)",
   CODEX: "#3b82f6",     // blue-500
   DSH: "var(--community-deepseek)", // DeepSeek Harness brand blue
   CLAUDE: "#d97757",    // Anthropic Japonica orange-red

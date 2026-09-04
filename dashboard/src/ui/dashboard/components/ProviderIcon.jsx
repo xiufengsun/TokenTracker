@@ -22,6 +22,32 @@ function CodexIcon({ size = 16, className = "" }) {
   );
 }
 
+function AcodeIcon({ size = 16, className = "" }) {
+  return (
+    <span
+      className={`relative inline-block shrink-0 ${className}`.trim()}
+      style={{ width: size, height: size }}
+      data-brand="acode"
+      aria-hidden="true"
+    >
+      <img
+        src="/brand-logos/acode.png"
+        alt=""
+        width={size}
+        height={size}
+        className="block h-full w-full object-contain dark:hidden"
+      />
+      <img
+        src="/brand-logos/acode-dark.png"
+        alt=""
+        width={size}
+        height={size}
+        className="hidden h-full w-full object-contain dark:block"
+      />
+    </span>
+  );
+}
+
 function CursorIcon({ size = 16, className = "" }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" className={className}>
@@ -340,6 +366,7 @@ function DeepSeekHarnessIcon({ size = 16, className = "" }) {
 }
 
 const PROVIDER_ICON_MAP = {
+  ACODE: AcodeIcon,
   CLAUDE: ClaudeIcon,
   ZCODE: ZcodeIcon,
   CODEBUDDY: CodeBuddyIcon,

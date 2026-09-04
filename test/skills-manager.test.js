@@ -42,6 +42,20 @@ function restoreEnv(name, value) {
 }
 
 describe("skills-manager targetList", () => {
+  it("includes AStudio and resolves its home override", () => {
+    const previousHome = process.env.TOKENTRACKER_ACODE_HOME;
+    try {
+      process.env.TOKENTRACKER_ACODE_HOME = path.join(sandboxHome, ".astudio-custom");
+      const target = skills.targetList().find((entry) => entry.id === "acode");
+      assert.ok(target);
+      assert.equal(target.label, "AStudio");
+      assert.equal(target.path, path.join(sandboxHome, ".astudio-custom", "skills"));
+      assert.equal(target.manageable, true);
+    } finally {
+      restoreEnv("TOKENTRACKER_ACODE_HOME", previousHome);
+    }
+  });
+
   it("includes Grok and resolves Grok home overrides", () => {
     const prevTokenTrackerGrokHome = process.env.TOKENTRACKER_GROK_HOME;
     const prevGrokHome = process.env.GROK_HOME;

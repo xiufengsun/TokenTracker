@@ -4,8 +4,10 @@ const fs = require("node:fs/promises");
 
 const {
   restoreCodexNotify,
+  restoreAcodeNotify,
   restoreEveryCodeNotify,
   buildCodexNotifyCmd,
+  buildAcodeNotifyCmd,
   buildEveryCodeNotifyCmd,
 } = require("../lib/codex-config");
 const {
@@ -33,6 +35,8 @@ async function cmdUninstall(argv) {
   const { trackerDir, binDir } = await resolveTrackerPaths({ home });
   const codexHome = process.env.CODEX_HOME || path.join(home, ".codex");
   const codexConfigPath = path.join(codexHome, "config.toml");
+  const acodeHome = process.env.TOKENTRACKER_ACODE_HOME || path.join(home, ".acode");
+  const acodeConfigPath = path.join(acodeHome, "config.toml");
   const codeHome = process.env.CODE_HOME || path.join(home, ".code");
   const codeConfigPath = path.join(codeHome, "config.toml");
   const claudeSettingsPath = path.join(home, ".claude", "settings.json");
@@ -45,8 +49,10 @@ async function cmdUninstall(argv) {
   const opencodeConfigDir = resolveOpencodeConfigDir({ home, env: process.env });
   const notifyPath = path.join(binDir, "notify.cjs");
   const notifyOriginalPath = path.join(trackerDir, "codex_notify_original.json");
+  const acodeNotifyOriginalPath = path.join(trackerDir, "acode_notify_original.json");
   const codeNotifyOriginalPath = path.join(trackerDir, "code_notify_original.json");
   const codexNotifyCmd = buildCodexNotifyCmd(notifyPath);
+  const acodeNotifyCmd = buildAcodeNotifyCmd(notifyPath);
   const codeNotifyCmd = buildEveryCodeNotifyCmd(notifyPath);
   const claudeHookCommand = buildClaudeHookCommand(notifyPath);
   const codebuddyHookCommand = buildHookCommand(notifyPath, "codebuddy");
@@ -54,6 +60,7 @@ async function cmdUninstall(argv) {
   const geminiHookCommand = buildGeminiHookCommand(notifyPath);
 
   const codexConfigExists = await isFile(codexConfigPath);
+  const acodeConfigExists = await isFile(acodeConfigPath);
   const codeConfigExists = await isFile(codeConfigPath);
   const claudeConfigExists = await isFile(claudeSettingsPath);
   const codebuddyConfigExists = await isFile(codebuddySettingsPath);
@@ -65,6 +72,13 @@ async function cmdUninstall(argv) {
         codexConfigPath,
         notifyOriginalPath,
         notifyCmd: codexNotifyCmd,
+      })
+    : { restored: false, skippedReason: "config-missing" };
+  const acodeRestore = acodeConfigExists
+    ? await restoreAcodeNotify({
+        acodeConfigPath,
+        notifyOriginalPath: acodeNotifyOriginalPath,
+        notifyCmd: acodeNotifyCmd,
       })
     : { restored: false, skippedReason: "config-missing" };
   const codeRestore = codeConfigExists
@@ -138,6 +152,15 @@ async function cmdUninstall(argv) {
               ? "- Codex notify: skipped (current notify is not managed by TokenTracker)"
             : "- Codex notify: no change"
         : "- Codex notify: skipped (config.toml not found)",
+      acodeConfigExists
+        ? acodeRestore?.restored
+          ? `- AStudio notify restored: ${acodeConfigPath}`
+          : acodeRestore?.skippedReason === "no-backup-not-installed"
+            ? "- AStudio notify: skipped (no backup; not installed)"
+            : acodeRestore?.skippedReason === "current-not-managed"
+              ? "- AStudio notify: skipped (current notify is not managed by TokenTracker)"
+              : "- AStudio notify: no change"
+        : "- AStudio notify: skipped (config.toml not found)",
       codeConfigExists
         ? codeRestore?.restored
           ? `- Every Code notify restored: ${codeConfigPath}`

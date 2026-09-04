@@ -8,8 +8,10 @@ const { readJson } = require("../lib/fs");
 const { readCursorStateSummary } = require("../lib/cursor-store");
 const {
   readCodexNotify,
+  readAcodeNotify,
   readEveryCodeNotify,
   buildCodexNotifyCmd,
+  buildAcodeNotifyCmd,
   isManagedNotifyCmd,
 } = require("../lib/codex-config");
 const {
@@ -188,6 +190,8 @@ async function cmdStatus(argv = []) {
   const syncSkipPath = path.join(trackerDir, "sync.skip.json");
   const codexHome = process.env.CODEX_HOME || path.join(home, ".codex");
   const codexConfigPath = path.join(codexHome, "config.toml");
+  const acodeHome = process.env.TOKENTRACKER_ACODE_HOME || path.join(home, ".acode");
+  const acodeConfigPath = path.join(acodeHome, "config.toml");
   const codeHome = process.env.CODE_HOME || path.join(home, ".code");
   const codeConfigPath = path.join(codeHome, "config.toml");
   const claudeSettingsPath = path.join(home, ".claude", "settings.json");
@@ -209,6 +213,7 @@ async function cmdStatus(argv = []) {
   });
   const notifyPath = path.join(binDir, "notify.cjs");
   const codexNotifyCmd = buildCodexNotifyCmd(notifyPath);
+  const acodeNotifyCmd = buildAcodeNotifyCmd(notifyPath);
   const claudeHookCommand = buildClaudeHookCommand(notifyPath);
   const codebuddyHookCommand = buildHookCommand(notifyPath, "codebuddy");
   const workbuddyHookCommand = buildHookCommand(notifyPath, "workbuddy");
@@ -240,6 +245,8 @@ async function cmdStatus(argv = []) {
   // terminal `tokentracker` run, so a correctly-installed integration would
   // otherwise report as not configured. See isManagedNotifyCmd.
   const notifyConfigured = isManagedNotifyCmd(codexNotify, codexNotifyCmd);
+  const acodeNotify = await readAcodeNotify(acodeConfigPath);
+  const acodeConfigured = isManagedNotifyCmd(acodeNotify, acodeNotifyCmd);
   const everyCodeNotify = await readEveryCodeNotify(codeConfigPath);
   const everyCodeConfigured =
     Array.isArray(everyCodeNotify) && everyCodeNotify.length > 0;
@@ -643,6 +650,15 @@ async function cmdStatus(argv = []) {
   const codexActive = formatResolvedPaths(codexPaths, ["sessions", "archived_sessions"]);
   const codexInstalledStatus = codexActive.length > 0;
 
+  const acodePaths = resolveInstallPaths({
+    nativeValue: acodeHome,
+    wslDir: ".acode",
+    requireAnyChild: ["sessions", "archived_sessions"],
+    union: true,
+  });
+  const acodeActive = formatResolvedPaths(acodePaths, ["sessions", "archived_sessions"]);
+  const acodeInstalled = acodeActive.length > 0;
+
   // Kimi (passive sessions scan)
   const kimiPaths = resolveInstallPaths({
     nativeValue: path.join(home, ".kimi"),
@@ -880,8 +896,10 @@ async function cmdStatus(argv = []) {
   // syscalls (~5–10ms cold). Memoize.
   const passiveProviders = detectPassiveProviders({
     home,
+    env: process.env,
     hookStatus: {
       codex_notify: notifyConfigured,
+      acode_notify: acodeConfigured,
       every_code_notify: everyCodeConfigured,
       claude: claudeHookConfigured,
       gemini: geminiHookConfigured,
@@ -916,6 +934,7 @@ async function cmdStatus(argv = []) {
       auto_retry: autoRetry || null,
       hooks: {
         codex_notify: notifyConfigured,
+        acode_notify: acodeConfigured,
         every_code_notify: everyCodeConfigured,
         claude: claudeHookConfigured,
         gemini: geminiHookConfigured,
@@ -930,6 +949,9 @@ async function cmdStatus(argv = []) {
         grok: grokInstalled ? Boolean(grokHookState?.configured) : null,
       },
       providers: {
+        acode: acodeInstalled
+          ? { installed: true, detail: acodeActive.join(" | ") }
+          : { installed: false },
         kimi_code: kimiInstalled || kimiCodeInstalled
           ? { installed: true, files: kimiWireFiles.length + kimiCodeWireFiles.length }
           : { installed: false },
@@ -1097,6 +1119,7 @@ async function cmdStatus(argv = []) {
       syncSkipLine,
       autoRetryLine,
       `- Codex notify: ${notifyConfigured ? JSON.stringify(codexNotify) : "unset"}`,
+      `- AStudio notify: ${acodeConfigured ? JSON.stringify(acodeNotify) : "unset"}`,
       `- Every Code notify: ${everyCodeConfigured ? JSON.stringify(everyCodeNotify) : "unset"}`,
       `- Claude hooks: ${claudeHookConfigured ? "set" : "unset"}`,
       claudeCodeInstalled
@@ -1175,6 +1198,9 @@ async function cmdStatus(argv = []) {
         : null,
       codexInstalledStatus
         ? `- Codex CLI: sessions found (${codexActive.join(" | ")})`
+        : null,
+      acodeInstalled
+        ? `- AStudio: sessions found (${acodeActive.join(" | ")})`
         : null,
       kilocodeInstalled
         ? `- Kilo Code (VS Code extension): passive reader (${kilocodeTaskFiles.length} task${kilocodeTaskFiles.length !== 1 ? "s" : ""} across ${new Set(kilocodeTaskFiles.map((t) => t.ide)).size} IDE${new Set(kilocodeTaskFiles.map((t) => t.ide)).size !== 1 ? "s" : ""})`

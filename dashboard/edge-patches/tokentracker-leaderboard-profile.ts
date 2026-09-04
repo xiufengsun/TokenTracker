@@ -261,9 +261,87 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "step-3.5-flash": { input: 0.1, output: 0.3, cache_read: 0.02, cache_write: 0.1 },
 };
 const ZERO_PRICING = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+// iFlytek MaaS prices used by the AStudio source: RMB per million tokens,
+// converted at 7.2 RMB/USD and rounded to two decimal places. Models without a cache-hit
+// price use the regular input price; cache writes use the regular input price as well.
+// AStudio homepage: https://agent.xfyun.cn/
+// Official pricing source: https://maas.xfyun.cn/modelSquare
+const IFLYTEK_MAAS_MODEL_PRICING: Record<string, { input: number; output: number; cache_read: number; cache_write?: number }> = {
+  "xopglm53": { input: 1.11, output: 3.89, cache_read: 0.28, cache_write: 1.11 },
+  "xopdeepseekv4pro0813": { input: 1.25, output: 3.75, cache_read: 0.04, cache_write: 1.25 },
+  "xopdeepseekv4flash0731": { input: 0.14, output: 0.28, cache_read: 0.03, cache_write: 0.14 },
+  "xopkimik27code": { input: 0.90, output: 3.75, cache_read: 0.90, cache_write: 0.90 },
+  "xopglm52": { input: 1.11, output: 3.89, cache_read: 0.28, cache_write: 1.11 },
+  "xopdeepseekv4flash": { input: 0.14, output: 0.28, cache_read: 0.03, cache_write: 0.14 },
+  "xopkimik26": { input: 0.90, output: 3.75, cache_read: 0.18, cache_write: 0.90 },
+  "xopdeepseekv4pro": { input: 1.67, output: 3.33, cache_read: 0.14, cache_write: 1.67 },
+  "xopqwen36v35b": { input: 0.15, output: 0.90, cache_read: 0.15, cache_write: 0.15 },
+  "xophunyuan7bmt": { input: 0.07, output: 0.28, cache_read: 0.07, cache_write: 0.07 },
+  "xoppaddleocrv16": { input: 0.00, output: 0.00, cache_read: 0.00, cache_write: 0.00 },
+  "xsparkx2flash": { input: 0.14, output: 0.28, cache_read: 0.14, cache_write: 0.14 },
+  "xopglm51": { input: 1.11, output: 3.89, cache_read: 0.22, cache_write: 1.11 },
+  "xsparkx2": { input: 0.42, output: 0.42, cache_read: 0.42, cache_write: 0.42 },
+  "xop35qwen2b": { input: 0.03, output: 0.06, cache_read: 0.03, cache_write: 0.03 },
+  "xopqwen35397b": { input: 0.17, output: 1.00, cache_read: 0.17, cache_write: 0.17 },
+  "xminimaxm25": { input: 0.29, output: 1.17, cache_read: 0.29, cache_write: 0.29 },
+  "xopglm5": { input: 0.83, output: 3.06, cache_read: 0.17, cache_write: 0.83 },
+  "xopkimik25": { input: 0.56, output: 2.92, cache_read: 0.56, cache_write: 0.56 },
+  "xopdeepseekv32": { input: 0.14, output: 0.21, cache_read: 0.14, cache_write: 0.14 },
+  "xop3qwencodernext": { input: 0.35, output: 1.39, cache_read: 0.35, cache_write: 0.35 },
+  "xopglmv47flash": { input: 0.14, output: 0.21, cache_read: 0.14, cache_write: 0.14 },
+  "xopglm47blth2": { input: 0.56, output: 2.22, cache_read: 0.56, cache_write: 0.56 },
+  "xop3qwen32bvl": { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 },
+  "xopdeepseekocr": { input: 0.00, output: 0.00, cache_read: 0.00, cache_write: 0.00 },
+  "xophunyuanocr": { input: 0.00, output: 0.00, cache_read: 0.00, cache_write: 0.00 },
+  "xop3qwen80bnext": { input: 0.08, output: 0.33, cache_read: 0.08, cache_write: 0.08 },
+  "xop3qwen235b2507": { input: 0.17, output: 1.67, cache_read: 0.17, cache_write: 0.17 },
+  "xop3qwen30b2507": { input: 0.06, output: 0.63, cache_read: 0.06, cache_write: 0.06 },
+  "xop3qwen235b": { input: 0.17, output: 1.67, cache_read: 0.17, cache_write: 0.17 },
+  "xop3qwen30b": { input: 0.06, output: 0.63, cache_read: 0.06, cache_write: 0.06 },
+  "xop3qwen32b": { input: 0.17, output: 1.67, cache_read: 0.17, cache_write: 0.17 },
+  "xdeepseekv3": { input: 0.22, output: 0.89, cache_read: 0.22, cache_write: 0.22 },
+  "xdeepseekr1": { input: 0.44, output: 1.78, cache_read: 0.44, cache_write: 0.44 },
+  "xdeepseekr1qwen32b": { input: 0.22, output: 0.67, cache_read: 0.22, cache_write: 0.22 },
+  "xopkimik2blth": { input: 0.56, output: 2.22, cache_read: 0.56, cache_write: 0.56 },
+  "xopkimik2blins": { input: 0.56, output: 2.22, cache_read: 0.56, cache_write: 0.56 },
+  "xop3qwen8breranker": { input: 0.00, output: 0.00, cache_read: 0.00, cache_write: 0.00 },
+  "xop3qwen8bembedding": { input: 0.00, output: 0.00, cache_read: 0.00, cache_write: 0.00 },
+  "xop3qwen0b6": { input: 0.04, output: 0.42, cache_read: 0.04, cache_write: 0.04 },
+  "xop3qwen4b": { input: 0.04, output: 0.42, cache_read: 0.04, cache_write: 0.04 },
+  "xqwen257bchat": { input: 0.07, output: 0.14, cache_read: 0.07, cache_write: 0.07 },
+  "xop3qwen14b": { input: 0.14, output: 1.39, cache_read: 0.14, cache_write: 0.14 },
+  "xop3qwen8b": { input: 0.07, output: 0.69, cache_read: 0.07, cache_write: 0.07 },
+  "xsparkprox": { input: 1.11, output: 5.56, cache_read: 1.11, cache_write: 1.11 },
+  "xspark13b6k": { input: 0.28, output: 0.83, cache_read: 0.28, cache_write: 0.28 },
+  "spark mini": { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 },
+  "spark mini instruct": { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 },
+  "spark tiny": { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 },
+  "internlm2.5_7b_chat": { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 },
+  "internlm2.5_1.8b_chat": { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 },
+  "qwen_v2.5_7b_base": { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 },
+  "xsqwen2d53b": { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 },
+  "qwen_v2.5_3b_base": { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 },
+  "qwen_v2.5_1.5b_instruct": { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 },
+  "qwen_v2.5_1.5b_base": { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 },
+  "qwen_v2.5_0.5b_instruct": { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 },
+  "qwen_v2.5_0.5b_base": { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 },
+  "xsqwenv2s1b5c": { input: 0.14, output: 0.28, cache_read: 0.14, cache_write: 0.14 },
+  "xsqwenv2s0b5c": { input: 0.28, output: 0.56, cache_read: 0.28, cache_write: 0.28 },
+  "xqwen14bchat": { input: 0.28, output: 0.83, cache_read: 0.28, cache_write: 0.28 },
+};
+function normalizeIFlytekMaasModel(model: string) {
+  const lower = model.trim().toLowerCase();
+  if (lower === "auto" || lower.endsWith("-auto")) return "xopglm53";
+  if (lower === "xsparkx2agent") return "xsparkx2";
+  return lower;
+}
 
-function getModelPricing(model: string) {
+function getModelPricing(model: string, source = "") {
   if (!model) return ZERO_PRICING;
+  if (source.toLowerCase() === "acode") {
+    const iFlytekMaasPricing = IFLYTEK_MAAS_MODEL_PRICING[normalizeIFlytekMaasModel(model)];
+    if (iFlytekMaasPricing) return iFlytekMaasPricing;
+  }
   const exact = MODEL_PRICING[model];
   if (exact) return exact;
   const lower = model.toLowerCase();
@@ -359,8 +437,9 @@ function getModelPricing(model: string) {
   return ZERO_PRICING;
 }
 
-function getRowPricing(row: { model?: string; hour_start?: string; pricing_tier?: string }) {
-  const pricing = getModelPricing(row.model || "");
+function getRowPricing(row: { model?: string; source?: string; hour_start?: string; pricing_tier?: string }) {
+  const pricing = getModelPricing(row.model || "", row.source);
+  if ((row.source || "").toLowerCase() === "acode") return pricing;
   const lower = String(row.model || "").toLowerCase();
   if (!lower.includes("deepseek-v4-flash") && !lower.includes("deepseek-v4-pro")) return pricing;
   let offPeak = row.pricing_tier === "off_peak";
@@ -429,7 +508,8 @@ function computeRowCost(row: UsageRow): number {
       ? "hy3-preview-agent"
       : rawModel;
   const p = getRowPricing({ ...row, model: modelForPricing });
-  const reasoningIncludedInOutput = row.source === "codex" || row.source === "every-code";
+  const reasoningIncludedInOutput =
+    row.source === "codex" || row.source === "acode" || row.source === "every-code";
   const reasoningCost = reasoningIncludedInOutput
     ? 0
     : (row.reasoning_output_tokens || 0) * (p.output || 0);
@@ -445,7 +525,7 @@ function computeRowCost(row: UsageRow): number {
 
 /** Map raw `source` to the canonical bucket used by the modal's by_provider list. */
 const KNOWN_SOURCES = new Set([
-  "codex", "claude", "gemini", "cursor", "opencode", "openclaw",
+  "acode", "codex", "claude", "gemini", "cursor", "opencode", "openclaw",
   "hermes", "kiro", "copilot", "pi-anthropic", "pi-github-copilot",
   "pi-copilot", "kimi", "droid",
 ]);

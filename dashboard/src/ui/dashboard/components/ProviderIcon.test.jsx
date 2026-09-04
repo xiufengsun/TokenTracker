@@ -54,6 +54,18 @@ describe("ProviderIcon", () => {
     expect(icon?.querySelector("circle")).toBeNull();
   });
 
+  it("renders AStudio with its theme-aware brand assets", () => {
+    const { container } = render(<ProviderIcon provider="acode" size={18} />);
+    const lightIcon = container.querySelector('img[src="/brand-logos/acode.png"]');
+    const darkIcon = container.querySelector('img[src="/brand-logos/acode-dark.png"]');
+
+    expect(lightIcon).toHaveAttribute("width", "18");
+    expect(lightIcon).toHaveClass("block", "dark:hidden");
+    expect(darkIcon).toHaveAttribute("height", "18");
+    expect(darkIcon).toHaveClass("hidden", "dark:block");
+    expect(container.querySelector("svg")).toBeNull();
+  });
+
   it("renders the multi-color oh-my-pi brand logo", () => {
     const { container } = render(<ProviderIcon provider="omp" size={20} />);
     const icon = container.querySelector('img[src="/brand-logos/omp.svg"]');

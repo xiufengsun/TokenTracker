@@ -15,10 +15,13 @@ const {
 const { prompt, promptHidden } = require("../lib/prompt");
 const {
   upsertCodexNotify,
+  upsertAcodeNotify,
   upsertEveryCodeNotify,
   readCodexNotify,
+  readAcodeNotify,
   readEveryCodeNotify,
   buildCodexNotifyCmd,
+  buildAcodeNotifyCmd,
   buildEveryCodeNotifyCmd,
   isManagedNotifyCmd,
 } = require("../lib/codex-config");
@@ -109,6 +112,7 @@ const DEFAULT_DASHBOARD_URL = "https://www.tokentracker.cc";
 const SUPPORTED_PROVIDERS = [
   "Claude Code",
   "Codex CLI",
+  "AStudio",
   "Cursor",
   "Gemini CLI",
   "Antigravity",
@@ -445,6 +449,50 @@ async function repairCodexNotifyIntegration({ home = os.homedir(), trackerDir, b
   return { ...result, skippedReason: null, notifyPath };
 }
 
+async function repairAcodeNotifyIntegration({ home = os.homedir(), trackerDir, binDir, safeMode = true } = {}) {
+  const paths = trackerDir && binDir ? { trackerDir, binDir } : await resolveTrackerPaths({ home });
+  const resolvedTrackerDir = trackerDir || paths.trackerDir;
+  const resolvedBinDir = binDir || paths.binDir;
+  const notifyPath = await writeNotifyHandler({
+    trackerDir: resolvedTrackerDir,
+    binDir: resolvedBinDir,
+  });
+  const context = buildIntegrationTargets({
+    home,
+    trackerDir: resolvedTrackerDir,
+    notifyPath,
+  });
+  const acodeProbe = await probeFile(context.acodeConfigPath);
+  if (!acodeProbe.exists) {
+    return { changed: false, skippedReason: "config-missing", notifyPath };
+  }
+
+  const currentNotify = await readAcodeNotify(context.acodeConfigPath);
+  if (arraysEqual(currentNotify, context.acodeNotifyCmd)) {
+    return { changed: false, skippedReason: null, notifyPath };
+  }
+
+  const repairDecision = safeMode
+    ? await shouldRepairCodexNotify({
+        currentNotify,
+        expectedNotify: context.acodeNotifyCmd,
+        notifyOriginalPath: context.acodeNotifyOriginalPath,
+      })
+    : { repair: true, captureOriginal: true, replaceOriginal: false };
+  if (!repairDecision.repair) {
+    return { changed: false, skippedReason: repairDecision.reason || "external-notify", notifyPath };
+  }
+
+  const result = await upsertAcodeNotify({
+    acodeConfigPath: context.acodeConfigPath,
+    notifyCmd: context.acodeNotifyCmd,
+    notifyOriginalPath: context.acodeNotifyOriginalPath,
+    captureOriginal: repairDecision.captureOriginal,
+    replaceOriginal: repairDecision.replaceOriginal,
+  });
+  return { ...result, skippedReason: null, notifyPath };
+}
+
 async function repairRuntimeIntegrations({
   home = os.homedir(),
   trackerDir,
@@ -476,6 +524,12 @@ async function repairRuntimeIntegrations({
   };
 
   await attempt("codex", () => repairCodexNotifyIntegration({
+    home,
+    trackerDir: resolvedTrackerDir,
+    binDir: resolvedBinDir,
+    safeMode,
+  }));
+  await attempt("acode", () => repairAcodeNotifyIntegration({
     home,
     trackerDir: resolvedTrackerDir,
     binDir: resolvedBinDir,
@@ -520,11 +574,15 @@ async function repairRuntimeIntegrations({
 function buildIntegrationTargets({ home, trackerDir, notifyPath }) {
   const codexHome = process.env.CODEX_HOME || path.join(home, ".codex");
   const codexConfigPath = path.join(codexHome, "config.toml");
+  const acodeHome = process.env.TOKENTRACKER_ACODE_HOME || path.join(home, ".acode");
+  const acodeConfigPath = path.join(acodeHome, "config.toml");
   const codeHome = process.env.CODE_HOME || path.join(home, ".code");
   const codeConfigPath = path.join(codeHome, "config.toml");
   const notifyOriginalPath = path.join(trackerDir, "codex_notify_original.json");
+  const acodeNotifyOriginalPath = path.join(trackerDir, "acode_notify_original.json");
   const codeNotifyOriginalPath = path.join(trackerDir, "code_notify_original.json");
   const notifyCmd = buildCodexNotifyCmd(notifyPath);
+  const acodeNotifyCmd = buildAcodeNotifyCmd(notifyPath);
   const codeNotifyCmd = buildEveryCodeNotifyCmd(notifyPath);
   const claudeDir = path.join(home, ".claude");
   const claudeSettingsPath = path.join(claudeDir, "settings.json");
@@ -547,10 +605,13 @@ function buildIntegrationTargets({ home, trackerDir, notifyPath }) {
   return {
     trackerDir,
     codexConfigPath,
+    acodeConfigPath,
     codeConfigPath,
     notifyOriginalPath,
+    acodeNotifyOriginalPath,
     codeNotifyOriginalPath,
     notifyCmd,
+    acodeNotifyCmd,
     codeNotifyCmd,
     claudeDir,
     claudeSettingsPath,
@@ -596,6 +657,24 @@ async function applyIntegrationSetup({
     });
   } else {
     summary.push({ label: "Codex CLI", status: "skipped", detail: renderSkipDetail(codexProbe) });
+  }
+
+  const acodeProbe = await probeFile(context.acodeConfigPath);
+  if (acodeProbe.exists) {
+    const currentNotify = await readAcodeNotify(context.acodeConfigPath);
+    const result = await upsertAcodeNotify({
+      acodeConfigPath: context.acodeConfigPath,
+      notifyCmd: context.acodeNotifyCmd,
+      notifyOriginalPath: context.acodeNotifyOriginalPath,
+      replaceOriginal: shouldReplaceStoredOriginalNotify(currentNotify, context.acodeNotifyCmd),
+    });
+    summary.push({
+      label: "AStudio",
+      status: result.changed ? "updated" : "set",
+      detail: result.changed ? "Updated config" : "Config already set",
+    });
+  } else {
+    summary.push({ label: "AStudio", status: "skipped", detail: renderSkipDetail(acodeProbe) });
   }
 
   const claudeDirExists = await isDir(context.claudeDir);
@@ -973,6 +1052,19 @@ async function previewIntegrations({ context }) {
     summary.push({ label: "Codex CLI", status: "skipped", detail: renderSkipDetail(codexProbe) });
   }
 
+  const acodeProbe = await probeFile(context.acodeConfigPath);
+  if (acodeProbe.exists) {
+    const existing = await readAcodeNotify(context.acodeConfigPath);
+    const matches = arraysEqual(existing, context.acodeNotifyCmd);
+    summary.push({
+      label: "AStudio",
+      status: matches ? "set" : "updated",
+      detail: matches ? "Already configured" : "Will update config",
+    });
+  } else {
+    summary.push({ label: "AStudio", status: "skipped", detail: renderSkipDetail(acodeProbe) });
+  }
+
   const claudeDirExists = await isDir(context.claudeDir);
   if (claudeDirExists) {
     const configured = await areClaudeUsageHooksConfigured({
@@ -1254,6 +1346,7 @@ for (let i = 0; i < rawArgs.length; i++) {
 const trackerDir = ${JSON.stringify(trackerDir)};
 const signalPath = ${JSON.stringify(queueSignalPath)};
 const codexOriginalPath = ${JSON.stringify(originalPath)};
+const acodeOriginalPath = ${JSON.stringify(path.join(trackerDir, "acode_notify_original.json"))};
 const codeOriginalPath = ${JSON.stringify(path.join(trackerDir, "code_notify_original.json"))};
 const trackerBinPath = ${JSON.stringify(trackerBinPath)};
   const depsMarkerPath = path.join(trackerDir, 'app', 'bin', 'tracker.js');
@@ -1310,14 +1403,16 @@ try {
   }
 } catch (_) {}
 
-// Chain the original notify if present (Codex/Every Code only).
+// Chain the existing Codex, AStudio, or Every Code notify hook.
 try {
   const originalPath =
     source === 'every-code'
       ? codeOriginalPath
-      : source === 'claude' || source === 'opencode' || source === 'gemini' || source === 'codebuddy' || source === 'workbuddy'
-        ? null
-        : codexOriginalPath;
+      : source === 'acode'
+        ? acodeOriginalPath
+        : source === 'claude' || source === 'opencode' || source === 'gemini' || source === 'codebuddy' || source === 'workbuddy'
+          ? null
+          : codexOriginalPath;
   if (originalPath) {
     const original = JSON.parse(fs.readFileSync(originalPath, 'utf8'));
     const cmd = Array.isArray(original?.notify) ? original.notify : null;
@@ -2009,6 +2104,7 @@ module.exports = {
   buildNotifyHandler,
   installLocalTrackerApp,
   repairCodexNotifyIntegration,
+  repairAcodeNotifyIntegration,
   repairRuntimeIntegrations,
   applyIntegrationSetup,
 };

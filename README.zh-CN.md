@@ -6,7 +6,7 @@
 
 ### 跨所有 CLI，看清你到底在 AI 上花了多少钱
 
-自动采集 **36 款 AI 编码工具** 的 token 用量，全程本地聚合，用一套漂亮的 Dashboard 看真实成本与趋势。不需要云账号、不需要 API Key、不需要任何配置 —— 一条命令搞定。
+自动采集 **37 款 AI 编码工具** 的 token 用量，全程本地聚合，用一套漂亮的 Dashboard 看真实成本与趋势。不需要云账号、不需要 API Key、不需要任何配置 —— 一条命令搞定。
 
 [![npm version](https://img.shields.io/npm/v/tokentracker-cli.svg?color=blue)](https://www.npmjs.com/package/tokentracker-cli)
 [![npm downloads](https://img.shields.io/npm/dm/tokentracker-cli.svg?color=brightgreen)](https://www.npmjs.com/package/tokentracker-cli)
@@ -90,7 +90,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ## ✨ 特性
 
-- 🔌 **开箱即用支持 36 款 AI 工具** —— Claude Code、Codex CLI、Cursor、Gemini CLI、Kiro、OpenCode、OpenClaw、Every Code、Hermes Agent、GitHub Copilot、Kimi Code、CodeBuddy、WorkBuddy、Grok Build、oh-my-pi、pi、Dots、Prime Agent、Craft Agents、Reasonix、Kilo CLI、Kilo Code、Roo Code、Antigravity、Zed Agent、Goose、Droid、Mimo Code、ZCode、Qoder、AnythingLLM Desktop、Claude Science、DeepSeek Harness、TRAE Work CN、LM Studio、Unsloth Studio
+- 🔌 **开箱即用支持 37 款 AI 工具** —— Claude Code、Codex CLI、AStudio、Cursor、Gemini CLI、Kiro、OpenCode、OpenClaw、Every Code、Hermes Agent、GitHub Copilot、Kimi Code、CodeBuddy、WorkBuddy、Grok Build、oh-my-pi、pi、Dots、Prime Agent、Craft Agents、Reasonix、Kilo CLI、Kilo Code、Roo Code、Antigravity、Zed Agent、Goose、Droid、Mimo Code、ZCode、Qoder、AnythingLLM Desktop、Claude Science、DeepSeek Harness、TRAE Work CN、LM Studio、Unsloth Studio
 - 🏠 **100% 本地** —— Token 数据绝不离开你的机器。无账号、无 API Key
 - 🚀 **零配置** —— 首次运行自动安装所有 hook。30 秒从零到 Dashboard
 - 📊 **漂亮的 Dashboard** —— 用量趋势、按模型的成本分解、GitHub 风格活跃度热力图、按项目归因
@@ -144,7 +144,7 @@ brew install xiufengsun/tokentracker/tokentracker
 <tr>
 <td colspan="2">
 
-**Skills 管理器** —— 浏览 250+ 公开 skill（GitHub 仓库 & `skills.sh`），一次安装，同步到 Claude / Codex / Grok / Antigravity / Gemini / OpenCode / Hermes。每个 Agent 单独开关，一键撤销，再也不用手动复制文件夹。
+**Skills 管理器** —— 浏览 250+ 公开 skill（GitHub 仓库 & `skills.sh`），一次安装，同步到 Claude / Codex / AStudio / Grok / Antigravity / Gemini / OpenCode / Hermes。每个 Agent 单独开关，一键撤销，再也不用手动复制文件夹。
 
 <img src="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/skills.png" alt="Skills Manager" />
 
@@ -169,6 +169,7 @@ brew install xiufengsun/tokentracker/tokentracker
 |---|---|---|
 | **Claude Code** | ✅ 自动 | 写入 `settings.json` 的 SessionEnd hook |
 | **Codex CLI** | ✅ 自动 | 写入 `config.toml` 的 TOML notify hook |
+| **AStudio** | ✅ 自动 | 写入 `config.toml` 的 TOML notify hook |
 | **Cursor** | ✅ 自动 | API + SQLite 中的 auth token |
 | **Kiro** | ✅ 自动 | SQLite + JSONL 混合读取 |
 | **Gemini CLI** | ✅ 自动 | SessionEnd hook |
@@ -206,7 +207,7 @@ brew install xiufengsun/tokentracker/tokentracker
 | **TRAE Work CN** | ✅ 自动 | **需要显式开启：设置 `TOKENTRACKER_TRAE_CN_USAGE=1`。** 读取用量会把本地保存的登录授权发送到 TRAE 的内部 API，因此在你开启之前不会发出任何请求。开启后：仅在存在本地 TRAE Work CN 登录授权的可执行非后台同步期间，读取 macOS / Windows 本地登录应用的 session-token 用量；内部 API 可能变化 |
 
 > **需要手动装什么插件 / hook 吗？** 不需要。`tokentracker`（或 `tokentracker init`）第一次跑的时候会全部搞定：
-> - **基于 hook 的工具**（Claude Code、Codex、Gemini、Every Code、**CodeBuddy**、**WorkBuddy**、**Grok Build**）—— 我们把 SessionEnd hook 或 TOML notify 条目写入它们自己的配置文件
+> - **基于 hook 的工具**（Claude Code、Codex、AStudio、Gemini、Every Code、**CodeBuddy**、**WorkBuddy**、**Grok Build**）—— 我们把 SessionEnd hook 或 TOML notify 条目写入它们自己的配置文件
 > - **基于插件的工具**（OpenCode、**OpenClaw**）—— 插件随 npm 包一起分发。OpenClaw 的 session plugin 位于 `~/.tokentracker/tracker/openclaw-plugin/openclaw-session-sync/`；TokenTracker 会通过 OpenClaw 自己的 CLI 挂接并启用它，然后写入 `hooks.allowConversationAccess=true`，让 OpenClaw 放行触发同步的会话结束事件。无需下载、无需拖拽
 > - **oh-my-pi** —— 被动会话扫描始终是计费/token 的事实来源（`~/.omp/agent/sessions/**/*.jsonl`）。检测到 OMP 时，`tokentracker init` 还会写入托管的 notify 扩展到 `~/.omp/agent/extensions/tokentracker-notify.ts`，以便回合结束后近实时触发同步。仅当文件带有 TokenTracker 托管标记时才视为我们拥有：同名用户自写扩展绝不会被覆盖或删除。`tokentracker uninstall` 也仅在文件仍为托管状态时删除它。
 > - **被动读取类**（Cursor、Kiro、Hermes、Kimi Code、Copilot、**Grok Build**、**pi**、**Craft Agents**、**Reasonix**、**Kilo CLI**、**Kilo Code**、**Roo Code**、**Antigravity**、**Zed Agent**、**Goose**、**Droid**、**Mimo Code**、**ZCode**、**Qoder**、**LM Studio**、**Unsloth Studio**、**AnythingLLM Desktop**、**Claude Science**、**DeepSeek Harness**) —— 完全不往它们里面塞东西，只读取它们自己产生的文件（SQLite DB、JSONL、OTEL 导出、会话轨迹日志）。Copilot App / CLI 的用量按请求读取 `~/.copilot/session-store.db`；`data.db` 只提供一次旧数据迁移基线，并在 store 成为主源后保持仅观察，Chat 扩展和旧版 CLI 继续使用 OTEL。TokenTracker 会协调这些数据源，使重叠请求只统计一次。迁移前无法无损拆分模型的 App/CLI 混合历史会保留为 `github-copilot-legacy` 聚合量，而不会猜测请求模型
@@ -224,7 +225,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 |                          | **TokenTracker** | ccusage     | Cursor 自带统计 |
 |--------------------------|:---:|:---:|:---:|
-| **支持的 AI 工具数**     | **36**           | 1（Claude）  | 1（Cursor）   |
+| **支持的 AI 工具数**     | **37**           | 1（Claude）  | 1（Cursor）   |
 | **本地优先，无需账号**   | ✅               | ✅           | ❌            |
 | **原生桌面 App**         | ✅ macOS + Windows | ❌          | ❌            |
 | **桌面小组件**           | ✅ 4 个小组件    | ❌           | ❌            |
@@ -236,7 +237,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ```mermaid
 flowchart LR
-    A["AI 编码工具<br/>Claude Code · Codex · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE Work CN · LM Studio · Unsloth Studio"]
+    A["AI 编码工具<br/>Claude Code · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE Work CN · LM Studio · Unsloth Studio"]
     A -->|hook 触发| B[Token Tracker]
     B -->|解析日志<br/>30 分钟 UTC 桶| C[(本地 SQLite)]
     C --> D[Web Dashboard]
@@ -278,6 +279,7 @@ flowchart LR
 | `TOKENTRACKER_DISABLE_GIT_ATTRIBUTION` | 关闭 Git 提交归因（设为 `1` 关闭）。归因会在每个近期会话的工作目录里执行 `git log`。关闭后 TokenTracker 完全不会进入你的项目目录（Outcomes 页只显示手动记录的结果） | — |
 | `TOKENTRACKER_GIT_ATTRIBUTION_PROTECTED_DIRS` | 允许 Git 归因进入 macOS 受保护目录（设为 `1` 允许）。默认会跳过 `~/Documents`、`~/Downloads`、`~/Desktop`、`~/Library`、影片/音乐/图片以及 `/Volumes` 下的会话，因为 macOS 会为每个位置单独弹一次访问授权提示。只有当你确实把仓库放在这些目录、且不介意授权时才需要开启 | — |
 | `CODEX_HOME` | 覆盖 Codex CLI 目录 | `~/.codex` |
+| `TOKENTRACKER_ACODE_HOME` | 覆盖 AStudio 目录 | `~/.acode` |
 | `GEMINI_HOME` | 覆盖 Gemini CLI 目录 | `~/.gemini` |
 | `TOKENTRACKER_GROK_HOME` | 覆盖 Grok Build 目录，供 Grok 集成和 Skills Manager 使用 | `~/.grok` |
 | `GROK_HOME` | 旧版 Grok Build 目录覆盖变量；未设置 `TOKENTRACKER_GROK_HOME` 时使用 | `~/.grok` |

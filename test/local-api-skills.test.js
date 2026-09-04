@@ -170,6 +170,10 @@ describe("/functions/tokentracker-skills auth + input", () => {
       body.targets.some((target) => target.id === "antigravity" && target.label === "Antigravity"),
       "Antigravity must appear in installed-skills targets",
     );
+    assert.ok(
+      body.targets.some((target) => target.id === "acode" && target.label === "AStudio"),
+      "AStudio must appear in installed-skills targets",
+    );
   });
 
   it("surfaces addRepo validation error via 500 with message", async () => {

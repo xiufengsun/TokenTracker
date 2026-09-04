@@ -13,6 +13,7 @@ const { test } = require("node:test");
 const matcher = require("../src/lib/pricing/matcher");
 const fetcher = require("../src/lib/pricing/litellm-fetcher");
 const pricing = require("../src/lib/pricing");
+const curatedPricing = require("../src/lib/pricing/curated-overrides.json");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -601,6 +602,74 @@ test("index: getModelPricing resolves GLM-5.2 from CURATED for ZCode rows", asyn
   assert.equal(cost, 1.4);
 });
 
+test("index: iFlytek MaaS 使用附件中的完整来源级价格表", () => {
+  pricing.resetPricingForTests();
+  const iFlytekMaasPricing = curatedPricing.source_exact.acode;
+  assert.equal(Object.keys(iFlytekMaasPricing).length, 61);
+  assert.equal(curatedPricing.source_alias?.acode, undefined);
+  for (const [model, value] of Object.entries(iFlytekMaasPricing)) {
+    for (const field of ["input", "output", "cache_read", "cache_write"]) {
+      assert.ok(Number.isFinite(value[field]) && value[field] >= 0, `${model}.${field} 价格无效`);
+      assert.equal(value[field], Math.round(value[field] * 100) / 100, `${model}.${field} 超过两位小数`);
+    }
+  }
+
+  const cases = [
+    ["xopglm53", { input: 1.11, output: 3.89, cache_read: 0.28, cache_write: 1.11 }],
+    ["xopglm52", { input: 1.11, output: 3.89, cache_read: 0.28, cache_write: 1.11 }],
+    ["xminimaxm25", { input: 0.29, output: 1.17, cache_read: 0.29, cache_write: 0.29 }],
+    ["xopkimik26", { input: 0.9, output: 3.75, cache_read: 0.18, cache_write: 0.9 }],
+    ["xopdeepseekv4pro", { input: 1.67, output: 3.33, cache_read: 0.14, cache_write: 1.67 }],
+    ["xopdeepseekv4flash0731", { input: 0.14, output: 0.28, cache_read: 0.03, cache_write: 0.14 }],
+    ["xopqwen36v35b", { input: 0.15, output: 0.9, cache_read: 0.15, cache_write: 0.15 }],
+    ["Spark Mini", { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 }],
+  ];
+  for (const [model, expected] of cases) {
+    assert.deepEqual(pricing.getModelPricing(model, { source: "acode" }), expected);
+  }
+
+  const glm53 = iFlytekMaasPricing.xopglm53;
+  for (const model of ["auto", "astronclaw-auto", "future-auto"]) {
+    assert.deepEqual(pricing.getModelPricing(model, { source: "acode" }), glm53);
+  }
+  assert.deepEqual(pricing.getModelPricing("xsparkx2agent", { source: "acode" }), iFlytekMaasPricing.xsparkx2);
+  assert.ok(!curatedPricing.source_exclusive?.includes("acode"));
+  assert.deepEqual(
+    pricing.getModelPricing("gpt-5.4", { source: "acode" }),
+    pricing.getModelPricing("gpt-5.4"),
+  );
+  assert.deepEqual(
+    pricing.getModelPricing("user-custom-model-never-listed", { source: "acode" }),
+    pricing.ZERO_PRICING,
+  );
+
+  // AStudio source-specific prices must not override public prices for same-named
+  // models from other sources.
+  assert.deepEqual(pricing.getModelPricing("GLM-5.2"), { input: 1.4, output: 4.4, cache_read: 0.26 });
+});
+
+test("index: iFlytek MaaS reasoning 已计入输出且不继承 DeepSeek 分时折扣", () => {
+  pricing.resetPricingForTests();
+  const base = {
+    source: "acode",
+    model: "xopglm52",
+    input_tokens: 0,
+    cached_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+    output_tokens: 1_000_000,
+    reasoning_output_tokens: 1_000_000,
+  };
+  assert.equal(pricing.computeRowCost(base), 3.89);
+
+  const offPeak = pricing.getRowPricing({
+    source: "acode",
+    model: "xopdeepseekv4pro",
+    hour_start: "2026-08-31T04:00:00.000Z",
+  });
+  assert.equal(offPeak.input, 1.67);
+  assert.equal(offPeak.output, 3.33);
+});
+
 test("index: getModelPricing resolves Sakana Fugu Ultra from CURATED (issue #214)", async () => {
   pricing.resetPricingForTests();
   const cachePath = tmpCachePath();
@@ -802,6 +871,39 @@ test("index: DeepSeek V4 pricing follows official UTC peak and off-peak windows 
     pricing.getModelPricing("deepseek-chat"),
     { input: 0.14, output: 0.28, cache_read: 0.0028, cache_write: 0.14 },
     "legacy model ids keep their historical static rate",
+  );
+});
+
+test("index: 旧 Provider 的展示型 DeepSeek 名称不触发分时折扣", () => {
+  pricing.resetPricingForTests();
+  const basePricing = {
+    input: 1.32,
+    output: 3.96,
+    cache_read: 0.044,
+    cache_write: 1.32,
+  };
+  const cases = [
+    ["antigravity", "DeepSeek V4 Pro (Thinking)"],
+    ["cursor", "DeepSeek V4 Pro (Thinking)"],
+    ["zed", "DeepSeek V4 Pro (Preview)"],
+  ];
+
+  for (const [source, model] of cases) {
+    assert.deepEqual(pricing.getModelPricing(model, { source }), basePricing);
+    assert.deepEqual(
+      pricing.getRowPricing({ source, model, pricing_tier: "off_peak" }),
+      basePricing,
+      `${source} 的展示型模型名不应继承 DeepSeek 分时折扣`,
+    );
+  }
+
+  assert.deepEqual(
+    pricing.getRowPricing({
+      source: "dsh",
+      model: "deepseek-v4-pro",
+      pricing_tier: "off_peak",
+    }),
+    { input: 0.66, output: 1.98, cache_read: 0.022, cache_write: 0.66 },
   );
 });
 

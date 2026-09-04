@@ -19,6 +19,10 @@ function buildEveryCodeNotifyCmd(notifyPath, options) {
   return [...buildCodexNotifyCmd(notifyPath, options), "--source=every-code"];
 }
 
+function buildAcodeNotifyCmd(notifyPath, options) {
+  return [...buildCodexNotifyCmd(notifyPath, options), "--source=acode"];
+}
+
 // Is this notify command one we wrote? Strict array equality is not a safe
 // test, because the command is not a stable constant across invocations:
 //   - argv[0] on Windows is an absolute `process.execPath` (#361). The desktop
@@ -170,6 +174,39 @@ async function loadCodexNotifyOriginal(notifyOriginalPath) {
 
 async function readCodexNotify(codexConfigPath) {
   return readNotify(codexConfigPath);
+}
+
+async function upsertAcodeNotify({
+  acodeConfigPath,
+  notifyCmd,
+  notifyOriginalPath,
+  captureOriginal = true,
+  replaceOriginal = false,
+}) {
+  return upsertNotify({
+    configPath: acodeConfigPath,
+    notifyCmd,
+    notifyOriginalPath,
+    configLabel: "AStudio config",
+    captureOriginal,
+    replaceOriginal,
+  });
+}
+
+async function restoreAcodeNotify({ acodeConfigPath, notifyOriginalPath, notifyCmd }) {
+  return restoreNotify({
+    configPath: acodeConfigPath,
+    notifyOriginalPath,
+    expectedNotify: notifyCmd,
+  });
+}
+
+async function loadAcodeNotifyOriginal(notifyOriginalPath) {
+  return loadNotifyOriginal(notifyOriginalPath);
+}
+
+async function readAcodeNotify(acodeConfigPath) {
+  return readNotify(acodeConfigPath);
 }
 
 async function upsertEveryCodeNotify({
@@ -536,6 +573,7 @@ function arraysEqual(a, b) {
 
 module.exports = {
   buildCodexNotifyCmd,
+  buildAcodeNotifyCmd,
   buildEveryCodeNotifyCmd,
   isManagedNotifyCmd,
   upsertNotify,
@@ -546,6 +584,10 @@ module.exports = {
   restoreCodexNotify,
   loadCodexNotifyOriginal,
   readCodexNotify,
+  upsertAcodeNotify,
+  restoreAcodeNotify,
+  loadAcodeNotifyOriginal,
+  readAcodeNotify,
   upsertEveryCodeNotify,
   restoreEveryCodeNotify,
   loadEveryCodeNotifyOriginal,

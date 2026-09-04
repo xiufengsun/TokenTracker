@@ -15,6 +15,7 @@ process.env.TOKENTRACKER_SKIP_OPENCLAW_CLI = "1";
 
 const {
   buildCodexNotifyCmd,
+  buildAcodeNotifyCmd,
   buildEveryCodeNotifyCmd,
   isManagedNotifyCmd,
   restoreCodexNotify,
@@ -56,6 +57,21 @@ test("buildEveryCodeNotifyCmd appends the every-code source on both platforms", 
     "node",
     posixPath,
     "--source=every-code",
+  ]);
+});
+
+test("buildAcodeNotifyCmd appends the acode source on both platforms", () => {
+  const notifyPath = "C:\\Users\\a\\.tokentracker\\bin\\notify.cjs";
+  assert.deepEqual(
+    buildAcodeNotifyCmd(notifyPath, { platform: "win32", execPath: "C:\\node\\node.exe" }),
+    ["C:\\node\\node.exe", notifyPath, "--source=acode"],
+  );
+  const posixPath = "/home/a/.tokentracker/bin/notify.cjs";
+  assert.deepEqual(buildAcodeNotifyCmd(posixPath, { platform: "linux" }), [
+    "/usr/bin/env",
+    "node",
+    posixPath,
+    "--source=acode",
   ]);
 });
 

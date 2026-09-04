@@ -89,7 +89,7 @@ function classifyWritableFailure(filePath) {
  *   every_code, opencode, openclaw, codebuddy, workbuddy, grok }
  * @returns {PassiveProvider[]}
  */
-function detectPassiveProviders({ home, hookStatus }) {
+function detectPassiveProviders({ home, hookStatus, env = process.env }) {
   const out = [];
 
   // Claude Code — logs at ~/.claude/projects/<name>/*.jsonl
@@ -126,6 +126,18 @@ function detectPassiveProviders({ home, hookStatus }) {
     logsPredicate: (_full, name, isDir) =>
       (isDir && name === "sessions") || (!isDir && name.endsWith(".jsonl")),
     settingsPath: path.join(home, ".codex", "config.toml"),
+  }));
+
+  const acodeHome = env.TOKENTRACKER_ACODE_HOME || path.join(home, ".acode");
+  out.push(buildEntry({
+    name: "acode",
+    hookExpected: true,
+    hookInstalled: Boolean(hookStatus?.acode_notify ?? hookStatus?.acode),
+    logsDir: acodeHome,
+    logsPredicate: (_full, name, isDir) =>
+      (isDir && (name === "sessions" || name === "archived_sessions")) ||
+      (!isDir && name.endsWith(".jsonl")),
+    settingsPath: path.join(acodeHome, "config.toml"),
   }));
 
   // Every Code — same shape as Codex, different home
