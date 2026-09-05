@@ -1163,17 +1163,13 @@ async function cmdSync(argv, context = {}) {
       });
 
       const parseOpencodeForInstall = async (options) => {
-        const { storageDir, dbDir, cursors } = options;
+        const { dbDir, cursors, messageFiles } = options;
         let filesResult = { filesProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
-        if (storageDir) {
-          const storagePath = path.join(storageDir, "storage");
-          const messageFiles = await listOpencodeMessageFiles(storagePath);
-          if (messageFiles.length > 0) {
-            filesResult = await parseOpencodeIncremental({
-              ...options,
-              messageFiles,
-            });
-          }
+        if (messageFiles.length > 0) {
+          filesResult = await parseOpencodeIncremental({
+            ...options,
+            messageFiles,
+          });
         }
 
         let dbResult = { messagesProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
@@ -1189,6 +1185,7 @@ async function cmdSync(argv, context = {}) {
               dbMessages: dbRead.messages,
               dbCursor: dbRead.cursor,
               dbPath,
+              opencodeCursorStore: cursorStore,
             });
           }
         }
@@ -1204,26 +1201,57 @@ async function cmdSync(argv, context = {}) {
         native: storagePaths.native || dbPaths.native,
         wsl: storagePaths.wsl || dbPaths.wsl,
       };
+      const installKeys = Object.keys(opencodePaths).filter((key) => opencodePaths[key]);
+      const messageFilesByInstall = {};
+      for (const key of installKeys) {
+        messageFilesByInstall[key] = storagePaths[key]
+          ? await listOpencodeMessageFiles(path.join(storagePaths[key], "storage"))
+          : [];
+      }
+      const storedOpencode = cursors.opencode;
+      const storedNamespaced = Boolean(
+        storedOpencode &&
+        typeof storedOpencode === "object" &&
+        (storedOpencode.native !== undefined || storedOpencode.wsl !== undefined),
+      );
+      if (
+        storedNamespaced !== (installKeys.length > 1) ||
+        Object.values(messageFilesByInstall).some((files) => files.length > 0)
+      ) {
+        await cursorStore.materializeAllOpencodeState();
+      }
 
-      const multiResult = await multiInstallParse({
-        paths: opencodePaths,
-        parserFn: parseOpencodeForInstall,
-        providerName: "opencode",
-        cursors,
-        queuePath,
-        projectQueuePath,
-        getParams: (p, key) => ({ storageDir: storagePaths[key], dbDir: dbPaths[key] }),
-        onProgress: (p) => {
-          if (!progress?.enabled) return;
-          const pct = p.total > 0 ? p.index / p.total : 1;
-          progress.update(
-            `Parsing Opencode (${p.install || "default"}) ${renderBar(pct)} ${formatNumber(
-              p.index,
-            )}/${formatNumber(p.total)} | buckets ${formatNumber(p.bucketsQueued)}`,
-          );
-        },
-        source: "opencode",
-      });
+      let multiResult;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          multiResult = await multiInstallParse({
+            paths: opencodePaths,
+            parserFn: parseOpencodeForInstall,
+            providerName: "opencode",
+            cursors,
+            queuePath,
+            projectQueuePath,
+            getParams: (_p, key) => ({
+              dbDir: dbPaths[key],
+              messageFiles: messageFilesByInstall[key] || [],
+              opencodeCursorNamespace: installKeys.length > 1 ? key : "flat",
+            }),
+            onProgress: (p) => {
+              if (!progress?.enabled) return;
+              const pct = p.total > 0 ? p.index / p.total : 1;
+              progress.update(
+                `Parsing Opencode (${p.install || "default"}) ${renderBar(pct)} ${formatNumber(
+                  p.index,
+                )}/${formatNumber(p.total)} | buckets ${formatNumber(p.bucketsQueued)}`,
+              );
+            },
+            source: "opencode",
+          });
+          break;
+        } catch (error) {
+          if (!isCursorStoreRetry(error) || attempt > 0) throw error;
+        }
+      }
 
       opencodeResult = {
         filesProcessed: multiResult.recordsProcessed,

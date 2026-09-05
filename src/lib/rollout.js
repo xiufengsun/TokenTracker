@@ -3402,10 +3402,9 @@ function deriveOpencodeMessageFingerprint({ msg, totals, source }) {
   return crypto.createHash("sha256").update(raw).digest("base64url").slice(0, 22);
 }
 
-// `fingerprint -> messageKey` for counted messages in this cursor namespace.
-// Rebuilt per parse run. Pre-#426 entries are fingerprinted as they are read;
-// the first claims ownership and later cross-session matches are retracted from
-// persisted buckets once. Tombstoned copies never claim ownership themselves.
+// `fingerprint -> Set<messageKey>` for counted messages in this cursor namespace.
+// Same-session duplicates are all retained as owners; the first session remains
+// canonical for cross-session fork copies. Tombstoned copies never claim ownership.
 function buildOpencodeFingerprintIndex(messageIndex, wantedFingerprints = null) {
   const byFingerprint = new Map();
   if (!messageIndex || typeof messageIndex !== "object") return byFingerprint;
@@ -3413,12 +3412,9 @@ function buildOpencodeFingerprintIndex(messageIndex, wantedFingerprints = null) 
     const entry = messageIndex[key];
     if (entry?.dedupedForkCopy === true) continue;
     const fingerprint = entry && typeof entry.fingerprint === "string" ? entry.fingerprint : null;
-    if (
-      fingerprint &&
-      (!wantedFingerprints || wantedFingerprints.has(fingerprint)) &&
-      !byFingerprint.has(fingerprint)
-    ) {
-      byFingerprint.set(fingerprint, key);
+    if (fingerprint && (!wantedFingerprints || wantedFingerprints.has(fingerprint))) {
+      if (!byFingerprint.has(fingerprint)) byFingerprint.set(fingerprint, new Set());
+      byFingerprint.get(fingerprint).add(key);
     }
   }
   return byFingerprint;
@@ -3436,12 +3432,17 @@ function opencodeMessageKeySession(messageKey) {
 // must not delete usage.
 function isOpencodeForkCopy(fingerprintIndex, fingerprint, messageKey) {
   if (!fingerprint || !fingerprintIndex) return false;
-  const owner = fingerprintIndex.get(fingerprint);
-  if (!owner || owner === messageKey) return false;
-  const ownerSession = opencodeMessageKeySession(owner);
+  const owners = fingerprintIndex.get(fingerprint);
+  if (!owners) return false;
   const session = opencodeMessageKeySession(messageKey);
-  if (!ownerSession || !session) return false;
-  return ownerSession !== session;
+  if (!session) return false;
+  for (const owner of owners instanceof Set ? owners : [owners]) {
+    const ownerSession = opencodeMessageKeySession(owner);
+    if (!ownerSession) continue;
+    if (owner === messageKey) return false;
+    if (ownerSession !== session) return true;
+  }
+  return false;
 }
 
 function normalizeOpencodeAttribution(raw) {
@@ -3519,8 +3520,16 @@ function recordOpencodeMessage({
     prevDeduped === Boolean(dedupedForkCopy)
   ) return;
 
-  if (fingerprintIndex && prevFingerprint && prevFingerprint !== nextFingerprint) {
-    if (fingerprintIndex.get(prevFingerprint) === messageKey) {
+  if (
+    fingerprintIndex &&
+    prevFingerprint &&
+    (prevFingerprint !== nextFingerprint || dedupedForkCopy)
+  ) {
+    const owners = fingerprintIndex.get(prevFingerprint);
+    if (owners instanceof Set) {
+      owners.delete(messageKey);
+      if (owners.size === 0) fingerprintIndex.delete(prevFingerprint);
+    } else if (owners === messageKey) {
       fingerprintIndex.delete(prevFingerprint);
     }
   }
@@ -3529,13 +3538,12 @@ function recordOpencodeMessage({
   if (nextAttribution) entry.attribution = encodeOpencodeAttribution(nextAttribution);
   if (dedupedForkCopy) entry.dedupedForkCopy = true;
   messageIndex[messageKey] = entry;
-  if (
-    fingerprintIndex &&
-    nextFingerprint &&
-    !dedupedForkCopy &&
-    !fingerprintIndex.has(nextFingerprint)
-  ) {
-    fingerprintIndex.set(nextFingerprint, messageKey);
+  if (fingerprintIndex && nextFingerprint && !dedupedForkCopy) {
+    if (!fingerprintIndex.has(nextFingerprint)) {
+      fingerprintIndex.set(nextFingerprint, new Set());
+    }
+    const owners = fingerprintIndex.get(nextFingerprint);
+    if (owners instanceof Set) owners.add(messageKey);
   }
 }
 
@@ -5188,6 +5196,8 @@ async function parseOpencodeDbIncremental({
   source,
   cursorKey,
   publicRepoResolver,
+  opencodeCursorStore,
+  opencodeCursorNamespace = "flat",
 }) {
   await ensureDir(path.dirname(queuePath));
   let messagesProcessed = 0;
@@ -5203,22 +5213,35 @@ async function parseOpencodeDbIncremental({
   const projectMetaCache = projectEnabled ? new Map() : null;
   const publicRepoCache = projectEnabled ? new Map() : null;
   const cursorNamespace = typeof cursorKey === "string" && cursorKey.length > 0 ? cursorKey : "opencode";
-  const opencodeState = normalizeOpencodeState(cursors?.[cursorNamespace]);
-  const messageIndex = opencodeState.messages;
   const touchedBuckets = new Set();
   const defaultSource = normalizeSourceInput(source) || "opencode";
+  const candidateMessageKeys = new Set();
   const candidateFingerprints = new Set();
   for (const entry of messages) {
+    const msgForKey = { ...entry?.data };
+    if (entry?.id && !msgForKey.id) msgForKey.id = entry.id;
+    if (entry?.sessionID && !msgForKey.sessionID) msgForKey.sessionID = entry.sessionID;
+    const messageKey = deriveOpencodeMessageKey(msgForKey, null);
+    if (messageKey) candidateMessageKeys.add(messageKey);
     const totals = normalizeOpencodeTokens(entry?.data?.tokens);
     const fingerprint = totals
       ? deriveOpencodeMessageFingerprint({ msg: entry.data, totals, source: defaultSource })
       : null;
     if (fingerprint) candidateFingerprints.add(fingerprint);
   }
-  // A hook-triggered sync normally carries one changed row. Restrict the
-  // historical fingerprint map to fingerprints that can actually match this
-  // batch instead of duplicating the whole long-lived message index in memory.
-  const fingerprintIndex = buildOpencodeFingerprintIndex(messageIndex, candidateFingerprints);
+  const loaded = cursorNamespace === "opencode" && opencodeCursorStore
+    ? await opencodeCursorStore.loadOpencodeMessagesForBatch({
+        namespace: opencodeCursorNamespace,
+        messageKeys: candidateMessageKeys,
+        fingerprints: candidateFingerprints,
+      })
+    : null;
+  const opencodeState = normalizeOpencodeState(cursors?.[cursorNamespace]);
+  const messageIndex = opencodeState.messages;
+  // Direct parser callers and the legacy single-file store retain the in-memory
+  // fallback; cursor-store generations provide the bounded reverse index.
+  const fingerprintIndex = loaded?.fingerprintIndex ||
+    buildOpencodeFingerprintIndex(messageIndex, candidateFingerprints);
 
   for (let idx = 0; idx < messages.length; idx++) {
     const entry = messages[idx];
