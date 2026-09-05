@@ -266,6 +266,14 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   //    cache_write = input. ──
   "step-3.7-flash": { input: 0.2, output: 1.15, cache_read: 0.04, cache_write: 0.2 },
   "step-3.5-flash": { input: 0.1, output: 0.3, cache_read: 0.02, cache_write: 0.1 },
+  // ── Alibaba Qwen3.8 (mirrored from src/lib/pricing/curated-overrides.json).
+  //    Official rates per MTok in/read/write/out: Flash $0.15/$0.016/$0.20/
+  //    $0.47, Max $2/$0.25/$2.50/$6 (verified 2026-09-05). LiteLLM carries
+  //    together_ai/Qwen/Qwen3.8-Flash without cache fields and
+  //    dashscope/qwen3.8-max without cache-write, so cache-heavy rows
+  //    undercounted ~48x until these were pinned. ──
+  "qwen3.8-flash": { input: 0.15, output: 0.47, cache_read: 0.016, cache_write: 0.2 },
+  "qwen3.8-max": { input: 2, output: 6, cache_read: 0.25, cache_write: 2.5 },
 };
 const ZERO_PRICING = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
 
@@ -364,6 +372,12 @@ function getModelPricing(model: string) {
   if (lower.includes("step-3.7-flash")) return MODEL_PRICING["step-3.7-flash"];
   if (lower.includes("step-3.5-flash")) return MODEL_PRICING["step-3.5-flash"];
   if (lower.includes("stepfun")) return MODEL_PRICING["step-3.7-flash"];
+  // Qwen3.8 ordering: Flash and Max are distinct SKUs; neither needle is a
+  // substring of the other, so flash-first mirrors the cheap-SKU-first GLM
+  // convention without changing behaviour. Catches cased/dated variants like
+  // "Qwen3.8-Flash" that miss the exact table key.
+  if (lower.includes("qwen3.8-flash")) return MODEL_PRICING["qwen3.8-flash"];
+  if (lower.includes("qwen3.8-max")) return MODEL_PRICING["qwen3.8-max"];
   if (lower === "auto") return MODEL_PRICING["composer-1"];
   return ZERO_PRICING;
 }

@@ -72,6 +72,8 @@ test("canonical pricing block retains regression-prone entries and matcher order
     '"cursor-grok-4.5-fast"',
     '"glm-5.3"',
     '"glm-5.3-flash"',
+    '"qwen3.8-flash"',
+    '"qwen3.8-max"',
   ]) {
     assert.ok(block.includes(`${key}:`), `canonical table lost ${key}`);
   }

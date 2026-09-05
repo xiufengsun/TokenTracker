@@ -214,6 +214,38 @@ test("matcher: GLM-5.3 and GLM-5.3-Flash resolve to their own curated rates (not
   }
 });
 
+test("matcher: Qwen3.8 Flash and Max resolve to their own curated rates (cache prices included)", () => {
+  const curated = require("../src/lib/pricing/curated-overrides.json");
+  // LiteLLM carries `together_ai/Qwen/Qwen3.8-Flash` without cache fields and
+  // `dashscope/qwen3.8-max` without cache_write. Before the curated pins,
+  // prefix-strip resolved those incomplete entries and cache-heavy dsh rows
+  // billed ~48x low. Curated must win even when LiteLLM has the model.
+  const litellm = {
+    "together_ai/Qwen/Qwen3.8-Flash": { input: 0.15, output: 0.47 },
+    "dashscope/qwen3.8-max": { input: 2, output: 6, cache_read: 0.25 },
+  };
+  const cases = [
+    ["qwen3.8-flash", 0.15, 0.47, 0.016, 0.2, "curated:exact"],
+    ["qwen3.8-max", 2, 6, 0.25, 2.5, "curated:exact"],
+    // cased / suffixed variants land on the right entry via fuzzy
+    ["Qwen3.8-Flash", 0.15, 0.47, 0.016, 0.2, "curated:fuzzy"],
+    ["qwen3.8-flash-thinking", 0.15, 0.47, 0.016, 0.2, "curated:fuzzy"],
+    ["QWEN3.8-MAX", 2, 6, 0.25, 2.5, "curated:fuzzy"],
+    // dash forms restore the dot and hit exact-dot
+    ["qwen3-8-flash", 0.15, 0.47, 0.016, 0.2, "curated:exact-dot"],
+    ["qwen3-8-max", 2, 6, 0.25, 2.5, "curated:exact-dot"],
+  ];
+  for (const [model, input, output, cache_read, cache_write, source] of cases) {
+    const r = matcher.lookupPricing(model, { curated, litellm });
+    assert.equal(r.hit, true, `${model} should resolve`);
+    assert.equal(r.value.input, input, `${model} input`);
+    assert.equal(r.value.output, output, `${model} output`);
+    assert.equal(r.value.cache_read, cache_read, `${model} cache_read`);
+    assert.equal(r.value.cache_write, cache_write, `${model} cache_write`);
+    assert.equal(r.source, source, `${model} source`);
+  }
+});
+
 test("matcher: lookupPricing strips a LiteLLM provider prefix for bare queue models", () => {
   // Queue rows store bare model names; LiteLLM keys are provider-qualified.
   const curated = { exact: {}, alias: {}, fuzzy: [] };
@@ -890,6 +922,53 @@ test("index: Cursor Fast SKUs keep their distinct curated pricing (#446)", () =>
     input_tokens: 1_000_000,
     output_tokens: 1_000_000,
   }), 60);
+});
+
+test("index: qwen3.8 cache-heavy rows bill cache reads and writes at the pinned rates", async () => {
+  pricing.resetPricingForTests();
+  const cachePath = tmpCachePath();
+  await pricing.ensurePricingLoaded({
+    cachePath,
+    fetchImpl: makeFetchImpl({
+      "together_ai/Qwen/Qwen3.8-Flash": {
+        input_cost_per_token: 1.5e-7,
+        output_cost_per_token: 4.7e-7,
+      },
+      "dashscope/qwen3.8-max": {
+        input_cost_per_token: 2e-6,
+        output_cost_per_token: 6e-6,
+        cache_read_input_token_cost: 2.5e-7,
+      },
+    }),
+  });
+  // Real dsh queue numbers (2026-09-05T13:00Z): 456 fresh input vs 2.54M
+  // cache reads + 264K cache writes. Without the curated cache prices this
+  // row cost $0.0048 instead of $0.0983.
+  const flash = pricing.computeRowCost({
+    source: "dsh",
+    model: "qwen3.8-flash",
+    hour_start: "2026-09-05T13:00:00.000Z",
+    input_tokens: 456,
+    output_tokens: 10106,
+    cached_input_tokens: 2540760,
+    cache_creation_input_tokens: 264343,
+    reasoning_output_tokens: 0,
+  });
+  assert.ok(
+    Math.abs(flash - (456 * 0.15 + 10106 * 0.47 + 2540760 * 0.016 + 264343 * 0.2) / 1e6) < 1e-9,
+    `flash cost ${flash} != pinned-rate expectation`,
+  );
+  // Max carries an explicit cache_write ($2.5/M) that LiteLLM omits entirely.
+  const max = pricing.computeRowCost({
+    source: "dsh",
+    model: "qwen3.8-max",
+    input_tokens: 1000,
+    output_tokens: 2000,
+    cached_input_tokens: 500000,
+    cache_creation_input_tokens: 100000,
+    reasoning_output_tokens: 0,
+  });
+  assert.equal(max, 0.389);
 });
 
 test("index: getModelPricing finds LiteLLM mainstream models with correct unit conversion", async () => {
