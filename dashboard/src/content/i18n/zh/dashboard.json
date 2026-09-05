@@ -2,6 +2,7 @@
   "usage.overview.all_tools": "全部",
   "usage.overview.all_models": "全部模型",
   "usage.overview.all_models_note": "同名模型会跨工具合并，并按总用量排序。",
+  "usage.overview.week_cross_month_hint": "本周跨越两个自然月，总量与单个自然月的用量并不直接可比",
   "usage.overview.all_tools_card_aria": "全部工具：{{tokens}} Token，{{cost}}，{{count}} 个模型。显示合并后的模型排行",
   "usage.overview.antigravity_notice_title": "Token 为估算值",
   "usage.overview.cache_hit_rate_label": "缓存命中率",

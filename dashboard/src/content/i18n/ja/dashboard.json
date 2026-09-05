@@ -2,6 +2,7 @@
   "usage.overview.all_tools": "すべて",
   "usage.overview.all_models": "すべてのモデル",
   "usage.overview.all_models_note": "同じ名前のモデルはツールをまたいで集計され、合計使用量順に表示されます。",
+  "usage.overview.week_cross_month_hint": "この週は2つの暦月にまたがるため、合計は単一の月の使用量と直接比較できません",
   "usage.overview.all_tools_card_aria": "すべてのツール：{{tokens}}トークン、{{cost}}、{{count}}モデル。統合モデルランキングを表示",
   "usage.overview.antigravity_notice_title": "トークンは推定値です",
   "usage.overview.cache_hit_rate_label": "キャッシュヒット率",

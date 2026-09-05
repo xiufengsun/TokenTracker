@@ -385,4 +385,38 @@ describe("UsageOverview", () => {
     ).toBeNull();
     expect(screen.getByTitle("1,234,567,890")).toHaveTextContent("1.23B");
   });
+
+  it("shows the covered date range and flags a week that spans two calendar months", () => {
+    render(
+      <UsageOverview
+        period="week"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="123"
+        fleetData={[]}
+        from="2026-08-31"
+        to="2026-09-06"
+      />,
+    );
+
+    expect(screen.getByText("Aug 31 — Sep 6")).toBeTruthy();
+    expect(screen.getByText(copy("usage.overview.week_cross_month_hint"))).toBeTruthy();
+  });
+
+  it("omits the cross-month hint when the selected week stays inside one month", () => {
+    render(
+      <UsageOverview
+        period="week"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="123"
+        fleetData={[]}
+        from="2026-09-01"
+        to="2026-09-07"
+      />,
+    );
+
+    expect(screen.getByText("Sep 1 — Sep 7")).toBeTruthy();
+    expect(screen.queryByText(copy("usage.overview.week_cross_month_hint"))).toBeNull();
+  });
 });

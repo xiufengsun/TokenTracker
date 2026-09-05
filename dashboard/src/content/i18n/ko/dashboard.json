@@ -2,6 +2,7 @@
   "usage.overview.all_tools": "전체",
   "usage.overview.all_models": "전체 모델",
   "usage.overview.all_models_note": "이름이 같은 모델은 도구 전체에서 합산되어 총사용량순으로 표시됩니다.",
+  "usage.overview.week_cross_month_hint": "이 주는 두 개의 달에 걸쳐 있으므로 합계를 한 달 사용량과 직접 비교할 수 없습니다",
   "usage.overview.all_tools_card_aria": "전체 도구: {{tokens}} 토큰, {{cost}}, 모델 {{count}}개. 통합 모델 순위 표시",
   "usage.overview.antigravity_notice_title": "추정 토큰",
   "usage.overview.cache_hit_rate_label": "캐시 적중률",

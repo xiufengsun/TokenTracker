@@ -2,6 +2,7 @@
   "usage.overview.all_tools": "Alle",
   "usage.overview.all_models": "Alle Modelle",
   "usage.overview.all_models_note": "Gleichnamige Modelle werden werkzeugübergreifend zusammengeführt und nach Gesamtnutzung sortiert.",
+  "usage.overview.week_cross_month_hint": "Diese Woche umfasst zwei Kalendermonate, sodass die Summe nicht direkt mit dem Verbrauch eines einzelnen Monats vergleichbar ist",
   "usage.overview.all_tools_card_aria": "Alle Werkzeuge: {{tokens}} Token, {{cost}}, {{count}} Modelle. Zusammengeführte Modellrangliste anzeigen",
   "usage.overview.antigravity_notice_title": "Token sind Schätzwerte",
   "usage.overview.antigravity_notice_body": "Antigravity-Lokalprotokolle enthalten keine tatsächlichen Nutzungsdaten, daher werden die Werte hier aus der Zeichenanzahl (ca. 4 Zeichen/Token) geschätzt, ohne Gemini Prompt-Cache-Rabatte. Betrachte diese Werte als grobe Obergrenze und nicht als Rechnungsgrundlage.",

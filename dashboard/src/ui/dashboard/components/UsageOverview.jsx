@@ -234,6 +234,19 @@ export function UsageOverview({
   const tabs = normalizePeriods(periods);
   const dateLocale = getDateFnsLocale(getCopyLocale());
   const summaryCounterValue = parseAnimatedCounterValue(String(summaryValue ?? ""));
+  // Weeks run Monday–Sunday, so a week selected near a month boundary can
+  // hold more usage than the month-to-date it overlaps. Spell out the covered
+  // dates and flag the straddle so the week/month totals read as different
+  // windows, not as a miscount.
+  const showCrossMonthHint =
+    period === "week" &&
+    typeof from === "string" &&
+    typeof to === "string" &&
+    from.slice(0, 7) !== to.slice(0, 7);
+  const periodRangeLabel =
+    from && to
+      ? `${formatDateShort(from, dateLocale)} — ${formatDateShort(to, dateLocale)}`
+      : null;
   // The digit-by-digit Counter renders at a fixed 72px and would clip on
   // phones. Below sm we drop it and render the plain value, which scales
   // with the responsive font class below. 639px == one below Tailwind's
@@ -476,6 +489,14 @@ export function UsageOverview({
               )}
             </div>
           )}
+          {periodRangeLabel ? (
+            <div className="mt-3 flex flex-col items-center gap-1 text-[11px] leading-snug text-oai-gray-400 dark:text-oai-gray-500">
+              <span className="tabular-nums">{periodRangeLabel}</span>
+              {showCrossMonthHint ? (
+                <span>{copy("usage.overview.week_cross_month_hint")}</span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         {/* Provider Distribution */}
