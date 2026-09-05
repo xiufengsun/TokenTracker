@@ -37,7 +37,9 @@ const {
   probeWslDistros,
   discoverWslHermesHome,
   resolveCopilotOtelPaths,
+  resolveVsCodeCopilotChatSessionPaths,
   parseCopilotIncremental,
+  parseVsCodeCopilotChatIncremental,
   parseKimiIncremental,
   parseCodebuddyIncremental,
   parseCursorApiIncremental,
@@ -6361,6 +6363,189 @@ test("resolveCopilotOtelPaths discovers both Copilot default locations", async (
         explicitPath,
       ].sort(),
     );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("resolveVsCodeCopilotChatSessionPaths discovers stable and Insiders workspace sessions", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-vscode-copilot-paths-"));
+  try {
+    let appData;
+    let resolverEnv;
+    if (process.platform === "darwin") {
+      appData = path.join(tmp, "Library", "Application Support");
+      resolverEnv = { HOME: tmp };
+    } else if (process.platform === "win32") {
+      appData = path.join(tmp, "AppData", "Roaming");
+      resolverEnv = { USERPROFILE: tmp, APPDATA: appData };
+    } else {
+      appData = path.join(tmp, ".config");
+      resolverEnv = { HOME: tmp, XDG_CONFIG_HOME: appData };
+    }
+    const stableDir = path.join(
+      appData,
+      "Code",
+      "User",
+      "workspaceStorage",
+      "workspace-a",
+      "chatSessions",
+    );
+    const insidersDir = path.join(
+      appData,
+      "Code - Insiders",
+      "User",
+      "workspaceStorage",
+      "workspace-b",
+      "chatSessions",
+    );
+    await fs.mkdir(stableDir, { recursive: true });
+    await fs.mkdir(insidersDir, { recursive: true });
+    await fs.writeFile(path.join(stableDir, "stable.jsonl"), "", "utf8");
+    await fs.writeFile(path.join(insidersDir, "insiders.json"), "{}", "utf8");
+    await fs.writeFile(path.join(stableDir, "ignored.txt"), "", "utf8");
+
+    assert.deepEqual(
+      resolveVsCodeCopilotChatSessionPaths(resolverEnv),
+      [path.join(stableDir, "stable.jsonl"), path.join(insidersDir, "insiders.json")].sort(),
+    );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseVsCodeCopilotChatIncremental replays JSONL patches and ignores official Copilot models", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-vscode-copilot-"));
+  try {
+    const sessionPath = path.join(tmp, "session.jsonl");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const timestamp = Date.parse("2026-09-01T10:15:00.000Z");
+    const patches = [
+      { kind: 0, v: { requests: [] } },
+      {
+        kind: 2,
+        k: ["requests"],
+        i: 0,
+        v: [{ requestId: "custom-1", modelId: "customendpoint/CLIProxyAPI/gpt-5.6-luna", timestamp }],
+      },
+      { kind: 1, k: ["requests", 0, "promptTokens"], v: 100 },
+      { kind: 1, k: ["requests", 0, "completionTokens"], v: 20 },
+      {
+        kind: 2,
+        k: ["requests"],
+        i: 1,
+        v: [{ requestId: "official-1", modelId: "copilot/auto", timestamp, promptTokens: 9999, completionTokens: 9999 }],
+      },
+      {
+        kind: 2,
+        k: ["requests"],
+        i: 2,
+        v: [{ requestId: "custom-2", modelId: "customendpoint/LiteLLM/deepseek-v4-flash-amd", timestamp, promptTokens: 300, completionTokens: 40 }],
+      },
+    ];
+    await fs.writeFile(sessionPath, patches.map((patch) => JSON.stringify(patch)).join("\n") + "\n", "utf8");
+    const cursors = {};
+
+    const first = await parseVsCodeCopilotChatIncremental({
+      sessionPaths: [sessionPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(first.eventsAggregated, 2);
+    const firstRows = (await readJsonLines(queuePath)).filter((row) => row.source === "copilot");
+    const luna = firstRows.find((row) => row.model === "gpt-5.6-luna");
+    const deepseek = firstRows.find((row) => row.model === "deepseek-v4-flash-amd");
+    assert.deepEqual(
+      { input: luna.input_tokens, output: luna.output_tokens, total: luna.total_tokens },
+      { input: 100, output: 20, total: 120 },
+    );
+    assert.deepEqual(
+      { input: deepseek.input_tokens, output: deepseek.output_tokens, total: deepseek.total_tokens },
+      { input: 300, output: 40, total: 340 },
+    );
+    assert.equal(firstRows.some((row) => row.model === "copilot/auto"), false);
+
+    await fs.appendFile(
+      sessionPath,
+      JSON.stringify({ kind: 1, k: ["requests", 0, "completionTokens"], v: 35 }) + "\n",
+      "utf8",
+    );
+    const second = await parseVsCodeCopilotChatIncremental({
+      sessionPaths: [sessionPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(second.eventsAggregated, 1);
+    const rowsAfterUpdate = (await readJsonLines(queuePath)).filter(
+      (row) => row.source === "copilot" && row.model === "gpt-5.6-luna",
+    );
+    const latestLuna = rowsAfterUpdate.at(-1);
+    assert.equal(latestLuna.input_tokens, 100);
+    assert.equal(latestLuna.output_tokens, 35);
+    assert.equal(latestLuna.total_tokens, 135);
+
+    const third = await parseVsCodeCopilotChatIncremental({
+      sessionPaths: [sessionPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(third.eventsAggregated, 0);
+    assert.equal(third.bucketsQueued, 0);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseVsCodeCopilotChatIncremental reads legacy JSON snapshots and reconciles updates", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-vscode-copilot-json-"));
+  try {
+    const sessionPath = path.join(tmp, "session.json");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const timestamp = Date.parse("2026-09-02T08:05:00.000Z");
+    const cursors = {};
+    await fs.writeFile(
+      sessionPath,
+      JSON.stringify({
+        requests: [
+          { requestId: "json-1", modelId: "customendpoint/LiteLLM/Qwen3.8-27B-NVFP4", timestamp, promptTokens: 500, completionTokens: 25 },
+          { requestId: "json-official", modelId: "copilot/gpt-5.3-codex", timestamp, promptTokens: 700, completionTokens: 70 },
+        ],
+      }),
+      "utf8",
+    );
+    const first = await parseVsCodeCopilotChatIncremental({
+      sessionPaths: [sessionPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(first.eventsAggregated, 1);
+    let rows = (await readJsonLines(queuePath)).filter(
+      (row) => row.source === "copilot" && row.model === "Qwen3.8-27B-NVFP4",
+    );
+    assert.equal(rows.at(-1).total_tokens, 525);
+
+    await fs.writeFile(
+      sessionPath,
+      JSON.stringify({
+        requests: [
+          { requestId: "json-1", modelId: "customendpoint/LiteLLM/Qwen3.8-27B-NVFP4", timestamp, promptTokens: 600, completionTokens: 30 },
+          { requestId: "json-official", modelId: "copilot/gpt-5.3-codex", timestamp, promptTokens: 700, completionTokens: 70 },
+        ],
+      }),
+      "utf8",
+    );
+    const second = await parseVsCodeCopilotChatIncremental({
+      sessionPaths: [sessionPath],
+      cursors,
+      queuePath,
+    });
+    assert.equal(second.eventsAggregated, 1);
+    rows = (await readJsonLines(queuePath)).filter(
+      (row) => row.source === "copilot" && row.model === "Qwen3.8-27B-NVFP4",
+    );
+    assert.equal(rows.at(-1).input_tokens, 600);
+    assert.equal(rows.at(-1).output_tokens, 30);
+    assert.equal(rows.at(-1).total_tokens, 630);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

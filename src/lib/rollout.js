@@ -16116,6 +16116,461 @@ async function parseCopilotIncremental({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// VS Code Copilot Chat — persisted workspace chat sessions
+//
+// The VS Code Chat extension does not necessarily emit the Copilot CLI OTEL
+// file.  It persists chat sessions under the VS Code workspace storage tree
+// instead.  Newer VS Code versions use an append-only JSONL patch log while
+// older versions write a complete JSON snapshot.  Only customendpoint/*
+// requests are owned here: official Copilot requests may also appear in the
+// OTEL/session-store readers above, and counting every VS Code request would
+// make those sources overlap.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VSCODE_COPILOT_CURSOR_VERSION = 1;
+const VSCODE_COPILOT_USAGE_FIELDS = new Set([
+  "requestId",
+  "modelId",
+  "promptTokens",
+  "completionTokens",
+  "timestamp",
+  "responseTimestamp",
+]);
+
+function addVsCodeCopilotChatFiles(target, chatDir) {
+  if (!chatDir || !target) return;
+  let entries;
+  try {
+    entries = fssync.readdirSync(chatDir, { withFileTypes: true });
+  } catch (_e) {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.endsWith(".jsonl") && !entry.name.endsWith(".json")) continue;
+    target.add(path.join(chatDir, entry.name));
+  }
+}
+
+function addVsCodeCopilotWorkspaceFiles(target, workspaceStorageDir) {
+  if (!workspaceStorageDir || !target) return;
+  let entries;
+  try {
+    entries = fssync.readdirSync(workspaceStorageDir, { withFileTypes: true });
+  } catch (_e) {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    addVsCodeCopilotChatFiles(
+      target,
+      path.join(workspaceStorageDir, entry.name, "chatSessions"),
+    );
+  }
+}
+
+function resolveVsCodeCopilotChatSessionPaths(env = process.env) {
+  const home =
+    process.platform === "win32"
+      ? env.USERPROFILE || env.HOME || os.homedir()
+      : env.HOME || os.homedir();
+  const paths = new Set();
+  const explicit =
+    typeof env.TOKENTRACKER_VSCODE_CHAT_SESSIONS_DIR === "string"
+      ? env.TOKENTRACKER_VSCODE_CHAT_SESSIONS_DIR.trim()
+      : "";
+
+  if (explicit) {
+    const explicitPath = normalizeCopilotDbPath(explicit, env);
+    if (explicitPath) {
+      try {
+        const explicitStat = fssync.statSync(explicitPath);
+        if (explicitStat.isDirectory()) {
+          addVsCodeCopilotChatFiles(paths, explicitPath);
+        } else if (
+          explicitStat.isFile() &&
+          (explicitPath.endsWith(".jsonl") || explicitPath.endsWith(".json"))
+        ) {
+          paths.add(explicitPath);
+        }
+      } catch (_e) {
+        // Keep the explicit path useful in tests and portable setups even
+        // before VS Code has created the directory/file.
+        if (explicitPath.endsWith(".jsonl") || explicitPath.endsWith(".json")) {
+          paths.add(explicitPath);
+        }
+      }
+    }
+  }
+
+  const appData =
+    process.platform === "darwin"
+      ? path.join(home, "Library", "Application Support")
+      : process.platform === "win32"
+        ? env.APPDATA || path.join(home, "AppData", "Roaming")
+        : env.XDG_CONFIG_HOME || path.join(home, ".config");
+  for (const appName of ["Code", "Code - Insiders", "VSCodium"]) {
+    addVsCodeCopilotWorkspaceFiles(
+      paths,
+      path.join(appData, appName, "User", "workspaceStorage"),
+    );
+  }
+  return Array.from(paths).sort();
+}
+
+function normalizeVsCodeCopilotModel(modelId) {
+  if (typeof modelId !== "string") return null;
+  const trimmed = modelId.trim();
+  if (!/^customendpoint\//i.test(trimmed)) return null;
+  const parts = trimmed.split("/").filter(Boolean);
+  const model = parts[parts.length - 1];
+  return normalizeCopilotAppModel(model) || null;
+}
+
+function slimVsCodeCopilotRequest(request) {
+  if (!request || typeof request !== "object" || Array.isArray(request)) return {};
+  const slim = {};
+  for (const field of VSCODE_COPILOT_USAGE_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(request, field)) {
+      slim[field] = request[field];
+    }
+  }
+  return slim;
+}
+
+function cloneVsCodeCopilotRequests(requests) {
+  return Array.isArray(requests) ? requests.map(slimVsCodeCopilotRequest) : [];
+}
+
+function applyVsCodeCopilotChatPatch(requests, patch) {
+  if (!patch || typeof patch !== "object") return false;
+  const kind = Number(patch.kind);
+  if (kind === 0) {
+    const initial = patch.v && typeof patch.v === "object" ? patch.v.requests : null;
+    requests.splice(0, requests.length, ...cloneVsCodeCopilotRequests(initial));
+    return true;
+  }
+
+  const key = patch.k;
+  if (!Array.isArray(key) || key[0] !== "requests") return false;
+  if (key.length === 1) {
+    if (kind === 1 && Array.isArray(patch.v)) {
+      requests.splice(0, requests.length, ...cloneVsCodeCopilotRequests(patch.v));
+      return true;
+    }
+    if (kind === 2) {
+      const values = Array.isArray(patch.v) ? patch.v : [patch.v];
+      if (!values.every((value) => value && typeof value === "object")) return false;
+      const rawIndex = Number(patch.i);
+      const index = Number.isInteger(rawIndex) && rawIndex >= 0
+        ? Math.min(rawIndex, requests.length)
+        : requests.length;
+      requests.splice(index, 0, ...values.map(slimVsCodeCopilotRequest));
+      return true;
+    }
+    return false;
+  }
+
+  const index = Number(key[1]);
+  if (!Number.isInteger(index) || index < 0) return false;
+  while (requests.length <= index) requests.push({});
+  if (kind === 1 && key.length === 2) {
+    requests[index] = slimVsCodeCopilotRequest(patch.v);
+    return true;
+  }
+  if (kind === 1 && key.length === 3 && VSCODE_COPILOT_USAGE_FIELDS.has(key[2])) {
+    requests[index][key[2]] = patch.v;
+    return true;
+  }
+  return false;
+}
+
+async function readVsCodeCopilotJsonlPatches(filePath, startOffset, requests) {
+  const data = await fs.readFile(filePath);
+  const safeStart = Math.max(0, Math.min(toNonNegativeInt(startOffset), data.length));
+  const tail = data.subarray(safeStart);
+  const lastNewline = tail.lastIndexOf(0x0a);
+  if (lastNewline < 0) {
+    return { nextOffset: safeStart, recordsProcessed: 0 };
+  }
+  const complete = tail.subarray(0, lastNewline + 1).toString("utf8");
+  let recordsProcessed = 0;
+  for (const rawLine of complete.split("\n")) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (!line.trim()) continue;
+    recordsProcessed++;
+    try {
+      const normalizedLine = line.charCodeAt(0) === 0xfeff ? line.slice(1) : line;
+      applyVsCodeCopilotChatPatch(requests, JSON.parse(normalizedLine));
+    } catch (_e) {
+      // A malformed unrelated patch must not prevent later usage patches from
+      // being consumed. The byte cursor still advances past this line.
+    }
+  }
+  return {
+    nextOffset: safeStart + lastNewline + 1,
+    recordsProcessed,
+  };
+}
+
+async function readVsCodeCopilotJsonSnapshot(filePath) {
+  const value = JSON.parse(await fs.readFile(filePath, "utf8"));
+  const requests = Array.isArray(value) ? value : value?.requests;
+  return cloneVsCodeCopilotRequests(requests);
+}
+
+function vsCodeCopilotRequestTimestampMs(request) {
+  const tsIso =
+    parseCopilotAppTimestamp(request?.responseTimestamp) ||
+    parseCopilotAppTimestamp(request?.timestamp);
+  return tsIso ? Date.parse(tsIso) : 0;
+}
+
+function extractVsCodeCopilotUsage(request) {
+  const model = normalizeVsCodeCopilotModel(request?.modelId);
+  if (!model) return null;
+  const input = toNonNegativeInt(request?.promptTokens);
+  const output = toNonNegativeInt(request?.completionTokens);
+  if (input + output <= 0) return null;
+  const timestampMs = vsCodeCopilotRequestTimestampMs(request);
+  if (!timestampMs) return null;
+  const bucketStart = toUtcHalfHourStart(new Date(timestampMs).toISOString());
+  if (!bucketStart) return null;
+  return {
+    model,
+    bucketStart,
+    totals: {
+      input_tokens: input,
+      cached_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      output_tokens: output,
+      reasoning_output_tokens: 0,
+      total_tokens: input + output,
+      conversation_count: 1,
+    },
+  };
+}
+
+function vsCodeCopilotRequestKey(request, index) {
+  const requestId = typeof request?.requestId === "string" ? request.requestId.trim() : "";
+  return requestId ? `id:${requestId}` : `index:${index}`;
+}
+
+function vsCodeCopilotUsageKey(usage) {
+  if (!usage) return "";
+  return JSON.stringify([
+    usage.model,
+    usage.bucketStart,
+    usage.totals.input_tokens,
+    usage.totals.output_tokens,
+    usage.totals.total_tokens,
+  ]);
+}
+
+function reconcileVsCodeCopilotRequestUsage(
+  hourlyState,
+  previousUsage,
+  currentUsage,
+  touchedBuckets,
+) {
+  // Keep an already-accounted request if a compacted/partial snapshot no
+  // longer contains enough metadata to identify it. Usage is historical and
+  // deleting a VS Code session must not erase tokens already used.
+  if (!currentUsage) return false;
+  if (
+    previousUsage &&
+    vsCodeCopilotUsageKey(previousUsage) === vsCodeCopilotUsageKey(currentUsage)
+  ) {
+    return false;
+  }
+  if (previousUsage) {
+    const previousBucket = getHourlyBucket(
+      hourlyState,
+      "copilot",
+      previousUsage.model,
+      previousUsage.bucketStart,
+    );
+    subtractTotals(previousBucket.totals, previousUsage.totals);
+    touchedBuckets.add(
+      bucketKey("copilot", previousUsage.model, previousUsage.bucketStart),
+    );
+  }
+  const currentBucket = getHourlyBucket(
+    hourlyState,
+    "copilot",
+    currentUsage.model,
+    currentUsage.bucketStart,
+  );
+  addTotals(currentBucket.totals, currentUsage.totals);
+  touchedBuckets.add(
+    bucketKey("copilot", currentUsage.model, currentUsage.bucketStart),
+  );
+  return true;
+}
+
+function normalizeVsCodeCopilotFileRequests(fileState) {
+  return cloneVsCodeCopilotRequests(fileState?.requests);
+}
+
+async function parseVsCodeCopilotChatIncremental({
+  sessionPaths,
+  paths,
+  cursors,
+  queuePath,
+  onProgress,
+  env,
+} = {}) {
+  await ensureDir(path.dirname(queuePath));
+  const state =
+    cursors.copilotVsCode && typeof cursors.copilotVsCode === "object"
+      ? cursors.copilotVsCode
+      : {};
+  const previousFiles =
+    state.files && typeof state.files === "object" ? state.files : {};
+  const discovered = Array.isArray(sessionPaths)
+    ? sessionPaths
+    : Array.isArray(paths)
+      ? paths
+      : resolveVsCodeCopilotChatSessionPaths(env || process.env);
+  const files = Array.from(
+    new Set([
+      ...discovered.filter((filePath) => typeof filePath === "string" && filePath),
+      ...Object.keys(previousFiles),
+    ]),
+  ).sort();
+  const fileStates = { ...previousFiles };
+  const hourlyState = normalizeHourlyState(cursors?.hourly);
+  const touchedBuckets = new Set();
+  const cb = typeof onProgress === "function" ? onProgress : null;
+  let recordsProcessed = 0;
+  let eventsAggregated = 0;
+  let fileErrors = 0;
+
+  for (let index = 0; index < files.length; index++) {
+    const filePath = files[index];
+    const previousFileState =
+      previousFiles[filePath] && typeof previousFiles[filePath] === "object"
+        ? previousFiles[filePath]
+        : {};
+    const previousRequests = normalizeVsCodeCopilotFileRequests(previousFileState);
+    let currentRequests = previousRequests;
+    let fileMetadata = null;
+    let didRead = false;
+    try {
+      const stat = fssync.statSync(filePath);
+      if (!stat.isFile()) continue;
+      const isJsonl = filePath.endsWith(".jsonl");
+      const previousSize = toNonNegativeInt(previousFileState.size);
+      const inodeChanged =
+        typeof previousFileState.ino === "number" &&
+        previousFileState.ino !== stat.ino;
+      const sameSizeRewritten =
+        previousSize > 0 &&
+        stat.size === previousSize &&
+        Number(previousFileState.mtimeMs) > 0 &&
+        stat.mtimeMs !== Number(previousFileState.mtimeMs);
+
+      if (isJsonl) {
+        const reset = inodeChanged || stat.size < previousSize || sameSizeRewritten;
+        currentRequests = reset ? [] : cloneVsCodeCopilotRequests(previousRequests);
+        const patchResult = await readVsCodeCopilotJsonlPatches(
+          filePath,
+          reset ? 0 : previousSize,
+          currentRequests,
+        );
+        recordsProcessed += patchResult.recordsProcessed;
+        fileMetadata = {
+          format: "jsonl",
+          size: patchResult.nextOffset,
+          mtimeMs: stat.mtimeMs,
+          ino: stat.ino,
+          requests: currentRequests,
+        };
+        didRead = patchResult.recordsProcessed > 0 || reset;
+      } else if (
+        previousFileState.format !== "json" ||
+        previousSize !== stat.size ||
+        Number(previousFileState.mtimeMs) !== stat.mtimeMs ||
+        previousFileState.ino !== stat.ino
+      ) {
+        currentRequests = await readVsCodeCopilotJsonSnapshot(filePath);
+        recordsProcessed++;
+        fileMetadata = {
+          format: "json",
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+          ino: stat.ino,
+          requests: currentRequests,
+        };
+        didRead = true;
+      }
+    } catch (_e) {
+      fileErrors++;
+      continue;
+    }
+
+    if (!fileMetadata) continue;
+    const previousByKey = new Map();
+    const currentByKey = new Map();
+    previousRequests.forEach((request, requestIndex) => {
+      previousByKey.set(vsCodeCopilotRequestKey(request, requestIndex), request);
+    });
+    currentRequests.forEach((request, requestIndex) => {
+      currentByKey.set(vsCodeCopilotRequestKey(request, requestIndex), request);
+    });
+    for (const [requestKey, request] of currentByKey) {
+      const currentUsage = extractVsCodeCopilotUsage(request);
+      const previousUsage = extractVsCodeCopilotUsage(previousByKey.get(requestKey));
+      if (
+        reconcileVsCodeCopilotRequestUsage(
+          hourlyState,
+          previousUsage,
+          currentUsage,
+          touchedBuckets,
+        )
+      ) {
+        eventsAggregated++;
+      }
+    }
+    fileStates[filePath] = {
+      ...fileMetadata,
+      updatedAt: new Date().toISOString(),
+    };
+    if (cb && (didRead || fileMetadata.format === "json")) {
+      cb({
+        index: index + 1,
+        total: files.length,
+        recordsProcessed,
+        eventsAggregated,
+        bucketsQueued: touchedBuckets.size,
+      });
+    }
+  }
+
+  const bucketsQueued = await enqueueTouchedBuckets({
+    queuePath,
+    hourlyState,
+    touchedBuckets,
+  });
+  const updatedAt = new Date().toISOString();
+  hourlyState.updatedAt = updatedAt;
+  cursors.hourly = hourlyState;
+  cursors.copilotVsCode = {
+    ...state,
+    version: VSCODE_COPILOT_CURSOR_VERSION,
+    files: fileStates,
+    updatedAt,
+  };
+  return {
+    recordsProcessed,
+    eventsAggregated,
+    bucketsQueued,
+    fileErrors,
+    filesDiscovered: discovered.length,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GitHub Copilot local runtime — session-store.db assistant_usage_events
 //
 // Copilot CLI 1.0.70+ persists one row per LLM request here. The Copilot App
@@ -20334,6 +20789,8 @@ module.exports = {
   copilotOtelCursorHasLegacyCliUsage,
   pruneCopilotUsageClaims,
   parseCopilotIncremental,
+  resolveVsCodeCopilotChatSessionPaths,
+  parseVsCodeCopilotChatIncremental,
   parseCopilotSessionStoreIncremental,
   parseCopilotAppDbIncremental,
   resolveKimiHome,
