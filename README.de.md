@@ -70,6 +70,7 @@ tokentracker status       # Hook-Status prüfen
 tokentracker status --json     # Maschinenlesbare Ausgabe (für jq, AI-Agenten)
 tokentracker status --light    # Reine ASCII-Tabelle (CI / SSH, kein Spinner)
 tokentracker doctor       # Health Check
+tokentracker update       # Dieses CLI aktualisieren
 ```
 
 ### 🍺 Homebrew (macOS)

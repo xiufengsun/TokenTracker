@@ -67,6 +67,7 @@ tokentracker              # 대시보드 열기
 tokentracker sync         # 수동 동기화
 tokentracker status       # hook 상태 확인
 tokentracker doctor       # 헬스 체크
+tokentracker update       # 이 CLI 업데이트
 ```
 
 ### 🍺 Homebrew (macOS)
