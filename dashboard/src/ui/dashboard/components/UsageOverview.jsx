@@ -788,10 +788,9 @@ function ProviderExpandedSection({ provider, color, providerHeading, contextSour
                           </p>
                         )}
 
-                        {/* Antigravity transcripts carry no usage field — every token
-                            here is a 4-char/token estimate that ignores Gemini prompt
-                            caching. Inline footnote, same muted style as the Context
-                            Breakdown footnote. */}
+                        {/* Antigravity parses exact tokens and prompt-cache hits from
+                            SQLite generation metadata when available, falling back to
+                            a ~4-char/token estimate for raw transcripts. */}
                         {isAntigravity && (
                           <p className="mb-3 text-[10px] leading-snug text-oai-gray-400 dark:text-oai-gray-500">
                             <span className="font-medium text-oai-gray-500 dark:text-oai-gray-400">
