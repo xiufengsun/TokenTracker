@@ -104,6 +104,7 @@ tokentracker status       # Check hook status
 tokentracker status --json     # Machine-readable summary (pipe to jq, ingest from AI agents)
 tokentracker status --light    # Plain ASCII table (CI / SSH, no spinner)
 tokentracker doctor       # Health check
+tokentracker update       # Update this CLI
 ```
 
 ### 🍺 Homebrew (macOS)
