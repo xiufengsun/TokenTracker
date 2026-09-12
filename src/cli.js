@@ -30,6 +30,9 @@ async function run(argv) {
   }
 
   switch (command) {
+    case "accounts":
+      await require("./commands/accounts").cmdAccounts(rest);
+      return;
     case "serve":
       await cmdServe(rest);
       return;
@@ -84,6 +87,7 @@ function printHelp() {
       "  npx tokentracker [--debug] device-login [--json] [--base-url <url>]",
       "  npx tokentracker [--debug] wrapped [--year 2026] [--json]",
       "  npx tokentracker sessions [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--format json|csv] [--out file] [--refresh] [--no-git]",
+      "  npx tokentracker accounts <add|list|login|run|auto|rename|archive|restore> [args]",
       "",
       "Notes:",
       "  - init: consent first, local setup next, browser sign-in last.",

@@ -4,6 +4,7 @@ import { gsap, ScrollTrigger } from "./gsap.js";
 import { InstallCommand } from "./InstallCommand.jsx";
 import { DownloadButtons } from "./DownloadButtons.jsx";
 import { CountUp } from "../../components/CountUp.jsx";
+import "./galaxy-legibility.css";
 
 // three.js (~150KB gzip) is decorative and below the hero copy — keep it out
 // of the landing critical path and hydrate the galaxy right after first paint.
@@ -106,7 +107,7 @@ export function HeroSection({
               {copy("landing.v3.hero.kicker")}
             </p>
 
-            <h1 className="text-balance text-4xl font-semibold leading-[1.08] tracking-tight text-white sm:text-[2.75rem] sm:tall:text-[3.25rem] sm:xtall:text-6xl lg:xtall:text-[4rem]">
+            <h1 className="lv3-hero-title text-balance text-4xl font-semibold leading-[1.08] tracking-tight text-white sm:text-[2.75rem] sm:tall:text-[3.25rem] sm:xtall:text-6xl lg:xtall:text-[4rem]">
               {copy("landing.v2.hero.title_line1")}
               <br />
               <span
@@ -144,30 +145,15 @@ export function HeroSection({
           {/* Outer div owns the centering; GSAP animates the inner one so the
               -50% translate never gets clobbered by the tween's transform. */}
           <div className="pointer-events-none absolute left-1/2 top-[68vh] z-10 -translate-x-1/2 -translate-y-1/2">
-            <div ref={statRef} className="flex flex-col items-center gap-2">
-            {/* Frosted dark pad: blurs the particles directly behind the
-                counter and dims them, with a radial mask so it melts into the
-                galaxy with no visible edge. */}
-            <div
-              className="absolute -inset-x-28 -inset-y-12 -z-10"
-              style={{
-                backdropFilter: "blur(9px)",
-                WebkitBackdropFilter: "blur(9px)",
-                background: "radial-gradient(closest-side, var(--lv3-scrim), transparent 76%)",
-                maskImage: "radial-gradient(closest-side, black 55%, transparent 100%)",
-                WebkitMaskImage: "radial-gradient(closest-side, black 55%, transparent 100%)",
-              }}
-              aria-hidden="true"
-            />
+            <div ref={statRef} className="lv3-counter flex flex-col items-center gap-2">
+            {/* A feathered, narrow scrim protects the text band while the
+                bright upper/lower lens arcs remain fully visible. */}
+            <div className="lv3-counter-scrim" aria-hidden="true" />
             <p className="text-[11px] font-bold uppercase tracking-[0.3em] text-oai-gray-300">
               {copy("landing.v3.hero.stat_label")}
             </p>
             <p
               className="whitespace-nowrap font-mono text-4xl font-bold tabular-nums leading-none text-white sm:tall:text-5xl"
-              style={{
-                textShadow:
-                  "0 2px 24px rgba(0, 0, 0, 0.9), 0 0 90px var(--lv3-accent-faint), 0 0 30px var(--lv3-accent-ghost)",
-              }}
             >
               <CountUp
                 value={tokenTotal}

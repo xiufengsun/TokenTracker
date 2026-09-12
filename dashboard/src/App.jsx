@@ -75,6 +75,7 @@ const LeaderboardProfilePage = lazy(() =>
 const LimitsPage = lazy(() =>
   import("./pages/LimitsPage.jsx").then((m) => ({ default: m.LimitsPage })),
 );
+const AccountsPage = lazy(() => import("./pages/AccountsPage.jsx").then((m) => ({ default: m.AccountsPage })));
 const LoginPage = lazy(() =>
   import("./pages/LoginPage.jsx").then((m) => ({ default: m.LoginPage })),
 );
@@ -214,6 +215,7 @@ export default function App() {
   if (profileUserId) gate = "dashboard";
 
   const isLimitsPath = normalizedPath === "/limits";
+  const isAccountsPath = normalizedPath === "/accounts";
   const isSettingsPath = normalizedPath === "/settings";
   const isSkillsPath = normalizedPath === "/skills";
   const isSessionsPath = normalizedPath === "/sessions";
@@ -222,7 +224,7 @@ export default function App() {
   const isIpCheckPath = normalizedPath === "/ip-check";
   const isServiceStatusPath = normalizedPath === "/service-status";
   const isAchievementsPath = normalizedPath === "/achievements";
-  if (isLimitsPath || isSettingsPath || isSkillsPath || isSessionsPath || isWidgetsPath || isPetPath || isIpCheckPath || isServiceStatusPath || isAchievementsPath) gate = "dashboard";
+  if (isAccountsPath || isLimitsPath || isSettingsPath || isSkillsPath || isSessionsPath || isWidgetsPath || isPetPath || isIpCheckPath || isServiceStatusPath || isAchievementsPath) gate = "dashboard";
 
   let PageComponent = DashboardPage;
   if (profileUserId) {
@@ -231,6 +233,8 @@ export default function App() {
     PageComponent = LeaderboardPage;
   } else if (isLimitsPath) {
     PageComponent = LimitsPage;
+  } else if (isAccountsPath) {
+    PageComponent = AccountsPage;
   } else if (isSettingsPath) {
     PageComponent = SettingsPage;
   } else if (isSkillsPath) {
@@ -256,6 +260,7 @@ export default function App() {
       normalizedPath === "/" ||
       isLeaderboardPath ||
       isLimitsPath ||
+      isAccountsPath ||
       isSettingsPath ||
       isSkillsPath ||
       isSessionsPath ||

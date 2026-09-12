@@ -1,0 +1,21 @@
+/* Keep touch controls and compact copy readable without changing shared buttons. */
+@media (max-width: 639px) {
+  .account-panel button:not([role="switch"]),
+  .account-dialog button:not([role="switch"]),
+  .account-dialog a {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .account-dialog button[role="switch"]::after {
+    content: "";
+    position: absolute;
+    inset: -12px -4px;
+  }
+
+  .account-panel .text-xs,
+  .account-dialog .text-xs {
+    font-size: 0.875rem;
+    line-height: 1.5;
+  }
+}

@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { ProviderIcon } from "../../dashboard/components/ProviderIcon.jsx";
-import { LV3_GL } from "./palette.js";
+import { BLACK_HOLE_FRAGMENT, BLACK_HOLE_VERTEX } from "./black-hole.js";
+import { LV3, LV3_GL } from "./palette.js";
 import {
   DISC,
   GALAXY_FRAGMENT,
@@ -169,6 +170,7 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
       uGlobalAlpha: { value: 0 },
       uProgress: { value: 0 },
       uLensScale: { value: sceneConfig.lensScale },
+      uBlackHoleScale: { value: sceneConfig.lensScale * (compactViewport ? 1.8 : 1) },
       uPointScale: { value: sceneConfig.pointScale },
       uColorA: { value: new THREE.Color(LV3_GL.accent) },
       uColorB: { value: new THREE.Color(LV3_GL.accentSoft) },
@@ -186,6 +188,32 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
     const points = new THREE.Points(geometry, material);
     points.frustumCulled = false;
     scene.add(points);
+
+    const blackHoleGeometry = new THREE.PlaneGeometry(12, 12);
+    const blackHoleUniforms = {
+      uTime: { value: 0 },
+      uOpacity: { value: 0 },
+      uTilt: { value: -0.10 },
+      uColor: { value: new THREE.Color(LV3_GL.accent) },
+      uHotColor: { value: new THREE.Color(LV3_GL.glint) },
+      uShadowColor: { value: new THREE.Color(LV3.bg) },
+    };
+    const blackHoleMaterial = new THREE.ShaderMaterial({
+      vertexShader: BLACK_HOLE_VERTEX,
+      fragmentShader: BLACK_HOLE_FRAGMENT,
+      uniforms: blackHoleUniforms,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const blackHole = new THREE.Mesh(blackHoleGeometry, blackHoleMaterial);
+    blackHole.position.set(0, DISC.yOffset, 0);
+    // The wider mobile camera otherwise shrinks the entire shadow behind
+    // the counter. Keep the lensed edge visible above and below the text.
+    blackHole.scale.setScalar(sceneConfig.lensScale * (compactViewport ? 1.8 : 1));
+    blackHole.renderOrder = 1;
+    blackHole.frustumCulled = false;
+    scene.add(blackHole);
 
     // Chips glide along a fixed screen-space orbit ellipse (always inside the
     // frame). Every frame, a ray from the camera through the chip's screen
@@ -268,20 +296,23 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
       window.addEventListener("pointermove", onPointerMove, { passive: true });
     }
 
-    const clock = new THREE.Clock();
+    // Advance scene time only while visible, so returning to the page does
+    // not jump the orbit or the flowing gas forward by the hidden duration.
+    let sceneTime = 0;
+    let previousFrame = performance.now();
     let fade = 0;
     let intro = 0;
-    let prevT = 0;
     let rafId = 0;
     let progressSmooth = 0;
 
     function animate() {
       rafId = requestAnimationFrame(animate);
+      const frameTime = performance.now();
+      const dt = Math.min(Math.max((frameTime - previousFrame) / 1000, 0.001), 0.033);
+      previousFrame = frameTime;
       if (paused.current || !inView.current) return;
-
-      const t = clock.getElapsedTime();
-      const dt = Math.min(Math.max(t - prevT, 0.001), 0.033);
-      prevT = t;
+      sceneTime += dt;
+      const t = sceneTime;
       // Damped scroll progress: the camera dive glides instead of tracking
       // every notch of the wheel 1:1.
       const progressTarget = Math.min(Math.max(progressRef?.current ?? 0, 0), 1);
@@ -314,10 +345,8 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
       // On compact screens, aim the camera at the black-hole origin itself
       // before deriving the projection offset. This keeps the actual WebGL
       // event horizon—not just the DOM glow—at the provider orbit center.
-      if (compactViewport) {
-        camera.lookAt(0, sceneConfig.lookAtY, 0);
-        camera.updateMatrixWorld();
-      }
+      camera.lookAt(0, sceneConfig.lookAtY, 0);
+      camera.updateMatrixWorld();
       // Keep galaxy visual center aligned to 68vh of the viewport dynamically
       const hView = getViewportHeight();
       const v_camera = new THREE.Vector3(0, DISC.yOffset, 0);
@@ -326,7 +355,11 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
       camera.projectionMatrix.elements[9] = (camera.projectionMatrix.elements[5] * v_camera.y) / (-v_camera.z) - targetY_ndc;
       camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
 
-      if (!compactViewport) camera.lookAt(0, sceneConfig.lookAtY, 0);
+      blackHole.quaternion.copy(camera.quaternion);
+      blackHoleUniforms.uTime.value = t;
+      blackHoleUniforms.uTilt.value = -0.10 + pointerSmooth.x * 0.025;
+      blackHoleUniforms.uOpacity.value = fade * introEase *
+        (1 - THREE.MathUtils.smoothstep(progress, 0.12, 0.50));
 
       renderer.render(scene, camera);
 
@@ -392,6 +425,8 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
       scene.clear();
       geometry.dispose();
       material.dispose();
+      blackHoleGeometry.dispose();
+      blackHoleMaterial.dispose();
       renderer.dispose();
       renderer.forceContextLoss();
       if (mount.contains(canvas)) mount.removeChild(canvas);

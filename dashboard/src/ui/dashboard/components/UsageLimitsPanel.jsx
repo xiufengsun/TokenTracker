@@ -1128,7 +1128,7 @@ function useWidestLabelWidth(containerRef) {
   return labelWidth;
 }
 
-export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, order, visibility, displayMode, subscriptions = [], showSubscriptions = true }) {
+export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, order, visibility, displayMode, subscriptions = [], showSubscriptions = true, embedded = false }) {
   const dataById = { claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan };
   const containerRef = useRef(null);
   const labelWidth = useWidestLabelWidth(containerRef);
@@ -1194,20 +1194,18 @@ export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, gr
     })
     .filter(Boolean);
 
-  return (
-    <FadeIn delay={0.15}>
-      <Card>
+  const content = (
         <div
           ref={containerRef}
           className="flex flex-col gap-3"
           style={labelWidth > 0 ? { "--tt-limits-label-w": `${labelWidth}px` } : undefined}
         >
-          <h3 className="text-sm font-medium text-oai-gray-500 dark:text-oai-gray-300 uppercase tracking-wide">
+          {!embedded && <h3 className="text-sm font-medium text-oai-gray-500 dark:text-oai-gray-300 uppercase tracking-wide">
             {copy("limits.panel.title")}{copy("limits.panel.mode_separator")}{modeLabel}
-          </h3>
+          </h3>}
           {groups.length > 0 ? groups : <StatusLine>{copy("limits.status.all_hidden")}</StatusLine>}
         </div>
-      </Card>
-    </FadeIn>
   );
+  if (embedded) { return content; }
+  return <FadeIn delay={0.15}><Card>{content}</Card></FadeIn>;
 }

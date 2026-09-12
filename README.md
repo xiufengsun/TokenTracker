@@ -366,6 +366,26 @@ Most users never need this — defaults are sensible. For advanced setups:
 | `TOKENTRACKER_UNSLOTH_DB` | Override the Unsloth Studio database file used by the passive usage reader | `$UNSLOTH_STUDIO_HOME/studio.db` |
 | `TOKENTRACKER_DEVIN_DB` | Override the Devin CLI database file used by the passive usage reader | `$XDG_DATA_HOME/devin/cli/sessions.db` |
 
+### Claude and Codex subscription accounts
+
+Open **AI accounts** (`/accounts`) to add and switch logins. Claude and Codex have separate groups with their provider icons. **Limits** (`/limits`) shows the current accounts’ remaining quota and reset times, with a link to account management.
+
+Existing official CLI logins appear as **Local default account**. To add another, choose **Add account → Generate sign-in link** and complete the official browser authorization. TokenTracker keeps the official CLI callback process alive and checks the saved identity; Claude’s authorization-code handoff is supported. Optional labels, reauthorization, deletion, permissions, and original-login restore controls are in account settings. Deleting an account permanently removes its private login and history; the current default and accounts with running sessions must be switched or closed first.
+
+Selecting a signed-in managed account updates the **default CLI login**. This applies to new terminal CLI sessions and IDE integrations that share that login. Existing processes may cache authentication and must be reopened; independently signed-in apps, API-key overrides, and other configuration directories are outside this switch. The current-account mark appears only after credential read-back succeeds. On macOS, an explicit switch updates the known Claude default Keychain items and local files; Codex uses its file credential store. The original authentication settings are backed up privately and can be restored. Unrelated configuration is preserved. Partial failures are rolled back, and external changes are never silently overwritten by restoration.
+
+Quota queries and caches are bound to the selected account’s identity and credential fingerprint. The account is checked again after fetching; mismatched responses are discarded. Verified token renewals are copied back to that account’s private home, with Claude ownership checked against its authenticated provider profile. An unverified login change pauses the old account’s quota display. Background checks never enable Keychain prompts. **Connect quota** explicitly allows narrowly scoped credential access for a local login; browser credentials are never read.
+
+**Sessions & automation** contains conversation launch and automatic switching. The default account opens with the normal CLI login. Other accounts use isolated homes. A default account is reserved for shared CLI/IDE use and excluded from the isolated rotation pool, preventing two different homes from racing the same OAuth refresh token.
+
+For **managed Claude sessions opened here**, choose a target within the session controls and click **Switch session account → Switch and resume**. TokenTracker checks the target, stops only its own child, and resumes the saved conversation in the same terminal. Finish ongoing work first. A failed replacement attempts to restore the original account; an unresponsive process is never force-killed. Saved conversations stay local, and copied transcript ranges are excluded from the destination’s usage totals. Unrelated terminal sessions cannot be hot-switched by this controller.
+
+Automatic Claude switching checks quota once a minute and resumes on another eligible managed account after confirmed exhaustion. Unknown quota and occupied accounts are skipped; normal completion and Ctrl-C stop the controller. Codex rotation starts the next account as a **new session** after an unsuccessful exit with confirmed exhaustion. It does not transfer conversation context. Rotation is scoped to conversations launched here, not arbitrary running CLI or IDE processes.
+
+Local token totals and estimated API cost cover isolated account histories only. Shared default logs may contain several identities, so they are not assigned to an account. Provider quota percentages cannot be converted to token counts, and estimated API cost is not the subscription bill. A detected identity change suspends attribution for that isolated home.
+
+Advanced command copies remain available in account settings. macOS launches Terminal, Windows launches PowerShell, and Linux uses `x-terminal-emulator`. The macOS launcher removes npm-specific environment variables that conflict with nvm.
+
 ### 🐧 Windows Subsystem for Linux (WSL) Auto-Discovery
 
 If you run AI coding agents inside WSL on Windows, TokenTracker can auto-discover and aggregate metrics from both native Windows and WSL installations.

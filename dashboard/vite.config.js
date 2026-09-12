@@ -1180,11 +1180,16 @@ function localDataApiPlugin() {
   // so evict its derived-metrics scanner too; otherwise a dashboard refresh
   // can keep serving stale edit-turn, provider/model, retry, and incremental
   // scan behavior until Vite restarts.
-  // NOTE: editing src/lib/*.js alone does NOT hot-reload here (those files are
-  // outside dashboard's module graph). Only a Vite config reload / full restart
-  // re-runs this eviction — e.g. the Sessions browser title (ai-title /
-  // thread_name) and fragment merging will keep serving stale data until then.
-  for (const modulePath of ["../src/lib/local-api", "../src/lib/session-analytics"]) {
+  // These CJS files are outside the client module graph. The watcher below
+  // restarts Vite when they change, which re-runs this eviction.
+  const repoApiModules = ["../src/lib/local-api", "../src/lib/session-analytics",
+    "../src/lib/subscription-accounts", "../src/lib/subscription-account-auth",
+    "../src/lib/subscription-account-usage", "../src/lib/subscription-account-api",
+    "../src/lib/subscription-account-pool", "../src/lib/subscription-system-accounts",
+    "../src/lib/subscription-account-launch", "../src/lib/subscription-account-sessions",
+    "../src/lib/subscription-account-transcripts", "../src/lib/subscription-account-session-runner",
+    "../src/lib/subscription-account-global", "../src/lib/subscription-keychain"];
+  for (const modulePath of repoApiModules) {
     try {
       delete esmRequire.cache[esmRequire.resolve(modulePath)];
     } catch {
@@ -1197,6 +1202,23 @@ function localDataApiPlugin() {
   return {
     name: "tokentracker-local-data-api",
     configureServer(server) {
+      // Backend CJS files are outside Vite's client module graph. Reload the
+      // handler when they change so new UI actions cannot hit an old API.
+      const backendFiles = new Set(repoApiModules.map((modulePath) => esmRequire.resolve(modulePath)));
+      server.watcher.add([...backendFiles]);
+      let restartTimer;
+      const reloadBackend = (file) => {
+        if (!backendFiles.has(path.resolve(file))) return;
+        clearTimeout(restartTimer);
+        restartTimer = setTimeout(() => {
+          void server.restart().catch(() => server.config.logger.error("Local API reload failed; restart the development server."));
+        }, 100);
+      };
+      server.watcher.on("change", reloadBackend);
+      server.httpServer?.once("close", () => {
+        clearTimeout(restartTimer);
+        server.watcher.off("change", reloadBackend);
+      });
       // 添加中间件到最前面，拦截所有请求
       server.middlewares.use((req, res, next) => {
         if (typeof req.url !== "string") {
@@ -1210,6 +1232,7 @@ function localDataApiPlugin() {
           // (cycle field, corrupt-store backups); a stale packaged app on
           // :7680 would 404 the Limits-page subscription UI in dev mode.
           || url.pathname === "/functions/tokentracker-subscription-manager"
+          || url.pathname === "/functions/tokentracker-subscription-accounts"
           || url.pathname === "/api/pets/import"
           || url.pathname.startsWith("/api/pets/local/")
           || url.pathname.startsWith("/api/pets/codex/");
