@@ -1911,7 +1911,6 @@ export function SkillsPage() {
         description={copy("skills.confirm.update_all_desc")}
         confirmLabel={copy("skills.update.action")}
         cancelLabel={copy("shared.action.cancel")}
-        busy={busyKey === "update-all"}
         onCancel={() => setPendingUpdateAll(null)}
         onConfirm={confirmUpdateAll}
       />

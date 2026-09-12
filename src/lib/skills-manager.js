@@ -1371,8 +1371,8 @@ async function checkUpdates({ force = false } = {}) {
 // reconciles with what the caller asked for.
 async function updateSkills(ids = []) {
   // An empty or malformed list means "nothing was asked for", never "every
-  // managed skill". local-api feeds `body.ids` straight in, so the permissive
-  // reading would turn one bad field into a full re-install of the library.
+  // managed skill" — the permissive reading turned one bad request field into a
+  // full re-install of the library.
   const wanted = new Set(
     (Array.isArray(ids) ? ids : []).map((id) => String(id || "")).filter(Boolean),
   );
