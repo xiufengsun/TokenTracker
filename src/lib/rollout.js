@@ -16722,6 +16722,790 @@ async function parseCopilotIncremental({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// VS Code Copilot Chat — persisted workspace chat sessions
+//
+// The VS Code Chat extension does not necessarily emit the Copilot CLI OTEL
+// file.  It persists chat sessions under the VS Code workspace storage tree
+// instead.  Newer VS Code versions use an append-only JSONL patch log while
+// older versions write a complete JSON snapshot.  Only customendpoint/*
+// requests are owned here: official Copilot requests may also appear in the
+// OTEL/session-store readers above, and counting every VS Code request would
+// make those sources overlap.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VSCODE_COPILOT_CURSOR_VERSION = 2;
+// JSONL patches can still arrive for a request shortly after its first usage
+// record. Keep a small overlap for that reconciliation, but never let a
+// session's complete request history become cursor state.
+const VSCODE_COPILOT_REQUEST_OVERLAP_LIMIT = 256;
+const VSCODE_COPILOT_READ_CHUNK_BYTES = 64 * 1024;
+const VSCODE_COPILOT_USAGE_FIELDS = new Set([
+  "requestId",
+  "modelId",
+  "promptTokens",
+  "completionTokens",
+  "timestamp",
+  "responseTimestamp",
+]);
+
+function addVsCodeCopilotChatFiles(target, chatDir) {
+  if (!chatDir || !target) return;
+  let entries;
+  try {
+    entries = fssync.readdirSync(chatDir, { withFileTypes: true });
+  } catch (_e) {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.endsWith(".jsonl") && !entry.name.endsWith(".json")) continue;
+    target.add(path.join(chatDir, entry.name));
+  }
+}
+
+function addVsCodeCopilotWorkspaceFiles(target, workspaceStorageDir) {
+  if (!workspaceStorageDir || !target) return;
+  let entries;
+  try {
+    entries = fssync.readdirSync(workspaceStorageDir, { withFileTypes: true });
+  } catch (_e) {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    addVsCodeCopilotChatFiles(
+      target,
+      path.join(workspaceStorageDir, entry.name, "chatSessions"),
+    );
+  }
+}
+
+function resolveVsCodeCopilotChatSessionPaths(env = process.env) {
+  const home =
+    process.platform === "win32"
+      ? env.USERPROFILE || env.HOME || os.homedir()
+      : env.HOME || os.homedir();
+  const paths = new Set();
+  const explicit =
+    typeof env.TOKENTRACKER_VSCODE_CHAT_SESSIONS_DIR === "string"
+      ? env.TOKENTRACKER_VSCODE_CHAT_SESSIONS_DIR.trim()
+      : "";
+
+  if (explicit) {
+    const explicitPath = normalizeCopilotDbPath(explicit, env);
+    if (explicitPath) {
+      try {
+        const explicitStat = fssync.statSync(explicitPath);
+        if (explicitStat.isDirectory()) {
+          addVsCodeCopilotChatFiles(paths, explicitPath);
+        } else if (
+          explicitStat.isFile() &&
+          (explicitPath.endsWith(".jsonl") || explicitPath.endsWith(".json"))
+        ) {
+          paths.add(explicitPath);
+        }
+      } catch (_e) {
+        // Keep the explicit path useful in tests and portable setups even
+        // before VS Code has created the directory/file.
+        if (explicitPath.endsWith(".jsonl") || explicitPath.endsWith(".json")) {
+          paths.add(explicitPath);
+        }
+      }
+    }
+  }
+
+  const appData =
+    process.platform === "darwin"
+      ? path.join(home, "Library", "Application Support")
+      : process.platform === "win32"
+        ? env.APPDATA || path.join(home, "AppData", "Roaming")
+        : env.XDG_CONFIG_HOME || path.join(home, ".config");
+  for (const appName of ["Code", "Code - Insiders", "VSCodium"]) {
+    addVsCodeCopilotWorkspaceFiles(
+      paths,
+      path.join(appData, appName, "User", "workspaceStorage"),
+    );
+  }
+  return Array.from(paths).sort();
+}
+
+function normalizeVsCodeCopilotModel(modelId) {
+  if (typeof modelId !== "string") return null;
+  const trimmed = modelId.trim();
+  if (!/^customendpoint\//i.test(trimmed)) return null;
+  const parts = trimmed.split("/").filter(Boolean);
+  const model = parts[parts.length - 1];
+  return normalizeCopilotAppModel(model) || null;
+}
+
+function slimVsCodeCopilotRequest(request) {
+  if (!request || typeof request !== "object" || Array.isArray(request)) return {};
+  const slim = {};
+  for (const field of VSCODE_COPILOT_USAGE_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(request, field)) {
+      slim[field] = request[field];
+    }
+  }
+  return slim;
+}
+
+function cloneVsCodeCopilotRequests(requests) {
+  return Array.isArray(requests) ? requests.map(slimVsCodeCopilotRequest) : [];
+}
+
+function isVsCodeCopilotRequestTrackable(request) {
+  if (!request || typeof request !== "object" || Array.isArray(request)) return false;
+  const modelId = typeof request.modelId === "string" ? request.modelId.trim() : "";
+  if (/^customendpoint\//i.test(modelId)) return true;
+  // A request can receive its modelId after its token fields. Retain that
+  // short-lived partial state so the later model patch can be reconciled.
+  if (!modelId) {
+    return [
+      "requestId",
+      "promptTokens",
+      "completionTokens",
+      "timestamp",
+      "responseTimestamp",
+    ].some((field) => Object.prototype.hasOwnProperty.call(request, field));
+  }
+  return false;
+}
+
+function trimVsCodeCopilotRequestMap(requestsByIndex) {
+  if (!(requestsByIndex instanceof Map)) return;
+  if (requestsByIndex.size <= VSCODE_COPILOT_REQUEST_OVERLAP_LIMIT) return;
+  const indexes = Array.from(requestsByIndex.keys()).sort((a, b) => a - b);
+  const removeCount = indexes.length - VSCODE_COPILOT_REQUEST_OVERLAP_LIMIT;
+  for (const index of indexes.slice(0, removeCount)) requestsByIndex.delete(index);
+}
+
+function restoreVsCodeCopilotRequestMap(fileState) {
+  const requestsByIndex = new Map();
+  const overlap = Array.isArray(fileState?.requestOverlap)
+    ? fileState.requestOverlap
+    : null;
+  if (overlap) {
+    for (const entry of overlap) {
+      const rawIndex = Number(entry?.index);
+      if (!Number.isInteger(rawIndex) || rawIndex < 0) continue;
+      const request = slimVsCodeCopilotRequest(entry?.request);
+      if (isVsCodeCopilotRequestTrackable(request)) {
+        requestsByIndex.set(rawIndex, request);
+      }
+    }
+  }
+
+  // Migrate the v1 cursor without carrying its full request array forward.
+  if (requestsByIndex.size === 0 && Array.isArray(fileState?.requests)) {
+    fileState.requests.forEach((request, index) => {
+      const compact = slimVsCodeCopilotRequest(request);
+      if (isVsCodeCopilotRequestTrackable(compact)) {
+        requestsByIndex.set(index, compact);
+      }
+    });
+  }
+  trimVsCodeCopilotRequestMap(requestsByIndex);
+  return requestsByIndex;
+}
+
+function serializeVsCodeCopilotRequestMap(requestsByIndex) {
+  trimVsCodeCopilotRequestMap(requestsByIndex);
+  return Array.from(requestsByIndex.entries())
+    .sort(([left], [right]) => left - right)
+    .map(([index, request]) => ({ index, request: slimVsCodeCopilotRequest(request) }));
+}
+
+function notifyVsCodeCopilotRequestChange(
+  requestsByIndex,
+  index,
+  request,
+  onChange,
+  previousByKey = null,
+) {
+  const previous = requestsByIndex.get(index) || null;
+  const compact = slimVsCodeCopilotRequest(request);
+  const next = isVsCodeCopilotRequestTrackable(compact) ? compact : null;
+  if (next) requestsByIndex.set(index, next);
+  else requestsByIndex.delete(index);
+  if (typeof onChange !== "function") return;
+  const requestForKey = next || previous;
+  const requestKey = vsCodeCopilotRequestKey(requestForKey, index);
+  // The historical lookup is only for a replacement/reset, after the live
+  // map has been cleared. For a normal field patch, `previous` is the current
+  // pre-patch state; using the persisted state again would subtract/add the
+  // same historical usage repeatedly within one sync.
+  const historical = !previous && previousByKey?.get(requestKey) || null;
+  onChange(historical || previous, next, index);
+}
+
+function replaceVsCodeCopilotRequestMap(
+  requestsByIndex,
+  requests,
+  onChange,
+  previousByKey = null,
+) {
+  const historicalByKey = previousByKey || new Map();
+  requestsByIndex.clear();
+  if (Array.isArray(requests)) {
+    requests.forEach((request, index) => {
+      notifyVsCodeCopilotRequestChange(
+        requestsByIndex,
+        index,
+        request,
+        onChange,
+        historicalByKey,
+      );
+    });
+  }
+  trimVsCodeCopilotRequestMap(requestsByIndex);
+}
+
+function applyVsCodeCopilotChatPatch(
+  requestsByIndex,
+  patch,
+  onChange,
+  previousByKey = null,
+) {
+  if (!patch || typeof patch !== "object") return false;
+  const kind = Number(patch.kind);
+  if (kind === 0) {
+    const initial = patch.v && typeof patch.v === "object" ? patch.v.requests : null;
+    replaceVsCodeCopilotRequestMap(
+      requestsByIndex,
+      initial,
+      onChange,
+      previousByKey,
+    );
+    return true;
+  }
+
+  const key = patch.k;
+  if (!Array.isArray(key) || key[0] !== "requests") return false;
+  if (key.length === 1) {
+    if (kind === 1 && Array.isArray(patch.v)) {
+      replaceVsCodeCopilotRequestMap(
+        requestsByIndex,
+        patch.v,
+        onChange,
+        previousByKey,
+      );
+      return true;
+    }
+    if (kind === 2) {
+      const values = Array.isArray(patch.v) ? patch.v : [patch.v];
+      if (!values.every((value) => value && typeof value === "object")) return false;
+      const rawIndex = Number(patch.i);
+      const highestIndex = Math.max(-1, ...requestsByIndex.keys());
+      const index = Number.isInteger(rawIndex) && rawIndex >= 0
+        ? rawIndex
+        : highestIndex + 1;
+      const shift = values.length;
+      for (const [existingIndex, request] of Array.from(requestsByIndex.entries())
+        .sort(([left], [right]) => right - left)) {
+        if (existingIndex >= index) {
+          requestsByIndex.delete(existingIndex);
+          requestsByIndex.set(existingIndex + shift, request);
+        }
+      }
+      values.forEach((value, valueIndex) => {
+        notifyVsCodeCopilotRequestChange(
+          requestsByIndex,
+          index + valueIndex,
+          value,
+          onChange,
+        );
+      });
+      trimVsCodeCopilotRequestMap(requestsByIndex);
+      return true;
+    }
+    return false;
+  }
+
+  const index = Number(key[1]);
+  if (!Number.isInteger(index) || index < 0) return false;
+  if (kind === 1 && key.length === 2) {
+    notifyVsCodeCopilotRequestChange(
+      requestsByIndex,
+      index,
+      patch.v,
+      onChange,
+      previousByKey,
+    );
+    return true;
+  }
+  if (kind === 1 && key.length === 3 && VSCODE_COPILOT_USAGE_FIELDS.has(key[2])) {
+    const next = { ...(requestsByIndex.get(index) || {}), [key[2]]: patch.v };
+    notifyVsCodeCopilotRequestChange(
+      requestsByIndex,
+      index,
+      next,
+      onChange,
+      previousByKey,
+    );
+    return true;
+  }
+  return false;
+}
+
+async function readVsCodeCopilotJsonlPatches(
+  filePath,
+  startOffset,
+  requestsByIndex,
+  { onChange, previousByKey } = {},
+) {
+  const handle = await fs.open(filePath, "r");
+  try {
+    const stat = await handle.stat();
+    const safeStart = Math.max(
+      0,
+      Math.min(toNonNegativeInt(startOffset), Number(stat.size)),
+    );
+    let readPosition = safeStart;
+    let pending = Buffer.alloc(0);
+    let pendingStart = safeStart;
+    let nextOffset = safeStart;
+    let recordsProcessed = 0;
+
+    while (true) {
+      const buffer = Buffer.allocUnsafe(VSCODE_COPILOT_READ_CHUNK_BYTES);
+      const { bytesRead } = await handle.read(
+        buffer,
+        0,
+        buffer.length,
+        readPosition,
+      );
+      if (bytesRead === 0) break;
+      readPosition += bytesRead;
+      pending = pending.length === 0
+        ? buffer.subarray(0, bytesRead)
+        : Buffer.concat([pending, buffer.subarray(0, bytesRead)]);
+
+      let newlineIndex;
+      while ((newlineIndex = pending.indexOf(0x0a)) >= 0) {
+        const lineBytes = pending.subarray(0, newlineIndex);
+        pending = pending.subarray(newlineIndex + 1);
+        pendingStart += newlineIndex + 1;
+        nextOffset = pendingStart;
+        const line = lineBytes[lineBytes.length - 1] === 0x0d
+          ? lineBytes.subarray(0, lineBytes.length - 1).toString("utf8")
+          : lineBytes.toString("utf8");
+        if (!line.trim()) continue;
+        recordsProcessed++;
+        try {
+          const normalizedLine = line.charCodeAt(0) === 0xfeff ? line.slice(1) : line;
+          applyVsCodeCopilotChatPatch(
+            requestsByIndex,
+            JSON.parse(normalizedLine),
+            onChange,
+            previousByKey,
+          );
+        } catch (_e) {
+          // A malformed unrelated patch must not prevent later usage patches
+          // from being consumed. The byte cursor still advances past the line.
+        }
+      }
+    }
+
+    // An unterminated tail is intentionally left at nextOffset so a later
+    // sync retries it after VS Code finishes the append.
+    return { nextOffset, recordsProcessed };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readVsCodeCopilotJsonSnapshot(filePath) {
+  const value = JSON.parse(await fs.readFile(filePath, "utf8"));
+  const requests = Array.isArray(value) ? value : value?.requests;
+  return cloneVsCodeCopilotRequests(requests);
+}
+
+function vsCodeCopilotRequestTimestampMs(request) {
+  const tsIso =
+    parseCopilotAppTimestamp(request?.responseTimestamp) ||
+    parseCopilotAppTimestamp(request?.timestamp);
+  return tsIso ? Date.parse(tsIso) : 0;
+}
+
+function extractVsCodeCopilotUsage(request) {
+  const model = normalizeVsCodeCopilotModel(request?.modelId);
+  if (!model) return null;
+  const reportedPromptTokens = toNonNegativeInt(request?.promptTokens);
+  const output = toNonNegativeInt(request?.completionTokens);
+  if (reportedPromptTokens + output <= 0) return null;
+  const timestampMs = vsCodeCopilotRequestTimestampMs(request);
+  if (!timestampMs) return null;
+  const bucketStart = toUtcHalfHourStart(new Date(timestampMs).toISOString());
+  if (!bucketStart) return null;
+  return {
+    model,
+    bucketStart,
+    totals: {
+      // VS Code exposes only aggregate promptTokens here. It does not prove
+      // how much was fresh input versus cache read/write, so keep that split
+      // unknown instead of billing the aggregate as uncached input.
+      input_tokens: 0,
+      cached_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      output_tokens: output,
+      reasoning_output_tokens: 0,
+      total_tokens: reportedPromptTokens + output,
+      billable_total_tokens: reportedPromptTokens + output,
+      conversation_count: 1,
+    },
+  };
+}
+
+function vsCodeCopilotRequestKey(request, index) {
+  const requestId = typeof request?.requestId === "string" ? request.requestId.trim() : "";
+  return requestId ? `id:${requestId}` : `index:${index}`;
+}
+
+function vsCodeCopilotUsageKey(usage) {
+  if (!usage) return "";
+  return JSON.stringify([
+    usage.model,
+    usage.bucketStart,
+    usage.totals.input_tokens,
+    usage.totals.output_tokens,
+    usage.totals.total_tokens,
+  ]);
+}
+
+function vsCodeCopilotUsageBucketKey(model, bucketStart) {
+  return JSON.stringify([model, bucketStart]);
+}
+
+function aggregateVsCodeCopilotRequests(requests) {
+  const aggregates = new Map();
+  if (!Array.isArray(requests)) return aggregates;
+  for (const request of requests) {
+    const usage = extractVsCodeCopilotUsage(request);
+    if (!usage) continue;
+    const key = vsCodeCopilotUsageBucketKey(usage.model, usage.bucketStart);
+    let totals = aggregates.get(key);
+    if (!totals) {
+      totals = {
+        model: usage.model,
+        bucketStart: usage.bucketStart,
+        totals: initTotals(),
+      };
+      aggregates.set(key, totals);
+    }
+    addTotals(totals.totals, usage.totals);
+  }
+  return aggregates;
+}
+
+function serializeVsCodeCopilotSnapshotTotals(aggregates) {
+  const output = {};
+  for (const [key, entry] of aggregates) {
+    output[key] = {
+      model: entry.model,
+      bucketStart: entry.bucketStart,
+      totals: { ...entry.totals },
+    };
+  }
+  return output;
+}
+
+function normalizeVsCodeCopilotSnapshotTotals(fileState) {
+  const raw = fileState?.snapshotTotals;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return new Map();
+  const aggregates = new Map();
+  for (const [key, entry] of Object.entries(raw)) {
+    const model = normalizeVsCodeCopilotModel(`customendpoint/${entry?.model || ""}`);
+    const bucketStart = typeof entry?.bucketStart === "string" ? entry.bucketStart : "";
+    if (!model || !bucketStart || !entry?.totals || typeof entry.totals !== "object") continue;
+    aggregates.set(key, {
+      model,
+      bucketStart,
+      totals: { ...initTotals(), ...entry.totals },
+    });
+  }
+  if (aggregates.size > 0 || fileState?.format !== "json") return aggregates;
+
+  // Migrate v1 JSON cursors, which stored the complete request array.
+  return aggregateVsCodeCopilotRequests(fileState?.requests);
+}
+
+function sameVsCodeCopilotTotals(left, right) {
+  if (!left || !right) return false;
+  return [
+    "input_tokens",
+    "cached_input_tokens",
+    "cache_creation_input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+    "total_tokens",
+    "billable_total_tokens",
+    "conversation_count",
+  ].every((field) => Number(left.totals?.[field] || 0) === Number(right.totals?.[field] || 0));
+}
+
+function reconcileVsCodeCopilotSnapshotTotals(
+  hourlyState,
+  previousAggregates,
+  currentAggregates,
+  touchedBuckets,
+) {
+  const keys = new Set([
+    ...previousAggregates.keys(),
+    ...currentAggregates.keys(),
+  ]);
+  let changed = 0;
+  for (const key of keys) {
+    const previous = previousAggregates.get(key);
+    const current = currentAggregates.get(key);
+    if (sameVsCodeCopilotTotals(previous, current)) continue;
+    if (previous) {
+      const previousBucket = getHourlyBucket(
+        hourlyState,
+        "copilot",
+        previous.model,
+        previous.bucketStart,
+      );
+      subtractTotals(previousBucket.totals, previous.totals);
+      touchedBuckets.add(
+        bucketKey("copilot", previous.model, previous.bucketStart),
+      );
+    }
+    if (current) {
+      const currentBucket = getHourlyBucket(
+        hourlyState,
+        "copilot",
+        current.model,
+        current.bucketStart,
+      );
+      addTotals(currentBucket.totals, current.totals);
+      currentBucket.usage_precision = "input_split_unknown";
+      touchedBuckets.add(
+        bucketKey("copilot", current.model, current.bucketStart),
+      );
+    }
+    changed++;
+  }
+  return changed;
+}
+
+function reconcileVsCodeCopilotRequestUsage(
+  hourlyState,
+  previousUsage,
+  currentUsage,
+  touchedBuckets,
+) {
+  // Keep an already-accounted request if a compacted/partial snapshot no
+  // longer contains enough metadata to identify it. Usage is historical and
+  // deleting a VS Code session must not erase tokens already used.
+  if (!currentUsage) return false;
+  if (
+    previousUsage &&
+    vsCodeCopilotUsageKey(previousUsage) === vsCodeCopilotUsageKey(currentUsage)
+  ) {
+    return false;
+  }
+  if (previousUsage) {
+    const previousBucket = getHourlyBucket(
+      hourlyState,
+      "copilot",
+      previousUsage.model,
+      previousUsage.bucketStart,
+    );
+    subtractTotals(previousBucket.totals, previousUsage.totals);
+    touchedBuckets.add(
+      bucketKey("copilot", previousUsage.model, previousUsage.bucketStart),
+    );
+  }
+  const currentBucket = getHourlyBucket(
+    hourlyState,
+    "copilot",
+    currentUsage.model,
+    currentUsage.bucketStart,
+  );
+  addTotals(currentBucket.totals, currentUsage.totals);
+  currentBucket.usage_precision = "input_split_unknown";
+  touchedBuckets.add(
+    bucketKey("copilot", currentUsage.model, currentUsage.bucketStart),
+  );
+  return true;
+}
+
+async function parseVsCodeCopilotChatIncremental({
+  sessionPaths,
+  paths,
+  cursors,
+  queuePath,
+  onProgress,
+  env,
+} = {}) {
+  await ensureDir(path.dirname(queuePath));
+  const cursorRoot = cursors && typeof cursors === "object" ? cursors : {};
+  const state =
+    cursorRoot?.copilotVsCode && typeof cursorRoot.copilotVsCode === "object"
+      ? cursorRoot.copilotVsCode
+      : {};
+  const previousFiles =
+    state.files && typeof state.files === "object" ? state.files : {};
+  const discovered = Array.isArray(sessionPaths)
+    ? sessionPaths
+    : Array.isArray(paths)
+      ? paths
+      : resolveVsCodeCopilotChatSessionPaths(env || process.env);
+  const files = Array.from(
+    new Set([
+      ...discovered.filter((filePath) => typeof filePath === "string" && filePath),
+      ...Object.keys(previousFiles),
+    ]),
+  ).sort();
+  const fileStates = { ...previousFiles };
+  const hourlyState = normalizeHourlyState(cursors?.hourly);
+  const touchedBuckets = new Set();
+  const cb = typeof onProgress === "function" ? onProgress : null;
+  let recordsProcessed = 0;
+  let eventsAggregated = 0;
+  let fileErrors = 0;
+
+  for (let index = 0; index < files.length; index++) {
+    const filePath = files[index];
+    const previousFileState =
+      previousFiles[filePath] && typeof previousFiles[filePath] === "object"
+        ? previousFiles[filePath]
+        : {};
+    const previousRequestsByIndex = restoreVsCodeCopilotRequestMap(previousFileState);
+    const previousByKey = new Map();
+    for (const [requestIndex, request] of previousRequestsByIndex) {
+      previousByKey.set(vsCodeCopilotRequestKey(request, requestIndex), request);
+    }
+    let currentRequestsByIndex = previousRequestsByIndex;
+    let fileMetadata = null;
+    let didRead = false;
+    const changedRequestKeys = new Set();
+    const onRequestChange = (previousRequest, currentRequest, requestIndex) => {
+      const previousUsage = extractVsCodeCopilotUsage(previousRequest);
+      const currentUsage = extractVsCodeCopilotUsage(currentRequest);
+      const requestKey = vsCodeCopilotRequestKey(
+        currentRequest || previousRequest,
+        requestIndex,
+      );
+      if (
+        reconcileVsCodeCopilotRequestUsage(
+          hourlyState,
+          previousUsage,
+          currentUsage,
+          touchedBuckets,
+        )
+      ) {
+        changedRequestKeys.add(requestKey);
+      }
+    };
+    try {
+      const stat = fssync.statSync(filePath);
+      if (!stat.isFile()) {
+        delete fileStates[filePath];
+        continue;
+      }
+      const isJsonl = filePath.endsWith(".jsonl");
+      const previousSize = toNonNegativeInt(previousFileState.size);
+      const inodeChanged =
+        typeof previousFileState.ino === "number" &&
+        previousFileState.ino !== stat.ino;
+      const sameSizeRewritten =
+        previousSize > 0 &&
+        stat.size === previousSize &&
+        Number(previousFileState.mtimeMs) > 0 &&
+        stat.mtimeMs !== Number(previousFileState.mtimeMs);
+
+      if (isJsonl) {
+        const reset = inodeChanged || stat.size < previousSize || sameSizeRewritten;
+        currentRequestsByIndex = reset ? new Map() : previousRequestsByIndex;
+        const patchResult = await readVsCodeCopilotJsonlPatches(
+          filePath,
+          reset ? 0 : previousSize,
+          currentRequestsByIndex,
+          { onChange: onRequestChange, previousByKey },
+        );
+        recordsProcessed += patchResult.recordsProcessed;
+        fileMetadata = {
+          format: "jsonl",
+          size: patchResult.nextOffset,
+          mtimeMs: stat.mtimeMs,
+          ino: stat.ino,
+          requestOverlap: serializeVsCodeCopilotRequestMap(currentRequestsByIndex),
+        };
+        didRead = patchResult.recordsProcessed > 0 || reset;
+      } else {
+        // Snapshots are already read in full; always re-read them so a
+        // same-size rewrite within one filesystem mtime tick is visible.
+        const currentRequests = await readVsCodeCopilotJsonSnapshot(filePath);
+        const currentAggregates = aggregateVsCodeCopilotRequests(currentRequests);
+        const previousAggregates = normalizeVsCodeCopilotSnapshotTotals(previousFileState);
+        const changedBuckets = reconcileVsCodeCopilotSnapshotTotals(
+          hourlyState,
+          previousAggregates,
+          currentAggregates,
+          touchedBuckets,
+        );
+        eventsAggregated += changedBuckets;
+        recordsProcessed++;
+        fileMetadata = {
+          format: "json",
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+          ino: stat.ino,
+          snapshotTotals: serializeVsCodeCopilotSnapshotTotals(currentAggregates),
+        };
+        didRead = true;
+      }
+    } catch (error) {
+      if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+        delete fileStates[filePath];
+        continue;
+      }
+      fileErrors++;
+      continue;
+    }
+
+    if (!fileMetadata) continue;
+    eventsAggregated += changedRequestKeys.size;
+    fileStates[filePath] = {
+      ...fileMetadata,
+      updatedAt: new Date().toISOString(),
+    };
+    if (cb && (didRead || fileMetadata.format === "json")) {
+      cb({
+        index: index + 1,
+        total: files.length,
+        recordsProcessed,
+        eventsAggregated,
+        bucketsQueued: touchedBuckets.size,
+      });
+    }
+  }
+
+  const bucketsQueued = await enqueueTouchedBuckets({
+    queuePath,
+    hourlyState,
+    touchedBuckets,
+  });
+  const updatedAt = new Date().toISOString();
+  hourlyState.updatedAt = updatedAt;
+  cursorRoot.hourly = hourlyState;
+  cursorRoot.copilotVsCode = {
+    ...state,
+    version: VSCODE_COPILOT_CURSOR_VERSION,
+    files: fileStates,
+    updatedAt,
+  };
+  return {
+    recordsProcessed,
+    eventsAggregated,
+    bucketsQueued,
+    fileErrors,
+    filesDiscovered: discovered.length,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GitHub Copilot local runtime — session-store.db assistant_usage_events
 //
 // Copilot CLI 1.0.70+ persists one row per LLM request here. The Copilot App
@@ -21093,6 +21877,8 @@ module.exports = {
   copilotOtelCursorHasLegacyCliUsage,
   pruneCopilotUsageClaims,
   parseCopilotIncremental,
+  resolveVsCodeCopilotChatSessionPaths,
+  parseVsCodeCopilotChatIncremental,
   parseCopilotSessionStoreIncremental,
   parseCopilotAppDbIncremental,
   resolveKimiHome,
