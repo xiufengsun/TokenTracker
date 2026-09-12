@@ -4,6 +4,7 @@ import {
   Award,
   BarChart3,
   Gauge,
+  UsersRound,
   Trophy,
   History,
   LayoutGrid,
@@ -60,6 +61,7 @@ export function getNavGroups() {
       id: "account",
       label: copy("nav.group.account"),
       items: [
+        { id: "accounts", to: "/accounts", icon: UsersRound, label: copy("nav.ai_accounts") },
         { id: "settings", to: "/settings", icon: SettingsIcon, label: copy("nav.settings") },
       ],
     },

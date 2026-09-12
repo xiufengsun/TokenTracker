@@ -36,7 +36,7 @@ export function DownloadButtons({ copy, githubLabel }) {
           href={nativeDownload.href}
           target="_blank"
           rel="noopener noreferrer"
-          className="group inline-flex h-11 items-center justify-center gap-2 rounded-full bg-white px-7 text-sm font-semibold text-oai-gray-950 shadow-lg shadow-black/30 transition-all duration-200 hover:bg-oai-gray-100 active:scale-[0.98]"
+          className="group inline-flex h-11 items-center justify-center gap-2 rounded-full bg-white px-7 text-sm font-semibold text-oai-gray-950 shadow-lg shadow-black/30 transition-all duration-200 ease-out hover:bg-oai-gray-100 motion-safe:hover:-translate-y-0.5 motion-safe:active:translate-y-0 motion-safe:active:scale-[0.98] motion-reduce:transition-none"
         >
           <nativeDownload.Icon className="h-4 w-4" />
           {nativeDownload.label}
@@ -48,7 +48,7 @@ export function DownloadButtons({ copy, githubLabel }) {
               href={link.href}
               target="_blank"
               rel="noopener noreferrer"
-              className="group inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-full border border-white/10 bg-oai-black/60 px-3 text-sm font-medium text-oai-gray-200 backdrop-blur-sm transition-colors hover:border-white/25 hover:text-white"
+              className="group inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-full border border-white/10 bg-oai-black/60 px-3 text-sm font-medium text-oai-gray-200 backdrop-blur-sm transition-all duration-200 ease-out hover:border-white/25 hover:text-white motion-safe:hover:-translate-y-0.5 motion-safe:active:translate-y-0 motion-safe:active:scale-[0.98] motion-reduce:transition-none"
             >
               <link.Icon className="h-4 w-4 shrink-0 text-oai-gray-400 group-hover:text-white" />
               <span className="truncate">{link.label}</span>

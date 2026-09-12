@@ -178,6 +178,7 @@ export const GALAXY_VERTEX = /* glsl */ `
   uniform vec3 uColorC;
   uniform float uProgress;
   uniform float uLensScale;
+  uniform float uBlackHoleScale;
   uniform float uPointScale;
   attribute float aSeed;
   attribute float aPhase;
@@ -187,11 +188,14 @@ export const GALAXY_VERTEX = /* glsl */ `
   varying float vAlpha;
   varying float vGlow;
   varying vec3 vColor;
+  varying vec2 vTangent;
+  varying float vStretch;
 
   void main() {
     vec3 p;
     float glow = 0.0;
     float alpha = 1.0;
+    float capture = 0.0;
 
     if (aFlow > 1.5) {
       // Galaxy disc body: fills the space between the provider streams.
@@ -212,13 +216,13 @@ export const GALAXY_VERTEX = /* glsl */ `
       float arm = sin(2.0 * ang - 3.4 * log(max(radius, 0.4)) - uTime * 0.14);
       // Gentle arm modulation only — inter-arm gaps stay visibly starry, and
       // the chip-ring band is exempted entirely so the ring never dims.
-      float armBoost = 0.72 + 0.28 * smoothstep(-0.3, 0.9, arm);
+      float armBoost = 0.46 + 0.54 * smoothstep(-0.3, 0.9, arm);
       armBoost = mix(armBoost, 1.0, smoothstep(8.0, 10.2, radius));
       // Extra glow on the band running through the outer disc.
       float ringBoost = 0.3 * smoothstep(8.0, 10.2, radius) * (1.0 - smoothstep(11.9, 14.0, radius));
       // Soft outer halo: fade gradually past the rim, no hard edge.
       float rimFade = 1.0 - 0.75 * smoothstep(11.9, 14.9, radius);
-      float coreBoost = smoothstep(11.0, 1.3, radius);
+      float coreBoost = 1.0 - smoothstep(1.3, 11.0, radius);
       float tw = 0.75 + 0.25 * sin(uTime * (0.5 + aSeed) + aSeed * 30.0);
       // Far-side compensation: the tilted disc's far half sits deeper in
       // perspective (smaller, dimmer points) — brighten it so the rim reads
@@ -232,16 +236,19 @@ export const GALAXY_VERTEX = /* glsl */ `
       vec3 anchor = uAnchors[int(aStream + 0.5)];
       float speed = 0.05 + 0.035 * aSeed;
       float t = fract(uTime * speed + aPhase);
-      float tt = t * t * (3.0 - 2.0 * t);
+      float tt = pow(t, 1.35);
       float r0 = length(anchor.xy);
       float ang0 = atan(anchor.y, anchor.x);
       float dir = 0.85 + 0.3 * fract(aSeed * 7.31);
       float radius = mix(r0, 0.25, tt);
-      float ang = ang0 + uSwirl * tt * dir;
+      capture = smoothstep(0.42, 0.96, tt);
+      float winding = -log(max(1.0 - tt, 0.025)) * 1.35;
+      float ang = ang0 + uSwirl * tt * dir + winding * capture;
+      ang += sin(tt * 17.0 + aStream * 2.4 + uTime * 0.35) * capture * 0.08;
       vec2 radial = vec2(cos(ang), sin(ang));
       vec2 lateral = vec2(-radial.y, radial.x);
       // Tight comet band: wide-ish at the chip, needle-thin near the core.
-      float band = mix(0.55, 0.06, tt);
+      float band = mix(0.55, 0.035, tt);
       float off1 = (fract(aSeed * 13.37) - 0.5) * 2.0;
       float off2 = (fract(aSeed * 47.11) - 0.5) * 2.0;
       p = vec3(radial * radius, anchor.z * (1.0 - tt));
@@ -256,7 +263,7 @@ export const GALAXY_VERTEX = /* glsl */ `
       float fadeIn = smoothstep(0.025, 0.1, t);
       // Thin out well before the core so the convergence stays luminous but
       // never blows out into a white blob under the counter.
-      float fadeOut = 1.0 - smoothstep(0.7, 0.93, t);
+      float fadeOut = 1.0 - smoothstep(0.88, 0.995, t);
       // Emission spike just past the chip edge — the icon reads as firing.
       float spawn = (1.0 - smoothstep(0.05, 0.22, t)) * fadeIn;
       // Each stream breathes on its own rhythm, strongest near its source.
@@ -266,6 +273,7 @@ export const GALAXY_VERTEX = /* glsl */ `
       float reveal = smoothstep(t - 0.12, t, uIntro);
       float farBoost = 1.0 + 0.5 * smoothstep(0.0, 8.0, p.y);
       alpha = 0.95 * fadeIn * fadeOut * streamPulse * reveal * farBoost * (1.0 + spawn * 0.9);
+      alpha *= 1.0 - capture * 0.35;
       glow = smoothstep(0.5, 0.92, tt) * 0.7 + spawn * 0.55;
     } else {
       // Ambient starfield: slow drift + twinkle, fading in with the intro.
@@ -316,26 +324,29 @@ export const GALAXY_VERTEX = /* glsl */ `
     float r_cam = length(toParticle);
     float lensGlow = 0.0;
     if (r_cam > 0.001) {
-      float R_E = 1.35 * uLensScale;
-      float R_horizon = 0.65 * uLensScale;
+      float R_E = 1.35 * uBlackHoleScale;
+      float R_horizon = 1.38 * uBlackHoleScale;
       
-      // Fade out particles that fall below the event horizon
-      float horizonFade = smoothstep(0.2, R_horizon, r_cam);
-      alpha *= horizonFade;
-      
-      // Point-mass Einstein Ring gravitational lensing formula
+      // Keep a smooth dark neighborhood for the continuous accretion disc.
+      // Limit magnification so the inner stars stay fine instead of exploding
+      // into a thick ring of white point sprites.
+      alpha *= smoothstep(R_horizon * 0.92, R_horizon * 1.30, r_cam);
+      float innerVisibility = mix(0.28, 0.72, capture);
+      alpha *= mix(innerVisibility, 1.0, smoothstep(R_E * 2.1, R_E * 5.0, r_cam));
       float r_lensed = 0.5 * (r_cam + sqrt(r_cam * r_cam + 4.0 * R_E * R_E));
-      
-      // Shift particles to their lensed coordinates on the screen plane
-      mv.xy = bh_cam.xy + toParticle * (r_lensed / r_cam);
-      
-      // Warp Z coordinate forward proportional to the lensing shift
-      mv.z += (r_lensed - r_cam) * 0.35;
-      
-      // Calculate gravitational magnification light effect (lensGlow)
-      lensGlow = 1.6 / (r_cam + 0.25);
+      float influence = 1.0 - smoothstep(R_E * 2.0, R_E * 6.0, r_cam);
+      float shift = (r_lensed - r_cam) * influence * 0.80;
+      mv.xy += toParticle * (shift / r_cam);
+      mv.z += shift * 0.15;
+      lensGlow = min(0.45, 0.65 / (r_cam + 1.0)) * influence;
     }
 
+    // Stretch infalling points tangentially into short light trails. Use
+    // projected direction so their orientation follows the tilted camera.
+    vec2 tangent = vec2(-toParticle.y * projectionMatrix[0][0],
+                         toParticle.x * projectionMatrix[1][1]);
+    vTangent = normalize(vec2(tangent.x, -tangent.y) + vec2(0.00001));
+    vStretch = 1.0 + capture * 1.6;
     gl_Position = projectionMatrix * mv;
     float dist = max(0.001, -mv.z);
     // Exaggerated near-big/far-small: particles low in the frame (near side
@@ -343,12 +354,11 @@ export const GALAXY_VERTEX = /* glsl */ `
     float depthK = mix(1.85, 0.45, smoothstep(-10.0, 8.0, p.y));
     
     // Scale particle sizes up based on lensing magnification
-    sizeMultiplier *= 1.0 + clamp(lensGlow - 1.0, 0.0, 3.0) * 0.45;
-    gl_PointSize = aSize * uPixelRatio * uPointScale * (26.0 / dist) * depthK * (1.0 + (glow + lensGlow * 0.35) * 1.7) * sizeMultiplier;
+    sizeMultiplier *= 1.0 + lensGlow * 0.15;
+    gl_PointSize = aSize * uPixelRatio * uPointScale * (26.0 / dist) * depthK * (1.0 + (glow + lensGlow * 0.35) * 1.7) * sizeMultiplier * vStretch * (1.0 - capture * 0.3);
 
     // Apply lensing color boost: blend into bright hot white/blue light at the Einstein Ring
     vColor = mix(mix(uColorA, uColorB, aSeed), uColorC, clamp(glow + lensGlow * 0.35, 0.0, 1.0) * 0.85);
-    vColor = mix(vColor, vec3(1.0, 1.0, 1.0) * 1.5, clamp((lensGlow - 1.5) * 0.4, 0.0, 1.0));
     vColor = mix(vColor, flashColor, flash * 0.95);
     vAlpha = alpha;
     vGlow = glow;
@@ -361,12 +371,16 @@ export const GALAXY_FRAGMENT = /* glsl */ `
   varying float vAlpha;
   varying float vGlow;
   varying vec3 vColor;
+  varying vec2 vTangent;
+  varying float vStretch;
 
   void main() {
     vec2 uv = gl_PointCoord - 0.5;
-    float d = length(uv);
-    float core = smoothstep(0.5, 0.02, d);
-    float halo = smoothstep(0.5, 0.18, d) * 0.5;
+    vec2 trailUv = vec2(dot(uv, vTangent), dot(uv, vec2(-vTangent.y, vTangent.x)));
+    trailUv.y *= vStretch;
+    float d = length(trailUv);
+    float core = 1.0 - smoothstep(0.02, 0.5, d);
+    float halo = (1.0 - smoothstep(0.18, 0.5, d)) * 0.3;
     float a = (core + halo * vGlow) * vAlpha * uGlobalAlpha;
     if (a < 0.003) discard;
     gl_FragColor = vec4(vColor, a);

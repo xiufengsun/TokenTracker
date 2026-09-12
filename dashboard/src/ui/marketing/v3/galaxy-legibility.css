@@ -1,0 +1,34 @@
+/* Limit readability treatment to the text, keeping the galaxy itself crisp. */
+.lv3-hero-title {
+  position: relative;
+  isolation: isolate;
+  text-shadow: 0 2px 3px var(--lv3-bg), 0 0 20px var(--lv3-bg);
+}
+.lv3-hero-title::before {
+  content: "";
+  position: absolute;
+  inset: -1.5rem -3rem;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(ellipse, var(--lv3-scrim) 10%, transparent 72%);
+}
+.lv3-hero-title > span {
+  /* A shadow on transparent clipped text would cover its gradient fill. */
+  text-shadow: none;
+}
+.lv3-counter {
+  position: relative;
+  isolation: isolate;
+  text-shadow: 0 1px 2px var(--lv3-bg), 0 0 6px var(--lv3-bg), 0 0 14px var(--lv3-bg);
+}
+.lv3-counter-scrim {
+  position: absolute;
+  inset: -.5rem -2rem;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(ellipse, var(--lv3-bg) 8%, var(--lv3-scrim) 46%, transparent 75%);
+}
+@media (max-width: 639px) {
+  .lv3-counter-scrim { inset: -.4rem -1rem; }
+  .lv3-hero-title::before { inset-inline: -1.5rem; }
+}

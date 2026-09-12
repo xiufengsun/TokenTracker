@@ -16,6 +16,7 @@ import { useLimitAlertPrefs } from "../hooks/use-limit-alert-prefs";
 import { sendPredictiveLimitAlerts } from "../lib/limit-alerts.js";
 import { isNativeEmbed, postNativeMessage } from "../lib/native-bridge.js";
 import { listSubscriptions } from "../lib/subscription-manager-api";
+import { CurrentAccountLimits } from "../components/CurrentAccountLimits.jsx";
 
 const IS_LOCAL_HOST =
   typeof window !== "undefined" &&
@@ -181,6 +182,8 @@ export function LimitsPage() {
             </div>
           </div>
 
+          {IS_LOCAL_HOST && <CurrentAccountLimits displayMode={prefs.displayMode} order={prefs.order} visibility={prefs.visibility} />}
+
           {isLoading ? (
             <LimitsPageSkeleton />
           ) : (
@@ -213,7 +216,7 @@ export function LimitsPage() {
                 codingPlan={usageLimits?.codingPlan}
                 agentPlan={usageLimits?.agentPlan}
                 order={prefs.order}
-                visibility={prefs.visibility}
+                visibility={IS_LOCAL_HOST ? { ...prefs.visibility, claude: false, codex: false } : prefs.visibility}
                 displayMode={prefs.displayMode}
                 subscriptions={subscriptions}
                 showSubscriptions={prefs.showSubscriptions !== false}

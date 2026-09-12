@@ -4192,6 +4192,8 @@ function resetUsageLimitsCache() {
 
 module.exports = {
   getUsageLimits,
+  fetchClaudeUsageLimits,
+  fetchCodexUsageLimits,
   normalizePlanLabel,
   resetUsageLimitsCache,
   cacheExpiresAtMs,

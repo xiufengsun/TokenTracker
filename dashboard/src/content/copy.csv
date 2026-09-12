@@ -1633,3 +1633,167 @@ limits.commandCode.setupHint.note_linux,ui,LimitsPage,UsageLimitsPanel,command_c
 landing.discovery.tracked_usage,landing,LandingPage,index.html,tracked_usage,"Token Tracker tracks input, output, cached, and cache-creation tokens per model, project, and time window. It also detects usage limits for 14 providers, including Claude, Codex, Cursor, Gemini, Antigravity, Qoder, Qoder CN, and Command Code.",Build-time static discovery copy,active
 landing.discovery.limits_summary,landing,LandingPage,index.html,limits_summary,"live quota and subscription status for 14 providers, with last-good caching for local providers such as Antigravity and Qoder.",Build-time static discovery copy,active
 landing.discovery.faq_usage,landing,LandingPage,index.html,faq_usage,"Input, output, cached, and cache-creation tokens per model, project, and time window. It also surfaces usage limits for 14 providers, including Claude, Codex, Cursor, Gemini, Antigravity, Qoder, Qoder CN, and Command Code.",Build-time static discovery copy,active
+accounts.title,ui,LimitsPage,SubscriptionAccounts,title,Subscription accounts,,active
+accounts.subtitle,ui,LimitsPage,SubscriptionAccounts,subtitle,"Your accounts, remaining quota and reset times.",,active
+accounts.add,ui,LimitsPage,SubscriptionAccounts,add,Add account,,active
+accounts.choose,ui,LimitsPage,SubscriptionAccounts,choose,Choose an account,,active
+accounts.empty,ui,LimitsPage,SubscriptionAccounts,empty,Add an account and connect it in your browser.,,active
+accounts.provider,ui,LimitsPage,SubscriptionAccounts,provider,AI service,,active
+accounts.label,ui,LimitsPage,SubscriptionAccounts,label,Account label,,active
+accounts.label_placeholder,ui,LimitsPage,SubscriptionAccounts,label_placeholder,Personal or work,,active
+accounts.login_hint,ui,LimitsPage,SubscriptionAccounts,login_hint,Authorize on the official sign-in page. Your login stays on this machine.,,active
+accounts.keychain_consent,ui,LimitsPage,SubscriptionAccounts,keychain_consent,Allow TokenTracker to read this account's Claude Keychain item for quota checks. macOS may ask for access; system and browser credentials are excluded.,,active
+accounts.create,ui,LimitsPage,SubscriptionAccounts,create,Create account,,active
+accounts.error,ui,LimitsPage,SubscriptionAccounts,error,Could not update accounts. Check the account state and try again.,,active
+accounts.retry,ui,LimitsPage,SubscriptionAccounts,retry,Retry,,active
+accounts.show_archived,ui,LimitsPage,SubscriptionAccounts,show_archived,Show archived accounts,,active
+accounts.not_logged_in,ui,LimitsPage,SubscriptionAccounts,not_logged_in,Sign-in required,,active
+accounts.refresh,ui,LimitsPage,SubscriptionAccounts,refresh,Refresh,,active
+accounts.archive,ui,LimitsPage,SubscriptionAccounts,archive,Archive,,active
+accounts.restore,ui,LimitsPage,SubscriptionAccounts,restore,Restore,,active
+accounts.loading,ui,LimitsPage,SubscriptionAccounts,loading,Reading account usage…,,active
+accounts.tokens,ui,LimitsPage,SubscriptionAccounts,tokens,Local tokens,,active
+accounts.cost,ui,LimitsPage,SubscriptionAccounts,cost,Estimated API cost (USD),,active
+accounts.range,ui,LimitsPage,SubscriptionAccounts,range,Usage period (UTC),,active
+accounts.days7,ui,LimitsPage,SubscriptionAccounts,days7,Last 7 days,,active
+accounts.days30,ui,LimitsPage,SubscriptionAccounts,days30,Last 30 days,,active
+accounts.all,ui,LimitsPage,SubscriptionAccounts,all,All time,,active
+accounts.scope,ui,LimitsPage,SubscriptionAccounts,scope,"Only logs in this account's isolated home are counted here, separately from dashboard and cloud totals. Older system logs are unassigned. API cost is an estimate, not your subscription bill; quota percentages cannot be converted to token counts.",,active
+accounts.daily,ui,LimitsPage,SubscriptionAccounts,daily,Daily breakdown,,active
+accounts.date,ui,LimitsPage,SubscriptionAccounts,date,Date (UTC),,active
+accounts.updated,ui,LimitsPage,SubscriptionAccounts,updated,Quota last fetched: {{date}},,active
+accounts.subscription_end,ui,LimitsPage,SubscriptionAccounts,subscription_end,Subscription end reported by provider: {{date}},,active
+accounts.login_command,ui,LimitsPage,SubscriptionAccounts,login_command,1. Sign in / renew login in your terminal,,active
+accounts.run_command,ui,LimitsPage,SubscriptionAccounts,run_command,2. Launch this account in your terminal,,active
+accounts.copy,ui,LimitsPage,SubscriptionAccounts,copy,Copy,,active
+accounts.copied,ui,LimitsPage,SubscriptionAccounts,copied,Copied,,active
+accounts.copy_command,ui,LimitsPage,SubscriptionAccounts,copy_command,Copy command: {{label}},,active
+accounts.copy_failed,ui,LimitsPage,SubscriptionAccounts,copy_failed,Select and copy the command manually.,,active
+accounts.manage,ui,LimitsPage,SubscriptionAccounts,manage,Account settings,,active
+accounts.save,ui,LimitsPage,SubscriptionAccounts,save,Save label,,active
+accounts.archive_hint,ui,LimitsPage,SubscriptionAccounts,archive_hint,Archiving hides the account and stops quota checks. Its history and login are kept so you can restore it.,,active
+accounts.stale,ui,LimitsPage,SubscriptionAccounts,stale,Showing an older quota snapshot. Its reset times may have passed.,,active
+accounts.status.login,ui,LimitsPage,SubscriptionAccounts,status.login,Sign in to connect this subscription and view its usage.,,active
+accounts.status.identity,ui,LimitsPage,SubscriptionAccounts,status.identity,The signed-in identity has changed. Add it as a new account to keep usage separate.,,active
+accounts.status.credentials,ui,LimitsPage,SubscriptionAccounts,status.credentials,Connect quota access to see this account’s limits.,,active
+accounts.status.expired,ui,LimitsPage,SubscriptionAccounts,status.expired,Sign in again to refresh this account’s quota. Your usage history is kept.,,active
+accounts.status.cooldown,ui,LimitsPage,SubscriptionAccounts,status.cooldown,Quota checks are cooling down. Refresh resumes after the retry window.,,active
+accounts.status.unavailable,ui,LimitsPage,SubscriptionAccounts,status.unavailable,Quota is temporarily unavailable. Try again later.,,active
+accounts.status.archived,ui,LimitsPage,SubscriptionAccounts,status.archived,This account is archived. Restore it to view usage and launch its CLI.,,active
+accounts.count,ui,LimitsPage,SubscriptionAccounts,count,{{count}} accounts,,active
+accounts.pool.title,ui,LimitsPage,SubscriptionAccounts,pool.title,Automatic account rotation,,active
+accounts.pool.description,ui,LimitsPage,SubscriptionAccounts,pool.description,"Launch with the command below to try signed-in accounts in list order. Exhausted, busy or unverifiable accounts are skipped. After an unsuccessful exit with confirmed quota exhaustion, the next account opens a new session. Existing conversation context is not transferred. Closing normally or pressing Ctrl-C stops rotation.",,active
+accounts.pool.command,ui,LimitsPage,SubscriptionAccounts,pool.command,Launch with automatic rotation,,active
+accounts.auth.starting,ui,LimitsPage,AccountAuthorization,auth.starting,Preparing the sign-in link…,,active
+accounts.auth.waiting,ui,LimitsPage,AccountAuthorization,auth.waiting,Waiting for browser authorization,,active
+accounts.auth.saving,ui,LimitsPage,AccountAuthorization,auth.saving,Verifying your account…,,active
+accounts.auth.complete,ui,LimitsPage,AccountAuthorization,auth.complete,Account connected,,active
+accounts.auth.failed,ui,LimitsPage,AccountAuthorization,auth.failed,Authorization did not complete,,active
+accounts.auth.cancelled,ui,LimitsPage,AccountAuthorization,auth.cancelled,Authorization cancelled,,active
+accounts.auth.cancelling,ui,LimitsPage,AccountAuthorization,auth.cancelling,Cancelling authorization…,,active
+accounts.auth.connection_error,ui,LimitsPage,AccountAuthorization,auth.connection_error,Could not check authorization status. Check the local connection.,,active
+accounts.auth.install_cli,ui,LimitsPage,AccountAuthorization,auth.install_cli,"Install the official CLI for this provider, then try again.",,active
+accounts.auth.retry_hint,ui,LimitsPage,AccountAuthorization,auth.retry_hint,"Try again from this account. If you signed in to a different subscription, add a new account instead.",,active
+accounts.auth.url_hint,ui,LimitsPage,AccountAuthorization,auth.url_hint,Choose the account on the official page. We’ll finish connecting it automatically.,,active
+accounts.auth.open,ui,LimitsPage,AccountAuthorization,auth.open,Open sign-in page,,active
+accounts.auth.copy_url,ui,LimitsPage,AccountAuthorization,auth.copy_url,Copy sign-in link,,active
+accounts.auth.code,ui,LimitsPage,AccountAuthorization,auth.code,Authorization code,,active
+accounts.auth.submit_code,ui,LimitsPage,AccountAuthorization,auth.submit_code,Complete authorization,,active
+accounts.auth.cancel,ui,LimitsPage,AccountAuthorization,auth.cancel,Cancel authorization,,active
+accounts.auth.optional_label,ui,LimitsPage,AccountAuthorization,auth.optional_label,Account label (optional),,active
+accounts.auth.generate,ui,LimitsPage,AccountAuthorization,auth.generate,Generate sign-in link,,active
+accounts.auth.reauthorize,ui,LimitsPage,AccountAuthorization,auth.reauthorize,Sign in again,,active
+accounts.system.label,ui,LimitsPage,SubscriptionAccounts,system.label,Local default account,,active
+accounts.system.detected,ui,LimitsPage,SubscriptionAccounts,system.detected,Detected in CLI configuration,,active
+accounts.system.description,ui,LimitsPage,SubscriptionAccounts,system.description,Detected from the official CLI configuration on this machine. Continue using your usual CLI command. The login is not copied or replaced; a saved account profile alone does not confirm that authorization is still valid.,,active
+accounts.system.no_limits,ui,LimitsPage,SubscriptionAccounts,system.no_limits,Quota is not available for this local login yet. See the provider connection settings below.,,active
+accounts.system.history,ui,LimitsPage,SubscriptionAccounts,system.history,"Old CLI logs may contain multiple identities, so their usage is not assigned to this account. Add accounts through browser authorization for separate usage tracking and automatic rotation.",,active
+accounts.system.about,ui,LimitsPage,SubscriptionAccounts,system.about,About this local account,,active
+accounts.ui.close,ui,LimitsPage,SubscriptionAccounts,ui.close,Close,,active
+accounts.ui.connected,ui,LimitsPage,SubscriptionAccounts,ui.connected,Connected,,active
+accounts.ui.configure,ui,LimitsPage,SubscriptionAccounts,ui.configure,Connect quota,,active
+accounts.ui.hide_archived,ui,LimitsPage,SubscriptionAccounts,ui.hide_archived,Hide archived accounts,,active
+accounts.ui.select_account,ui,LimitsPage,SubscriptionAccounts,ui.select_account,Select an account to view its usage and limits.,,active
+accounts.ui.rotation_on,ui,LimitsPage,SubscriptionAccounts,ui.rotation_on,Quota exhausted → next managed account,,active
+accounts.ui.rotation_off,ui,LimitsPage,SubscriptionAccounts,ui.rotation_off,Use the selected account for the next conversation,,active
+accounts.ui.launch_pool,ui,LimitsPage,SubscriptionAccounts,ui.launch_pool,Start with rotation,,active
+accounts.ui.launch,ui,LimitsPage,SubscriptionAccounts,ui.launch,Start a conversation,,active
+accounts.ui.launched,ui,LimitsPage,SubscriptionAccounts,ui.launched,Sent to your terminal. Continue there to start working.,,active
+accounts.ui.launch_failed,ui,LimitsPage,SubscriptionAccounts,ui.launch_failed,"Could not open a terminal. Check the project directory and CLI installation, then try again.",,active
+accounts.ui.add_title,ui,LimitsPage,SubscriptionAccounts,ui.add_title,Connect {{provider}} account,,active
+accounts.ui.advanced,ui,LimitsPage,SubscriptionAccounts,ui.advanced,Advanced · commands and history,,active
+accounts.ui.launch_pool_hint,ui,LimitsPage,SubscriptionAccounts,ui.launch_pool_hint,Claude keeps the saved conversation when moving to the next available account. Codex rotation starts a new session after an exit with confirmed quota exhaustion.,,active
+accounts.ui.launch_hint,ui,LimitsPage,SubscriptionAccounts,ui.launch_hint,Open a new conversation with {{account}}. Existing conversations keep their current account.,,active
+accounts.ui.directory,ui,LimitsPage,SubscriptionAccounts,ui.directory,Project directory (optional),,active
+accounts.ui.directory_hint,ui,LimitsPage,SubscriptionAccounts,ui.directory_hint,Leave blank to use your home folder,,active
+accounts.ui.open_terminal,ui,LimitsPage,SubscriptionAccounts,ui.open_terminal,Open terminal,,active
+accounts.ui.resume_auth,ui,LimitsPage,SubscriptionAccounts,ui.resume_auth,Continue sign-in,,active
+accounts.ui.rotation_unavailable,ui,LimitsPage,SubscriptionAccounts,ui.rotation_unavailable,Add another account for automatic switching,,active
+accounts.ui.selection_hint,ui,LimitsPage,SubscriptionAccounts,ui.selection_hint,Select an account to view its details. Use Switch session account to apply it to a running managed Claude session.,,active
+accounts.ui.pool_credentials,ui,LimitsPage,SubscriptionAccounts,ui.pool_credentials,"No account has verifiable quota. Enable the selected account’s quota access in settings, or turn off rotation to open a single account.",,active
+accounts.ui.pool_blocked,ui,LimitsPage,SubscriptionAccounts,ui.pool_blocked,"No eligible account is available for rotation. Check sign-in, quota and running sessions, then retry.",,active
+accounts.ui.checking_launch,ui,LimitsPage,SubscriptionAccounts,ui.checking_launch,Checking accounts…,,active
+accounts.session.title,ui,LimitsPage,SubscriptionAccounts,session.title,Active conversations,,active
+accounts.session.starting,ui,LimitsPage,SubscriptionAccounts,session.starting,Starting Claude…,,active
+accounts.session.running,ui,LimitsPage,SubscriptionAccounts,session.running,Running,,active
+accounts.session.switching,ui,LimitsPage,SubscriptionAccounts,session.switching,Switching account…,,active
+accounts.session.failed,ui,LimitsPage,SubscriptionAccounts,session.failed,Stopped with an error,,active
+accounts.session.disconnected,ui,LimitsPage,SubscriptionAccounts,session.disconnected,Connection lost,,active
+accounts.session.stopped,ui,LimitsPage,SubscriptionAccounts,session.stopped,Stopped,,active
+accounts.session.external,ui,LimitsPage,SubscriptionAccounts,session.external,No active conversations here. Start one below to manage it from this page.,,active
+accounts.session.switch,ui,LimitsPage,SubscriptionAccounts,session.switch,Switch session account,,active
+accounts.session.switch_title,ui,LimitsPage,SubscriptionAccounts,session.switch_title,Switch to {{account}},,active
+accounts.session.switch_hint,ui,LimitsPage,SubscriptionAccounts,session.switch_hint,Stops the current Claude process and resumes its saved conversation with the selected account in the same terminal. Wait for ongoing work to finish first. Conversation files stay on this machine; previous usage remains with its original account.,,active
+accounts.session.confirm,ui,LimitsPage,SubscriptionAccounts,session.confirm,Switch and resume,,active
+accounts.session.requested,ui,LimitsPage,SubscriptionAccounts,session.requested,Switch requested. The session status below confirms when the new process is running.,,active
+accounts.session.complete,ui,LimitsPage,SubscriptionAccounts,session.complete,Conversation resumed with this account,,active
+accounts.session.restored,ui,LimitsPage,SubscriptionAccounts,session.restored,Switch failed. The original account was restarted with its saved conversation.,,active
+accounts.session.stop_timeout,ui,LimitsPage,SubscriptionAccounts,session.stop_timeout,Claude did not finish stopping. No replacement process was started; retry after its work finishes.,,active
+accounts.session.failed_hint,ui,LimitsPage,SubscriptionAccounts,session.failed_hint,Could not complete this operation. Check the terminal and account access before retrying; your conversation files are preserved.,,active
+accounts.ui.codex_selection_hint,ui,LimitsPage,SubscriptionAccounts,ui.codex_selection_hint,Select an account to view details and choose the next launch.,,active
+accounts.session.rotation,ui,LimitsPage,SubscriptionAccounts,session.rotation,Rotate this session,,active
+accounts.ui.allow_quota,ui,LimitsPage,SubscriptionAccounts,ui.allow_quota,Allow quota access for this account,,active
+accounts.session.need_target,ui,LimitsPage,SubscriptionAccounts,session.need_target,Add another signed-in account to switch this conversation.,,active
+accounts.global.current,ui,LimitsPage,SubscriptionAccounts,global.current,Current account,,active
+accounts.global.switching,ui,LimitsPage,SubscriptionAccounts,global.switching,Switching account…,,active
+accounts.global.choose,ui,LimitsPage,SubscriptionAccounts,global.choose,Choose an account to use in your terminal and editor.,,active
+accounts.global.applied_hint,ui,LimitsPage,SubscriptionAccounts,global.applied_hint,New sessions use the current login. Reopen existing terminal or editor sessions to apply a switch.,,active
+accounts.global.sessions,ui,LimitsPage,SubscriptionAccounts,global.sessions,Sessions & automation,,active
+accounts.global.session_hint,ui,LimitsPage,SubscriptionAccounts,global.session_hint,Start a new conversation or manage one opened here.,,active
+accounts.global.scope,ui,LimitsPage,SubscriptionAccounts,global.scope,Switching updates the default Claude or Codex CLI login and IDE integrations that share it. Existing processes may need reopening. Custom configuration directories and API-key logins use separate settings. Your original login is saved locally and can be restored.,,active
+accounts.global.restore,ui,LimitsPage,SubscriptionAccounts,global.restore,Restore original login,,active
+accounts.global.busy,ui,LimitsPage,SubscriptionAccounts,global.busy,This account has an open session. Finish it before switching the default login.,,active
+accounts.global.login_needed,ui,LimitsPage,SubscriptionAccounts,global.login_needed,Reconnect this account before switching.,,active
+accounts.global.failed,ui,LimitsPage,SubscriptionAccounts,global.failed,The login could not be switched. Your current login is preserved; retry from account settings.,,active
+accounts.global.recovery,ui,LimitsPage,SubscriptionAccounts,global.recovery,The switch needs recovery. Open account settings and restore the previous login.,,active
+accounts.global.system_access,ui,LimitsPage,SubscriptionAccounts,global.system_access,Connect quota access to read this CLI account’s credentials on this machine. Only this account’s quota is requested; browser logins are never read.,,active
+accounts.quota.session,ui,LimitsPage,SubscriptionAccounts,quota.session,Current window,,active
+accounts.quota.weekly,ui,LimitsPage,SubscriptionAccounts,quota.weekly,Weekly quota,,active
+accounts.quota.period,ui,LimitsPage,SubscriptionAccounts,quota.period,Usage window,,active
+accounts.quota.remaining,ui,LimitsPage,SubscriptionAccounts,quota.remaining,Remaining quota,,active
+accounts.quota.left,ui,LimitsPage,SubscriptionAccounts,quota.left,{{value}}% left,,active
+accounts.quota.reset,ui,LimitsPage,SubscriptionAccounts,quota.reset,Resets {{date}},,active
+accounts.quota.cached,ui,LimitsPage,SubscriptionAccounts,quota.cached,Last known quota,,active
+accounts.quota.updating,ui,LimitsPage,SubscriptionAccounts,quota.updating,Awaiting refresh,,active
+accounts.global.changed,ui,LimitsPage,SubscriptionAccounts,global.changed,The local login changed. Select an account again to reconnect its quota.,,active
+nav.ai_accounts,ui,AccountsPage,SubscriptionAccounts,ai_accounts,AI accounts,,active
+accounts.page.subtitle,ui,AccountsPage,SubscriptionAccounts,subtitle,Choose the account used by your CLI and connected editors.,,active
+accounts.page.limits,ui,AccountsPage,SubscriptionAccounts,limits,View all limits,,active
+accounts.overview.title,ui,AccountsPage,SubscriptionAccounts,title,Current accounts,,active
+accounts.overview.manage,ui,AccountsPage,SubscriptionAccounts,manage,Manage accounts,,active
+accounts.overview.unavailable,ui,AccountsPage,SubscriptionAccounts,unavailable,Quota is unavailable. Connect or check this account in account settings.,,active
+accounts.session.target,ui,AccountsPage,SubscriptionAccounts,target,Switch to account,,active
+accounts.global.pool_scope,ui,AccountsPage,SubscriptionAccounts,pool_scope,Rotation applies to conversations opened here and keeps your default login available for other tools.,,active
+accounts.delete.action,ui,AccountsPage,SubscriptionAccounts,action,Delete account,,active
+accounts.delete.title,ui,AccountsPage,SubscriptionAccounts,title,Delete {{account}}?,,active
+accounts.delete.description,ui,AccountsPage,SubscriptionAccounts,description,This permanently removes the login and history saved for this account in TokenTracker. Your provider subscription stays active.,,active
+accounts.delete.cancel,ui,AccountsPage,SubscriptionAccounts,cancel,Cancel,,active
+accounts.delete.busy,ui,AccountsPage,SubscriptionAccounts,busy,This account is in use. Switch the default login and close its conversations before deleting it.,,active
+accounts.delete.failed,ui,AccountsPage,SubscriptionAccounts,failed,The account could not be deleted. Please try again.,,active
+accounts.quota.used,ui,LimitsPage,AccountQuotaSummary,used,Used quota,,active
+accounts.quota.consumed,ui,LimitsPage,AccountQuotaSummary,consumed,{{value}}% used,,active
+accounts.global.current_short,ui,AccountsPage,SubscriptionAccounts,current_short,Current,,active
+accounts.delete.progress,ui,AccountsPage,SubscriptionAccounts,progress,Deleting…,,active
+accounts.ui.saving,ui,AccountsPage,SubscriptionAccounts,saving,Saving…,,active
+accounts.session.history,ui,AccountsPage,SubscriptionAccounts,history,Recent sessions ({{count}}),,active
+accounts.auth.action_failed,ui,AccountsPage,AccountAuthorization,action_failed,Could not submit. Your input is kept; try again.,,active

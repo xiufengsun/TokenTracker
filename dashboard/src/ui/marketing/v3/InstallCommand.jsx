@@ -21,6 +21,7 @@ export function InstallCommand({ copy, installCommand, installCopied, onCopyInst
           style={{
             background: "radial-gradient(circle, var(--lv3-glint), transparent 10%)",
             animationDuration: "6s",
+            animationPlayState: reduceMotion ? "paused" : "running",
           }}
         />
         <div
@@ -28,6 +29,7 @@ export function InstallCommand({ copy, installCommand, installCopied, onCopyInst
           style={{
             background: "radial-gradient(circle, var(--lv3-glint), transparent 10%)",
             animationDuration: "6s",
+            animationPlayState: reduceMotion ? "paused" : "running",
           }}
         />
 
@@ -60,13 +62,21 @@ export function InstallCommand({ copy, installCommand, installCopied, onCopyInst
             aria-label={
               installCopied ? copy("landing.install.action.copied") : copy("landing.install.action.copy")
             }
-            className="shrink-0 flex h-9 w-9 items-center justify-center text-oai-gray-200 bg-oai-gray-900 border border-oai-gray-700 rounded-lg hover:bg-oai-gray-800 hover:text-white active:scale-95 transition-all duration-200 shadow-sm"
+            className="shrink-0 flex h-9 w-9 items-center justify-center text-oai-gray-200 bg-oai-gray-900 border border-oai-gray-700 rounded-lg hover:bg-oai-gray-800 hover:text-white motion-safe:active:scale-95 transition-all duration-200 motion-reduce:transition-none shadow-sm"
           >
-            {installCopied ? (
-              <Check className="h-4 w-4 text-[color:var(--lv3-accent-soft)]" aria-hidden />
-            ) : (
-              <Copy className="h-4 w-4 opacity-70" aria-hidden />
-            )}
+            <motion.span
+              key={installCopied ? "copied" : "copy"}
+              className="inline-flex"
+              initial={reduceMotion ? false : { opacity: 0, scale: 0.85 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: reduceMotion ? 0 : 0.18, ease: "easeOut" }}
+            >
+              {installCopied ? (
+                <Check className="h-4 w-4 text-[color:var(--lv3-accent-soft)]" aria-hidden />
+              ) : (
+                <Copy className="h-4 w-4 opacity-70" aria-hidden />
+              )}
+            </motion.span>
           </button>
         </div>
       </motion.div>

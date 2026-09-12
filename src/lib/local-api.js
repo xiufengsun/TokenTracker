@@ -3211,6 +3211,27 @@ function createLocalApiHandler({ queuePath }) {
       return true;
     }
 
+    // Account identities and all mutations are local-auth protected. This endpoint
+    // never launches a shell or returns provider credentials.
+    if (p === "/functions/tokentracker-subscription-accounts") {
+      const method = String(req.method || "GET").toUpperCase();
+      res.setHeader("Cache-Control", "no-store");
+      if (!["GET", "POST"].includes(method)) {
+        json(res, { error: "Method Not Allowed" }, 405);
+      } else if (!isAuthorizedLocalMutation(req)) {
+        json(res, { error: "Unauthorized" }, 401);
+      } else {
+        try {
+          const { subscriptionAccountRequest } = require("./subscription-account-api");
+          json(res, await subscriptionAccountRequest({ trackerDir: path.dirname(qp), method,
+            body: method === "POST" ? await readJsonBody(req) : null, url }));
+        } catch (_error) {
+          json(res, { error: "Account operation failed. Check the account state or try again." }, 400);
+        }
+      }
+      return true;
+    }
+
     // --- usage-limits ---
     if (p === "/functions/tokentracker-usage-limits") {
       const { getUsageLimits, resetUsageLimitsCache } = require("./usage-limits");
