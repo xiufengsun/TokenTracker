@@ -15,6 +15,9 @@ const STORE_DIRNAME = "cursor-store-v2";
 const MANIFEST_FILENAME = "manifest.json";
 const GENERATIONS_DIRNAME = "generations";
 const DEFERRED_CODEX_AUDIT_FILENAME = "deferred-codex-audit.json";
+const SHARDED_CORE_FILENAME = "core-v3.json";
+const OPENCODE_MESSAGES_DIRNAME = "opencode-messages";
+const OPENCODE_FINGERPRINTS_DIRNAME = "opencode-fingerprints";
 const DEFAULT_ACTIVATION_BYTES = 16 * 1024 * 1024;
 const PROJECT_ABSENT_CONTEXT_RESCAN_MS = 24 * 60 * 60 * 1000;
 const CURSOR_STORE_RETRY_CODE = "TOKENTRACKER_CURSOR_STORE_RETRY";
@@ -66,26 +69,9 @@ async function openCursorStore({
       return opened;
     }
 
-    manifest = await migrateLegacyCursorState({
-      cursorsPath,
-      storeRoot,
-      legacyFingerprint,
-      previousManifest: manifest,
-      codexRoots: normalizedCodexRoots,
-      failureInjector,
-    });
-    migratedDuringOpen = true;
-    const recovered = await openManifestGeneration({
-      cursorsPath,
-      storeRoot,
-      manifest,
-      codexRoots: normalizedCodexRoots,
-      failureInjector,
-    });
-    if (recovered) {
-      recovered.requiresCommit = true;
-      return recovered;
-    }
+    throw cursorStoreCorruption(
+      `No valid cursor store generation in ${storeRoot}`,
+    );
   }
 
   const legacySize = Number(legacyFingerprint?.size || 0);
@@ -136,7 +122,10 @@ async function readCursorStateSummary({ trackerDir, cursorsPath } = {}) {
       );
     }
     const opened = await readGeneration({ storeRoot, generationId: manifest.current }) ||
-      await readGeneration({ storeRoot, generationId: manifest.previous });
+      await readGeneration({
+        storeRoot,
+        generationId: manifest.rollback || manifest.previous,
+      });
     if (opened) {
       return {
         cursors: opened.core,
@@ -145,6 +134,7 @@ async function readCursorStateSummary({ trackerDir, cursorsPath } = {}) {
         fileCount: Number(opened.metadata?.counts?.totalFiles || 0),
         codexFileCount: Number(opened.metadata?.counts?.codexFiles || 0),
         codexEventCount: Number(opened.metadata?.counts?.codexEvents || 0),
+        opencodeMessageCount: Number(opened.metadata?.counts?.opencodeMessages || 0),
       };
     }
   }
@@ -188,6 +178,12 @@ class LegacyCursorStore {
 
   async materializeAllCodexState() {}
 
+  async loadOpencodeMessagesForBatch() {
+    return null;
+  }
+
+  async materializeAllOpencodeState() {}
+
   async canSkipCodexDay() {
     return false;
   }
@@ -211,7 +207,7 @@ class V2CursorStore {
     storeRoot,
     manifest,
     generation,
-    fallbackGenerationId,
+    fallbackGenerationIds,
     codexRoots,
     failureInjector,
   }) {
@@ -221,7 +217,9 @@ class V2CursorStore {
     this.manifest = manifest;
     this.generation = generation.metadata;
     this.generationDir = generation.directory;
-    this.fallbackGenerationId = fallbackGenerationId;
+    this.fallbackGenerationIds = Array.isArray(fallbackGenerationIds)
+      ? [...fallbackGenerationIds]
+      : [];
     this.codexRoots = codexRoots;
     this.cursors = generation.core;
     this.failureInjector = failureInjector;
@@ -233,9 +231,18 @@ class V2CursorStore {
     this.loadedEventSets = new Map();
     this.pendingEventKeys = new Map();
     this.skipValidationCache = new Map();
+    this.loadedOpencodeMessageShards = new Map();
+    this.loadedOpencodeFingerprintShards = new Map();
+    this.opencodeFingerprintIndexes = new Map();
+    this.materializedOpencodeNamespaces = new Set();
     this.fileShardLoadCount = 0;
+    this.opencodeMessageShardLoadCount = 0;
+    this.opencodeFingerprintShardLoadCount = 0;
     this.materializedCodexHashes = false;
     this.requiresCommit = generation.metadata.id !== manifest.current;
+
+    this.normalizeGenerationMetadata();
+    this.stageInlineOpencodeMessages();
 
     if (!this.cursors.files || typeof this.cursors.files !== "object") {
       this.cursors.files = {};
@@ -263,6 +270,30 @@ class V2CursorStore {
 
   get currentCorePath() {
     return path.join(this.generationDir, this.generation?.coreFile || "core.json");
+  }
+
+  normalizeGenerationMetadata() {
+    if (!this.generation.opencodeMessages) this.generation.opencodeMessages = {};
+    if (!this.generation.opencodeFingerprints) this.generation.opencodeFingerprints = {};
+  }
+
+  stageInlineOpencodeMessages() {
+    const states = opencodeNamespaceStates(this.cursors.opencode);
+    const messageCount = Array.from(states.values()).reduce(
+      (sum, state) => sum + Object.keys(state.messages || {}).length,
+      0,
+    );
+    if (messageCount === 0) return;
+    if (
+      Object.keys(this.generation.opencodeMessages).length > 0 ||
+      Object.keys(this.generation.opencodeFingerprints).length > 0
+    ) {
+      throw cursorStoreCorruption("OpenCode messages exist in both core and shards");
+    }
+    for (const namespace of states.keys()) {
+      this.materializedOpencodeNamespaces.add(namespace);
+    }
+    this.requiresCommit = true;
   }
 
   async loadCodexFilesForPaths(paths, cursors = this.cursors) {
@@ -363,6 +394,210 @@ class V2CursorStore {
         }
         cursors.codexHashes = hashes;
         this.materializedCodexHashes = true;
+        return { restarted: attempt > 0 };
+      } catch (error) {
+        if (!isCursorStoreRetry(error) || attempt > 0) throw error;
+      }
+    }
+    return { restarted: false };
+  }
+
+  async loadOpencodeMessagesForBatch({
+    namespace = "flat",
+    messageKeys = [],
+    fingerprints = [],
+  } = {}) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const loaded = await this.loadOpencodeMessagesForBatchUnchecked({
+          namespace,
+          messageKeys,
+          fingerprints,
+        });
+        if (loaded) loaded.restarted = attempt > 0;
+        return loaded;
+      } catch (error) {
+        if (
+          !isCursorStoreRetry(error) ||
+          normalizeOpencodeNamespace(namespace) !== "flat" ||
+          attempt > 0
+        ) {
+          throw error;
+        }
+      }
+    }
+    return null;
+  }
+
+  async loadOpencodeMessagesForBatchUnchecked({
+    namespace,
+    messageKeys,
+    fingerprints,
+  }) {
+    const normalizedNamespace = normalizeOpencodeNamespace(namespace);
+    const activeRoot = this.cursors.opencode;
+    const activeRootIsFlat = Boolean(
+      activeRoot &&
+      typeof activeRoot === "object" &&
+      activeRoot.native === undefined &&
+      activeRoot.wsl === undefined,
+    );
+    const state = normalizedNamespace !== "flat" && activeRootIsFlat
+      ? activeRoot
+      : opencodeStateForNamespace(this.cursors, normalizedNamespace, true);
+    if (!state || this.materializedOpencodeNamespaces.has(normalizedNamespace)) return null;
+    const messages = state.messages && typeof state.messages === "object"
+      ? state.messages
+      : (state.messages = {});
+    const managed = hasOpencodeNamespaceShards({
+      namespace: normalizedNamespace,
+      metadata: this.generation,
+      loadedMessages: this.loadedOpencodeMessageShards,
+      loadedFingerprints: this.loadedOpencodeFingerprintShards,
+    });
+    if (!managed && Object.keys(messages).length > 0) return null;
+    if (!managed && this.generation.coreFile !== SHARDED_CORE_FILENAME) return null;
+
+    const wantedMessageKeys = Array.from(new Set(
+      Array.from(messageKeys || []).filter((key) => typeof key === "string" && key.length > 0),
+    ));
+    for (const shardKey of new Set(wantedMessageKeys.map((key) => (
+      opencodeMessageShardKey(key, normalizedNamespace)
+    )))) {
+      const alreadyLoaded = this.loadedOpencodeMessageShards.has(shardKey);
+      const data = await this.loadOpencodeMessageShard(shardKey);
+      if (!alreadyLoaded) Object.assign(messages, data);
+    }
+
+    const wantedFingerprints = new Set(
+      Array.from(fingerprints || []).filter((value) => (
+        typeof value === "string" && value.length > 0
+      )),
+    );
+    for (const messageKey of wantedMessageKeys) {
+      const previousFingerprint = messages[messageKey]?.fingerprint;
+      if (typeof previousFingerprint === "string" && previousFingerprint.length > 0) {
+        wantedFingerprints.add(previousFingerprint);
+      }
+    }
+    for (const shardKey of new Set(Array.from(wantedFingerprints, (fingerprint) => (
+      opencodeFingerprintShardKey(fingerprint, normalizedNamespace)
+    )))) {
+      await this.loadOpencodeFingerprintShard(shardKey, normalizedNamespace);
+    }
+
+    if (!this.opencodeFingerprintIndexes.has(normalizedNamespace)) {
+      this.opencodeFingerprintIndexes.set(normalizedNamespace, new Map());
+    }
+    return {
+      fingerprintIndex: this.opencodeFingerprintIndexes.get(normalizedNamespace),
+      restarted: false,
+    };
+  }
+
+  async loadOpencodeMessageShard(shardKey) {
+    try {
+      return await this.loadOpencodeMessageShardUnchecked(shardKey);
+    } catch (error) {
+      if (
+        error?.code !== "TOKENTRACKER_CURSOR_STORE_CORRUPT" ||
+        !this.activateFallbackGeneration(this.cursors)
+      ) {
+        throw error;
+      }
+      throw cursorStoreRetry(error);
+    }
+  }
+
+  async loadOpencodeMessageShardUnchecked(shardKey) {
+    if (this.loadedOpencodeMessageShards.has(shardKey)) {
+      return this.loadedOpencodeMessageShards.get(shardKey).data;
+    }
+    const metadata = this.generation.opencodeMessages[shardKey] || null;
+    const data = await readJsonObjectShard({
+      generationDir: this.generationDir,
+      metadata,
+      label: `OpenCode message shard ${metadata?.file || shardKey}`,
+    });
+    this.loadedOpencodeMessageShards.set(shardKey, { data });
+    this.opencodeMessageShardLoadCount += 1;
+    return data;
+  }
+
+  async loadOpencodeFingerprintShard(shardKey, namespace) {
+    try {
+      return await this.loadOpencodeFingerprintShardUnchecked(shardKey, namespace);
+    } catch (error) {
+      if (
+        error?.code !== "TOKENTRACKER_CURSOR_STORE_CORRUPT" ||
+        !this.activateFallbackGeneration(this.cursors)
+      ) {
+        throw error;
+      }
+      throw cursorStoreRetry(error);
+    }
+  }
+
+  async loadOpencodeFingerprintShardUnchecked(shardKey, namespace) {
+    const alreadyLoaded = this.loadedOpencodeFingerprintShards.has(shardKey);
+    if (!alreadyLoaded) {
+      const metadata = this.generation.opencodeFingerprints[shardKey] || null;
+      const data = await readJsonObjectShard({
+        generationDir: this.generationDir,
+        metadata,
+        label: `OpenCode fingerprint shard ${metadata?.file || shardKey}`,
+        validate: (value) => Array.isArray(value) && value.every((item) => (
+          typeof item === "string" && item.length > 0
+        )),
+      });
+      this.loadedOpencodeFingerprintShards.set(shardKey, { data });
+      this.opencodeFingerprintShardLoadCount += 1;
+    }
+    if (!this.opencodeFingerprintIndexes.has(namespace)) {
+      this.opencodeFingerprintIndexes.set(namespace, new Map());
+    }
+    const index = this.opencodeFingerprintIndexes.get(namespace);
+    if (!alreadyLoaded) {
+      for (const [fingerprint, owners] of Object.entries(
+        this.loadedOpencodeFingerprintShards.get(shardKey).data,
+      )) {
+        index.set(fingerprint, new Set(owners));
+      }
+    }
+    return index;
+  }
+
+  async materializeAllOpencodeState() {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const namespaces = opencodeNamespacesForStore({
+          state: this.cursors.opencode,
+          metadata: this.generation,
+          loadedMessages: this.loadedOpencodeMessageShards,
+          loadedFingerprints: this.loadedOpencodeFingerprintShards,
+        });
+        for (const namespace of namespaces) {
+          const state = opencodeStateForNamespace(this.cursors, namespace, true);
+          if (!state.messages || typeof state.messages !== "object") state.messages = {};
+          for (const shardKey of opencodeShardKeysForNamespace(
+            namespace,
+            this.generation.opencodeMessages,
+            this.loadedOpencodeMessageShards,
+          )) {
+            Object.assign(
+              state.messages,
+              await this.loadOpencodeMessageShard(shardKey),
+            );
+          }
+          for (const shardKey of opencodeShardKeysForNamespace(
+            namespace,
+            this.generation.opencodeFingerprints,
+            this.loadedOpencodeFingerprintShards,
+          )) {
+            await this.loadOpencodeFingerprintShard(shardKey, namespace);
+          }
+          this.materializedOpencodeNamespaces.add(namespace);
+        }
         return { restarted: attempt > 0 };
       } catch (error) {
         if (!isCursorStoreRetry(error) || attempt > 0) throw error;
@@ -490,14 +725,13 @@ class V2CursorStore {
   }
 
   activateFallbackGeneration(cursors = this.cursors) {
-    const generationId = this.fallbackGenerationId;
-    this.fallbackGenerationId = null;
-    if (!generationId) return false;
-
-    const fallback = readGenerationSync({
-      storeRoot: this.storeRoot,
-      generationId,
-    });
+    let fallback = null;
+    while (!fallback && this.fallbackGenerationIds.length > 0) {
+      fallback = readGenerationSync({
+        storeRoot: this.storeRoot,
+        generationId: this.fallbackGenerationIds.shift(),
+      });
+    }
     if (!fallback) return false;
 
     const fallbackCore = cloneJson(fallback.core);
@@ -511,9 +745,111 @@ class V2CursorStore {
     this.loadedEventSets.clear();
     this.pendingEventKeys.clear();
     this.skipValidationCache.clear();
+    this.loadedOpencodeMessageShards.clear();
+    this.loadedOpencodeFingerprintShards.clear();
+    this.opencodeFingerprintIndexes.clear();
+    this.materializedOpencodeNamespaces.clear();
     this.materializedCodexHashes = false;
     this.requiresCommit = true;
+    this.normalizeGenerationMetadata();
+    this.stageInlineOpencodeMessages();
     return true;
+  }
+
+  async commitOpencodeShards({ cursors, generationDir, metadata }) {
+    const states = opencodeNamespaceStates(cursors.opencode);
+    const currentNamespaces = new Set(states.keys());
+
+    for (const shardMap of [metadata.opencodeMessages, metadata.opencodeFingerprints]) {
+      for (const [shardKey, entry] of Object.entries(shardMap)) {
+        if (currentNamespaces.has(opencodeShardNamespace(shardKey))) continue;
+        if (entry?.file) await fs.unlink(path.join(generationDir, entry.file)).catch(() => {});
+        delete shardMap[shardKey];
+      }
+    }
+
+    for (const [namespace, state] of states) {
+      const messages = state.messages && typeof state.messages === "object"
+        ? state.messages
+        : {};
+      const managed = hasOpencodeNamespaceShards({
+        namespace,
+        metadata: this.generation,
+        loadedMessages: this.loadedOpencodeMessageShards,
+        loadedFingerprints: this.loadedOpencodeFingerprintShards,
+      });
+      const materialized = this.materializedOpencodeNamespaces.has(namespace) ||
+        (!managed && Object.keys(messages).length > 0);
+
+      if (materialized) {
+        await removeOpencodeNamespaceShards({ generationDir, metadata, namespace });
+        const partitioned = partitionOpencodeMessages(messages, namespace);
+        for (const [shardKey, data] of partitioned.messageShards) {
+          await writeOpencodeShard({
+            generationDir,
+            metadataMap: metadata.opencodeMessages,
+            directory: OPENCODE_MESSAGES_DIRNAME,
+            shardKey,
+            data,
+          });
+        }
+        for (const [shardKey, data] of partitioned.fingerprintShards) {
+          await writeOpencodeShard({
+            generationDir,
+            metadataMap: metadata.opencodeFingerprints,
+            directory: OPENCODE_FINGERPRINTS_DIRNAME,
+            shardKey,
+            data,
+          });
+        }
+        continue;
+      }
+
+      const dirtyMessageShards = new Set([
+        ...opencodeShardKeysForNamespace(
+          namespace,
+          {},
+          this.loadedOpencodeMessageShards,
+        ),
+        ...Object.keys(messages).map((key) => opencodeMessageShardKey(key, namespace)),
+      ]);
+      for (const shardKey of dirtyMessageShards) {
+        const data = {};
+        for (const [messageKey, entry] of Object.entries(messages)) {
+          if (opencodeMessageShardKey(messageKey, namespace) === shardKey) {
+            data[messageKey] = entry;
+          }
+        }
+        await writeOpencodeShard({
+          generationDir,
+          metadataMap: metadata.opencodeMessages,
+          directory: OPENCODE_MESSAGES_DIRNAME,
+          shardKey,
+          data,
+        });
+      }
+
+      const fingerprintIndex = this.opencodeFingerprintIndexes.get(namespace) || new Map();
+      for (const shardKey of opencodeShardKeysForNamespace(
+        namespace,
+        {},
+        this.loadedOpencodeFingerprintShards,
+      )) {
+        const data = {};
+        for (const [fingerprint, owners] of fingerprintIndex) {
+          if (opencodeFingerprintShardKey(fingerprint, namespace) === shardKey) {
+            data[fingerprint] = Array.from(owners);
+          }
+        }
+        await writeOpencodeShard({
+          generationDir,
+          metadataMap: metadata.opencodeFingerprints,
+          directory: OPENCODE_FINGERPRINTS_DIRNAME,
+          shardKey,
+          data,
+        });
+      }
+    }
   }
 
   async commit(cursors = this.cursors) {
@@ -523,15 +859,19 @@ class V2CursorStore {
     try {
       await ensureDir(path.join(generationDir, "codex-files"));
       await ensureDir(path.join(generationDir, "codex-events"));
+      await ensureDir(path.join(generationDir, OPENCODE_MESSAGES_DIRNAME));
+      await ensureDir(path.join(generationDir, OPENCODE_FINGERPRINTS_DIRNAME));
 
       const nextMetadata = {
         version: STORE_VERSION,
         id: generationId,
         createdAt: new Date().toISOString(),
-        coreFile: "core.json",
+        coreFile: SHARDED_CORE_FILENAME,
         codexFiles: cloneJson(this.generation?.codexFiles || {}),
         codexEvents: cloneJson(this.generation?.codexEvents || {}),
-        counts: { nonCodexFiles: 0, codexFiles: 0, totalFiles: 0, codexEvents: 0 },
+        opencodeMessages: cloneJson(this.generation?.opencodeMessages || {}),
+        opencodeFingerprints: cloneJson(this.generation?.opencodeFingerprints || {}),
+        counts: {},
       };
 
       await cloneGenerationFiles({
@@ -604,9 +944,16 @@ class V2CursorStore {
         }
       }
 
+      await this.commitOpencodeShards({
+        cursors,
+        generationDir,
+        metadata: nextMetadata,
+      });
+
       const core = {
         ...cursors,
         files: coreFiles,
+        opencode: cloneOpencodeCoreState(cursors.opencode),
       };
       delete core.codexHashes;
       await fs.writeFile(
@@ -624,10 +971,16 @@ class V2CursorStore {
 
       await maybeInjectFailure(this.failureInjector, "beforeManifestSwap");
 
+      const compatibleGeneration = this.generation?.coreFile === "core.json"
+        ? this.generation.id
+        : this.manifest?.previous || null;
       const nextManifest = {
         version: STORE_VERSION,
         current: generationId,
-        previous: this.generation?.id || null,
+        rollback: this.generation?.id || null,
+        // Older v2 readers reject core-v3.json and fall back to this frozen,
+        // fully-inline checkpoint instead of opening an empty message index.
+        previous: compatibleGeneration,
         legacyFingerprint: this.manifest?.legacyFingerprint || null,
         updatedAt: new Date().toISOString(),
       };
@@ -642,10 +995,16 @@ class V2CursorStore {
       this.loadedEventSets.clear();
       this.pendingEventKeys.clear();
       this.skipValidationCache.clear();
+      this.loadedOpencodeMessageShards.clear();
+      this.loadedOpencodeFingerprintShards.clear();
+      this.opencodeFingerprintIndexes.clear();
+      this.materializedOpencodeNamespaces.clear();
       this.materializedCodexHashes = false;
+      this.fallbackGenerationIds = [nextManifest.rollback].filter(Boolean);
       this.requiresCommit = false;
       await cleanupGenerations(this.storeRoot, new Set([
         nextManifest.current,
+        nextManifest.rollback,
         nextManifest.previous,
       ].filter(Boolean)));
     } catch (error) {
@@ -779,9 +1138,10 @@ async function openManifestGeneration({
 }) {
   const generationIds = Array.from(new Set([
     manifest.current,
-    manifest.previous,
+    manifest.rollback || manifest.previous,
   ].filter(Boolean)));
-  for (const generationId of generationIds) {
+  for (let index = 0; index < generationIds.length; index += 1) {
+    const generationId = generationIds[index];
     const generation = await readGeneration({ storeRoot, generationId });
     if (!generation) continue;
     return new V2CursorStore({
@@ -789,10 +1149,7 @@ async function openManifestGeneration({
       storeRoot,
       manifest,
       generation,
-      fallbackGenerationId:
-        generationId === manifest.current && manifest.previous !== generationId
-          ? manifest.previous
-          : null,
+      fallbackGenerationIds: generationIds.slice(index + 1),
       codexRoots,
       failureInjector,
     });
@@ -848,13 +1205,14 @@ function isCursorStateRoot(value) {
 }
 
 function isGenerationMetadata(metadata, generationId) {
+  const shardedOpencode = metadata?.coreFile === SHARDED_CORE_FILENAME;
   if (
     !metadata ||
     typeof metadata !== "object" ||
     Array.isArray(metadata) ||
     metadata.version !== STORE_VERSION ||
     metadata.id !== generationId ||
-    metadata.coreFile !== "core.json" ||
+    (metadata.coreFile !== "core.json" && !shardedOpencode) ||
     !metadata.codexFiles ||
     typeof metadata.codexFiles !== "object" ||
     Array.isArray(metadata.codexFiles) ||
@@ -867,10 +1225,25 @@ function isGenerationMetadata(metadata, generationId) {
   ) {
     return false;
   }
+  if (
+    shardedOpencode &&
+    (!metadata.opencodeMessages ||
+      typeof metadata.opencodeMessages !== "object" ||
+      Array.isArray(metadata.opencodeMessages) ||
+      !metadata.opencodeFingerprints ||
+      typeof metadata.opencodeFingerprints !== "object" ||
+      Array.isArray(metadata.opencodeFingerprints))
+  ) {
+    return false;
+  }
 
   return (
     validShardMetadataMap(metadata.codexFiles, "codex-files") &&
-    validShardMetadataMap(metadata.codexEvents, "codex-events")
+    validShardMetadataMap(metadata.codexEvents, "codex-events") &&
+    (!shardedOpencode || (
+      validShardMetadataMap(metadata.opencodeMessages, OPENCODE_MESSAGES_DIRNAME) &&
+      validShardMetadataMap(metadata.opencodeFingerprints, OPENCODE_FINGERPRINTS_DIRNAME)
+    ))
   );
 }
 
@@ -898,10 +1271,7 @@ function validShardMetadataMap(shards, expectedDirectory) {
 }
 
 async function generationReferencesExist(directory, metadata) {
-  for (const [expectedDirectory, shards] of [
-    ["codex-files", metadata.codexFiles],
-    ["codex-events", metadata.codexEvents],
-  ]) {
+  for (const [expectedDirectory, shards] of generationShardMaps(metadata)) {
     const expectedNames = Object.values(shards)
       .map((entry) => normalizeShardReference(entry.file, expectedDirectory).name);
     if (expectedNames.length === 0) continue;
@@ -921,10 +1291,7 @@ async function generationReferencesExist(directory, metadata) {
 }
 
 function generationReferencesExistSync(directory, metadata) {
-  for (const [expectedDirectory, shards] of [
-    ["codex-files", metadata.codexFiles],
-    ["codex-events", metadata.codexEvents],
-  ]) {
+  for (const [expectedDirectory, shards] of generationShardMaps(metadata)) {
     const expectedNames = Object.values(shards)
       .map((entry) => normalizeShardReference(entry.file, expectedDirectory).name);
     if (expectedNames.length === 0) continue;
@@ -959,17 +1326,31 @@ function normalizeShardReference(relativeFile, expectedDirectory) {
   return { directory: expectedDirectory, name: parts[1] };
 }
 
+function generationShardMaps(metadata) {
+  return [
+    ["codex-files", metadata.codexFiles || {}],
+    ["codex-events", metadata.codexEvents || {}],
+    [OPENCODE_MESSAGES_DIRNAME, metadata.opencodeMessages || {}],
+    [OPENCODE_FINGERPRINTS_DIRNAME, metadata.opencodeFingerprints || {}],
+  ];
+}
+
 function sameGenerationCounts(left, right) {
-  return ["nonCodexFiles", "codexFiles", "totalFiles", "codexEvents"]
-    .every((key) => Number(left?.[key]) === Number(right?.[key]));
+  return [
+    "nonCodexFiles",
+    "codexFiles",
+    "totalFiles",
+    "codexEvents",
+    "opencodeMessages",
+    "opencodeFingerprints",
+  ].every((key) => Number(left?.[key] || 0) === Number(right?.[key] || 0));
 }
 
 async function cloneGenerationFiles({ fromDirectory, toDirectory, metadata }) {
-  for (const entry of Object.values(metadata.codexFiles || {})) {
-    if (entry?.file) await cloneOrCopy(fromDirectory, toDirectory, entry.file);
-  }
-  for (const entry of Object.values(metadata.codexEvents || {})) {
-    if (entry?.file) await cloneOrCopy(fromDirectory, toDirectory, entry.file);
+  for (const [, shards] of generationShardMaps(metadata)) {
+    for (const entry of Object.values(shards)) {
+      if (entry?.file) await cloneOrCopy(fromDirectory, toDirectory, entry.file);
+    }
   }
 }
 
@@ -1099,6 +1480,196 @@ function assertShardIntegrity(raw, metadata, label) {
   }
 }
 
+async function readJsonObjectShard({
+  generationDir,
+  metadata,
+  label,
+  validate = (value) => value && typeof value === "object" && !Array.isArray(value),
+}) {
+  if (!metadata?.file) return {};
+  let raw;
+  try {
+    raw = await fs.readFile(path.join(generationDir, metadata.file), "utf8");
+  } catch (error) {
+    throw cursorStoreCorruption(`Unable to read ${label}`, error);
+  }
+  assertShardIntegrity(raw, metadata, label);
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (error) {
+    throw cursorStoreCorruption(`Invalid ${label}`, error);
+  }
+  if (
+    !data ||
+    typeof data !== "object" ||
+    Array.isArray(data) ||
+    Object.keys(data).length !== metadata.count ||
+    Object.values(data).some((value) => !validate(value))
+  ) {
+    throw cursorStoreCorruption(`Invalid ${label}`);
+  }
+  return data;
+}
+
+async function writeOpencodeShard({
+  generationDir,
+  metadataMap,
+  directory,
+  shardKey,
+  data,
+}) {
+  const previousFile = metadataMap[shardKey]?.file;
+  if (previousFile) await fs.unlink(path.join(generationDir, previousFile)).catch(() => {});
+  if (Object.keys(data).length === 0) {
+    delete metadataMap[shardKey];
+    return;
+  }
+  const relativeFile = path.join(directory, `${shardKey}.json`);
+  const serialized = `${JSON.stringify(data)}\n`;
+  await fs.writeFile(path.join(generationDir, relativeFile), serialized, "utf8");
+  metadataMap[shardKey] = {
+    file: relativeFile,
+    count: Object.keys(data).length,
+    ...buildShardIntegrity(serialized),
+  };
+}
+
+async function removeOpencodeNamespaceShards({ generationDir, metadata, namespace }) {
+  for (const shardMap of [metadata.opencodeMessages, metadata.opencodeFingerprints]) {
+    for (const [shardKey, entry] of Object.entries(shardMap)) {
+      if (opencodeShardNamespace(shardKey) !== namespace) continue;
+      if (entry?.file) await fs.unlink(path.join(generationDir, entry.file)).catch(() => {});
+      delete shardMap[shardKey];
+    }
+  }
+}
+
+function normalizeOpencodeNamespace(value) {
+  return value === "native" || value === "wsl" ? value : "flat";
+}
+
+function opencodeNamespaceStates(state) {
+  const out = new Map();
+  if (!state || typeof state !== "object" || Array.isArray(state)) return out;
+  if (state.native !== undefined || state.wsl !== undefined) {
+    for (const namespace of ["native", "wsl"]) {
+      const child = state[namespace];
+      if (child && typeof child === "object" && !Array.isArray(child)) {
+        out.set(namespace, child);
+      }
+    }
+  } else {
+    out.set("flat", state);
+  }
+  return out;
+}
+
+function opencodeStateForNamespace(cursors, namespace, create = false) {
+  if (!cursors.opencode || typeof cursors.opencode !== "object" || Array.isArray(cursors.opencode)) {
+    if (!create) return null;
+    cursors.opencode = namespace === "flat" ? {} : { native: {}, wsl: {} };
+  }
+  const root = cursors.opencode;
+  const namespaced = root.native !== undefined || root.wsl !== undefined;
+  if (namespace === "flat") return namespaced ? null : root;
+  if (!namespaced) return null;
+  if (!root[namespace] || typeof root[namespace] !== "object" || Array.isArray(root[namespace])) {
+    if (!create) return null;
+    root[namespace] = {};
+  }
+  return root[namespace];
+}
+
+function opencodeShardHash(value) {
+  return crypto.createHash("sha256").update(value).digest("hex").slice(0, 2);
+}
+
+function opencodeMessageShardKey(messageKey, namespace = "flat") {
+  return `${normalizeOpencodeNamespace(namespace)}-${opencodeShardHash(messageKey)}`;
+}
+
+function opencodeFingerprintShardKey(fingerprint, namespace = "flat") {
+  return `${normalizeOpencodeNamespace(namespace)}-${opencodeShardHash(fingerprint)}`;
+}
+
+function opencodeShardNamespace(shardKey) {
+  const namespace = typeof shardKey === "string" ? shardKey.split("-", 1)[0] : "";
+  return namespace === "native" || namespace === "wsl" ? namespace : "flat";
+}
+
+function opencodeShardKeysForNamespace(namespace, metadataMap, loadedMap) {
+  return Array.from(new Set([
+    ...Object.keys(metadataMap || {}),
+    ...Array.from(loadedMap?.keys?.() || []),
+  ].filter((shardKey) => opencodeShardNamespace(shardKey) === namespace)));
+}
+
+function hasOpencodeNamespaceShards({
+  namespace,
+  metadata,
+  loadedMessages,
+  loadedFingerprints,
+}) {
+  return (
+    opencodeShardKeysForNamespace(namespace, metadata.opencodeMessages, loadedMessages).length > 0 ||
+    opencodeShardKeysForNamespace(namespace, metadata.opencodeFingerprints, loadedFingerprints).length > 0
+  );
+}
+
+function opencodeNamespacesForStore({
+  state,
+  metadata,
+  loadedMessages,
+  loadedFingerprints,
+}) {
+  const namespaces = new Set(opencodeNamespaceStates(state).keys());
+  for (const shardKey of [
+    ...Object.keys(metadata.opencodeMessages || {}),
+    ...Object.keys(metadata.opencodeFingerprints || {}),
+    ...Array.from(loadedMessages.keys()),
+    ...Array.from(loadedFingerprints.keys()),
+  ]) {
+    namespaces.add(opencodeShardNamespace(shardKey));
+  }
+  return namespaces;
+}
+
+function partitionOpencodeMessages(messages, namespace) {
+  const messageShards = new Map();
+  const fingerprintShards = new Map();
+  for (const messageKey in messages || {}) {
+    const entry = messages[messageKey];
+    const messageShard = opencodeMessageShardKey(messageKey, namespace);
+    if (!messageShards.has(messageShard)) messageShards.set(messageShard, {});
+    messageShards.get(messageShard)[messageKey] = entry;
+    const fingerprint = typeof entry?.fingerprint === "string" ? entry.fingerprint : null;
+    if (!fingerprint || entry?.dedupedForkCopy === true) continue;
+    const fingerprintShard = opencodeFingerprintShardKey(fingerprint, namespace);
+    if (!fingerprintShards.has(fingerprintShard)) fingerprintShards.set(fingerprintShard, {});
+    const shard = fingerprintShards.get(fingerprintShard);
+    if (!shard[fingerprint]) shard[fingerprint] = [];
+    shard[fingerprint].push(messageKey);
+  }
+  return { messageShards, fingerprintShards };
+}
+
+function cloneOpencodeCoreState(state) {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return state;
+  if (state.native !== undefined || state.wsl !== undefined) {
+    const clone = { ...state };
+    for (const namespace of ["native", "wsl"]) {
+      if (!state[namespace] || typeof state[namespace] !== "object") continue;
+      clone[namespace] = { ...state[namespace] };
+      delete clone[namespace].messages;
+    }
+    return clone;
+  }
+  const clone = { ...state };
+  delete clone.messages;
+  return clone;
+}
+
 async function validateProjectSummary(summary, nowMs) {
   if (!summary || typeof summary !== "object") return false;
   const absentFreshUntil = Number(summary.absentFreshUntil);
@@ -1176,11 +1747,17 @@ function calculateGenerationCounts(metadata, coreFiles) {
     .reduce((sum, entry) => sum + Number(entry?.count || 0), 0);
   const codexEvents = Object.values(metadata.codexEvents || {})
     .reduce((sum, entry) => sum + Number(entry?.count || 0), 0);
+  const opencodeMessages = Object.values(metadata.opencodeMessages || {})
+    .reduce((sum, entry) => sum + Number(entry?.count || 0), 0);
+  const opencodeFingerprints = Object.values(metadata.opencodeFingerprints || {})
+    .reduce((sum, entry) => sum + Number(entry?.count || 0), 0);
   return {
     nonCodexFiles,
     codexFiles,
     totalFiles: nonCodexFiles + codexFiles,
     codexEvents,
+    opencodeMessages,
+    opencodeFingerprints,
   };
 }
 
@@ -1332,6 +1909,8 @@ module.exports = {
   STORE_VERSION,
   codexEventShardKey,
   codexFileShardKey,
+  opencodeFingerprintShardKey,
+  opencodeMessageShardKey,
   isCodexSessionCursorPath,
   isCursorStoreRetry,
   openCursorStore,

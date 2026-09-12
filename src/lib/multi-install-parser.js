@@ -47,7 +47,9 @@ async function multiInstallParse({ paths, parserFn, providerName, cursors, getPa
       eventsAggregated += result.eventsAggregated || 0;
       bucketsQueued += result.bucketsQueued || 0;
     } catch (parseErr) {
-      cursors[providerName] = ns;
+      if (parseErr?.code !== "TOKENTRACKER_CURSOR_STORE_RETRY") {
+        cursors[providerName] = ns;
+      }
       throw parseErr;
     }
   }

@@ -107,6 +107,29 @@ test("multiInstallParse partial parse failure propagates error", async () => {
   assert.deepEqual(cursors.hermes.native, { done: true }, "first install's cursor state should be preserved");
 });
 
+test("cursor-store retry preserves the activated fallback namespaces", async () => {
+  const cursors = { opencode: { native: { old: true }, wsl: { old: true } } };
+  await assert.rejects(
+    () => multiInstallParse({
+      paths: { native: "/a", wsl: "/b" },
+      parserFn: async ({ cursors: current }) => {
+        current.opencode = { native: { fallback: true }, wsl: { fallback: true } };
+        const error = new Error("retry");
+        error.code = "TOKENTRACKER_CURSOR_STORE_RETRY";
+        throw error;
+      },
+      providerName: "opencode",
+      cursors,
+      getParams: () => ({}),
+    }),
+    (error) => error?.code === "TOKENTRACKER_CURSOR_STORE_RETRY",
+  );
+  assert.deepEqual(cursors.opencode, {
+    native: { fallback: true },
+    wsl: { fallback: true },
+  });
+});
+
 test("multiInstallParse empty install produces correct partial result", async () => {
   const cursors = { hourly: { buckets: {} } };
 
