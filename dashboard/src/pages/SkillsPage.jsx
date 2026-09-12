@@ -1255,8 +1255,16 @@ export function SkillsPage() {
     runMutation(installBusyKey(skill), async () => {
       const result = await updateSkills([skill.id]);
       await loadUpdates();
-      const row = (result?.results || [])[0];
-      if (row && !row.ok) throw new Error(row.error || copy("skills.error.generic"));
+      const { results = [], rateLimited = null, updated = 0 } = result || {};
+      // A rate limit comes back as a field rather than a throw, so it has to be
+      // branched on first — same order as Update all. Without it a 403 read as
+      // "Updated {{name}}" while the badge stayed up.
+      if (rateLimited) {
+        showToast({ title: copy("skills.update.rate_limited", { count: updated }), timeout: 6000 });
+        return;
+      }
+      const row = results[0];
+      if (!row || !row.ok) throw new Error(row?.error || copy("skills.error.generic"));
       showToast({
         title: copy("skills.toast.updated", { name: skill.name || skill.directory }),
         timeout: 4000,

@@ -446,7 +446,8 @@ describe("updateSkills", () => {
 
       assert.equal(res.updated, 1, "work done before the limit is kept");
       assert.match(res.rateLimited || "", /rate-limited/i, "rate limit is surfaced, not swallowed");
-      assert.equal(res.failed, 0, "a rate limit is not a per-skill failure");
+      assert.equal(res.results.length, 2, "the skill the limit landed on is still reported");
+      assert.equal(res.failed, 1, "an id we never got to is a failure to update, not a silent drop");
     } finally {
       global.fetch = realFetch;
       resetRegistry();
@@ -748,4 +749,197 @@ describe("checkUpdates when a repo cannot be reached", () => {
       resetRegistry();
     }
   });
+});
+
+// Grok recheck of e13fd37c: the earlier race test dropped a *sibling* while a
+// different skill downloaded. The skill under its own await was still written
+// back by installSkill()'s re-read + push.
+describe("updateSkills race under the skill's own download", () => {
+  const TREE = [{ type: "blob", path: "a/SKILL.md", sha: "v1" }];
+  const skillsDir = () => path.join(sandboxHome, ".tokentracker", "skills");
+  const registryFile = () => path.join(skillsDir(), "registry.json");
+
+  const managed = (id, directory, sourceDirectory) => {
+    const [repo] = id.split(":");
+    const [repoOwner, repoName] = repo.split("/");
+    return {
+      id,
+      key: id,
+      name: directory,
+      directory,
+      sourceDirectory,
+      repoOwner,
+      repoName,
+      repoBranch: "main",
+      sourceSignature: "STALE_SIGNATURE",
+      installedAt: 1,
+      targets: [],
+    };
+  };
+
+  function seed(entries) {
+    fs.mkdirSync(skillsDir(), { recursive: true });
+    fs.writeFileSync(registryFile(), JSON.stringify({ repos: [], skills: entries }));
+  }
+  const readIds = () => JSON.parse(fs.readFileSync(registryFile(), "utf8")).skills.map((s) => s.id);
+  function clean() {
+    resetRegistry();
+    fs.rmSync(path.join(skillsDir(), "updates-cache.json"), { force: true });
+    fs.rmSync(path.join(skillsDir(), "ssot"), { recursive: true, force: true });
+  }
+
+  // Fires `onFirstDownload` during the raw GET, i.e. inside installSkill's await,
+  // after updateSkills has already re-checked membership.
+  function stubDroppingMidDownload(onFirstDownload) {
+    let fired = false;
+    global.fetch = async (url) => {
+      if (isGitHubApi(url)) return { ok: true, status: 200, json: async () => ({ tree: TREE }) };
+      if (!fired) {
+        fired = true;
+        onFirstDownload();
+      }
+      return { ok: true, status: 200, text: async () => "---\nname: Foo\ndescription: d\n---\n" };
+    };
+  }
+
+  it("leaves a skill uninstalled when the uninstall lands under its own download", async () => {
+    clean();
+    const realFetch = global.fetch;
+    try {
+      seed([managed("o/r:a", "a", "a")]);
+      stubDroppingMidDownload(() => {
+        fs.writeFileSync(registryFile(), JSON.stringify({ repos: [], skills: [] }));
+      });
+
+      const res = await skills.updateSkills(["o/r:a"]);
+
+      assert.equal(res.updated, 0, "a skill removed mid-download must not count as updated");
+      assert.ok(!readIds().includes("o/r:a"), "and must not be written back into the registry");
+    } finally {
+      global.fetch = realFetch;
+      clean();
+    }
+  });
+
+  it("does not clobber a same-directory replacement that landed mid-download", async () => {
+    clean();
+    const realFetch = global.fetch;
+    try {
+      seed([managed("o/r:a", "a", "a")]);
+      stubDroppingMidDownload(() => {
+        // The user removed o/r:a and installed a different repo's skill into the
+        // same install directory while we were downloading.
+        fs.writeFileSync(
+          registryFile(),
+          JSON.stringify({ repos: [], skills: [managed("other/x:a", "a", "a")] }),
+        );
+      });
+
+      await skills.updateSkills(["o/r:a"]);
+
+      const ids = readIds();
+      assert.ok(ids.includes("other/x:a"), "the replacement must survive");
+      assert.ok(!ids.includes("o/r:a"), "the superseded skill must not be resurrected");
+    } finally {
+      global.fetch = realFetch;
+      clean();
+    }
+  });
+});
+
+describe("updateSkills rate-limit result rows", () => {
+  const TREE = [
+    { type: "blob", path: "a/SKILL.md", sha: "v1" },
+    { type: "blob", path: "c/SKILL.md", sha: "v1" },
+  ];
+  const skillsDir = () => path.join(sandboxHome, ".tokentracker", "skills");
+
+  function seed(entries) {
+    fs.mkdirSync(skillsDir(), { recursive: true });
+    fs.writeFileSync(path.join(skillsDir(), "registry.json"), JSON.stringify({ repos: [], skills: entries }));
+  }
+  const managed = (id, dir) => {
+    const [repo] = id.split(":");
+    const [repoOwner, repoName] = repo.split("/");
+    return {
+      id,
+      key: id,
+      name: dir,
+      directory: dir,
+      sourceDirectory: dir,
+      repoOwner,
+      repoName,
+      repoBranch: "main",
+      sourceSignature: "STALE_SIGNATURE",
+      installedAt: 1,
+      targets: [],
+    };
+  };
+  function clean() {
+    resetRegistry();
+    fs.rmSync(path.join(skillsDir(), "updates-cache.json"), { force: true });
+    fs.rmSync(path.join(skillsDir(), "ssot"), { recursive: true, force: true });
+  }
+  const LIMITED = { ok: false, status: 403, json: async () => ({}), text: async () => "" };
+
+  // Grok's three repros. In each, both requested ids must come back with a row.
+  const CASES = [
+    {
+      name: "the very first tree call is rate-limited",
+      fetch: () => async () => LIMITED,
+      updated: 0,
+    },
+    {
+      name: "the first raw download is rate-limited",
+      fetch: () => async (url) =>
+        isGitHubApi(url) ? { ok: true, status: 200, json: async () => ({ tree: TREE }) } : LIMITED,
+      updated: 0,
+    },
+    {
+      name: "the second repo is rate-limited after the first succeeded",
+      fetch: () => {
+        let trees = 0;
+        return async (url) => {
+          if (isGitHubApi(url)) {
+            trees += 1;
+            return trees === 1
+              ? { ok: true, status: 200, json: async () => ({ tree: TREE }) }
+              : LIMITED;
+          }
+          return { ok: true, status: 200, text: async () => "---\nname: Foo\ndescription: d\n---\n" };
+        };
+      },
+      updated: 1,
+    },
+  ];
+
+  for (const scenario of CASES) {
+    it(`reports every requested id when ${scenario.name}`, async () => {
+      clean();
+      const realFetch = global.fetch;
+      try {
+        seed([managed("o/r:a", "a"), managed("o/r2:c", "c")]);
+        global.fetch = scenario.fetch();
+
+        const ids = ["o/r:a", "o/r2:c"];
+        const res = await skills.updateSkills(ids);
+
+        assert.ok(res.rateLimited, "precondition: the run stopped on a rate limit");
+        assert.equal(res.updated, scenario.updated);
+        assert.deepEqual(
+          res.results.map((row) => row.id).sort(),
+          [...ids].sort(),
+          "no requested id may be dropped from the report",
+        );
+        assert.equal(
+          res.updated + res.skipped + res.failed,
+          res.results.length,
+          "counts must reconcile with the rows",
+        );
+      } finally {
+        global.fetch = realFetch;
+        clean();
+      }
+    });
+  }
 });

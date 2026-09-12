@@ -909,7 +909,12 @@ function listInstalledSkills() {
   });
 }
 
-async function installSkill(skillInput, targetIds = ["claude", "codex"], prefetchedTree = null) {
+async function installSkill(
+  skillInput,
+  targetIds = ["claude", "codex"],
+  prefetchedTree = null,
+  { expectExistingId = null } = {},
+) {
   const skill = {
     key: String(skillInput?.key || ""),
     name: String(skillInput?.name || ""),
@@ -963,6 +968,14 @@ async function installSkill(skillInput, targetIds = ["claude", "codex"], prefetc
       const out = path.join(temp, safeRelative);
       ensureDir(path.dirname(out));
       fs.writeFileSync(out, await fetchText(githubRawUrl(skill.repoOwner, skill.repoName, branch, entry.path)));
+    }
+    // An update must not recreate a skill that was uninstalled while we were
+    // downloading, nor overwrite whatever took its install directory in the
+    // meantime. Checked here because everything from this point to
+    // saveRegistry() is synchronous — no await can interleave a change we would
+    // then clobber.
+    if (expectExistingId && !readRegistry().skills.some((entry) => !entry.trashedAt && entry.id === expectExistingId)) {
+      throw new Error("Skill is no longer installed");
     }
     removePath(dest);
     ensureDir(path.dirname(dest));
@@ -1423,6 +1436,7 @@ async function updateSkills(ids = []) {
           },
           skill.targets || [],
           { branch, tree },
+          { expectExistingId: skill.id },
         );
         results.push({ id: skill.id, name: skill.name, ok: true, skipped: false });
         if (fresh) verdicts[skill.id] = false;
@@ -1436,6 +1450,18 @@ async function updateSkills(ids = []) {
       }
     }
     if (rateLimited) break;
+  }
+
+  // A rate-limited stop breaks out of both loops, leaving the skill it happened
+  // on and everything after it unreported. Backfill so every requested id comes
+  // back with a row and the counts still reconcile with what was asked for.
+  if (rateLimited) {
+    const reported = new Set(results.map((row) => row.id));
+    const nameById = new Map(managed.map((skill) => [skill.id, skill.name]));
+    for (const id of wanted) {
+      if (reported.has(id)) continue;
+      results.push({ id, name: nameById.get(id) || null, ok: false, error: rateLimited.message });
+    }
   }
 
   // Prime the cache from the trees this run already holds, so the refresh that
