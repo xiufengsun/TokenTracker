@@ -6,9 +6,12 @@ const { test } = require("node:test");
 
 const {
   STORE_DIRNAME,
+  opencodeFingerprintShardKey,
+  opencodeMessageShardKey,
   openCursorStore,
   readCursorStateSummary,
 } = require("../src/lib/cursor-store");
+const { multiInstallParse } = require("../src/lib/multi-install-parser");
 const { purgeProjectUsage } = require("../src/lib/project-usage-purge");
 
 async function withCursorFixture(fn) {
@@ -394,14 +397,8 @@ test("a corrupt current generation falls back to the previous generation", async
     await migrated.commit();
 
     const manifestPath = path.join(trackerDir, STORE_DIRNAME, "manifest.json");
-    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
-    const corePath = path.join(
-      trackerDir,
-      STORE_DIRNAME,
-      "generations",
-      manifest.current,
-      "core.json",
-    );
+    const current = await readCurrentGeneration(trackerDir);
+    const corePath = path.join(current.directory, current.metadata.coreFile);
     await fs.writeFile(corePath, "{broken", "utf8");
 
     const recovered = await openCursorStore({ trackerDir, cursorsPath });
@@ -580,6 +577,188 @@ test("state summaries prefer a later legacy write over stale v2 state", async ()
     assert.equal(summary.legacyDrift, true);
     assert.equal(summary.cursors.files[day17File].offset, 77);
     assert.equal(summary.codexEventCount, legacy.codexHashes.length);
+  });
+});
+
+test("OpenCode messages migrate out of core and load by message and fingerprint shard", async () => {
+  await withCursorFixture(async ({ trackerDir, cursorsPath, legacy }) => {
+    const prepared = structuredClone(legacy);
+    const totals = (input) => ({
+      input_tokens: input,
+      output_tokens: 1,
+      cached_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      reasoning_output_tokens: 0,
+      total_tokens: input + 1,
+    });
+    prepared.opencode = {
+      messages: {
+        "session-a|message-a": {
+          lastTotals: totals(10),
+          fingerprint: "fingerprint-a",
+          updatedAt: "2026-08-30T00:00:00.000Z",
+        },
+        "session-a|message-b": {
+          lastTotals: totals(20),
+          fingerprint: "fingerprint-a",
+          updatedAt: "2026-08-30T00:00:00.000Z",
+        },
+        "session-b|message-c": {
+          lastTotals: totals(30),
+          fingerprint: "fingerprint-c",
+          updatedAt: "2026-08-30T00:00:00.000Z",
+        },
+      },
+      dbCursor: { version: 1 },
+    };
+    await fs.writeFile(cursorsPath, `${JSON.stringify(prepared)}\n`, "utf8");
+
+    const migrated = await openCursorStore({ trackerDir, cursorsPath, forceV2: true });
+    assert.equal(Object.keys(migrated.cursors.opencode.messages).length, 3);
+    await migrated.commit();
+
+    const current = await readCurrentGeneration(trackerDir);
+    const core = JSON.parse(
+      await fs.readFile(path.join(current.directory, current.metadata.coreFile), "utf8"),
+    );
+    assert.equal(current.metadata.coreFile, "core-v3.json");
+    assert.equal(core.opencode.messages, undefined);
+    assert.equal(current.metadata.counts.opencodeMessages, 3);
+    assert.equal(current.metadata.counts.opencodeFingerprints, 2);
+
+    const compatible = await readGenerationFixture(trackerDir, current.manifest.previous);
+    assert.equal(compatible.metadata.coreFile, "core.json");
+    const compatibleCore = JSON.parse(
+      await fs.readFile(path.join(compatible.directory, compatible.metadata.coreFile), "utf8"),
+    );
+    assert.equal(Object.keys(compatibleCore.opencode.messages).length, 3);
+
+    const reopened = await openCursorStore({ trackerDir, cursorsPath });
+    assert.equal(reopened.cursors.opencode.messages, undefined);
+    const loaded = await reopened.loadOpencodeMessagesForBatch({
+      messageKeys: ["session-a|message-a"],
+      fingerprints: ["fingerprint-a"],
+    });
+    assert.equal(reopened.cursors.opencode.messages["session-a|message-a"].lastTotals.input_tokens, 10);
+    assert.deepEqual(
+      Array.from(loaded.fingerprintIndex.get("fingerprint-a")).sort(),
+      ["session-a|message-a", "session-a|message-b"],
+    );
+    assert.equal(reopened.opencodeMessageShardLoadCount, 1);
+    assert.equal(reopened.opencodeFingerprintShardLoadCount, 1);
+    assert.ok(current.metadata.opencodeMessages[opencodeMessageShardKey("session-a|message-a")]);
+    assert.ok(current.metadata.opencodeFingerprints[opencodeFingerprintShardKey("fingerprint-a")]);
+  });
+});
+
+test("OpenCode shards stay isolated while multi-install parsing selects each namespace", async () => {
+  await withCursorFixture(async ({ trackerDir, cursorsPath, legacy }) => {
+    const entry = (input, fingerprint) => ({
+      lastTotals: { input_tokens: input, total_tokens: input },
+      fingerprint,
+    });
+    const prepared = structuredClone(legacy);
+    prepared.opencode = {
+      native: { messages: { "native-session|message": entry(10, "native-fingerprint") } },
+      wsl: { messages: { "wsl-session|message": entry(20, "wsl-fingerprint") } },
+    };
+    await fs.writeFile(cursorsPath, `${JSON.stringify(prepared)}\n`, "utf8");
+    const migrated = await openCursorStore({ trackerDir, cursorsPath, forceV2: true });
+    await migrated.commit();
+
+    const store = await openCursorStore({ trackerDir, cursorsPath });
+    await multiInstallParse({
+      paths: { native: "/native", wsl: "/wsl" },
+      providerName: "opencode",
+      cursors: store.cursors,
+      getParams: (_path, namespace) => ({ namespace }),
+      parserFn: async ({ namespace, cursors }) => {
+        const messageKey = `${namespace}-session|message`;
+        const loaded = await store.loadOpencodeMessagesForBatch({
+          namespace,
+          messageKeys: [messageKey],
+          fingerprints: [`${namespace}-fingerprint`],
+        });
+        assert.equal(cursors.opencode.messages[messageKey].lastTotals.input_tokens, namespace === "native" ? 10 : 20);
+        assert.deepEqual(Array.from(loaded.fingerprintIndex.get(`${namespace}-fingerprint`)), [messageKey]);
+        return { recordsProcessed: 1 };
+      },
+    });
+    assert.equal(store.cursors.opencode.native.messages["wsl-session|message"], undefined);
+    assert.equal(store.cursors.opencode.wsl.messages["native-session|message"], undefined);
+    await store.commit();
+    const reopened = await openCursorStore({ trackerDir, cursorsPath });
+    await reopened.loadOpencodeMessagesForBatch({
+      namespace: "wsl",
+      messageKeys: ["wsl-session|message"],
+      fingerprints: ["wsl-fingerprint"],
+    });
+    assert.equal(reopened.cursors.opencode.wsl.messages["wsl-session|message"].lastTotals.input_tokens, 20);
+  });
+});
+
+test("invalid current and fallback generations fail closed instead of remigrating frozen legacy state", async () => {
+  await withCursorFixture(async ({ trackerDir, cursorsPath, originalLegacyRaw }) => {
+    const migrated = await openCursorStore({ trackerDir, cursorsPath, forceV2: true });
+    await migrated.commit();
+    const second = await openCursorStore({ trackerDir, cursorsPath });
+    await second.commit();
+    const current = await readCurrentGeneration(trackerDir);
+    const rollback = await readGenerationFixture(trackerDir, current.manifest.rollback);
+    const compatible = await readGenerationFixture(trackerDir, current.manifest.previous);
+    assert.equal(compatible.metadata.coreFile, "core.json");
+    await fs.writeFile(path.join(current.directory, current.metadata.coreFile), "{broken", "utf8");
+    await fs.writeFile(path.join(rollback.directory, rollback.metadata.coreFile), "{broken", "utf8");
+
+    await assert.rejects(
+      openCursorStore({ trackerDir, cursorsPath }),
+      (error) => error?.code === "TOKENTRACKER_CURSOR_STORE_CORRUPT",
+    );
+    assert.equal(await fs.readFile(cursorsPath, "utf8"), originalLegacyRaw);
+  });
+});
+
+test("a corrupt OpenCode shard lazily falls back to the rollback generation", async () => {
+  await withCursorFixture(async ({ trackerDir, cursorsPath, legacy }) => {
+    const prepared = structuredClone(legacy);
+    prepared.opencode = {
+      messages: {
+        "session-a|message-a": {
+          lastTotals: { input_tokens: 10, total_tokens: 10 },
+          fingerprint: "fingerprint-a",
+        },
+      },
+    };
+    await fs.writeFile(cursorsPath, `${JSON.stringify(prepared)}\n`, "utf8");
+    const migrated = await openCursorStore({ trackerDir, cursorsPath, forceV2: true });
+    await migrated.commit();
+
+    const updating = await openCursorStore({ trackerDir, cursorsPath });
+    await updating.loadOpencodeMessagesForBatch({
+      messageKeys: ["session-a|message-a"],
+      fingerprints: ["fingerprint-a"],
+    });
+    updating.cursors.opencode.messages["session-a|message-a"].lastTotals.input_tokens = 20;
+    await updating.commit();
+
+    const current = await readCurrentGeneration(trackerDir);
+    const shard = current.metadata.opencodeMessages[
+      opencodeMessageShardKey("session-a|message-a")
+    ];
+    const shardPath = path.join(current.directory, shard.file);
+    const raw = await fs.readFile(shardPath, "utf8");
+    await fs.writeFile(shardPath, corruptShardWithoutChangingLength(raw), "utf8");
+
+    const recovered = await openCursorStore({ trackerDir, cursorsPath });
+    const result = await recovered.loadOpencodeMessagesForBatch({
+      messageKeys: ["session-a|message-a"],
+      fingerprints: ["fingerprint-a"],
+    });
+    assert.equal(result.restarted, true);
+    assert.equal(
+      recovered.cursors.opencode.messages["session-a|message-a"].lastTotals.input_tokens,
+      10,
+    );
   });
 });
 
