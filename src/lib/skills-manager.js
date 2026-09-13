@@ -1285,24 +1285,41 @@ function updateFingerprint(managed) {
 // rate-limited stop. "We could not check" must not render as "nothing is
 // stale": that clears every badge and with it the way to retry. Returns the
 // merged map. Entries for skills that are no longer installed are dropped.
-function writeUpdateCache(verdicts) {
+//
+// `full` says the round attempted the whole library, which only checkUpdates()
+// does. An update attempts the ids it was handed, so it may only publish an
+// entry when the carried map fills in the rest — see the guard below.
+function writeUpdateCache(verdicts, { full = false } = {}) {
   const managed = managedUpdateCandidates(readRegistry());
   const live = new Set(managed.map((skill) => skill.id));
   const cached = readJson(updateCachePath(), null);
-  const carried =
+  const carriedFresh = Boolean(
     cached &&
-    cached.updates &&
-    typeof cached.updates === "object" &&
-    Number.isFinite(cached.checkedAt) &&
-    Date.now() - cached.checkedAt < UPDATE_CACHE_TTL_MS
-      ? cached.updates
-      : {};
+      cached.updates &&
+      typeof cached.updates === "object" &&
+      Number.isFinite(cached.checkedAt) &&
+      Date.now() - cached.checkedAt < UPDATE_CACHE_TTL_MS,
+  );
   const updates = {};
-  for (const [id, stale] of Object.entries(carried)) if (live.has(id)) updates[id] = Boolean(stale);
+  if (carriedFresh) {
+    for (const [id, stale] of Object.entries(cached.updates)) if (live.has(id)) updates[id] = Boolean(stale);
+  }
   for (const [id, stale] of Object.entries(verdicts)) if (live.has(id)) updates[id] = Boolean(stale);
+
+  // The entry is read back as a verdict for the entire library, and a missing
+  // key reads as "not stale". A partial round that stamped the library
+  // fingerprint would therefore publish silence about skills nobody looked at,
+  // and the next check would hit it. Leave the cache alone instead and let that
+  // check do the work.
+  if (!full && !managed.every((skill) => Object.prototype.hasOwnProperty.call(updates, skill.id))) {
+    return updates;
+  }
+
   writeJson(updateCachePath(), {
     fingerprint: updateFingerprint(managed),
-    checkedAt: Date.now(),
+    // A prime inherits the window of the check it built on: it re-derived some
+    // ids, not the library, so it must not restart the hour for the rest.
+    checkedAt: full || !carriedFresh ? Date.now() : cached.checkedAt,
     updates,
   });
   return updates;
@@ -1360,7 +1377,7 @@ async function checkUpdates({ force = false } = {}) {
   });
 
   const checkedAt = Date.now();
-  return { updates: writeUpdateCache(updates), checkedAt, cached: false };
+  return { updates: writeUpdateCache(updates, { full: true }), checkedAt, cached: false };
 }
 
 // Re-install managed skills from upstream, grouped by repo like checkUpdates()

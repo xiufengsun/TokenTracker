@@ -943,3 +943,200 @@ describe("updateSkills rate-limit result rows", () => {
     });
   }
 });
+
+// Grok recheck of 1aca5e2f: a run that only touches some ids was still stamping a
+// full-library fingerprint and a fresh checkedAt, so the next check cache-hit a
+// map that never mentioned the siblings — and a missing key reads as "not stale".
+describe("updateSkills partial cache prime", () => {
+  const TREE_A = [{ type: "blob", path: "a/SKILL.md", sha: "v2" }];
+  const TREE_C = [{ type: "blob", path: "c/SKILL.md", sha: "v2" }];
+  const skillsDir = () => path.join(sandboxHome, ".tokentracker", "skills");
+  const cachePath = () => path.join(skillsDir(), "updates-cache.json");
+  const HOUR = 60 * 60 * 1000;
+
+  const managed = (id, dir) => {
+    const [repo] = id.split(":");
+    const [repoOwner, repoName] = repo.split("/");
+    return {
+      id,
+      key: id,
+      name: dir,
+      directory: dir,
+      sourceDirectory: dir,
+      repoOwner,
+      repoName,
+      repoBranch: "main",
+      sourceSignature: "STALE_SIGNATURE",
+      installedAt: 1,
+      targets: [],
+    };
+  };
+  const ENTRIES = [managed("o/r:a", "a"), managed("o/r2:c", "c")];
+
+  function seed({ cacheAgeMs }) {
+    fs.mkdirSync(skillsDir(), { recursive: true });
+    fs.writeFileSync(path.join(skillsDir(), "registry.json"), JSON.stringify({ repos: [], skills: ENTRIES }));
+    if (cacheAgeMs === null) {
+      fs.rmSync(cachePath(), { force: true });
+      return;
+    }
+    fs.writeFileSync(
+      cachePath(),
+      JSON.stringify({
+        fingerprint: ENTRIES.map((e) => `${e.id}@${e.sourceSignature}`).sort().join("|"),
+        checkedAt: Date.now() - cacheAgeMs,
+        updates: { "o/r:a": true, "o/r2:c": true },
+      }),
+    );
+  }
+
+  function clean() {
+    resetRegistry();
+    fs.rmSync(cachePath(), { force: true });
+    fs.rmSync(path.join(skillsDir(), "ssot"), { recursive: true, force: true });
+  }
+
+  // Repo o/r always answers; o/r2 answers or fails per scenario.
+  function stub({ secondRepo = "ok" } = {}) {
+    global.fetch = async (url) => {
+      const text = { ok: true, status: 200, text: async () => "---\nname: Foo\ndescription: d\n---\n" };
+      if (!isGitHubApi(url)) return text;
+      const isSecond = String(url).includes("/o/r2/");
+      if (isSecond && secondRepo !== "ok") {
+        return { ok: false, status: secondRepo === "limited" ? 403 : 500, json: async () => ({}) };
+      }
+      return { ok: true, status: 200, json: async () => ({ tree: isSecond ? TREE_C : TREE_A }) };
+    };
+  }
+
+  // Rows lifted from the review's probe table.
+  const CASES = [
+    { name: "in-TTL cache, per-row update of the sibling", cacheAgeMs: 0, ids: ["o/r:a"], secondRepo: "ok" },
+    { name: "expired cache, per-row update of the sibling", cacheAgeMs: 2 * HOUR, ids: ["o/r:a"], secondRepo: "ok" },
+    { name: "in-TTL cache, update-all with the second repo down", cacheAgeMs: 0, ids: ["o/r:a", "o/r2:c"], secondRepo: "down" },
+    { name: "expired cache, update-all with the second repo rate-limited", cacheAgeMs: 2 * HOUR, ids: ["o/r:a", "o/r2:c"], secondRepo: "limited" },
+  ];
+
+  for (const scenario of CASES) {
+    it(`keeps the sibling's stale verdict — ${scenario.name}`, async () => {
+      clean();
+      const realFetch = global.fetch;
+      try {
+        seed({ cacheAgeMs: scenario.cacheAgeMs });
+        stub({ secondRepo: scenario.secondRepo });
+
+        await skills.updateSkills(scenario.ids);
+
+        // checkUpdates() throws on a rate limit it cannot satisfy; the UI keeps
+        // its previous map in that case, which also preserves the badge.
+        let after;
+        try {
+          after = (await skills.checkUpdates()).updates;
+        } catch (error) {
+          assert.match(String(error?.message || ""), /rate-limited/i);
+          return;
+        }
+        assert.equal(
+          after["o/r2:c"],
+          true,
+          "a skill this run never re-checked must not be published as up to date",
+        );
+      } finally {
+        global.fetch = realFetch;
+        clean();
+      }
+    });
+  }
+
+  // The review's remaining row. With no prior check there is no verdict for the
+  // sibling to preserve, so the badge is still absent — but the run must not
+  // manufacture a hit-able snapshot saying so. The next check has to be real.
+  it("leaves the cache alone when a partial run cannot cover the library", async () => {
+    clean();
+    const realFetch = global.fetch;
+    try {
+      seed({ cacheAgeMs: null });
+      stub({ secondRepo: "down" });
+
+      await skills.updateSkills(["o/r:a", "o/r2:c"]);
+
+      assert.equal(
+        fs.existsSync(cachePath()),
+        false,
+        "a partial run with nothing to carry must not publish a library verdict",
+      );
+      const after = await skills.checkUpdates();
+      assert.equal(after.cached, false, "the follow-up must be a real check, not a primed hit");
+    } finally {
+      global.fetch = realFetch;
+      clean();
+    }
+  });
+
+  // The gate must not cost the optimisation it was added around: the usual shape
+  // is a fresh check, then Update all on the ids it flagged.
+  it("still primes off a fresh check so the refresh spends no tree call", async () => {
+    clean();
+    const realFetch = global.fetch;
+    let trees = 0;
+    try {
+      fs.mkdirSync(skillsDir(), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir(), "registry.json"), JSON.stringify({ repos: [], skills: ENTRIES }));
+      fs.writeFileSync(
+        cachePath(),
+        JSON.stringify({
+          fingerprint: ENTRIES.map((e) => `${e.id}@${e.sourceSignature}`).sort().join("|"),
+          checkedAt: Date.now(),
+          // A real check just ran: one stale, one current.
+          updates: { "o/r:a": true, "o/r2:c": false },
+        }),
+      );
+      global.fetch = async (url) => {
+        if (!isGitHubApi(url)) return { ok: true, status: 200, text: async () => "---\nname: Foo\ndescription: d\n---\n" };
+        trees += 1;
+        return { ok: true, status: 200, json: async () => ({ tree: String(url).includes("/o/r2/") ? TREE_C : TREE_A }) };
+      };
+
+      await skills.updateSkills(["o/r:a"]);
+      const spent = trees;
+      const after = await skills.checkUpdates();
+
+      assert.equal(after.cached, true, "the refresh after an update is still served from the prime");
+      assert.equal(trees - spent, 0, "and still costs no second round of tree calls");
+      assert.deepEqual(after.updates, { "o/r:a": false, "o/r2:c": false });
+    } finally {
+      global.fetch = realFetch;
+      clean();
+    }
+  });
+
+  it("does not stamp a fresh full-library TTL from a partial run", async () => {
+    clean();
+    const realFetch = global.fetch;
+    try {
+      const seededAt = Date.now() - 40 * 60 * 1000;
+      fs.mkdirSync(skillsDir(), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir(), "registry.json"), JSON.stringify({ repos: [], skills: ENTRIES }));
+      fs.writeFileSync(
+        cachePath(),
+        JSON.stringify({
+          fingerprint: ENTRIES.map((e) => `${e.id}@${e.sourceSignature}`).sort().join("|"),
+          checkedAt: seededAt,
+          updates: { "o/r:a": true, "o/r2:c": true },
+        }),
+      );
+      stub();
+
+      await skills.updateSkills(["o/r:a"]);
+
+      const written = JSON.parse(fs.readFileSync(cachePath(), "utf8"));
+      assert.ok(
+        written.checkedAt <= seededAt,
+        "priming off a 40-minute-old check must not restart the hour for skills it never looked at",
+      );
+    } finally {
+      global.fetch = realFetch;
+      clean();
+    }
+  });
+});
