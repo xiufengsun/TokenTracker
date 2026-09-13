@@ -909,7 +909,12 @@ function listInstalledSkills() {
   });
 }
 
-async function installSkill(skillInput, targetIds = ["claude", "codex"]) {
+async function installSkill(
+  skillInput,
+  targetIds = ["claude", "codex"],
+  prefetchedTree = null,
+  { expectExistingId = null } = {},
+) {
   const skill = {
     key: String(skillInput?.key || ""),
     name: String(skillInput?.name || ""),
@@ -939,7 +944,9 @@ async function installSkill(skillInput, targetIds = ["claude", "codex"]) {
     );
   }
 
-  const { branch, tree } = await getRepoTree({
+  // Bulk update hands in the repo tree it already fetched, so N skills from one
+  // repo cost one GitHub call instead of N.
+  const { branch, tree } = prefetchedTree || await getRepoTree({
     owner: skill.repoOwner,
     name: skill.repoName,
     branch: skill.repoBranch,
@@ -961,6 +968,14 @@ async function installSkill(skillInput, targetIds = ["claude", "codex"]) {
       const out = path.join(temp, safeRelative);
       ensureDir(path.dirname(out));
       fs.writeFileSync(out, await fetchText(githubRawUrl(skill.repoOwner, skill.repoName, branch, entry.path)));
+    }
+    // An update must not recreate a skill that was uninstalled while we were
+    // downloading, nor overwrite whatever took its install directory in the
+    // meantime. Checked here because everything from this point to
+    // saveRegistry() is synchronous — no await can interleave a change we would
+    // then clobber.
+    if (expectExistingId && !readRegistry().skills.some((entry) => !entry.trashedAt && entry.id === expectExistingId)) {
+      throw new Error("Skill is no longer installed");
     }
     removePath(dest);
     ensureDir(path.dirname(dest));
@@ -992,9 +1007,13 @@ async function installSkill(skillInput, targetIds = ["claude", "codex"]) {
     targets: selectedTargets,
   };
 
-  registry.skills = registry.skills.filter((entry) => entry.id !== installed.id && entry.directory.toLowerCase() !== installName.toLowerCase());
-  registry.skills.push(installed);
-  saveRegistry(registry);
+  // Re-read: the downloads above can take minutes and the registry is shared
+  // with every other mutation path, so the copy fetched before them is stale by
+  // now. Reading here keeps the read/modify/write window down to this block.
+  const latest = readRegistry();
+  latest.skills = latest.skills.filter((entry) => entry.id !== installed.id && entry.directory.toLowerCase() !== installName.toLowerCase());
+  latest.skills.push(installed);
+  saveRegistry(latest);
 
   for (const id of selectedTargets) syncSkillToTarget(installName, id);
   appendActivity({ action: "install", name: installed.name, directory: installName, targets: selectedTargets, source: `${skill.repoOwner}/${skill.repoName}` });
@@ -1244,20 +1263,89 @@ function updateCachePath() {
   return path.join(dataDir(), "updates-cache.json");
 }
 
+// checkUpdates() and updateSkills() have to agree on three things: which skills
+// are candidates, how a cached verdict is keyed, and which tree a skill's
+// signature comes from. They share these so the badge and the update can never
+// disagree about the same skill.
+function managedUpdateCandidates(registry) {
+  return registry.skills.filter(
+    (skill) => !skill.trashedAt && skill.repoOwner && skill.repoName && skill.sourceSignature,
+  );
+}
+
+function updateFingerprint(managed) {
+  return managed
+    .map((skill) => `${skill.id}@${skill.sourceSignature}`)
+    .sort()
+    .join("|");
+}
+
+// Write the verdicts a round derived, carrying forward the previous map for
+// anything it could not derive — a repo whose tree failed, everything past a
+// rate-limited stop. "We could not check" must not render as "nothing is
+// stale": that clears every badge and with it the way to retry. Returns the
+// merged map. Entries for skills that are no longer installed are dropped.
+//
+// `full` says the round attempted the whole library, which only checkUpdates()
+// does. An update attempts the ids it was handed, so it may only publish an
+// entry when the carried map fills in the rest — see the guard below.
+function writeUpdateCache(verdicts, { full = false } = {}) {
+  const managed = managedUpdateCandidates(readRegistry());
+  const live = new Set(managed.map((skill) => skill.id));
+  const cached = readJson(updateCachePath(), null);
+  const carriedFresh = Boolean(
+    cached &&
+      cached.updates &&
+      typeof cached.updates === "object" &&
+      Number.isFinite(cached.checkedAt) &&
+      Date.now() - cached.checkedAt < UPDATE_CACHE_TTL_MS,
+  );
+  const updates = {};
+  if (carriedFresh) {
+    for (const [id, stale] of Object.entries(cached.updates)) if (live.has(id)) updates[id] = Boolean(stale);
+  }
+  for (const [id, stale] of Object.entries(verdicts)) if (live.has(id)) updates[id] = Boolean(stale);
+
+  // The entry is read back as a verdict for the entire library, and a missing
+  // key reads as "not stale". A partial round that stamped the library
+  // fingerprint would therefore publish silence about skills nobody looked at,
+  // and the next check would hit it. Leave the cache alone instead and let that
+  // check do the work.
+  if (!full && !managed.every((skill) => Object.prototype.hasOwnProperty.call(updates, skill.id))) {
+    return updates;
+  }
+
+  writeJson(updateCachePath(), {
+    fingerprint: updateFingerprint(managed),
+    // A prime inherits the window of the check it built on: it re-derived some
+    // ids, not the library, so it must not restart the hour for the rest.
+    checkedAt: full || !carriedFresh ? Date.now() : cached.checkedAt,
+    updates,
+  });
+  return updates;
+}
+
+function groupSkillsByRepo(skills) {
+  const byRepo = new Map();
+  for (const skill of skills) {
+    const branch = skill.repoBranch || "main";
+    const key = `${skill.repoOwner}/${skill.repoName}@${branch}`.toLowerCase();
+    if (!byRepo.has(key)) {
+      byRepo.set(key, { owner: skill.repoOwner, name: skill.repoName, branch, skills: [] });
+    }
+    byRepo.get(key).skills.push(skill);
+  }
+  return Array.from(byRepo.values());
+}
+
 // Compare each managed GitHub/skills.sh skill's stored source signature against a
 // freshly fetched repo tree. One tree call per repo (skills from the same repo
 // share it), concurrency-limited and cached for an hour so a background check
 // can't trip GitHub's unauthenticated rate limit. Returns { updates: {id:bool} }.
 // Read-only: never mutates the registry or the on-disk skills.
 async function checkUpdates({ force = false } = {}) {
-  const registry = readRegistry();
-  const managed = registry.skills.filter(
-    (skill) => !skill.trashedAt && skill.repoOwner && skill.repoName && skill.sourceSignature,
-  );
-  const fingerprint = managed
-    .map((skill) => `${skill.id}@${skill.sourceSignature}`)
-    .sort()
-    .join("|");
+  const managed = managedUpdateCandidates(readRegistry());
+  const fingerprint = updateFingerprint(managed);
 
   if (!force) {
     const cached = readJson(updateCachePath(), null);
@@ -1273,18 +1361,8 @@ async function checkUpdates({ force = false } = {}) {
     }
   }
 
-  const byRepo = new Map();
-  for (const skill of managed) {
-    const branch = skill.repoBranch || "main";
-    const key = `${skill.repoOwner}/${skill.repoName}@${branch}`.toLowerCase();
-    if (!byRepo.has(key)) {
-      byRepo.set(key, { owner: skill.repoOwner, name: skill.repoName, branch, skills: [] });
-    }
-    byRepo.get(key).skills.push(skill);
-  }
-
   const updates = {};
-  await mapWithConcurrency(Array.from(byRepo.values()), UPDATE_CHECK_CONCURRENCY, async (repo) => {
+  await mapWithConcurrency(groupSkillsByRepo(managed), UPDATE_CHECK_CONCURRENCY, async (repo) => {
     let tree;
     try {
       ({ tree } = await getRepoTree(repo));
@@ -1299,8 +1377,122 @@ async function checkUpdates({ force = false } = {}) {
   });
 
   const checkedAt = Date.now();
-  writeJson(updateCachePath(), { fingerprint, checkedAt, updates });
-  return { updates, checkedAt, cached: false };
+  return { updates: writeUpdateCache(updates, { full: true }), checkedAt, cached: false };
+}
+
+// Re-install managed skills from upstream, grouped by repo like checkUpdates()
+// so N skills from one repo cost one tree call. Sequential by necessity:
+// installSkill() read/modify/writes the registry, so parallel installs would
+// drop each other's entries. Every requested id gets a result row — including
+// ones that are no longer installed — so updated + skipped + failed always
+// reconciles with what the caller asked for.
+async function updateSkills(ids = []) {
+  // An empty or malformed list means "nothing was asked for", never "every
+  // managed skill" — the permissive reading turned one bad request field into a
+  // full re-install of the library.
+  const wanted = new Set(
+    (Array.isArray(ids) ? ids : []).map((id) => String(id || "")).filter(Boolean),
+  );
+  if (!wanted.size) return { results: [], updated: 0, skipped: 0, failed: 0, rateLimited: null };
+  const managed = readRegistry().skills.filter(
+    (skill) => !skill.trashedAt && skill.repoOwner && skill.repoName && wanted.has(skill.id),
+  );
+
+  const results = [];
+  const verdicts = {};
+  let rateLimited = null;
+
+  const known = new Set(managed.map((skill) => skill.id));
+  for (const id of wanted) {
+    if (!known.has(id)) results.push({ id, name: null, ok: false, error: "Skill is no longer installed" });
+  }
+
+  for (const repo of groupSkillsByRepo(managed)) {
+    let branch;
+    let tree;
+    try {
+      ({ branch, tree } = await getRepoTree(repo));
+    } catch (error) {
+      if (error instanceof RateLimitError) {
+        rateLimited = error;
+        break;
+      }
+      for (const skill of repo.skills) {
+        results.push({ id: skill.id, name: skill.name, ok: false, error: error?.message || "Unable to read repository" });
+      }
+      continue;
+    }
+
+    for (const skill of repo.skills) {
+      const sourceDir = skill.sourceDirectory || skill.directory;
+      const fresh = sourceSignatureFromTree(tree, sourceDir);
+      if (skill.sourceSignature && fresh === skill.sourceSignature) {
+        results.push({ id: skill.id, name: skill.name, ok: true, skipped: true });
+        verdicts[skill.id] = false;
+        continue;
+      }
+      // This loop runs for as long as the downloads take, and the registry is
+      // shared with every other mutation path — re-check rather than write back
+      // a skill that was uninstalled while we were working.
+      if (!readRegistry().skills.some((entry) => !entry.trashedAt && entry.id === skill.id)) {
+        results.push({ id: skill.id, name: skill.name, ok: false, error: "Skill is no longer installed" });
+        continue;
+      }
+      try {
+        await installSkill(
+          {
+            key: skill.key,
+            name: skill.name,
+            description: skill.description,
+            // installSkill() wants the repo path, not the flat install name.
+            directory: sourceDir,
+            readmeUrl: skill.readmeUrl,
+            repoOwner: skill.repoOwner,
+            repoName: skill.repoName,
+            repoBranch: branch,
+          },
+          skill.targets || [],
+          { branch, tree },
+          { expectExistingId: skill.id },
+        );
+        results.push({ id: skill.id, name: skill.name, ok: true, skipped: false });
+        if (fresh) verdicts[skill.id] = false;
+      } catch (error) {
+        if (error instanceof RateLimitError) {
+          rateLimited = error;
+          break;
+        }
+        results.push({ id: skill.id, name: skill.name, ok: false, error: error?.message || "Update failed" });
+        if (fresh) verdicts[skill.id] = true;
+      }
+    }
+    if (rateLimited) break;
+  }
+
+  // A rate-limited stop breaks out of both loops, leaving the skill it happened
+  // on and everything after it unreported. Backfill so every requested id comes
+  // back with a row and the counts still reconcile with what was asked for.
+  if (rateLimited) {
+    const reported = new Set(results.map((row) => row.id));
+    const nameById = new Map(managed.map((skill) => [skill.id, skill.name]));
+    for (const id of wanted) {
+      if (reported.has(id)) continue;
+      results.push({ id, name: nameById.get(id) || null, ok: false, error: rateLimited.message });
+    }
+  }
+
+  // Prime the cache from the trees this run already holds, so the refresh that
+  // follows is a cache hit rather than a second tree call per repo. Skipped when
+  // the run derived nothing — there is no fresh verdict to record.
+  if (Object.keys(verdicts).length) writeUpdateCache(verdicts);
+
+  return {
+    results,
+    updated: results.filter((entry) => entry.ok && !entry.skipped).length,
+    skipped: results.filter((entry) => entry.skipped).length,
+    failed: results.filter((entry) => !entry.ok).length,
+    rateLimited: rateLimited ? rateLimited.message : null,
+  };
 }
 
 // skills.sh exposes only /api/search (no leaderboard endpoint), so "Popular" is
@@ -1385,4 +1577,5 @@ module.exports = {
   sourceSignatureFromTree,
   targetList,
   uninstallSkill,
+  updateSkills,
 };

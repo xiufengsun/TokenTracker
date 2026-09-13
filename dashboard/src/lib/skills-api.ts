@@ -66,6 +66,10 @@ export function installSkill(skill: AnyRecord, targets: string[]) {
   return mutateSkillsJson({ action: "install", skill, targets });
 }
 
+export function updateSkills(ids: string[]) {
+  return mutateSkillsJson({ action: "update_all", ids });
+}
+
 export function uninstallSkill(id: string) {
   return mutateSkillsJson({ action: "uninstall", id });
 }

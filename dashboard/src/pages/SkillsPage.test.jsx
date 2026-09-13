@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { copy } from "../lib/copy";
 import {
   addSkillRepo,
+  checkSkillUpdates,
   getAccountSkillInventories,
   deleteLocalSkill,
   discoverSkills,
@@ -17,11 +18,14 @@ import {
   searchSkills,
   setSkillTargets,
   uninstallSkill,
+  updateSkills,
 } from "../lib/skills-api";
 import { buildLocallyInstalledKeys, SkillsPage } from "./SkillsPage.jsx";
 
 vi.mock("../lib/skills-api", () => ({
   addSkillRepo: vi.fn(),
+  checkSkillUpdates: vi.fn(),
+  updateSkills: vi.fn(),
   getAccountSkillInventories: vi.fn(),
   deleteLocalSkill: vi.fn(),
   discoverSkills: vi.fn(),
@@ -35,6 +39,14 @@ vi.mock("../lib/skills-api", () => ({
   searchSkills: vi.fn(),
   setSkillTargets: vi.fn(),
   uninstallSkill: vi.fn(),
+}));
+
+const toastSpy = vi.hoisted(() => vi.fn());
+
+vi.mock("../ui/components/Toast.jsx", () => ({
+  showToast: toastSpy,
+  toastManager: { add: vi.fn() },
+  ToastProvider: ({ children }) => children,
 }));
 
 const testAuth = vi.hoisted(() => ({
@@ -87,6 +99,9 @@ beforeEach(() => {
   vi.mocked(deleteLocalSkill).mockResolvedValue({ ok: true });
   vi.mocked(addSkillRepo).mockResolvedValue({ ok: true });
   vi.mocked(removeSkillRepo).mockResolvedValue({ ok: true });
+  vi.mocked(checkSkillUpdates).mockResolvedValue({ updates: {} });
+  vi.mocked(updateSkills).mockResolvedValue({ results: [], updated: 0, skipped: 0, failed: 0, rateLimited: null });
+  toastSpy.mockClear();
 });
 
 describe("SkillsPage", () => {
@@ -307,5 +322,97 @@ describe("SkillsPage", () => {
     expect(await screen.findByText("Remote Only Skill")).toBeInTheDocument();
     await waitFor(() => expect(getAccountSkillInventories).toHaveBeenCalledWith("test-access-token"));
     expect(screen.getByText(copy("skills.inventory.remote"))).toBeInTheDocument();
+  });
+});
+
+// updateSkills reports a rate limit as a return field, not a throw. handleUpdateAll
+// branches on it; the per-row button used to fall through and toast success while
+// the badge stayed up.
+describe("SkillsPage per-row update", () => {
+  async function openAlphaAndUpdate() {
+    const user = userEvent.setup();
+    render(<SkillsPage />);
+    await user.click(
+      await screen.findByRole("button", {
+        name: copy("skills.row.open_details", { name: "Alpha Skill" }),
+      }),
+    );
+    await user.click(await screen.findByRole("button", { name: copy("skills.update.action") }));
+    return user;
+  }
+
+  beforeEach(() => {
+    vi.mocked(checkSkillUpdates).mockResolvedValue({ updates: { "alpha-skill": true } });
+    // handleUpdate needs the GitHub coordinates a managed skill always carries;
+    // the shared fixture omits them.
+    vi.mocked(getInstalledSkills).mockResolvedValue({
+      targets: [{ id: "claude", label: "Claude" }],
+      skills: [
+        {
+          id: "alpha-skill",
+          name: "Alpha Skill",
+          directory: "alpha-skill",
+          sourceDirectory: "alpha-skill",
+          description: "First installed skill.",
+          targets: ["claude"],
+          managed: true,
+          repoOwner: "demo",
+          repoName: "skills",
+          repoBranch: "main",
+        },
+      ],
+    });
+  });
+
+  it("reports a rate limit instead of claiming the skill was updated", async () => {
+    vi.mocked(updateSkills).mockResolvedValue({
+      results: [],
+      updated: 0,
+      skipped: 0,
+      failed: 0,
+      rateLimited: "GitHub rate-limited this request (HTTP 403). Try again later.",
+    });
+
+    await openAlphaAndUpdate();
+
+    await waitFor(() => expect(toastSpy).toHaveBeenCalled());
+    const titles = toastSpy.mock.calls.map(([options]) => options?.title);
+    expect(titles).toContain(copy("skills.update.rate_limited", { count: 0 }));
+    expect(titles).not.toContain(copy("skills.toast.updated", { name: "Alpha Skill" }));
+  });
+
+  it("does not toast success when the backend reports no rows at all", async () => {
+    vi.mocked(updateSkills).mockResolvedValue({
+      results: [],
+      updated: 0,
+      skipped: 0,
+      failed: 0,
+      rateLimited: null,
+    });
+
+    await openAlphaAndUpdate();
+
+    await waitFor(() => {
+      expect(screen.getByText(copy("skills.error.generic"))).toBeInTheDocument();
+    });
+    const titles = toastSpy.mock.calls.map(([options]) => options?.title);
+    expect(titles).not.toContain(copy("skills.toast.updated", { name: "Alpha Skill" }));
+  });
+
+  it("still toasts success on a normal update", async () => {
+    vi.mocked(updateSkills).mockResolvedValue({
+      results: [{ id: "alpha-skill", name: "Alpha Skill", ok: true, skipped: false }],
+      updated: 1,
+      skipped: 0,
+      failed: 0,
+      rateLimited: null,
+    });
+
+    await openAlphaAndUpdate();
+
+    await waitFor(() => {
+      const titles = toastSpy.mock.calls.map(([options]) => options?.title);
+      expect(titles).toContain(copy("skills.toast.updated", { name: "Alpha Skill" }));
+    });
   });
 });

@@ -1216,10 +1216,17 @@ skills.toast.bulk_removed,ui,SkillsPage,SkillsPage,toast_bulk_removed,"Removed {
 skills.toast.synced_one,ui,SkillsPage,SkillsPage,toast_synced_one,"Synced {{name}} to {{agent}}.",,active
 skills.toast.unsynced_one,ui,SkillsPage,SkillsPage,toast_unsynced_one,"Unsynced {{name}} from {{agent}}.",,active
 skills.toast.updated,ui,SkillsPage,SkillsPage,toast_updated,"Updated {{name}}.",,active
+skills.toast.updated_many,ui,SkillsPage,SkillsPage,toast_updated_many,"Updated {{count}} skills.",,active
+skills.toast.updated_partial,ui,SkillsPage,SkillsPage,toast_updated_partial,"Updated {{count}} of {{total}} skills. {{failed}} failed.",,active
+skills.toast.updated_none,ui,SkillsPage,SkillsPage,toast_updated_none,"All skills are already up to date.",,active
 skills.confirm.bulk_remove_title,ui,SkillsPage,SkillsPage,confirm_bulk_remove_title,"Remove {{count}} skills?",,active
 skills.confirm.bulk_remove_desc,ui,SkillsPage,SkillsPage,confirm_bulk_remove_desc,"This unsyncs each skill from every agent and deletes its local copy.",,active
+skills.confirm.update_all_title,ui,SkillsPage,SkillsPage,confirm_update_all_title,"Update {{count}} skills?",,active
+skills.confirm.update_all_desc,ui,SkillsPage,SkillsPage,confirm_update_all_desc,"Each skill is re-downloaded from its source repository, replacing the local copy.",,active
 skills.update.available,ui,SkillsPage,SkillDetailPanel,update_available,"A newer version is available upstream.",,active
 skills.update.action,ui,SkillsPage,SkillDetailPanel,update_action,"Update",,active
+skills.update.all_action,ui,SkillsPage,SkillsPage,update_all_action,"Update all ({{count}})",,active
+skills.update.rate_limited,ui,SkillsPage,SkillsPage,update_rate_limited,"GitHub rate limit reached after {{count}} updates. Try again in an hour.",,active
 skills.usage.section_title,ui,SkillsPage,SkillDetailPanel,usage_section_title,"Activity",,active
 skills.usage.invocations,ui,SkillsPage,SkillDetailPanel,usage_invocations,"Invocations",,active
 skills.usage.cost,ui,SkillsPage,SkillDetailPanel,usage_cost,"Est. cost",,active

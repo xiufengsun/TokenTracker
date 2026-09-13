@@ -3160,6 +3160,11 @@ function createLocalApiHandler({ queuePath }) {
             json(res, { ok: true, skill: await skills.installSkill(body.skill, body.targets || ["claude", "codex"]) });
             return true;
           }
+          if (action === "update_all") {
+            // Partial success is normal, so this reports per-skill rather than failing.
+            json(res, { ok: true, ...(await skills.updateSkills(Array.isArray(body.ids) ? body.ids : [])) });
+            return true;
+          }
           if (action === "uninstall") {
             json(res, { ok: true, ...(skills.uninstallSkill(body.id) || {}) });
             return true;
