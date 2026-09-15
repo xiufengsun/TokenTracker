@@ -1,4 +1,6 @@
 {
+  "usage.metric.unclassified_input": "入力（キャッシュ内訳不明）",
+  "usage.cost.partial": "費用情報が不完全",
   "usage.overview.all_tools": "すべて",
   "usage.overview.all_models": "すべてのモデル",
   "usage.overview.all_models_note": "同じ名前のモデルはツールをまたいで集計され、合計使用量順に表示されます。",

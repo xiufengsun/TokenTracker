@@ -76,6 +76,7 @@ const TOKEN_TOTAL_KEYS = [
   "total_tokens",
   "billable_total_tokens",
   "input_tokens",
+  "unclassified_input_tokens",
   "output_tokens",
   "cached_input_tokens",
   "cache_creation_input_tokens",
@@ -83,6 +84,7 @@ const TOKEN_TOTAL_KEYS = [
 ];
 
 function addTotalsInto(target: any, add: any) {
+  if (add?.cost_status === "partial" || Number(add?.unclassified_input_tokens) > 0) target.cost_status = "partial";
   for (const key of TOKEN_TOTAL_KEYS) {
     target[key] = (Number(target[key]) || 0) + (Number(add?.[key]) || 0);
   }
@@ -148,6 +150,7 @@ export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) 
         source: entry?.source,
         totalTokens: Number.isFinite(totalTokens) ? totalTokens : 0,
         totalCost: Number.isFinite(totalCost) ? totalCost : 0,
+        costPartial: entry?.totals?.cost_status === "partial",
         inputTokens: Math.max(0, toFiniteNumber(entry?.totals?.input_tokens) ?? 0),
         cacheRead: Math.max(0, toFiniteNumber(entry?.totals?.cached_input_tokens) ?? 0),
         cacheCreate: Math.max(0, toFiniteNumber(entry?.totals?.cache_creation_input_tokens) ?? 0),
@@ -188,7 +191,8 @@ export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) 
               : entry.totalCost > 0 && entry.totalTokens > 0
                 ? (modelTokens / entry.totalTokens) * entry.totalCost
                 : null;
-          return { id, name, share, usage: modelTokens, cost: modelCost };
+          const costPartial = model?.totals?.cost_status === "partial";
+          return { id, name, share, usage: modelTokens, cost: costPartial ? null : modelCost, ...(costPartial ? {costPartial: true} : {}) };
         })
         .filter(Boolean);
       // Input-side cache hit rate = cache reads / all input-side tokens
@@ -199,7 +203,7 @@ export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) 
       const cacheInputTokens = entry.inputTokens + entry.cacheRead + entry.cacheCreate;
       const hasCacheActivity = entry.cacheRead + entry.cacheCreate > 0;
       const cacheHitRate =
-        hasCacheActivity && cacheInputTokens > 0
+        !entry.costPartial && hasCacheActivity && cacheInputTokens > 0
           ? Math.round((entry.cacheRead / cacheInputTokens) * 100)
           : null;
       return {
@@ -207,7 +211,8 @@ export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) 
         label,
         totalPercent: String(totalPercent),
         totalPercentValue: totalPercentRaw,
-        usd: entry.totalCost,
+        usd: entry.costPartial ? null : entry.totalCost,
+        ...(entry.costPartial ? {costPartial: true} : {}),
         usage: entry.totalTokens,
         cacheHitRate,
         cacheReusedTokens: entry.cacheRead,
@@ -259,6 +264,7 @@ export function buildAllModels(fleetData: any) {
       nameWeight: 0,
     };
     current.usage += usage;
+    current.costPartial = current.costPartial || model.costPartial;
     const cost = toFiniteNumber(model?.cost);
     if (cost != null) {
       current.cost += cost;
@@ -282,7 +288,8 @@ export function buildAllModels(fleetData: any) {
       id: model.id,
       name: model.name,
       usage: model.usage,
-      cost: model.hasCost ? model.cost : null,
+      cost: model.costPartial ? null : model.hasCost ? model.cost : null,
+      ...(model.costPartial ? {costPartial: true} : {}),
       share: totalUsage > 0
         ? Math.round((model.usage / totalUsage) * 1000) / 10
         : 0,

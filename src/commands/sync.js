@@ -43,6 +43,7 @@ const {
   resolveKiroBasePath,
   resolveHermesPath,
   resolveCopilotOtelPaths,
+  resolveVsCodeCopilotChatSessionPaths,
   normalizeCopilotDbPath,
   uniqueCopilotDbPaths,
   coalesceCopilotDbStatesByIdentity,
@@ -73,6 +74,7 @@ const {
   copilotOtelCursorHasLegacyCliUsage,
   pruneCopilotUsageClaims,
   parseCopilotIncremental,
+  parseVsCodeCopilotChatIncremental,
   parseCopilotSessionStoreIncremental,
   parseCopilotAppDbIncremental,
   resolveKimiWireFiles,
@@ -2903,6 +2905,49 @@ async function cmdSync(argv, context = {}) {
       }
     }
 
+    // ── VS Code Copilot Chat persisted workspace sessions ──
+    // The Chat extension can be routed through a custom endpoint without
+    // emitting ~/.copilot OTEL or session-store rows. Its exact token counts
+    // are persisted in workspaceStorage/*/chatSessions/*.jsonl (or legacy
+    // .json snapshots), so parse that source after the legacy Copilot readers.
+    const vscodeCopilotChatPaths = copilotSourceAllowed
+      ? resolveVsCodeCopilotChatSessionPaths(process.env)
+      : [];
+    const hasTrackedVsCodeCopilotChatFiles =
+      cursors?.copilotVsCode?.files &&
+      Object.keys(cursors.copilotVsCode.files).length > 0;
+    if (
+      copilotSourceAllowed &&
+      (vscodeCopilotChatPaths.length > 0 || hasTrackedVsCodeCopilotChatFiles)
+    ) {
+      if (progress?.enabled) {
+        progress.start(`Parsing VS Code Copilot ${renderBar(0)} | buckets 0`);
+      }
+      try {
+        const vscodeCopilotResult = await parseVsCodeCopilotChatIncremental({
+          sessionPaths: vscodeCopilotChatPaths,
+          cursors,
+          queuePath,
+          env: process.env,
+          onProgress: (p) => {
+            if (!progress?.enabled) return;
+            const pct = p.total > 0 ? p.index / p.total : 1;
+            progress.update(
+              `Parsing VS Code Copilot ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(p.total)} files | buckets ${formatNumber(p.bucketsQueued)}`,
+            );
+          },
+        });
+        copilotResult = mergeParseResult(copilotResult, vscodeCopilotResult);
+        if (vscodeCopilotResult.fileErrors > 0 && !opts.auto) {
+          process.stderr.write(
+            `VS Code Copilot sync: skipped ${vscodeCopilotResult.fileErrors} unreadable session file(s)\n`,
+          );
+        }
+      } catch (err) {
+        warnProviderParseFailure("VS Code Copilot", err, opts);
+      }
+    }
+
     if (copilotSourceAllowed) {
       if (Array.isArray(cursors?.copilot?.recentUsageEvents)) {
         cursors.copilot.recentUsageEvents = pruneCopilotUsageClaims(
@@ -3874,6 +3919,17 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
       Authorization: `Bearer ${deviceToken}`,
     };
     if (anonKey) headers.apikey = anonKey;
+    if (result.buckets.some((row) => Number(row.unclassified_input_tokens) > 0)) {
+      // An older ingest endpoint silently drops unknown columns. Negotiate
+      // support before sending any partial-accounting rows or advancing state.
+      const capability = await fetch(`${root}/functions/${INGEST_SLUG}?capabilities=1`, {
+        method: "GET", headers,
+      });
+      const supported = capability.ok ? await capability.json().catch(() => null) : null;
+      if (!(Number(supported?.accounting_version) >= 3)) {
+        throw new Error("Cloud accounting support is not ready for unclassified input; usage remains queued locally.");
+      }
+    }
     const res = await fetch(`${root}/functions/${INGEST_SLUG}`, {
       method: "POST",
       headers,

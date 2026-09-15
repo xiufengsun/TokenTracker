@@ -100,6 +100,7 @@ function readPetStats() {
   return {
     todayTokens: num(s?.todayTokens, today.tokens),
     todayCostUsd: num(s?.todayCostUsd, today.costUsd),
+    costPartial: s?.costPartial === true,
     conversations: num(s?.conversations),
     last7dTokens: num(s?.last7dTokens),
     last7dActiveDays: num(s?.last7dActiveDays),
@@ -824,7 +825,7 @@ function Pet() {
       ...s,
       tokens: s.todayTokens,
       tokensText: formatTokens(s.todayTokens),
-      costText: `${currency.symbol}${costValue.toFixed(2)}`,
+      costText: s.costPartial ? "—" : `${currency.symbol}${costValue.toFixed(2)}`,
       costValue,
       limitText: formatPetLimitSummary(locale, limitSummaries[0] || null),
       isSyncing,

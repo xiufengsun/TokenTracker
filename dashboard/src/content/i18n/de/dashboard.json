@@ -1,4 +1,6 @@
 {
+  "usage.metric.unclassified_input": "Eingabe (Cache-Aufteilung unbekannt)",
+  "usage.cost.partial": "Kosten unvollständig",
   "usage.overview.all_tools": "Alle",
   "usage.overview.all_models": "Alle Modelle",
   "usage.overview.all_models_note": "Gleichnamige Modelle werden werkzeugübergreifend zusammengeführt und nach Gesamtnutzung sortiert.",

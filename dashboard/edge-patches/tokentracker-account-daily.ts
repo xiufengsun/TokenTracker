@@ -512,6 +512,7 @@ interface HourlyRow {
   total_tokens: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  unclassified_input_tokens?: number | null;
   cached_input_tokens: number | null;
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
@@ -525,6 +526,7 @@ interface GroupedRow {
   total_tokens: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  unclassified_input_tokens?: number | null;
   cached_input_tokens: number | null;
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
@@ -599,6 +601,7 @@ function computeRowCost(row: GroupedRow): number {
   if (row.source === "pi-github-copilot" || row.source === "pi-copilot") return 0;
   const reportedCost = Number(row.total_cost_usd);
   if (
+    !(Number(row.unclassified_input_tokens) > 0) &&
     SOURCES_WITH_AUTHORITATIVE_COST.has(row.source) &&
     Number.isFinite(reportedCost) &&
     reportedCost > 0
@@ -702,6 +705,7 @@ export default async function (req: Request): Promise<Response> {
     total_cost_usd: number;
     input_tokens: number;
     output_tokens: number;
+    unclassified_input_tokens: number;
     cached_input_tokens: number;
     cache_creation_input_tokens: number;
     reasoning_output_tokens: number;
@@ -723,6 +727,7 @@ export default async function (req: Request): Promise<Response> {
         total_cost_usd: 0,
         input_tokens: 0,
         output_tokens: 0,
+        unclassified_input_tokens: 0,
         cached_input_tokens: 0,
         cache_creation_input_tokens: 0,
         reasoning_output_tokens: 0,
@@ -737,6 +742,7 @@ export default async function (req: Request): Promise<Response> {
     a.total_cost_usd += computeRowCost(row);
     a.input_tokens += Number(row.input_tokens) || 0;
     a.output_tokens += Number(row.output_tokens) || 0;
+    a.unclassified_input_tokens += Number(row.unclassified_input_tokens) || 0;
     a.cached_input_tokens += Number(row.cached_input_tokens) || 0;
     a.cache_creation_input_tokens += Number(row.cache_creation_input_tokens) || 0;
     a.reasoning_output_tokens += Number(row.reasoning_output_tokens) || 0;
@@ -746,5 +752,13 @@ export default async function (req: Request): Promise<Response> {
   }
 
   const data = Array.from(byDay.values()).sort((a, b) => a.day.localeCompare(b.day));
-  return json({ from, to, data });
+  return json({ from, to, data: data.map((row) => ({ ...row, ...costFields(row.total_cost_usd, row.unclassified_input_tokens) })) });
+}
+
+function costFields(known: number | string, unclassified: number) {
+  return {
+    total_cost_usd: unclassified > 0 ? null : known,
+    known_cost_usd: known,
+    cost_status: unclassified > 0 ? "partial" : "complete",
+  };
 }

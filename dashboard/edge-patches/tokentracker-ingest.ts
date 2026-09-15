@@ -55,6 +55,11 @@ async function sha256Hex(input: string): Promise<string> {
 export default async function (req: Request): Promise<Response> {
   if (req.method === "OPTIONS")
     return new Response(null, { status: 204, headers: corsHeaders });
+  const requestUrl = new URL(req.url);
+  if (requestUrl.searchParams.get("capabilities") === "1") {
+    if (req.method !== "GET") return json({ error: "Method not allowed" }, 405);
+    return json({ accounting_version: 3, unclassified_input_tokens: true });
+  }
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   const authHeader = req.headers.get("Authorization");
@@ -121,6 +126,7 @@ export default async function (req: Request): Promise<Response> {
   const TOKEN_KEYS = [
     "input_tokens",
     "output_tokens",
+    "unclassified_input_tokens",
     "cached_input_tokens",
     "cache_creation_input_tokens",
     "reasoning_output_tokens",
@@ -136,7 +142,7 @@ export default async function (req: Request): Promise<Response> {
     const tokens: Record<string, number> = {};
     let tokensOk = true;
     for (const k of TOKEN_KEYS) {
-      const v = Number(r?.[k]);
+      const v = Number(k === "unclassified_input_tokens" ? (r?.[k] ?? 0) : r?.[k]);
       if (!Number.isSafeInteger(v) || v < 0) tokensOk = false;
       else tokens[k] = v;
     }
@@ -153,7 +159,7 @@ export default async function (req: Request): Promise<Response> {
       !Number.isFinite(verifiedAt) ||
       !tokensOk ||
       tokens.total_tokens !==
-        tokens.input_tokens + tokens.cached_input_tokens + tokens.cache_creation_input_tokens + tokens.output_tokens
+        tokens.unclassified_input_tokens + tokens.input_tokens + tokens.cached_input_tokens + tokens.cache_creation_input_tokens + tokens.output_tokens
     ) {
       return json({ error: "Invalid account session state" }, 400);
     }
@@ -180,6 +186,11 @@ export default async function (req: Request): Promise<Response> {
     return json({ error: "Too many buckets (max 500)" }, 400);
   }
 
+  if (buckets.some((b: Record<string, unknown>) => {
+    const value = b.unclassified_input_tokens ?? 0;
+    return typeof value !== "number" || !Number.isSafeInteger(value) || value < 0;
+  })) return json({ error: "Invalid unclassified_input_tokens" }, 400);
+
   const mappedRows = buckets.map((b: Record<string, unknown>) => ({
     user_id: userId,
     device_id: deviceId,
@@ -187,13 +198,14 @@ export default async function (req: Request): Promise<Response> {
     source: b.source || "unknown",
     model: b.model || "unknown",
     input_tokens: b.input_tokens || 0,
+    unclassified_input_tokens: b.unclassified_input_tokens ?? 0,
     cached_input_tokens: b.cached_input_tokens || 0,
     cache_creation_input_tokens: b.cache_creation_input_tokens || 0,
     output_tokens: b.output_tokens || 0,
     reasoning_output_tokens: b.reasoning_output_tokens || 0,
     total_tokens: b.total_tokens || 0,
     billable_total_tokens: b.billable_total_tokens || 0,
-    total_cost_usd: Number(b.total_cost_usd) || 0,
+    total_cost_usd: Number(b.unclassified_input_tokens) > 0 ? null : Number(b.total_cost_usd) || 0,
     // The CLI queue rows name this field `conversation_count`; older upload
     // paths sent `conversations`. Reading only `conversations` zeroed the
     // column for every CLI upload since 2026-04-18 — accept both.

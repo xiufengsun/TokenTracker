@@ -488,6 +488,7 @@ interface HourlyRow {
   total_tokens: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  unclassified_input_tokens?: number | null;
   cached_input_tokens: number | null;
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
@@ -498,6 +499,7 @@ interface Totals {
   billable_total_tokens: number;
   input_tokens: number;
   output_tokens: number;
+  unclassified_input_tokens: number;
   cached_input_tokens: number;
   cache_creation_input_tokens: number;
   reasoning_output_tokens: number;
@@ -511,6 +513,7 @@ interface GroupedRow {
   total_tokens: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  unclassified_input_tokens?: number | null;
   cached_input_tokens: number | null;
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
@@ -663,6 +666,7 @@ export default async function (req: Request): Promise<Response> {
     billable_total_tokens: 0,
     input_tokens: 0,
     output_tokens: 0,
+    unclassified_input_tokens: 0,
     cached_input_tokens: 0,
     cache_creation_input_tokens: 0,
     reasoning_output_tokens: 0,
@@ -683,6 +687,7 @@ export default async function (req: Request): Promise<Response> {
     sa.totals.billable_total_tokens += tt;
     sa.totals.input_tokens += Number(row.input_tokens) || 0;
     sa.totals.output_tokens += Number(row.output_tokens) || 0;
+    sa.totals.unclassified_input_tokens += Number(row.unclassified_input_tokens) || 0;
     sa.totals.cached_input_tokens += Number(row.cached_input_tokens) || 0;
     sa.totals.cache_creation_input_tokens += Number(row.cache_creation_input_tokens) || 0;
     sa.totals.reasoning_output_tokens += Number(row.reasoning_output_tokens) || 0;
@@ -696,6 +701,7 @@ export default async function (req: Request): Promise<Response> {
     ma.totals.billable_total_tokens += tt;
     ma.totals.input_tokens += Number(row.input_tokens) || 0;
     ma.totals.output_tokens += Number(row.output_tokens) || 0;
+    ma.totals.unclassified_input_tokens += Number(row.unclassified_input_tokens) || 0;
     ma.totals.cached_input_tokens += Number(row.cached_input_tokens) || 0;
     ma.totals.cache_creation_input_tokens += Number(row.cache_creation_input_tokens) || 0;
     ma.totals.reasoning_output_tokens += Number(row.reasoning_output_tokens) || 0;
@@ -713,7 +719,8 @@ export default async function (req: Request): Promise<Response> {
     const reportedCost = Number(row.total_cost_usd);
     ma.totalCostUsd += subscriptionBacked
       ? 0
-      : SOURCES_WITH_AUTHORITATIVE_COST.has(src) &&
+      : !(Number(row.unclassified_input_tokens) > 0) &&
+    SOURCES_WITH_AUTHORITATIVE_COST.has(src) &&
           Number.isFinite(reportedCost) &&
           reportedCost > 0
         ? reportedCost
@@ -731,14 +738,14 @@ export default async function (req: Request): Promise<Response> {
         return {
           model: m.model,
           model_id: m.model_id,
-          totals: { ...m.totals, total_cost_usd: m.totalCostUsd.toFixed(6) },
+          totals: { ...m.totals, ...costFields(m.totalCostUsd.toFixed(6), m.totals.unclassified_input_tokens) },
         };
       })
       .sort((a, b) => b.totals.total_tokens - a.totals.total_tokens);
-    const sourceCost = models.reduce((sum, m) => sum + Number(m.totals.total_cost_usd), 0);
+    const sourceCost = models.reduce((sum, m) => sum + Number(m.totals.known_cost_usd), 0);
     return {
       source: s.source,
-      totals: { ...s.totals, total_cost_usd: sourceCost.toFixed(6) },
+      totals: { ...s.totals, ...costFields(sourceCost.toFixed(6), s.totals.unclassified_input_tokens) },
       models,
     };
   });
@@ -755,4 +762,12 @@ export default async function (req: Request): Promise<Response> {
       effective_from: new Date().toISOString().slice(0, 10),
     },
   });
+}
+
+function costFields(known: number | string, unclassified: number) {
+  return {
+    total_cost_usd: unclassified > 0 ? null : known,
+    known_cost_usd: known,
+    cost_status: unclassified > 0 ? "partial" : "complete",
+  };
 }

@@ -484,6 +484,7 @@ interface UsageRow {
   total_tokens: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  unclassified_input_tokens?: number | null;
   cached_input_tokens: number | null;
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
@@ -506,6 +507,7 @@ function computeRowCost(row: UsageRow): number {
   if (row.source === "pi-github-copilot" || row.source === "pi-copilot") return 0;
   const reportedCost = Number(row.total_cost_usd);
   if (
+    !(Number(row.unclassified_input_tokens) > 0) &&
     SOURCES_WITH_AUTHORITATIVE_COST.has(row.source) &&
     Number.isFinite(reportedCost) &&
     reportedCost > 0
@@ -872,6 +874,9 @@ export default async function (req: Request): Promise<Response> {
   const periodByModel = new Map<string, number>();
   let periodTotalTokens = 0;
   let periodTotalCost = 0;
+  let periodUnclassified = 0;
+  const dayUnclassified = new Map<string, number>();
+  const providerUnclassified = new Map<string, number>();
 
   for (const row of groupedRows) {
     const day = String(row.bucket || "");
@@ -900,16 +905,20 @@ export default async function (req: Request): Promise<Response> {
       if (row.model) periodByModel.set(row.model, (periodByModel.get(row.model) || 0) + tokens);
       periodTotalTokens += tokens;
       periodTotalCost += cost;
+      const unknown = Number(row.unclassified_input_tokens) || 0;
+      periodUnclassified += unknown;
+      dayUnclassified.set(day, (dayUnclassified.get(day) || 0) + unknown);
+      providerUnclassified.set(src, (providerUnclassified.get(src) || 0) + unknown);
     }
   }
 
   // best_day in period. A grouped zero row is not activity and must not turn
   // an otherwise empty profile into a synthetic "best" day.
-  let bestDay: { date: string; total_tokens: number; estimated_cost_usd: number } | null = null;
+  let bestDay: { date: string; total_tokens: number; estimated_cost_usd: number | null; total_cost_usd?: number | string | null; known_cost_usd?: number | string; cost_status?: string } | null = null;
   for (const [day, tokens] of periodByDay.entries()) {
     if (tokens <= 0) continue;
     if (!bestDay || tokens > bestDay.total_tokens) {
-      bestDay = { date: day, total_tokens: tokens, estimated_cost_usd: periodByDayCost.get(day) || 0 };
+      bestDay = { date: day, total_tokens: tokens, ...costFields(periodByDayCost.get(day) || 0, dayUnclassified.get(day) || 0), estimated_cost_usd: (dayUnclassified.get(day) || 0) > 0 ? null : periodByDayCost.get(day) || 0 };
     }
   }
 
@@ -957,7 +966,8 @@ export default async function (req: Request): Promise<Response> {
     .map(([source, v]) => ({
       source,
       total_tokens: v.tokens,
-      estimated_cost_usd: v.cost,
+      ...costFields(v.cost, providerUnclassified.get(source) || 0),
+      estimated_cost_usd: (providerUnclassified.get(source) || 0) > 0 ? null : v.cost,
       percent: periodTotalTokens > 0 ? v.tokens / periodTotalTokens : 0,
     }))
     .sort((a, b) => b.total_tokens - a.total_tokens);
@@ -992,9 +1002,12 @@ export default async function (req: Request): Promise<Response> {
     },
     totals: {
       total_tokens: periodTotalTokens,
-      estimated_cost_usd: periodTotalCost,
+      unclassified_input_tokens: periodUnclassified,
+      ...costFields(periodTotalCost, periodUnclassified),
+      estimated_cost_usd: periodUnclassified > 0 ? null : periodTotalCost,
       active_days: activeDays,
-      avg_per_day_usd: avgPerDayUsd,
+      avg_per_day_usd: periodUnclassified > 0 ? null : avgPerDayUsd,
+      known_avg_per_day_usd: avgPerDayUsd,
     },
     streak,
     best_day: bestDay,
@@ -1008,4 +1021,12 @@ export default async function (req: Request): Promise<Response> {
     badges,
     badges_include_unearned: isSelf,
   });
+}
+
+function costFields(known: number | string, unclassified: number) {
+  return {
+    total_cost_usd: unclassified > 0 ? null : known,
+    known_cost_usd: known,
+    cost_status: unclassified > 0 ? "partial" : "complete",
+  };
 }

@@ -8,7 +8,7 @@ struct FleetEntry: Identifiable {
     let id = UUID()
     let label: String
     let totalPercent: String
-    let usd: Double
+    let usd: Double?
     let usage: Int
     let models: [FleetModel]
 }
@@ -1049,12 +1049,12 @@ class DashboardViewModel: ObservableObject {
     private func buildFleetData() -> [FleetEntry] {
         guard let sources = modelBreakdown?.sources else { return [] }
 
-        let normalized: [(source: String, totalTokens: Int, totalCost: Double, models: [ModelEntry])] = sources.compactMap { entry in
+        let normalized: [(source: String, totalTokens: Int, totalCost: Double?, models: [ModelEntry])] = sources.compactMap { entry in
             let tokens = entry.totals.billableTotalTokens > 0
                 ? entry.totals.billableTotalTokens
                 : entry.totals.totalTokens
             guard tokens > 0 else { return nil }
-            let cost = Double(entry.totals.totalCostUsd ?? "0") ?? 0
+            let cost = entry.totals.totalCostUsd.flatMap(Double.init)
             return (source: entry.source, totalTokens: tokens, totalCost: cost, models: entry.models)
         }
 

@@ -738,14 +738,15 @@ internal sealed class PetWindow : Window
         // stuck on the light value — a near-black blob on a dark desktop.
         var petDark = NativeTheme.ResolveIsLight(NativeTheme.CurrentPreference) ? "false" : "true";
         var syncing = _syncing ? "true" : "false";
-        var cost = _stats.TodayCostUsd.ToString(inv);
+        var cost = _stats.CostPartial ? "—" : _stats.TodayCostUsd.ToString(inv);
         var limitsJson = _limits?.ToJsonString() ?? "null";
         var bubbleBand = _bubbleBand.ToString(inv);
         var connected = _connected ? "true" : "false";
         var statsJson = System.Text.Json.JsonSerializer.Serialize(new
         {
             todayTokens = _stats.TodayTokens,
-            todayCostUsd = _stats.TodayCostUsd,
+            todayCostUsd = _stats.CostPartial ? (decimal?)null : _stats.TodayCostUsd,
+            costPartial = _stats.CostPartial,
             conversations = _stats.TodayConversations,
             last7dTokens = _stats.Last7dTokens,
             last7dActiveDays = _stats.Last7dActiveDays,

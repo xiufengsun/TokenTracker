@@ -1219,6 +1219,11 @@ export function DashboardPage({
         value: hasSummary ? formatTokens(summary?.input_tokens) : "—",
         title: hasSummary ? formatTokensTooltip(summary?.input_tokens) : undefined,
       },
+      ...(Number(summary?.unclassified_input_tokens) > 0 ? [{
+        label: copy("usage.metric.unclassified_input"),
+        value: formatTokens(summary.unclassified_input_tokens),
+        title: formatTokensTooltip(summary.unclassified_input_tokens),
+      }] : []),
       {
         label: copy("usage.metric.output"),
         value: hasSummary ? formatTokens(summary?.output_tokens) : "—",
@@ -1238,6 +1243,7 @@ export function DashboardPage({
     [
       summary?.cached_input_tokens,
       summary?.input_tokens,
+      summary?.unclassified_input_tokens,
       summary?.output_tokens,
       summary?.reasoning_output_tokens,
       summaryTotalTokens,
@@ -1248,8 +1254,8 @@ export function DashboardPage({
   );
 
   const summaryCostValue = useMemo(
-    () => formatUsdCurrency(summary?.total_cost_usd, { currency, rate }),
-    [summary?.total_cost_usd, currency, rate],
+    () => summary?.cost_status === "partial" ? copy("usage.cost.partial") : formatUsdCurrency(summary?.total_cost_usd, { currency, rate }),
+    [summary?.total_cost_usd, summary?.cost_status, currency, rate],
   );
   const summaryConversationsValue = useMemo(
     () => summary?.conversation_count ?? null,

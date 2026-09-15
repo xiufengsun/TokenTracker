@@ -179,6 +179,11 @@ function getRowPricing(row) {
 // computeRowCost in src/lib/local-api.js. Moved here so vite mock + local
 // server share one source of truth.
 function computeRowCost(row) {
+  if (require("../usage-accounting").unclassifiedInput(row) > 0) return null;
+  return computeKnownRowCost(row);
+}
+
+function computeKnownRowCost(row) {
   if (LOCAL_INFERENCE_SOURCES.has(String(row?.source || "").toLowerCase())) return 0;
   // Pi can route a turn through a subscription-backed Copilot provider. Pi's
   // usage record reports a zero marginal cost for those turns; do not
@@ -254,6 +259,7 @@ module.exports = {
   getModelPricing,
   getRowPricing,
   computeRowCost,
+  computeKnownRowCost,
   resetPricingForTests,
   MODEL_PRICING,
   ZERO_PRICING,

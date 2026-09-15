@@ -1,4 +1,6 @@
 {
+  "usage.metric.unclassified_input": "입력 (캐시 구분 알 수 없음)",
+  "usage.cost.partial": "비용 정보 불완전",
   "usage.overview.all_tools": "전체",
   "usage.overview.all_models": "전체 모델",
   "usage.overview.all_models_note": "이름이 같은 모델은 도구 전체에서 합산되어 총사용량순으로 표시됩니다.",

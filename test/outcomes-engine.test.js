@@ -133,6 +133,66 @@ test("computeQualityPerDollar: join math (qpd, acceptance, effective tokens)", (
   assert.ok(Math.abs(res.totals.quality_per_dollar - 2 / 1.9) < 1e-9);
 });
 
+test("computeQualityPerDollar: preserves partial cost instead of turning unknown spend into zero", () => {
+  const queueRows = [{
+    source: "copilot",
+    model: "gpt-6-astra",
+    hour_start: "2026-09-12T10:00:00Z",
+    unclassified_input_tokens: 1_000_000,
+    output_tokens: 100,
+    total_tokens: 1_000_100,
+  }];
+  const outcomes = [{
+    timestamp: "2026-09-12T10:30:00Z",
+    model: "gpt-6-astra",
+    tool: "copilot",
+    accepted: true,
+  }];
+
+  const result = computeQualityPerDollar(queueRows, outcomes, {});
+  for (const row of [result.by_model[0], result.by_tool[0], result.totals]) {
+    assert.strictEqual(row.cost_usd, null);
+    assert.strictEqual(row.cost_status, "partial");
+    assert.ok(Math.abs(row.known_cost_usd - 0.005) < 1e-12);
+    assert.strictEqual(row.quality_per_dollar, null);
+    assert.strictEqual(row.effective_cost_usd, null);
+  }
+});
+
+test("computeQualityPerDollar: mixed complete and partial rows keep the aggregate denominator unknown", () => {
+  const queueRows = [
+    {
+      source: "opencode",
+      model: "kimi-k2.6",
+      hour_start: "2026-09-12T09:00:00Z",
+      input_tokens: 1_000_000,
+      total_tokens: 1_000_000,
+    },
+    {
+      source: "copilot",
+      model: "gpt-6-astra",
+      hour_start: "2026-09-12T10:00:00Z",
+      unclassified_input_tokens: 1_000_000,
+      output_tokens: 100,
+      total_tokens: 1_000_100,
+    },
+  ];
+  const outcomes = [
+    { timestamp: "2026-09-12T09:30:00Z", model: "kimi-k2.6", tool: "opencode", accepted: true },
+    { timestamp: "2026-09-12T10:30:00Z", model: "gpt-6-astra", tool: "copilot", accepted: true },
+  ];
+
+  const result = computeQualityPerDollar(queueRows, outcomes, {});
+  const completeModel = result.by_model.find((row) => row.key === "kimi-k2.6");
+  assert.ok(Math.abs(completeModel.cost_usd - 0.95) < 1e-12);
+  assert.strictEqual(completeModel.cost_status, undefined);
+  assert.strictEqual(result.totals.cost_usd, null);
+  assert.strictEqual(result.totals.cost_status, "partial");
+  assert.ok(Math.abs(result.totals.known_cost_usd - 0.955) < 1e-12);
+  assert.strictEqual(result.totals.quality_per_dollar, null);
+  assert.strictEqual(result.totals.effective_cost_usd, null);
+});
+
 test("computeQualityPerDollar: degrades to cost-only when no outcomes", () => {
   const queueRows = [
     { source: "opencode", model: "kimi-k2.6", hour_start: "2026-06-30T10:00:00Z", input_tokens: 1_000_000, total_tokens: 1_000_000 },

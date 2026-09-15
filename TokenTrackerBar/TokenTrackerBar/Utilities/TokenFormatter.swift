@@ -73,10 +73,10 @@ enum TokenFormatter {
     }
 
     /// Parses a cost string (e.g. "1.234567") and formats per the current currency.
-    /// Returns "<symbol>0.00" on failure.
+    /// Missing cost remains unavailable rather than becoming a zero bill.
     static func formatCostFromString(_ value: String?) -> String {
         guard let value, let parsed = Double(value) else {
-            return "\(currentCurrencySymbol())0.00"
+            return "—"
         }
         return formatCost(parsed)
     }

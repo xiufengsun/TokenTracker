@@ -529,6 +529,7 @@ function computeRowCost(row: HourlyRow): number {
   if (row.source === "pi-github-copilot" || row.source === "pi-copilot") return 0;
   const reportedCost = Number(row.total_cost_usd);
   if (
+    !(Number(row.unclassified_input_tokens) > 0) &&
     SOURCES_WITH_AUTHORITATIVE_COST.has(row.source) &&
     Number.isFinite(reportedCost) &&
     reportedCost > 0
@@ -624,6 +625,7 @@ interface HourlyRow {
   total_tokens: number;
   input_tokens: number;
   output_tokens: number;
+  unclassified_input_tokens: number;
   cached_input_tokens: number;
   cache_creation_input_tokens: number;
   reasoning_output_tokens: number;
@@ -644,6 +646,7 @@ interface UserAgg {
   kimi_tokens: number;
   other_tokens: number;
   total_tokens: number;
+  unclassified_input_tokens: number;
   estimated_cost_usd: number;
 }
 
@@ -661,6 +664,7 @@ function newUserAgg(): UserAgg {
     kimi_tokens: 0,
     other_tokens: 0,
     total_tokens: 0,
+    unclassified_input_tokens: 0,
     estimated_cost_usd: 0,
   };
 }
@@ -1089,6 +1093,7 @@ export default async function (req: Request): Promise<Response> {
       const col = SOURCE_COLUMN_MAP[row.source] ?? "other_tokens";
       (agg as unknown as Record<string, number>)[col] += tokens;
       agg.total_tokens += tokens;
+      agg.unclassified_input_tokens += Number(row.unclassified_input_tokens) || 0;
       agg.estimated_cost_usd += computeRowCost(row);
     }
     for (const blockedUserId of BLOCKED_LEADERBOARD_USER_IDS) {
@@ -1257,7 +1262,9 @@ export default async function (req: Request): Promise<Response> {
         kimi_tokens: agg.kimi_tokens,
         other_tokens: agg.other_tokens,
         total_tokens: agg.total_tokens,
-        estimated_cost_usd: Math.round(agg.estimated_cost_usd * 100) / 100,
+        unclassified_input_tokens: agg.unclassified_input_tokens,
+        ...costFields(Math.round(agg.estimated_cost_usd * 100) / 100, agg.unclassified_input_tokens),
+        estimated_cost_usd: agg.unclassified_input_tokens > 0 ? null : Math.round(agg.estimated_cost_usd * 100) / 100,
         display_name: displayName,
         avatar_url: avatarUrl,
         github_url: githubUrl,
@@ -1357,4 +1364,12 @@ export default async function (req: Request): Promise<Response> {
     results,
   });
   return json({ ok: true, results, ...(anomalyScan ? { scan: anomalyScan } : {}) });
+}
+
+function costFields(known: number | string, unclassified: number) {
+  return {
+    total_cost_usd: unclassified > 0 ? null : known,
+    known_cost_usd: known,
+    cost_status: unclassified > 0 ? "partial" : "complete",
+  };
 }

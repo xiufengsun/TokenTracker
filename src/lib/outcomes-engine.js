@@ -21,7 +21,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { computeRowCost } = require("./pricing");
+const { computeRowCost, computeKnownRowCost } = require("./pricing");
 
 function resolveOutcomesPath() {
   return path.join(os.homedir(), ".tokentracker", "tracker", "outcomes.jsonl");
@@ -122,14 +122,15 @@ function inWindow(dayStr, from, to) {
   return true;
 }
 
-function bumpCost(map, key, cost, tokens) {
+function bumpCost(map, key, knownCost, tokens, partial) {
   let agg = map.get(key);
   if (!agg) {
-    agg = { cost_usd: 0, total_tokens: 0 };
+    agg = { known_cost_usd: 0, total_tokens: 0, cost_status: "complete" };
     map.set(key, agg);
   }
-  agg.cost_usd += cost;
+  agg.known_cost_usd += knownCost;
   agg.total_tokens += tokens;
+  if (partial) agg.cost_status = "partial";
 }
 
 function bumpOutcome(map, key, accepted) {
@@ -143,7 +144,9 @@ function bumpOutcome(map, key, accepted) {
 }
 
 function combineRow(key, cost, out) {
-  const cost_usd = cost ? cost.cost_usd : 0;
+  const known_cost_usd = cost ? cost.known_cost_usd : 0;
+  const costPartial = cost?.cost_status === "partial";
+  const cost_usd = costPartial ? null : known_cost_usd;
   const total_tokens = cost ? cost.total_tokens : 0;
   const accepted = out ? out.accepted : 0;
   const outcomes = out ? out.outcomes : 0;
@@ -151,13 +154,18 @@ function combineRow(key, cost, out) {
   // quality per dollar = accepted, gate-passing outcomes ÷ dollars spent.
   // Null (not zero) when we can't form the ratio — no spend or no outcomes —
   // so the UI can distinguish "0 quality" from "not enough data".
-  const quality_per_dollar = cost_usd > 0 && outcomes > 0 ? accepted / cost_usd : null;
+  const quality_per_dollar = !costPartial && cost_usd > 0 && outcomes > 0
+    ? accepted / cost_usd
+    : null;
   // Effective Tokens: the share of tokens that produced accepted work.
   const effective_tokens = acceptance_rate === null ? null : total_tokens * acceptance_rate;
-  const effective_cost_usd = acceptance_rate === null ? null : cost_usd * acceptance_rate;
+  const effective_cost_usd = acceptance_rate === null || costPartial
+    ? null
+    : cost_usd * acceptance_rate;
   return {
     key,
     cost_usd,
+    ...(costPartial ? { known_cost_usd, cost_status: "partial" } : {}),
     total_tokens,
     accepted,
     outcomes,
@@ -204,10 +212,13 @@ function computeQualityPerDollar(queueRows, outcomes, { from = "", to = "" } = {
     if ((from || to) && !inWindow(day, from, to)) continue;
     const model = (row && row.model) || "unknown";
     const tool = (row && row.source) || "unknown";
-    const cost = computeRowCost(row) || 0;
+    const completeCost = computeRowCost(row);
+    const partial = completeCost === null;
+    const computedCost = partial ? computeKnownRowCost(row) : completeCost;
+    const knownCost = Number.isFinite(Number(computedCost)) ? Number(computedCost) : 0;
     const tokens = Number((row && row.total_tokens) || 0);
-    bumpCost(modelCost, model, cost, tokens);
-    bumpCost(toolCost, tool, cost, tokens);
+    bumpCost(modelCost, model, knownCost, tokens, partial);
+    bumpCost(toolCost, tool, knownCost, tokens, partial);
   }
 
   const modelOut = new Map();
@@ -222,11 +233,13 @@ function computeQualityPerDollar(queueRows, outcomes, { from = "", to = "" } = {
   const by_model = combine(modelCost, modelOut);
   const by_tool = combine(toolCost, toolOut);
 
-  let totalCost = 0;
+  let totalKnownCost = 0;
   let totalTokens = 0;
+  let totalCostStatus = "complete";
   for (const v of modelCost.values()) {
-    totalCost += v.cost_usd;
+    totalKnownCost += v.known_cost_usd;
     totalTokens += v.total_tokens;
+    if (v.cost_status === "partial") totalCostStatus = "partial";
   }
   let totalAccepted = 0;
   let totalOutcomes = 0;
@@ -236,7 +249,7 @@ function computeQualityPerDollar(queueRows, outcomes, { from = "", to = "" } = {
   }
   const totals = combineRow(
     "__all__",
-    { cost_usd: totalCost, total_tokens: totalTokens },
+    { known_cost_usd: totalKnownCost, total_tokens: totalTokens, cost_status: totalCostStatus },
     { accepted: totalAccepted, outcomes: totalOutcomes },
   );
 

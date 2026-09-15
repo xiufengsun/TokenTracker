@@ -32,7 +32,8 @@ internal sealed class UsagePoller : IDisposable
         long Last30dAvgPerDay,
         int StreakDays,
         int ActiveDaysAllTime,
-        IReadOnlyList<TopModelStat> TopModels);
+        IReadOnlyList<TopModelStat> TopModels,
+        bool CostPartial = false);
 
     // Local server only (127.0.0.1) — never route through a system/env proxy, or a
     // VPN/proxy user without a loopback bypass can't reach it (see ServerManager.Http).
@@ -290,7 +291,7 @@ internal sealed class UsagePoller : IDisposable
                 l7Tokens, l7Active,
                 l30Tokens, l30Avg,
                 streak, activeAll,
-                models);
+                models, totals.TryGetProperty("cost_status", out var costStatus) && costStatus.GetString() == "partial");
         }
         catch
         {

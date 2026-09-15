@@ -185,7 +185,7 @@ function renderProfileCard(opts: {
   const p = PALETTE[theme];
   const displayName = row.display_name || "Anonymous";
   const tokens = compactNumber(Number(row.total_tokens ?? 0));
-  const cost = formatCost(Number(row.estimated_cost_usd ?? 0));
+  const cost = row.estimated_cost_usd == null ? "Partial cost" : formatCost(Number(row.estimated_cost_usd));
   const rank = row.rank ? `#${row.rank}` : "—";
 
   // Mini provider breakdown (top 3 by tokens). Compact bar so the card

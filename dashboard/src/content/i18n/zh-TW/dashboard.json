@@ -1,4 +1,6 @@
 {
+  "usage.metric.unclassified_input": "輸入（快取拆分未知）",
+  "usage.cost.partial": "費用不完整",
   "usage.overview.all_tools": "全部",
   "usage.overview.all_models": "全部模型",
   "usage.overview.all_models_note": "同名模型會跨工具合併，並按總用量排序。",

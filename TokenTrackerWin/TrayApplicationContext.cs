@@ -1032,7 +1032,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // Feed the floating pet the SAME numbers the tray shows (same poller, same moment).
         _petWindow?.ApplyStats(s);
         _petWindow?.ApplyConnected(_server.Status == ServerManager.ServerStatus.Running);
-        var cost = symbol + (s.TodayCostUsd * rate).ToString("0.00", CultureInfo.InvariantCulture);
+        var cost = s.CostPartial ? "—" : symbol + (s.TodayCostUsd * rate).ToString("0.00", CultureInfo.InvariantCulture);
         var text = s.TodayTokens <= 0
             ? $"{_strings.TodayTitle}: {_strings.NoData}"
             : $"{_strings.TodayTitle}: {UsagePoller.FormatTokens(s.TodayTokens)} {_strings.TokensUnit} · {cost}";

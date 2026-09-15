@@ -366,7 +366,7 @@ function MobileLeaderboardRow({
           <div className="mt-1 text-[11px] text-oai-gray-400 dark:text-oai-gray-500">
             <span>{copy("leaderboard.column.est_cost")}</span>
             <span className={cn("ml-1 tabular-nums font-medium", isAnon ? "text-oai-gray-400/80 dark:text-oai-gray-500/80" : "text-oai-gray-600 dark:text-oai-gray-300")}>
-              {formatCost(entry?.estimated_cost_usd, currency, rate)}
+              {entry?.cost_status === "partial" ? copy("usage.cost.partial") : formatCost(entry?.estimated_cost_usd, currency, rate)}
             </span>
           </div>
         </div>
@@ -919,7 +919,7 @@ export function LeaderboardPage({
                       <TotalTokens value={entry?.total_tokens} />
                     </td>
                     <td className="hidden sm:table-cell px-3 sm:px-4 py-4 font-medium text-oai-brand-600 dark:text-oai-brand-400 whitespace-nowrap text-right tabular-nums bg-oai-brand-50 dark:bg-oai-brand-900/10" title="Based on estimated API pricing, not actual billing">
-                      {formatCost(entry?.estimated_cost_usd, currency, rate)}
+                      {entry?.cost_status === "partial" ? copy("usage.cost.partial") : formatCost(entry?.estimated_cost_usd, currency, rate)}
                     </td>
                     <LeaderboardTokenCells entry={entry} isMe orderedColumns={orderedColumns} />
                   </tr>
@@ -968,7 +968,7 @@ export function LeaderboardPage({
                     <TotalTokens value={entry?.total_tokens} />
                   </td>
                   <td className="hidden sm:table-cell px-3 sm:px-4 py-4 text-oai-gray-500 dark:text-oai-gray-400 whitespace-nowrap text-right tabular-nums bg-white dark:bg-oai-gray-950 group-hover:bg-oai-gray-50 dark:group-hover:bg-oai-gray-900/60" title="Based on estimated API pricing, not actual billing">
-                    {formatCost(entry?.estimated_cost_usd, currency, rate)}
+                    {entry?.cost_status === "partial" ? copy("usage.cost.partial") : formatCost(entry?.estimated_cost_usd, currency, rate)}
                   </td>
                   <LeaderboardTokenCells entry={entry} isMe={false} orderedColumns={orderedColumns} />
                 </tr>

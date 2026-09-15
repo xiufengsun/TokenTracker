@@ -510,7 +510,9 @@ async function runLocalSyncCommand(extraEnv = {}, opts = {}) {
 // at require-time, so dev-server mocks still get LiteLLM-backed cost data.
 const __viteRequire = createRequire(import.meta.url);
 const __pricing = __viteRequire(path.resolve(REPO_ROOT, "src/lib/pricing"));
-const { getModelPricing, computeRowCost } = __pricing;
+const { getModelPricing, computeKnownRowCost: computeRowCost } = __pricing;
+const { annotateCostPayload } = __viteRequire(path.resolve(REPO_ROOT, 'src/lib/usage-accounting.js'));
+const stringifyUsagePayload = (data) => JSON.stringify(annotateCostPayload(data));
 
 async function handleLocalApi(req, res, url) {
   // Honor the dashboard's tz / tz_offset_minutes params so hourly/daily
@@ -622,7 +624,7 @@ async function handleLocalApi(req, res, url) {
           total_cost_usd: 0,
           input_tokens: 0,
           output_tokens: 0,
-          cached_input_tokens: 0,
+          unclassified_input_tokens: 0, cached_input_tokens: 0,
           cache_creation_input_tokens: 0,
           reasoning_output_tokens: 0,
           conversation_count: 0,
@@ -635,6 +637,7 @@ async function handleLocalApi(req, res, url) {
       agg.input_tokens += row.input_tokens || 0;
       agg.output_tokens += row.output_tokens || 0;
       agg.cached_input_tokens += row.cached_input_tokens || 0;
+      agg.unclassified_input_tokens = (agg.unclassified_input_tokens || 0) + (row.unclassified_input_tokens || 0 || 0);
       agg.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
       agg.reasoning_output_tokens += row.reasoning_output_tokens || 0;
       agg.conversation_count += row.conversation_count || 0;
@@ -655,7 +658,7 @@ async function handleLocalApi(req, res, url) {
       res.statusCode = 405;
       res.setHeader("Allow", "POST");
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ ok: false, error: "Method Not Allowed" }));
+      res.end(stringifyUsagePayload({ ok: false, error: "Method Not Allowed" }));
       return true;
     }
 
@@ -691,11 +694,11 @@ async function handleLocalApi(req, res, url) {
         // ignore
       }
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ ok: true, ...result }));
+      res.end(stringifyUsagePayload({ ok: true, ...result }));
     } catch (error) {
       res.statusCode = 500;
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({
+      res.end(stringifyUsagePayload({
         ok: false,
         error: error?.message || "Local sync failed",
         code: error?.code ?? null,
@@ -721,19 +724,19 @@ async function handleLocalApi(req, res, url) {
       const outcomes = readOutcomesData(resolveOutcomesPath());
       if (!outcomes.length) {
         res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ available: false, from, to, by_model: [], by_tool: [], totals: null }));
+        res.end(stringifyUsagePayload({ available: false, from, to, by_model: [], by_tool: [], totals: null }));
         return true;
       }
 
       const queueRows = readQueueData();
       const result = computeQualityPerDollar(queueRows, outcomes, { from, to });
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ from, to, scope: null, excluded_sources: [], ...result }));
+      res.end(stringifyUsagePayload({ from, to, scope: null, excluded_sources: [], ...result }));
     } catch (e) {
       console.warn("[vite-mock] tokentracker-outcomes failed:", e?.message || e);
       res.statusCode = 500;
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: e?.message || "Unknown error" }));
+      res.end(stringifyUsagePayload({ error: e?.message || "Unknown error" }));
     }
     return true;
   }
@@ -751,13 +754,14 @@ async function handleLocalApi(req, res, url) {
       acc.input_tokens += row.input_tokens;
       acc.output_tokens += row.output_tokens;
       acc.cached_input_tokens += row.cached_input_tokens;
+      acc.unclassified_input_tokens = (acc.unclassified_input_tokens || 0) + (row.unclassified_input_tokens || 0);
       acc.cache_creation_input_tokens += row.cache_creation_input_tokens;
       acc.reasoning_output_tokens += row.reasoning_output_tokens;
       acc.conversation_count += row.conversation_count;
       return acc;
     }, {
       total_tokens: 0, billable_total_tokens: 0, total_cost_usd: 0, input_tokens: 0,
-      output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0,
+      output_tokens: 0, unclassified_input_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0,
     });
     const totalCost = totals.total_cost_usd;
 
@@ -804,7 +808,7 @@ async function handleLocalApi(req, res, url) {
     last30dFrom.setUTCDate(last30dFrom.getUTCDate() - 29);
 
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({
+    res.end(stringifyUsagePayload({
       from, to, days: daily.length,
       totals: { ...totals, total_cost_usd: totalCost.toFixed(6) },
       rolling: {
@@ -833,7 +837,7 @@ async function handleLocalApi(req, res, url) {
     const rows = readQueueData();
     const daily = aggregateByDay(rows).filter(d => d.day >= from && d.day <= to);
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ from, to, data: daily }));
+    res.end(stringifyUsagePayload({ from, to, data: daily }));
     return true;
   }
 
@@ -857,7 +861,7 @@ async function handleLocalApi(req, res, url) {
           billable_total_tokens: 0,
           input_tokens: 0,
           output_tokens: 0,
-          cached_input_tokens: 0,
+          unclassified_input_tokens: 0, cached_input_tokens: 0,
           cache_creation_input_tokens: 0,
           reasoning_output_tokens: 0,
           conversation_count: 0,
@@ -870,6 +874,7 @@ async function handleLocalApi(req, res, url) {
       agg.input_tokens += row.input_tokens || 0;
       agg.output_tokens += row.output_tokens || 0;
       agg.cached_input_tokens += row.cached_input_tokens || 0;
+      agg.unclassified_input_tokens = (agg.unclassified_input_tokens || 0) + (row.unclassified_input_tokens || 0 || 0);
       agg.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
       agg.reasoning_output_tokens += row.reasoning_output_tokens || 0;
       agg.conversation_count += row.conversation_count || 0;
@@ -879,7 +884,7 @@ async function handleLocalApi(req, res, url) {
     }
     const data = Array.from(byMonth.values()).sort((a, b) => a.month.localeCompare(b.month));
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ from, to, data }));
+    res.end(stringifyUsagePayload({ from, to, data }));
     return true;
   }
 
@@ -896,7 +901,7 @@ async function handleLocalApi(req, res, url) {
         billable_total_tokens: 0,
         input_tokens: 0,
         output_tokens: 0,
-        cached_input_tokens: 0,
+        unclassified_input_tokens: 0, cached_input_tokens: 0,
         cache_creation_input_tokens: 0,
         reasoning_output_tokens: 0,
         conversation_count: 0,
@@ -917,6 +922,7 @@ async function handleLocalApi(req, res, url) {
         agg.input_tokens += row.input_tokens || 0;
         agg.output_tokens += row.output_tokens || 0;
         agg.cached_input_tokens += row.cached_input_tokens || 0;
+        agg.unclassified_input_tokens = (agg.unclassified_input_tokens || 0) + (row.unclassified_input_tokens || 0 || 0);
         agg.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
         agg.reasoning_output_tokens += row.reasoning_output_tokens || 0;
         agg.conversation_count += row.conversation_count || 0;
@@ -927,7 +933,7 @@ async function handleLocalApi(req, res, url) {
     }
 
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ day, data: hourlyData }));
+    res.end(stringifyUsagePayload({ day, data: hourlyData }));
     return true;
   }
 
@@ -982,7 +988,7 @@ async function handleLocalApi(req, res, url) {
       weeksArr.push(cells.slice(i, i + 7));
     }
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ from, to, week_starts_on: "sun", active_days: activeDays, streak_days: 0, weeks: weeksArr }));
+    res.end(stringifyUsagePayload({ from, to, week_starts_on: "sun", active_days: activeDays, streak_days: 0, weeks: weeksArr }));
     return true;
   }
 
@@ -1010,7 +1016,7 @@ async function handleLocalApi(req, res, url) {
       if (!bySource.has(source)) {
         bySource.set(source, {
           source,
-          totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_cost_usd: "0" },
+          totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, unclassified_input_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_cost_usd: "0" },
           models: new Map()
         });
       }
@@ -1022,6 +1028,7 @@ async function handleLocalApi(req, res, url) {
       sourceAgg.totals.input_tokens += row.input_tokens || 0;
       sourceAgg.totals.output_tokens += row.output_tokens || 0;
       sourceAgg.totals.cached_input_tokens += row.cached_input_tokens || 0;
+      sourceAgg.totals.unclassified_input_tokens = (sourceAgg.totals.unclassified_input_tokens || 0) + (row.unclassified_input_tokens || 0 || 0);
       sourceAgg.totals.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
       sourceAgg.totals.reasoning_output_tokens += row.reasoning_output_tokens || 0;
 
@@ -1030,7 +1037,7 @@ async function handleLocalApi(req, res, url) {
         sourceAgg.models.set(modelName, {
           model: modelName,
           model_id: modelName,
-          totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_cost_usd: "0" }
+          totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, unclassified_input_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_cost_usd: "0" }
         });
       }
       const modelAgg = sourceAgg.models.get(modelName);
@@ -1039,6 +1046,7 @@ async function handleLocalApi(req, res, url) {
       modelAgg.totals.input_tokens += row.input_tokens || 0;
       modelAgg.totals.output_tokens += row.output_tokens || 0;
       modelAgg.totals.cached_input_tokens += row.cached_input_tokens || 0;
+      modelAgg.totals.unclassified_input_tokens = (modelAgg.totals.unclassified_input_tokens || 0) + (row.unclassified_input_tokens || 0 || 0);
       modelAgg.totals.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
       modelAgg.totals.reasoning_output_tokens += row.reasoning_output_tokens || 0;
       modelAgg.totals.total_cost_usd = Number(modelAgg.totals.total_cost_usd || 0)
@@ -1061,7 +1069,7 @@ async function handleLocalApi(req, res, url) {
     });
 
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({
+    res.end(stringifyUsagePayload({
       from, to, days: 0, sources,
       pricing: { model: "default", pricing_mode: "add", source: "default", effective_from: new Date().toISOString().slice(0, 10), rates_per_million_usd: { input: "1.750000", cached_input: "0.175000", output: "14.000000", reasoning_output: "14.000000" } },
     }));
@@ -1084,16 +1092,16 @@ async function handleLocalApi(req, res, url) {
       const { computeClaudeCategoryBreakdown, unsupportedSourcePayload } = __viteRequire(categorizerPath);
       if (requestedSource !== "claude") {
         res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ from, to, ...unsupportedSourcePayload(requestedSource) }));
+        res.end(stringifyUsagePayload({ from, to, ...unsupportedSourcePayload(requestedSource) }));
         return true;
       }
       const result = await computeClaudeCategoryBreakdown({ from, to, projectDir: process.cwd() });
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ from, to, ...result }));
+      res.end(stringifyUsagePayload({ from, to, ...result }));
     } catch (e) {
       console.warn("[vite-mock] usage-category-breakdown failed:", e?.message || e);
       res.statusCode = 500;
-      res.end(JSON.stringify({ error: e?.message || "compute_failed" }));
+      res.end(stringifyUsagePayload({ error: e?.message || "compute_failed" }));
     }
     return true;
   }
@@ -1114,11 +1122,11 @@ async function handleLocalApi(req, res, url) {
         platform: process.platform,
       });
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify(data));
+      res.end(stringifyUsagePayload(data));
     } catch (e) {
       res.statusCode = 500;
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: e?.message || "Unknown error" }));
+      res.end(stringifyUsagePayload({ error: e?.message || "Unknown error" }));
     }
     return true;
   }
@@ -1126,7 +1134,7 @@ async function handleLocalApi(req, res, url) {
   // 处理 user-status
   if (pathname === "/functions/tokentracker-user-status") {
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({
+    res.end(stringifyUsagePayload({
       user_id: "local-user", email: "local@localhost", name: "Local User", is_public: false,
       created_at: new Date().toISOString(),
       pro: { active: true, sources: ["local"], expires_at: null, partial: false, as_of: new Date().toISOString() },
@@ -1160,7 +1168,7 @@ async function proxyToLocalCli(req, res) {
   } catch (error) {
     res.statusCode = 502;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({
+    res.end(stringifyUsagePayload({
       error: `Local CLI not reachable on :7680 — start it with: node bin/tracker.js serve --no-sync --no-open`,
       detail: String(error?.message || error),
     }));

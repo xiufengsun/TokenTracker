@@ -25,17 +25,19 @@ function avgCostPerAcc(cost_usd, accepted) {
 }
 
 function Row({ row }) {
+  const costPartial = row.cost_status === "partial";
+  const costLabel = costPartial ? copy("usage.cost.partial") : money(row.cost_usd);
   return (
     <tr className="border-t border-oai-gray-100 dark:border-oai-gray-800/60 hover:bg-oai-gray-50/40 dark:hover:bg-oai-gray-800/10 transition-colors">
       <td className="py-2.5 pr-2 font-mono text-[11px] text-oai-gray-700 dark:text-oai-gray-300 truncate max-w-[80px] xs:max-w-[110px] sm:max-w-[140px]" title={row.key}>
         {row.key}
       </td>
-      <td className="py-2.5 px-1.5 text-right tabular-nums text-oai-gray-600 dark:text-oai-gray-400">{money(row.cost_usd)}</td>
+      <td className="py-2.5 px-1.5 text-right tabular-nums text-oai-gray-600 dark:text-oai-gray-400">{costLabel}</td>
       <td className="py-2.5 px-1.5 text-right tabular-nums text-oai-gray-600 dark:text-oai-gray-400">
         {row.accepted}/{row.outcomes}
       </td>
       <td className="py-2.5 px-1.5 text-right tabular-nums text-oai-gray-600 dark:text-oai-gray-400">{pct(row.acceptance_rate)}</td>
-      <td className="py-2.5 pl-2 pr-2 text-right tabular-nums font-semibold text-oai-black dark:text-oai-white">{avgCostPerAcc(row.cost_usd, row.accepted)}</td>
+      <td className="py-2.5 pl-2 pr-2 text-right tabular-nums font-semibold text-oai-black dark:text-oai-white">{costPartial ? copy("usage.cost.partial") : avgCostPerAcc(row.cost_usd, row.accepted)}</td>
     </tr>
   );
 }
@@ -60,6 +62,9 @@ export function QualityPerDollarCard({ from, to, deviceId = null }) {
 
   const top = models.slice(0, 6);
   const totals = data.totals || {};
+  const totalsCost = totals.cost_status === "partial"
+    ? copy("usage.cost.partial")
+    : money(totals.cost_usd);
   const subtitle = `${copy("qpd.card.subtitle")}${loading ? ` ${copy("qpd.card.updating")}` : ""}`;
 
   return (
@@ -96,7 +101,7 @@ export function QualityPerDollarCard({ from, to, deviceId = null }) {
           {copy("qpd.card.totals", {
             accepted: totals.accepted ?? 0,
             outcomes: totals.outcomes ?? 0,
-            cost: money(totals.cost_usd),
+            cost: totalsCost,
           })}
         </span>
         <span title={`${copy("qpd.card.et_tooltip")} · ${formatTokensTooltip(totals.effective_tokens)}`}>

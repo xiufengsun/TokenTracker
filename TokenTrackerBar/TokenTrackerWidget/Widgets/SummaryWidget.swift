@@ -197,7 +197,7 @@ private func todaySubText(snap: WidgetSnapshot) -> Text {
 }
 
 /// Plain gray cost line for the 7d / 30d hero blocks.
-private func costSubText(_ usd: Double) -> Text {
+private func costSubText(_ usd: Double?) -> Text {
     Text(WidgetFormat.cost(usd)).foregroundColor(.secondary)
 }
 

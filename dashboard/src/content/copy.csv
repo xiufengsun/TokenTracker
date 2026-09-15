@@ -1,4 +1,6 @@
 key,module,page,component,slot,text,notes,status
+usage.metric.unclassified_input,dashboard,DashboardPage,UsageOverview,input,"Input (cache split unknown)",,active
+usage.cost.partial,dashboard,DashboardPage,UsageOverview,cost,"Cost incomplete","Input cache split was not reported; the full cost cannot be calculated.",active
 header.auth.sign_in_aria,shared,*,InsforgeUserHeaderControls,sign_in_aria,"Sign in",,active
 login.back_home,shared,LoginPage,LoginPage,back_home,"Back to home",,active
 login.cloud_only,shared,LoginPage,LoginPage,cloud_only,"Cloud sign-in is not configured. Use the local dashboard on localhost.",,active
