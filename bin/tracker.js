@@ -40,7 +40,11 @@ if (applyResult && applyResult.unprotected === true) {
 }
 
 run(argv).catch((err) => {
-  console.error(err?.stack || String(err));
+  if (!debug && isUsageError(err)) {
+    console.error(err.message);
+  } else {
+    console.error(err?.stack || String(err));
+  }
   if (debug) {
     if (typeof err?.status === 'number') {
       console.error(`Status: ${err.status}`);
@@ -58,3 +62,8 @@ run(argv).catch((err) => {
   }
   process.exitCode = 1;
 });
+
+function isUsageError(err) {
+  const message = typeof err?.message === "string" ? err.message : "";
+  return message.startsWith("Unknown command:") || message.startsWith("Unknown option:");
+}

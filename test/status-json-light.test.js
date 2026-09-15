@@ -83,6 +83,7 @@ test("status --bogus rejects unknown flag", () => {
   const res = runStatus(["--bogus"]);
   assert.notEqual(res.status, 0, "unknown flag must be rejected");
   assert.match(res.stderr + res.stdout, /Unknown option: --bogus/);
+  assert.doesNotMatch(res.stderr, /at parseArgs/);
 });
 
 test("status --json --no-spinner is accepted (no-spinner is a no-op for status)", () => {

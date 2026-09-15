@@ -69,6 +69,7 @@ tokentracker status       # 查看 hook 挂接状态
 tokentracker status --json   # 机器可读 JSON（pipe 到 jq、给 AI agent 喂数据）
 tokentracker status --light  # 纯 ASCII 表（CI / SSH 用，无 spinner）
 tokentracker doctor       # 健康检查
+tokentracker update       # 更新本 CLI
 ```
 
 ### 🍺 Homebrew（macOS）

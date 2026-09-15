@@ -67,6 +67,7 @@ tokentracker              # ダッシュボードを開く
 tokentracker sync         # 手動同期
 tokentracker status       # hook の状態を確認
 tokentracker doctor       # ヘルスチェック
+tokentracker update       # この CLI を更新
 ```
 
 ### 🍺 Homebrew (macOS)

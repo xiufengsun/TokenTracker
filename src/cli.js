@@ -8,6 +8,7 @@ const { cmdServe } = require("./commands/serve");
 const { cmdDeviceLogin } = require("./commands/device-login");
 const { cmdWrapped } = require("./commands/wrapped");
 const { cmdSessions } = require("./commands/sessions");
+const { cmdUpdate } = require("./commands/update");
 
 async function run(argv) {
   const [command, ...rest] = argv;
@@ -18,7 +19,7 @@ async function run(argv) {
     return;
   }
 
-  if (command === "-h" || command === "--help") {
+  if (command === "-h" || command === "--help" || command === "help") {
     printHelp();
     return;
   }
@@ -60,9 +61,20 @@ async function run(argv) {
     case "sessions":
       await cmdSessions(rest);
       return;
+    case "update":
+    case "upgrade":
+      await cmdUpdate(rest);
+      return;
     default:
-      throw new Error(`Unknown command: ${command}`);
+      printUnknownCommand(command);
+      process.exitCode = 1;
+      return;
   }
+}
+
+function printUnknownCommand(command) {
+  process.stderr.write(`Unknown command: ${command}\n\n`);
+  printHelp();
 }
 
 function printHelp() {
@@ -73,6 +85,7 @@ function printHelp() {
       "",
       "Usage:",
       "  npx tokentracker                                         Open local dashboard",
+      "  npx tokentracker -h, --help                              Show this help",
       "  npx tokentracker -v, --version                           Show version info",
       "  npx tokentracker [--debug] serve [--port 7680] [--no-open] [--no-sync]",
       "  npx tokentracker [--debug] init [--yes] [--dry-run] [--no-open] [--link-code <code>]",
@@ -84,6 +97,7 @@ function printHelp() {
       "  npx tokentracker [--debug] device-login [--json] [--base-url <url>]",
       "  npx tokentracker [--debug] wrapped [--year 2026] [--json]",
       "  npx tokentracker sessions [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--format json|csv] [--out file] [--refresh] [--no-git]",
+      "  npx tokentracker [--debug] update",
       "",
       "Notes:",
       "  - init: consent first, local setup next, browser sign-in last.",
@@ -99,9 +113,10 @@ function printHelp() {
       "  - --debug shows original backend errors.",
       "  - device-login pairs a headless CLI / SSH session with a browser sign-in (15-min code).",
       "  - sessions exports metadata-only Claude/Codex efficiency analytics; no prompt or response text is retained.",
+      "  - update delegates to npm, bun, pnpm, yarn, or Homebrew. It will not switch install methods.",
       "",
     ].join("\n"),
   );
 }
 
-module.exports = { run };
+module.exports = { run, printHelp };
