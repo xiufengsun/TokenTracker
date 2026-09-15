@@ -93,7 +93,8 @@ const {
   parseReasonixIncremental,
   resolveGrokBuildSessions,
   parseGrokBuildIncremental,
-  listAntigravityTranscripts,
+  resolveAntigravityDbPath,
+  listAntigravityTranscriptsWithStatus,
   parseAntigravityIncremental,
   resolveCodebuddyProjectFiles,
   codebuddyJsonlHasUsage,
@@ -1145,17 +1146,26 @@ async function cmdSync(argv, context = {}) {
     }
 
     let antigravityFiles = [];
+    let antigravityInventoryComplete = true;
     if (sourceAllowed("antigravity") && geminiPaths) {
+      const knownAntigravityFiles = new Set(
+        Object.keys(cursors.files || {}).filter((filePath) => resolveAntigravityDbPath(filePath)),
+      );
       const fileSets = [];
       if (geminiPaths.native) {
-        fileSets.push(await listAntigravityTranscripts(geminiPaths.native));
+        fileSets.push(
+          await listAntigravityTranscriptsWithStatus(geminiPaths.native, knownAntigravityFiles),
+        );
       }
       if (geminiPaths.wsl) {
-        fileSets.push(await listAntigravityTranscripts(geminiPaths.wsl));
+        fileSets.push(
+          await listAntigravityTranscriptsWithStatus(geminiPaths.wsl, knownAntigravityFiles),
+        );
       }
+      antigravityInventoryComplete = fileSets.every((set) => set.complete);
       const seen = new Set();
       for (const set of fileSets) {
-        for (const f of set) {
+        for (const f of set.files) {
           if (!seen.has(f)) {
             seen.add(f);
             antigravityFiles.push(f);
@@ -1186,6 +1196,7 @@ async function cmdSync(argv, context = {}) {
             );
           },
           source: "antigravity",
+          inventoryComplete: antigravityInventoryComplete,
         });
       } catch (err) {
         warnProviderParseFailure("Antigravity", err, opts);
