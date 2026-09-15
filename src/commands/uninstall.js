@@ -44,6 +44,9 @@ async function cmdUninstall(argv) {
   const codebuddySettingsPath = path.join(codebuddyDir, "settings.json");
   const workbuddyDir = process.env.WORKBUDDY_HOME || path.join(home, ".workbuddy");
   const workbuddySettingsPath = path.join(workbuddyDir, "settings.json");
+  // WorkBuddy AI — international build, sibling home (~/.workbuddy-ai).
+  const workbuddyAiDir = process.env.WORKBUDDY_AI_HOME || path.join(home, ".workbuddy-ai");
+  const workbuddyAiSettingsPath = path.join(workbuddyAiDir, "settings.json");
   const geminiConfigDir = resolveGeminiConfigDir({ home, env: process.env });
   const geminiSettingsPath = resolveGeminiSettingsPath({ configDir: geminiConfigDir });
   const opencodeConfigDir = resolveOpencodeConfigDir({ home, env: process.env });
@@ -57,6 +60,7 @@ async function cmdUninstall(argv) {
   const claudeHookCommand = buildClaudeHookCommand(notifyPath);
   const codebuddyHookCommand = buildHookCommand(notifyPath, "codebuddy");
   const workbuddyHookCommand = buildHookCommand(notifyPath, "workbuddy");
+  const workbuddyAiHookCommand = buildHookCommand(notifyPath, "workbuddy-ai");
   const geminiHookCommand = buildGeminiHookCommand(notifyPath);
 
   const codexConfigExists = await isFile(codexConfigPath);
@@ -65,6 +69,7 @@ async function cmdUninstall(argv) {
   const claudeConfigExists = await isFile(claudeSettingsPath);
   const codebuddyConfigExists = await isFile(codebuddySettingsPath);
   const workbuddyConfigExists = await isFile(workbuddySettingsPath);
+  const workbuddyAiConfigExists = await isFile(workbuddyAiSettingsPath);
   const geminiConfigExists = await isDir(geminiConfigDir);
   const opencodeConfigExists = await isDir(opencodeConfigDir);
   const codexRestore = codexConfigExists
@@ -104,6 +109,12 @@ async function cmdUninstall(argv) {
     ? await removeClaudeHook({
         settingsPath: workbuddySettingsPath,
         hookCommand: workbuddyHookCommand,
+      })
+    : { removed: false, skippedReason: "config-missing" };
+  const workbuddyAiRemove = workbuddyAiConfigExists
+    ? await removeClaudeHook({
+        settingsPath: workbuddyAiSettingsPath,
+        hookCommand: workbuddyAiHookCommand,
       })
     : { removed: false, skippedReason: "config-missing" };
   const geminiRemove = geminiConfigExists
@@ -191,6 +202,13 @@ async function cmdUninstall(argv) {
             ? "- WorkBuddy hooks: no change"
             : "- WorkBuddy hooks: skipped"
         : "- WorkBuddy hooks: skipped (settings.json not found)",
+      workbuddyAiConfigExists
+        ? workbuddyAiRemove?.removed
+          ? `- WorkBuddy AI hooks removed: ${workbuddyAiSettingsPath}`
+          : workbuddyAiRemove?.skippedReason === "hook-missing"
+            ? "- WorkBuddy AI hooks: no change"
+            : "- WorkBuddy AI hooks: skipped"
+        : "- WorkBuddy AI hooks: skipped (settings.json not found)",
       geminiConfigExists
         ? geminiRemove?.removed
           ? `- Gemini hooks removed: ${geminiSettingsPath}`

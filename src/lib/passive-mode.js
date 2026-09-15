@@ -171,6 +171,16 @@ function detectPassiveProviders({ home, hookStatus, env = process.env }) {
     settingsPath: path.join(home, ".workbuddy", "settings.json"),
   }));
 
+  // WorkBuddy AI — international build; data + hooks in ~/.workbuddy-ai
+  out.push(buildEntry({
+    name: "workbuddy-ai",
+    hookExpected: true,
+    hookInstalled: Boolean(hookStatus?.["workbuddy-ai"]),
+    logsDir: path.join(home, ".workbuddy-ai"),
+    logsPredicate: (_full, name) => name === "projects" || name.endsWith(".jsonl"),
+    settingsPath: path.join(home, ".workbuddy-ai", "settings.json"),
+  }));
+
   return out;
 }
 

@@ -1049,7 +1049,17 @@ function scanClaudeProjects(projectMap) {
 // ---------------------------------------------------------------------------
 
 function json(res, data, status) {
-  res.writeHead(status || 200, { "Content-Type": "application/json" });
+  // Usage and cost payloads change on every sync, and cost is re-priced on
+  // every read (pricing is applied per request, never stored in the queue) —
+  // so a cached response can pin stale costs on screen indefinitely. WebView2
+  // caches responses that carry no freshness directive, and the dashboard's
+  // local fetch path omits `cache: "no-store"` (only the cloud path sets it).
+  // Endpoints that care already set this header by hand; do it once here so
+  // every JSON response is covered.
+  res.writeHead(status || 200, {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+  });
   res.end(JSON.stringify(data));
 }
 
