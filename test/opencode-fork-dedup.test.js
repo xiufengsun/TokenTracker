@@ -19,6 +19,7 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 const { test } = require("node:test");
 
+const { openCursorStore } = require("../src/lib/cursor-store");
 const { parseOpencodeIncremental, parseOpencodeDbIncremental } = require("../src/lib/rollout");
 
 const HOUR = "2026-08-06T10:00:00.000Z";
@@ -145,6 +146,77 @@ test("parseOpencodeDbIncremental counts a fork-copied prefix once and keeps the 
     assert.equal(again.eventsAggregated, 0);
     assert.equal(again.bucketsQueued, 0);
     assert.deepEqual(await queueTotals(queuePath), totals);
+  });
+});
+
+test("sharded OpenCode cursors load only the batch state and preserve fork dedup", async () => {
+  await withTmp(async (tmp) => {
+    const trackerDir = path.join(tmp, "tracker");
+    const cursorsPath = path.join(trackerDir, "cursors.json");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = newCursors();
+    const base = Date.parse(HOUR);
+    const parent = msg({
+      id: "msg_parent",
+      sessionID: "ses_parent",
+      created: base + 1000,
+      input: 4000,
+      output: 40,
+    });
+    const fork = msg({
+      id: "msg_fork",
+      sessionID: "ses_fork",
+      created: base + 1000,
+      input: 4000,
+      output: 40,
+    });
+
+    await parseOpencodeDbIncremental({
+      dbMessages: [parent],
+      cursors,
+      queuePath,
+      source: "opencode",
+    });
+    await fs.mkdir(trackerDir, { recursive: true });
+    await fs.writeFile(cursorsPath, `${JSON.stringify(cursors)}\n`, "utf8");
+    const migrated = await openCursorStore({ trackerDir, cursorsPath, forceV2: true });
+    await migrated.commit();
+
+    const store = await openCursorStore({ trackerDir, cursorsPath });
+    const result = await parseOpencodeDbIncremental({
+      dbMessages: [fork],
+      cursors: store.cursors,
+      queuePath,
+      source: "opencode",
+      opencodeCursorStore: store,
+    });
+    assert.equal(result.eventsAggregated, 0);
+    assert.equal((await queueTotals(queuePath)).input_tokens, 4000);
+    assert.equal(store.opencodeMessageShardLoadCount, 1);
+    assert.equal(store.opencodeFingerprintShardLoadCount, 1);
+    assert.equal(store.cursors.opencode.messages["ses_fork|msg_fork"].dedupedForkCopy, true);
+    const beforeCommit = await parseOpencodeDbIncremental({
+      dbMessages: [fork],
+      cursors: store.cursors,
+      queuePath,
+      source: "opencode",
+      opencodeCursorStore: store,
+    });
+    assert.equal(beforeCommit.eventsAggregated, 0);
+    assert.equal(store.cursors.opencode.messages["ses_fork|msg_fork"].dedupedForkCopy, true);
+    await store.commit();
+
+    const reopened = await openCursorStore({ trackerDir, cursorsPath });
+    const again = await parseOpencodeDbIncremental({
+      dbMessages: [fork],
+      cursors: reopened.cursors,
+      queuePath,
+      source: "opencode",
+      opencodeCursorStore: reopened,
+    });
+    assert.equal(again.eventsAggregated, 0);
+    assert.equal(again.bucketsQueued, 0);
+    assert.equal((await queueTotals(queuePath)).input_tokens, 4000);
   });
 });
 
@@ -332,6 +404,64 @@ test("parseOpencodeDbIncremental never drops a same-session duplicate (fork alwa
     assert.equal(res.eventsAggregated, 2);
     const totals = await queueTotals(queuePath);
     assert.equal(totals.input_tokens, 1800);
+  });
+});
+
+test("fork dedup scans past same-session fingerprint owners", async () => {
+  await withTmp(async (tmp) => {
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = newCursors();
+    const base = Date.parse(HOUR);
+    const owner = msg({ id: "msg_1", sessionID: "ses_same", created: base + 1000, input: 100 });
+    await parseOpencodeDbIncremental({
+      dbMessages: [owner],
+      cursors,
+      queuePath,
+      source: "opencode",
+    });
+
+    const ownerEntry = cursors.opencode.messages["ses_same|msg_1"];
+    cursors.opencode.messages["ses_other|msg_2"] = { ...ownerEntry };
+    const fork = msg({ id: "msg_3", sessionID: "ses_same", created: base + 1000, input: 100 });
+    const result = await parseOpencodeDbIncremental({
+      dbMessages: [fork],
+      cursors,
+      queuePath,
+      source: "opencode",
+    });
+
+    assert.equal(result.eventsAggregated, 0);
+    assert.equal((await queueTotals(queuePath)).input_tokens, 100);
+    assert.equal(cursors.opencode.messages["ses_same|msg_3"].dedupedForkCopy, true);
+  });
+});
+
+test("fingerprint ownership keeps alternate same-session owners after a correction", async () => {
+  await withTmp(async (tmp) => {
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = newCursors();
+    const base = Date.parse(HOUR);
+    const first = msg({ id: "msg_1", sessionID: "ses_same", created: base + 1000, input: 100 });
+    const second = msg({ id: "msg_2", sessionID: "ses_same", created: base + 1000, input: 100 });
+    await parseOpencodeDbIncremental({
+      dbMessages: [first, second],
+      cursors,
+      queuePath,
+      source: "opencode",
+    });
+
+    const corrected = msg({ id: "msg_1", sessionID: "ses_same", created: base + 1000, input: 200 });
+    const fork = msg({ id: "msg_fork", sessionID: "ses_other", created: base + 1000, input: 100 });
+    const result = await parseOpencodeDbIncremental({
+      dbMessages: [corrected, fork],
+      cursors,
+      queuePath,
+      source: "opencode",
+    });
+
+    assert.equal(result.eventsAggregated, 1);
+    assert.equal((await queueTotals(queuePath)).input_tokens, 300);
+    assert.equal(cursors.opencode.messages["ses_other|msg_fork"].dedupedForkCopy, true);
   });
 });
 
