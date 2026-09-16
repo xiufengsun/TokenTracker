@@ -17,6 +17,7 @@ export const AGENT_LOGOS = [
   { id: 12, name: "Kimi", provider: "kimi" },
   { id: 13, name: "CodeBuddy", provider: "codebuddy" },
   { id: 14, name: "WorkBuddy", provider: "workbuddy" },
+  { id: 39, name: "WorkBuddy AI", provider: "workbuddy-ai" },
   { id: 15, name: "Grok", provider: "grok" },
   { id: 16, name: "oh-my-pi", provider: "omp" },
   { id: 17, name: "Pi", provider: "pi" },

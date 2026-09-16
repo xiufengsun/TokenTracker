@@ -158,9 +158,25 @@ function normalizeCursorModel(model) {
 // under-count, but it tracks the token cost of WorkBuddy's representative model
 // rather than an unrelated vendor's. (The raw "auto" string is still
 // stored/displayed; only the pricing lookup is remapped.)
+// Bare "auto" must be namespaced per build so both builds can carry their own
+// curated alias for it. Leaving it as the literal "auto" would hand the lookup
+// to the shared curated alias table, where "auto" -> composer-1 (Cursor's
+// default) silently bills WorkBuddy at Composer rates. The namespaced keys have
+// no LiteLLM entry, so lookupPricing skips the LiteLLM reverse-substring step
+// (which would otherwise grope at "auto") and lands on the curated alias edge.
 function normalizeWorkbuddyModel(model) {
   if (typeof model === "string" && model.trim().toLowerCase() === "auto") {
-    return "hy3-preview-agent";
+    return "workbuddy/auto";
+  }
+  return model;
+}
+
+// The international WorkBuddy build has the same "auto" auto-router placeholder,
+// but its router picks non-Tencent models, so it resolves to its own alias
+// (gpt-5.6-terra, the international default tier) instead of the Tencent one.
+function normalizeWorkbuddyAiModel(model) {
+  if (typeof model === "string" && model.trim().toLowerCase() === "auto") {
+    return "workbuddy-ai/auto";
   }
   return model;
 }
@@ -201,6 +217,7 @@ const SOURCE_MODEL_NORMALIZERS = {
   zed: normalizeZedModel,
   unsloth: normalizeUnslothModel,
   workbuddy: normalizeWorkbuddyModel,
+  "workbuddy-ai": normalizeWorkbuddyAiModel,
 };
 
 // Memoise the sorted-by-length LiteLLM key list. Reverse-substring scan walks

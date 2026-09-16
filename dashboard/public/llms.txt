@@ -23,7 +23,7 @@ timestamps, never prompts, responses, or source code.
 - [npm package](https://www.npmjs.com/package/tokentracker-cli)
 - [Latest release](https://github.com/xiufengsun/TokenTracker/releases/latest)
 
-## Supported AI coding tools (38)
+## Supported AI coding tools (39)
 - Claude Code
 - Codex CLI
 - AStudio

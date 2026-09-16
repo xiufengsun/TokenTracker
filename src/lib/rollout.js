@@ -10083,23 +10083,42 @@ async function parseCodebuddyIncremental({
 //      is accepted by workbuddySqliteUsageSnapshot.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function resolveWorkbuddyHome(env = process.env) {
+// WorkBuddy ships two regional builds that keep their data in sibling homes:
+//   ~/.workbuddy     — Tencent CN build (models: hy*/glm*/deepseek-*/auto)
+//   ~/.workbuddy-ai  — international build (models: gpt-5.6-*, gpt-6-*)
+// Both write byte-identical JSONL, so every reader below is shared and only
+// the home directory (and the bucket source key) differs. `variant` is also
+// the source key written into hourly buckets, so the two builds stay
+// separable in the dashboard and never share dedup state.
+const WORKBUDDY_VARIANTS = {
+  workbuddy: { dir: ".workbuddy", envVar: "WORKBUDDY_HOME" },
+  "workbuddy-ai": { dir: ".workbuddy-ai", envVar: "WORKBUDDY_AI_HOME" },
+};
+
+function resolveWorkbuddyVariant(variant) {
+  return Object.prototype.hasOwnProperty.call(WORKBUDDY_VARIANTS, variant)
+    ? variant
+    : "workbuddy";
+}
+
+function resolveWorkbuddyHome(env = process.env, variant = "workbuddy") {
+  const spec = WORKBUDDY_VARIANTS[resolveWorkbuddyVariant(variant)];
   const home = env.HOME || require("node:os").homedir();
-  if (env.WORKBUDDY_HOME) return env.WORKBUDDY_HOME;
+  if (env[spec.envVar]) return env[spec.envVar];
   if (process.platform === "win32") {
     return pickWin32ProviderPath({
       env,
-      nativeValue: path.join(home, ".workbuddy"),
-      wslProviderDir: ".workbuddy",
+      nativeValue: path.join(home, spec.dir),
+      wslProviderDir: spec.dir,
     });
   }
-  return path.join(home, ".workbuddy");
+  return path.join(home, spec.dir);
 }
 
-function resolveWorkbuddyDefaultModel(env = process.env) {
+function resolveWorkbuddyDefaultModel(env = process.env, variant = "workbuddy") {
   const fallback = "auto";
   try {
-    const workbuddyHome = resolveWorkbuddyHome(env);
+    const workbuddyHome = resolveWorkbuddyHome(env, variant);
     if (!workbuddyHome) return fallback;
     const settingsPath = path.join(workbuddyHome, "settings.json");
     const raw = fssync.readFileSync(settingsPath, "utf8");
@@ -10119,8 +10138,8 @@ function resolveWorkbuddyDefaultModel(env = process.env) {
 // ~/.workbuddy/traces/<pid>/trace_*.json. Those summaries are useful only when
 // the detailed JSONL for a session is absent, so they are returned as typed
 // entries and parsed after JSONL (JSONL remains authoritative when both exist).
-function resolveWorkbuddyProjectFiles(env = process.env) {
-  const workbuddyHome = resolveWorkbuddyHome(env);
+function resolveWorkbuddyProjectFiles(env = process.env, variant = "workbuddy") {
+  const workbuddyHome = resolveWorkbuddyHome(env, variant);
   if (!workbuddyHome) return [];
   const projectsDir = path.join(workbuddyHome, "projects");
   const files = [];
@@ -10229,10 +10248,15 @@ async function parseWorkbuddyIncremental({
   onProgress,
   env,
   defaultModel,
+  source = "workbuddy",
 } = {}) {
   await ensureDir(path.dirname(queuePath));
+  // `source` doubles as the variant selector and the bucket source key, so the
+  // CN install (~/.workbuddy) and the international install (~/.workbuddy-ai)
+  // get independent cursor namespaces and never share dedup state.
+  const variant = resolveWorkbuddyVariant(source);
   const workbuddyState =
-    cursors.workbuddy && typeof cursors.workbuddy === "object" ? cursors.workbuddy : {};
+    cursors[variant] && typeof cursors[variant] === "object" ? cursors[variant] : {};
   const seenIds = new Set(
     Array.isArray(workbuddyState.seenIds) ? workbuddyState.seenIds : [],
   );
@@ -10258,20 +10282,20 @@ async function parseWorkbuddyIncremental({
 
   const allFiles = Array.isArray(projectFiles)
     ? projectFiles
-    : resolveWorkbuddyProjectFiles(env || process.env);
+    : resolveWorkbuddyProjectFiles(env || process.env, variant);
   const jsonlFiles = allFiles.filter((entry) => typeof entry === "string");
   const traceFiles = allFiles.filter(
     (entry) => entry && typeof entry === "object" && typeof entry.path === "string" && entry.kind === "trace",
   );
   const files = [...jsonlFiles, ...traceFiles];
-  const fallbackModel = defaultModel || resolveWorkbuddyDefaultModel(env || process.env);
+  const fallbackModel = defaultModel || resolveWorkbuddyDefaultModel(env || process.env, variant);
 
-  const workbuddyHome = resolveWorkbuddyHome(env || process.env);
+  const workbuddyHome = resolveWorkbuddyHome(env || process.env, variant);
   const dbPath = workbuddyHome ? path.join(workbuddyHome, "workbuddy.db") : null;
   const dbExists = Boolean(dbPath && fssync.existsSync(dbPath));
 
   if (files.length === 0 && !dbExists) {
-    cursors.workbuddy = {
+    cursors[variant] = {
       ...workbuddyState,
       seenIds: Array.from(seenIds),
       seenTraceIds: Array.from(seenTraceIds),
@@ -10418,9 +10442,9 @@ async function parseWorkbuddyIncremental({
         conversation_count: 1,
       };
 
-      const bucket = getHourlyBucket(hourlyState, "workbuddy", model, bucketStart);
+      const bucket = getHourlyBucket(hourlyState, variant, model, bucketStart);
       addTotals(bucket.totals, delta);
-      touchedBuckets.add(bucketKey("workbuddy", model, bucketStart));
+      touchedBuckets.add(bucketKey(variant, model, bucketStart));
       seenIds.add(messageId);
       // Keep legacy entry-id keys alongside the response id so upgrading a
       // cursor cannot replay a row that an older build already counted.
@@ -10525,9 +10549,9 @@ async function parseWorkbuddyIncremental({
       total_tokens: inputTokens + totalCached + totalOutput,
       conversation_count: 1,
     };
-    const bucket = getHourlyBucket(hourlyState, "workbuddy", model, bucketStart);
+    const bucket = getHourlyBucket(hourlyState, variant, model, bucketStart);
     addTotals(bucket.totals, delta);
-    touchedBuckets.add(bucketKey("workbuddy", model, bucketStart));
+    touchedBuckets.add(bucketKey(variant, model, bucketStart));
     seenTraceIds.add(traceId);
     tracedSessionIds.add(sessionId);
     recordsProcessed++;
@@ -10660,9 +10684,9 @@ async function parseWorkbuddyIncremental({
           conversation_count: Object.keys(previousTokens).every((key) => toNonNegativeInt(previousTokens[key]) === 0) || isReset ? 1 : 0,
         };
 
-        const bucket = getHourlyBucket(hourlyState, "workbuddy", model, bucketStart);
+        const bucket = getHourlyBucket(hourlyState, variant, model, bucketStart);
         addTotals(bucket.totals, delta);
-        touchedBuckets.add(bucketKey("workbuddy", model, bucketStart));
+        touchedBuckets.add(bucketKey(variant, model, bucketStart));
         sqliteSessions[sessionId] = {
           used: usedNow,
           updatedAt: updatedAtRaw,
@@ -10713,7 +10737,7 @@ async function parseWorkbuddyIncremental({
   const updatedAt = new Date().toISOString();
   hourlyState.updatedAt = updatedAt;
   cursors.hourly = hourlyState;
-  cursors.workbuddy = {
+  cursors[variant] = {
     ...workbuddyState,
     seenIds: cappedSeen,
     seenTraceIds: cappedSeenTraceIds,
@@ -21683,6 +21707,8 @@ module.exports = {
   resolveWorkbuddyProjectFiles,
   resolveWorkbuddyDefaultModel,
   parseWorkbuddyIncremental,
+  WORKBUDDY_VARIANTS,
+  resolveWorkbuddyVariant,
   resolveKiroCliSessionFiles,
   resolveKiroCliDbPath,
   parseKiroCliIncremental,

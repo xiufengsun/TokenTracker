@@ -102,6 +102,20 @@
       "cache_write": 0.167,
       "note": "See hy3-preview-agent."
     },
+    "hy4-preview": {
+      "input": 0.834,
+      "output": 2.5,
+      "cache_read": 0.042,
+      "cache_write": 0.834,
+      "note": "Tencent Hunyuan Hy4 preview (released + open-sourced 2026-08-28; 770B total / 49B active, 1M context). Shipped first in WorkBuddy and CodeBuddy (both CN and international builds). Official TokenHub rates: RMB 6 / 0.3 (cache hit) / 18 per MTok in/read/out = $0.834 / $0.042 / $2.50. Tencent publishes no cache-write price, so cache_write = input (matches the hy3-preview convention). WorkBuddy's auto-router also emits the bare alias \"hy4-preview\" for the same SKU. Remove once LiteLLM carries it."
+    },
+    "hy4-preview-agent": {
+      "input": 0.834,
+      "output": 2.5,
+      "cache_read": 0.042,
+      "cache_write": 0.834,
+      "note": "See hy4-preview. CodeBuddy's auto-router emits this -agent suffixed form."
+    },
     "composer-1": {
       "input": 1.25,
       "output": 10,
@@ -416,10 +430,33 @@
       "cache_read": 0,
       "cache_write": 0,
       "note": "Alias for free Build SKU as labeled in Grok updates.jsonl modelUsage. Canonical storage id is grok-build-free."
+    },
+    "deepseek-v4.1-flash": {
+      "input": 0.44,
+      "output": 1.32,
+      "cache_read": 0.014,
+      "cache_write": 0.44,
+      "note": "DeepSeek V4.1 Flash, seen in WorkBuddy logs. Priced on the V4 Flash tier because no separate V4.1 price list has been published yet: $0.44 / $1.38 (output rounded down from 3x input, matching the curated V4 Flash entry) / $0.014 cache read per MTok. cache_write = input (DeepSeek publishes no write surcharge). Re-verify when DeepSeek publishes V4.1 rates, then remove."
+    },
+    "auto-pro": {
+      "input": 0.834,
+      "output": 2.5,
+      "cache_read": 0.042,
+      "cache_write": 0.834,
+      "note": "WorkBuddy's auto-router \"pro\" tier. Like bare \"auto\", the log never exposes the model actually picked, so this is a representative-rate placeholder: Hy4 preview, WorkBuddy's current flagship backend. Must NOT be left un-aliased — the shared curated \"auto\" -> composer-1 alias would otherwise bill it as Cursor Composer. Remove only if WorkBuddy starts logging real model ids."
+    },
+    "gpt-6-astra": {
+      "input": 2,
+      "output": 12,
+      "cache_read": 0.2,
+      "cache_write": 2.5,
+      "note": "GPT-6 Astra, seen in the international WorkBuddy build. No published OpenAI price list at the time of writing, so it is placeholder-priced on the GPT-5.6 balanced (terra) tier rather than left at $0. Replace with real rates once OpenAI publishes them."
     }
   },
   "alias": {
-    "auto": "composer-1"
+    "auto": "composer-1",
+    "workbuddy/auto": "hy3-preview-agent",
+    "workbuddy-ai/auto": "gpt-5.6-terra"
   },
   "source_exact": {
     "acode": {
@@ -646,6 +683,14 @@
     {
       "match": "stepfun",
       "ref": "step-3.7-flash"
+    },
+    {
+      "match": "hy4",
+      "ref": "hy4-preview"
+    },
+    {
+      "match": "deepseek-v4.1",
+      "ref": "deepseek-v4.1-flash"
     }
   ]
 }

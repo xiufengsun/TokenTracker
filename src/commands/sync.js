@@ -318,6 +318,7 @@ const AUTO_SYNC_SOURCES = new Set([
   "trae-cn",
   "unsloth",
   "workbuddy",
+  "workbuddy-ai",
   "zcode",
   "zed",
 ]);
@@ -2364,6 +2365,42 @@ async function cmdSync(argv, context = {}) {
       }
     }
 
+    // ── WorkBuddy AI — international build (~/.workbuddy-ai/projects/**/*.jsonl) ──
+    // Same Claude-fork family and byte-identical JSONL as the CN build above;
+    // only the home directory differs, so it reuses the WorkBuddy parser and
+    // gets its own source key (and cursor namespace) so the two builds stay
+    // separable instead of merging into one provider row.
+    let workbuddyAiResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    const workbuddyAiFiles = sourceAllowed("workbuddy-ai")
+      ? mergeBothFileSources({
+          resolveFiles: (resolveEnv) => resolveWorkbuddyProjectFiles(resolveEnv, "workbuddy-ai"),
+          env: process.env,
+        })
+      : [];
+    if (sourceAllowed("workbuddy-ai")) {
+      if (progress?.enabled) {
+        progress.start(`Parsing WorkBuddy AI ${renderBar(0)} | buckets 0`);
+      }
+      try {
+        workbuddyAiResult = await parseWorkbuddyIncremental({
+          projectFiles: workbuddyAiFiles,
+          cursors,
+          queuePath,
+          env: process.env,
+          source: "workbuddy-ai",
+          onProgress: (p) => {
+            if (!progress?.enabled) return;
+            const pct = p.total > 0 ? p.index / p.total : 1;
+            progress.update(
+              `Parsing WorkBuddy AI ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(p.total)} files | buckets ${formatNumber(p.bucketsQueued)}`,
+            );
+          },
+        });
+      } catch (err) {
+        warnProviderParseFailure("WorkBuddy AI", err, opts);
+      }
+    }
+
     // ── oh-my-pi (passive ~/.omp/agent/sessions/**/*.jsonl reader) ──
     // Task-subagent transcripts (nested below the cwd level) are scanned too,
     // so their usage counts toward the omp totals.
@@ -2955,6 +2992,7 @@ async function cmdSync(argv, context = {}) {
       kimiCodeResult.recordsProcessed +
       codebuddyResult.recordsProcessed +
       workbuddyResult.recordsProcessed +
+      workbuddyAiResult.recordsProcessed +
       ompResult.recordsProcessed +
       piResult.recordsProcessed +
       primeAgentResult.recordsProcessed +
@@ -2994,6 +3032,7 @@ async function cmdSync(argv, context = {}) {
       kimiCodeResult.bucketsQueued +
       codebuddyResult.bucketsQueued +
       workbuddyResult.bucketsQueued +
+      workbuddyAiResult.bucketsQueued +
       ompResult.bucketsQueued +
       piResult.bucketsQueued +
       primeAgentResult.bucketsQueued +
