@@ -84,6 +84,8 @@ test("canonical pricing block retains regression-prone entries and matcher order
     '"cursor-grok-4.5-fast"',
     '"glm-5.3"',
     '"glm-5.3-flash"',
+    '"deepseek-v4.1-flash"',
+    '"deepseek-flash"',
   ]) {
     assert.ok(block.includes(`${key}:`), `canonical table lost ${key}`);
   }

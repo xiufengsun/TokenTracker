@@ -33,6 +33,8 @@ const SOURCES_WITH_AUTHORITATIVE_COST = new Set(["grok"]);
 const SEED_SNAPSHOT_PATH = path.resolve(__dirname, "seed-snapshot.json");
 const DEEPSEEK_TIME_PRICED_MODELS = [
   "deepseek-v4-flash",
+  "deepseek-v4.1-flash",
+  "deepseek-flash",
   "deepseek-v4-pro",
 ];
 // Sync seed load. Done at require-time so callers that haven't awaited
