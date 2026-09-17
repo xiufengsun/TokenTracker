@@ -170,6 +170,7 @@ After `SMAppService.mainApp.register/unregister` from the bridge (not via `Launc
 
 - **`installSkill()` downloads for minutes before it writes, so read every field from a fresh `readRegistry()` at the sync checkpoint, never from the pre-download snapshot.** The guard before `removePath(dest)` (`skills-manager.js:984`) is the last point where nothing has awaited, so existence *and* `targets` (`:982`) must both be read there. #613 refreshed existence but kept `targets` from the stale copy, so toggling an agent mid-download silently reverted it.
 - **Temp dirs use `fs.mkdtempSync` (`skills-manager.js:963`), never `${name}-${Date.now()}`.** Millisecond names collide once mutations overlap, and `removePath(temp)` then deletes the other run's in-flight download. `SkillsPage.jsx:855` serialises the UI behind an `operationInFlight` ref because `busyKey` state commits too late to block a fast second click. `/functions/tokentracker-skills` has no such lock.
+- **`grep` treats `skills-manager.js` as binary and silently reports no matches — search it with `grep -a`.** `hashDirectory()` writes three literal NUL bytes as field separators (`:493`, `:499`), which is enough for `grep` to skip the file and exit 1 rather than error. It is the only tracked text file in the repo with this property. An empty plain-`grep` result here is not evidence a symbol is absent.
 
 ### Cloud moderation (leaderboard bans / quarantine)
 
