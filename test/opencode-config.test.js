@@ -44,6 +44,23 @@ test("opencode plugin keeps its identifying shape", () => {
   assert.ok(plugin.includes(JSON.stringify(NOTIFY_PATH)), "plugin must embed the notify path");
 });
 
+// Three loaders read one generated file (issue #646). Verified against real
+// binaries: opencode 1.18.30 rejects a default export that lacks server()
+// ("must default export an object with server()") and rejects a default export
+// without an id ("must export id"); opencode 2.x rejects the bare v1 named
+// export ("Plugin must export a default definition with an id and an effect or
+// setup function"). Dropping any of the three shapes below breaks one of them.
+test("opencode plugin satisfies the v1 named, v1 default and v2 default loaders", () => {
+  const plugin = buildOpencodePlugin({ notifyPath: NOTIFY_PATH });
+  assert.match(plugin, /export const TokenTrackerPlugin = server;/, "older opencode v1 reads the named export");
+  assert.match(plugin, /export default \{[\s\S]*\bid: "tokentracker",/, "both v1 and v2 require an id on the default export");
+  assert.match(plugin, /export default \{[\s\S]*\bserver,/, "current v1 requires server() on the default export");
+  assert.match(plugin, /export default \{[\s\S]*\bsetup: async \(\) => \{\},/, "v2 requires setup() on the default export");
+  // The notify spawn must stay reachable from the v1 path; v2's PluginContext
+  // has no event stream, so setup() is deliberately inert there.
+  assert.match(plugin, /const server = async \(\{ \$ \}\) => \{/);
+});
+
 test("generated opencode plugin is syntactically valid ES module", () => {
   const dir = tmpDir("tokentracker-opencode-plugin-");
   const file = path.join(dir, "tokentracker.mjs");

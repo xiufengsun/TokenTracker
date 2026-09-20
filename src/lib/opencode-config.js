@@ -26,7 +26,7 @@ function buildOpencodePlugin({ notifyPath }) {
   return (
     `// ${PLUGIN_MARKER}\n` +
     `const notifyPath = ${JSON.stringify(safeNotifyPath)};\n` +
-    `export const TokenTrackerPlugin = async ({ $ }) => {\n` +
+    `const server = async ({ $ }) => {\n` +
     `  return {\n` +
     `    event: async ({ event }) => {\n` +
     `      if (!event || event.type !== ${JSON.stringify(DEFAULT_EVENT)}) return;\n` +
@@ -40,6 +40,25 @@ function buildOpencodePlugin({ notifyPath }) {
     `      } catch (_) {}\n` +
     `    }\n` +
     `  };\n` +
+    `};\n` +
+    // Three loaders read this one file (issue #646):
+    //   * older opencode v1 takes the named export;
+    //   * current v1 (verified on 1.18.30) requires a default export carrying
+    //     `id` and `server()`, and rejects the file outright without them;
+    //   * v2 requires a default export carrying `id` and `setup()`/`effect()`,
+    //     and ignores `server()`.
+    // Emitting all three keeps a single generated file valid everywhere. v2's
+    // plugin context exposes no event stream and no shell (`@opencode-ai/plugin`
+    // v2 PluginContext is agent/aisdk/catalog/command/integration/reference/skill
+    // only), so there is nothing for `setup` to subscribe to -- it exists to make
+    // the plugin load instead of erroring on every startup. Usage itself does not
+    // depend on this hook: opencode rows are parsed from the on-disk storage and
+    // opencode.db, and the hook only makes a sync happen sooner.
+    `export const TokenTrackerPlugin = server;\n` +
+    `export default {\n` +
+    `  id: "tokentracker",\n` +
+    `  server,\n` +
+    `  setup: async () => {},\n` +
     `};\n`
   );
 }
