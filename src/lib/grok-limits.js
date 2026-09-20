@@ -495,6 +495,40 @@ async function resolveGrokAccessToken({
   };
 }
 
+// xAI reports the subscription as a human-readable product name on the billing
+// payload's top level (`subscriptionTier`, a sibling of `config`, not a member
+// of it) -- a Free account reads exactly "Free".
+const GROK_PLAN_TIERS = new Map([
+  ["supergrokheavy", "SuperGrok Heavy"],
+  ["supergrokplus", "SuperGrok Plus"],
+  ["supergroklite", "SuperGrok Lite"],
+  ["supergrok", "SuperGrok"],
+  ["xpremiumplus", "X Premium+"],
+  ["premiumplus", "X Premium+"],
+  ["xpremium", "X Premium+"],
+  ["apikey", "API Key"],
+  ["free", "Free"],
+]);
+
+/**
+ * Map xAI's subscription tier to the name its own UI shows.
+ *
+ * Separators are folded away before matching so the same table covers whichever
+ * casing the API returns ("SuperGrok Heavy", "SUPER_GROK_HEAVY", "superGrokHeavy").
+ * Unknown values return null rather than being passed through: the Limits panel
+ * falls back to the bare brand name, which is better than rendering a raw enum
+ * (issue #130 shipped "Kimi Type_event" that way).
+ */
+function deriveGrokPlanLabel(rawTier) {
+  if (rawTier == null) return null;
+  const key = String(rawTier).toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (!key) return null;
+  // Exact match only. Prefix matching would read an unseen tier such as
+  // "SuperGrok Business" as plain "SuperGrok", and a confidently wrong plan on
+  // the card is worse than no plan at all.
+  return GROK_PLAN_TIERS.get(key) ?? null;
+}
+
 /**
  * Parse either:
  *   - Unified billing (`?format=credits`): weekly/monthly period + creditUsagePercent
@@ -567,6 +601,8 @@ function normalizeGrokBillingResponse(body) {
   }
 
   return {
+    // Read from the response root, not from `config`.
+    plan_label: deriveGrokPlanLabel(body?.subscriptionTier),
     period_type: periodType,
     monthly_credits_limit: monthlyLimit,
     monthly_credits_used: used,
@@ -721,6 +757,7 @@ module.exports = {
   normalizeGrokPeriodType,
   inferGrokPeriodTypeFromDates,
   sumProductUsagePercent,
+  deriveGrokPlanLabel,
   normalizeGrokBillingResponse,
   fetchGrokBilling,
   fetchGrokLimits,

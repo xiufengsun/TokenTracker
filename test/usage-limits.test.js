@@ -4523,6 +4523,73 @@ describe("getUsageLimits plan_label", () => {
     }
   });
 
+  // Grok bypasses withPlanLabel on purpose: the shared normalizer Title-Cases
+  // ("Supergrok Heavy", "Api Key") and maps "free" to null, but xAI's
+  // subscriptionTier is already the exact product name and Free is a tier users
+  // asked to see (#635). Routing grok back through withPlanLabel breaks both.
+  it("surfaces Grok's subscription tier verbatim, including Free", async () => {
+    async function grokPlanLabel(subscriptionTier) {
+      resetUsageLimitsCache();
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-plan-grok-"));
+      try {
+        const grokHome = path.join(tmp, ".grok");
+        fs.mkdirSync(grokHome, { recursive: true });
+        fs.writeFileSync(
+          path.join(grokHome, "auth.json"),
+          JSON.stringify({ "https://auth.x.ai::test": { key: "grok-token" } }),
+          "utf8",
+        );
+
+        const result = await getUsageLimits({
+          home: tmp,
+          platform: "linux",
+          providerTimeoutMs: 1000,
+          securityRunner() {
+            return { status: 1, stdout: "" };
+          },
+          commandRunner() {
+            return { status: 1, stdout: "" };
+          },
+          fetchImpl(url) {
+            if (typeof url === "string" && url.startsWith("https://cli-chat-proxy.grok.com/v1/billing")) {
+              return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: async () => ({
+                  subscriptionTier,
+                  config: {
+                    currentPeriod: {
+                      type: "USAGE_PERIOD_TYPE_WEEKLY",
+                      start: "2026-09-08T00:00:00+00:00",
+                      end: "2026-09-15T00:00:00+00:00",
+                    },
+                    creditUsagePercent: 12,
+                    onDemandCap: { val: 0 },
+                    onDemandUsed: { val: 0 },
+                    isUnifiedBillingUser: true,
+                  },
+                }),
+              });
+            }
+            return pendingUnlessCodexReset(url);
+          },
+        });
+
+        assert.equal(result.grok.configured, true);
+        assert.equal(result.grok.error, null);
+        return result.grok.plan_label;
+      } finally {
+        resetUsageLimitsCache();
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
+
+    assert.equal(await grokPlanLabel("SuperGrok Heavy"), "SuperGrok Heavy");
+    assert.equal(await grokPlanLabel("API Key"), "API Key");
+    assert.equal(await grokPlanLabel("Free"), "Free");
+    assert.equal(await grokPlanLabel("TIER_UNSPECIFIED"), null);
+  });
+
   it("leaves plan_label null for a free Claude account", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-plan-free-"));

@@ -9,6 +9,7 @@ const {
   normalizeGrokPeriodType,
   inferGrokPeriodTypeFromDates,
   sumProductUsagePercent,
+  deriveGrokPlanLabel,
   fetchGrokBilling,
   fetchGrokLimits,
   readGrokAccessToken,
@@ -988,5 +989,61 @@ describe("grok refresh hardening", () => {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("deriveGrokPlanLabel", () => {
+  // A live Free account's billing payload reads exactly {"subscriptionTier":"Free"},
+  // so the field is a display string rather than an enum. Fold separators away
+  // anyway: the paid literals are unverified and could arrive as SUPER_GROK_HEAVY.
+  it("maps xAI tiers to their own product names regardless of casing", () => {
+    assert.equal(deriveGrokPlanLabel("SuperGrok Heavy"), "SuperGrok Heavy");
+    assert.equal(deriveGrokPlanLabel("SUPER_GROK_HEAVY"), "SuperGrok Heavy");
+    assert.equal(deriveGrokPlanLabel("superGrokHeavy"), "SuperGrok Heavy");
+    assert.equal(deriveGrokPlanLabel("SuperGrok Lite"), "SuperGrok Lite");
+    assert.equal(deriveGrokPlanLabel("SuperGrok Plus"), "SuperGrok Plus");
+    assert.equal(deriveGrokPlanLabel("SuperGrok"), "SuperGrok");
+    assert.equal(deriveGrokPlanLabel("X Premium+"), "X Premium+");
+    assert.equal(deriveGrokPlanLabel("PremiumPlus"), "X Premium+");
+    assert.equal(deriveGrokPlanLabel("API Key"), "API Key");
+    assert.equal(deriveGrokPlanLabel("Free"), "Free");
+  });
+
+  it("returns null for unknown, empty and missing tiers", () => {
+    // Matching is exact: a prefix match would render an unseen
+    // "SuperGrok Business" as plain "SuperGrok", which is a confidently wrong
+    // plan on the card. Null lets the panel fall back to "Grok Build".
+    assert.equal(deriveGrokPlanLabel("SuperGrok Business"), null);
+    assert.equal(deriveGrokPlanLabel("TIER_UNSPECIFIED"), null);
+    assert.equal(deriveGrokPlanLabel(""), null);
+    assert.equal(deriveGrokPlanLabel(null), null);
+    assert.equal(deriveGrokPlanLabel(undefined), null);
+  });
+
+  it("reads subscriptionTier from the response root, not from config", () => {
+    const base = {
+      config: {
+        currentPeriod: {
+          type: "USAGE_PERIOD_TYPE_WEEKLY",
+          start: "2026-09-08T00:00:00+00:00",
+          end: "2026-09-15T00:00:00+00:00",
+        },
+        creditUsagePercent: 12,
+        onDemandCap: { val: 0 },
+        onDemandUsed: { val: 0 },
+        isUnifiedBillingUser: true,
+      },
+    };
+
+    assert.equal(
+      normalizeGrokBillingResponse({ ...base, subscriptionTier: "SuperGrok Heavy" }).plan_label,
+      "SuperGrok Heavy",
+    );
+    // Nested under config is the wrong place and must not be picked up.
+    assert.equal(
+      normalizeGrokBillingResponse({ config: { ...base.config, subscriptionTier: "SuperGrok Heavy" } }).plan_label,
+      null,
+    );
+    assert.equal(normalizeGrokBillingResponse(base).plan_label, null);
   });
 });
