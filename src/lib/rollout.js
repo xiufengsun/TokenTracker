@@ -15799,7 +15799,15 @@ function resolveReasonixHome(env = process.env) {
   if (env.REASONIX_STATE_HOME) {
     return expandHomePath(env.REASONIX_STATE_HOME, env);
   }
-  const home = env.HOME || require("node:os").homedir();
+  // Windows installs of Git Bash / MSYS / conda export a HOME of their own
+  // (often a POSIX-shaped path), so preferring it silently sends the scan to a
+  // directory that does not exist and Reasonix drops out of `status` entirely
+  // with no "skipped" line to explain it. Match resolveCopilotDbPaths and take
+  // USERPROFILE first on win32.
+  const home =
+    process.platform === "win32"
+      ? env.USERPROFILE || env.HOME || require("node:os").homedir()
+      : env.HOME || require("node:os").homedir();
   return path.join(home, ".reasonix");
 }
 

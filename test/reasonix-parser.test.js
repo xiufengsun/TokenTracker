@@ -168,3 +168,37 @@ test("parseReasonixIncremental bounds inconsistent estimated cache totals", asyn
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+// Git Bash / MSYS / conda on Windows export a HOME of their own, so preferring
+// it sends the Reasonix scan to a directory that does not exist -- and because
+// `status` only prints a Reasonix line when the home resolves, the user sees no
+// data and no explanation (issue #641).
+test("reasonix: Windows resolves the home from USERPROFILE, not a shell-provided HOME", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "reasonix-win-"));
+  const profile = path.join(root, "profile");
+  const bogusHome = path.join(root, "msys-home");
+  fs.mkdirSync(bogusHome, { recursive: true });
+  const telemetry = writeSession(profile, "s1", {
+    input_tokens: 10,
+    output_tokens: 5,
+    total_tokens: 15,
+  });
+
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  try {
+    const found = resolveReasonixTelemetryFiles({ HOME: bogusHome, USERPROFILE: profile });
+    assert.deepEqual(found, [telemetry], "USERPROFILE must win over a shell HOME on win32");
+  } finally {
+    if (descriptor) Object.defineProperty(process, "platform", descriptor);
+  }
+
+  // Explicit overrides still take precedence over both.
+  const override = resolveReasonixTelemetryFiles({
+    TOKENTRACKER_REASONIX_HOME: path.join(profile, ".reasonix"),
+    HOME: bogusHome,
+  });
+  assert.deepEqual(override, [telemetry]);
+
+  fs.rmSync(root, { recursive: true, force: true });
+});
