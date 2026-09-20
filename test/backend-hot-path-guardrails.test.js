@@ -460,28 +460,40 @@ test("leaderboard bans block token issuance and usage ingestion", () => {
   }
 
   assert.ok(
-    tokenIssue.indexOf("if (await isUsageBlocked(dbClient, userId))")
+    tokenIssue.indexOf("if (isLeaderboardBlockedUser(userId))")
       < tokenIssue.indexOf("// Device identity resolution"),
     "normal token issuance must reject the account before mutating a device",
   );
   assert.ok(
-    devicePoll.indexOf("if (await isUsageBlocked(client, row.user_id))")
+    devicePoll.indexOf("if (isLeaderboardBlockedUser(row.user_id))")
       < devicePoll.indexOf("issueDeviceToken(client, row.user_id"),
     "device-flow polling must reject the account before issuing a token",
   );
   assert.ok(
-    ingest.indexOf("if (await isUsageBlocked(client, userId))")
+    ingest.indexOf("if (isLeaderboardBlockedUser(userId))")
       < ingest.indexOf('.from("tokentracker_hourly")'),
     "ingest must reject the account before writing usage",
   );
+
+  // A heuristic anomaly flag must NOT gate the write path. The detector is
+  // automatic, and tokentracker-leaderboard-refresh already drops flagged
+  // accounts from the public snapshot -- so blocking ingest as well bought no
+  // extra protection and made a false positive unrecoverable: the account
+  // could not upload the corrected numbers that would clear the flag, and
+  // stayed cut off until someone read an issue (#639). Only an explicit,
+  // human-curated ban stops uploads.
   for (const [file, source] of [
     ["tokentracker-device-token-issue.ts", tokenIssue],
     ["tokentracker-device-flow-poll.ts", devicePoll],
     ["tokentracker-ingest.ts", ingest],
   ]) {
-    assert.match(source, /\.eq\("status", "auto_excluded"\)/u,
-      `${file} must reversibly pause machine-excluded accounts`);
+    assert.doesNotMatch(source, /\.eq\("status", "auto_excluded"\)/u,
+      `${file} must not turn an automatic anomaly flag into an upload ban`);
   }
+  const refresh = read("dashboard/edge-patches/tokentracker-leaderboard-refresh.ts");
+  assert.match(refresh, /\.eq\("status", "auto_excluded"\)/u,
+    "the refresh job is what keeps flagged accounts out of the public snapshot",
+  );
 });
 
 test("leaderboard reads expose snapshot freshness and disable response caching", () => {
