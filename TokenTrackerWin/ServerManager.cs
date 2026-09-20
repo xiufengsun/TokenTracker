@@ -70,6 +70,18 @@ internal sealed class ServerManager : IDisposable
     private static readonly HttpClient LocalSyncHttp =
         new(new HttpClientHandler { UseProxy = false }) { Timeout = Timeout.InfiniteTimeSpan };
 
+    // An unbounded client timeout still needs a ceiling on the single-flight
+    // slot.  A loopback read can hang forever when the socket dies without an
+    // RST -- a suspended laptop overnight is the common case -- and the slot is
+    // only released in RunBackgroundSyncAsync's finally.  While it is held,
+    // TriggerBackgroundSync returns at the _syncInFlight guard and StartDirectSync
+    // returns at the _backgroundSyncCts guard, so the timer AND the "Sync Now"
+    // menu item both become silent no-ops until the app is restarted, even
+    // though `tracker sync` in a terminal still works.  Cancel well above the
+    // local API's own 120s sync-child budget so a slow but live publish is
+    // never cut short.
+    private static readonly TimeSpan BackgroundSyncDeadline = TimeSpan.FromMinutes(5);
+
     /// <summary>Raised on the thread-pool when the running state flips. UI must marshal to the UI thread.</summary>
     public event Action<ServerStatus>? StatusChanged;
 
@@ -205,6 +217,7 @@ internal sealed class ServerManager : IDisposable
             if (_stopping || Status != ServerStatus.Running || _syncInFlight) return;
 
             cts = new CancellationTokenSource();
+            cts.CancelAfter(BackgroundSyncDeadline);
             _backgroundSyncCts = cts;
             _syncInFlight = true;
             RaiseSyncStarted();
@@ -301,7 +314,10 @@ internal sealed class ServerManager : IDisposable
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
-            Log("background sync cancelled");
+            // Shutdown and the BackgroundSyncDeadline watchdog land in the same
+            // catch; name them apart so a wedged loopback read is visible in the
+            // log instead of looking like an ordinary quit.
+            Log(_stopping ? "background sync cancelled" : "background sync deadline exceeded");
         }
         catch (Exception ex)
         {
