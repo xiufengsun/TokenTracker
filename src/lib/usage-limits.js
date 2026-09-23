@@ -268,6 +268,7 @@ async function fetchClaudeUsageLimits(accessToken, { fetchImpl = fetch, maxAttem
     Authorization: `Bearer ${accessToken}`,
     "anthropic-beta": "oauth-2025-04-20",
     Accept: "application/json",
+    "Accept-Encoding": "identity",
   };
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const res = await fetchImpl(url, { method: "GET", headers });
