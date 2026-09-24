@@ -82,6 +82,36 @@ function resolveZcodeNativeDbPath({
   return candidates.find((p) => existsSync(p)) || candidates[0];
 }
 
+// mimocode (the engine behind the Xiaomi MiMo desktop app and the mimocode CLI)
+// is an OpenCode fork and keeps OpenCode's data-dir rule on every platform:
+// XDG_DATA_HOME, else ~/.local/share — on Windows too, where that means
+// %USERPROFILE%\.local\share\mimocode\mimocode.db (#629). The %APPDATA%
+// location was our guess before a Windows install was seen; keep it as a
+// fallback so an install that does live there is not lost.
+function resolveMimoNativeDbPath({
+  home = os.homedir(),
+  env = process.env,
+  platform = process.platform,
+  deps = {},
+} = {}) {
+  const existsSync = deps.existsSync || fssync.existsSync;
+  const mimoHomeOverride = typeof env.MIMO_HOME === "string" ? env.MIMO_HOME.trim() : "";
+  if (mimoHomeOverride) {
+    // An explicit MIMO_HOME pins the install, same rule as ZCODE_HOME above.
+    return path.join(path.resolve(mimoHomeOverride), "mimocode.db");
+  }
+  const xdgDataHome = typeof env.XDG_DATA_HOME === "string" && env.XDG_DATA_HOME.trim()
+    ? env.XDG_DATA_HOME.trim()
+    : path.join(home, ".local", "share");
+  const candidates = [
+    path.join(xdgDataHome, "mimocode", "mimocode.db"),
+    ...(platform === "win32" && typeof env.APPDATA === "string" && env.APPDATA.trim()
+      ? [path.join(env.APPDATA.trim(), "mimocode", "mimocode.db")]
+      : []),
+  ];
+  return candidates.find((p) => existsSync(p)) || candidates[0];
+}
+
 function hasAnyChild(p, children, existsSync) {
   const ex = existsSync || fssync.existsSync;
   return children.some((c) => { try { return ex(path.join(p, c)); } catch (_e) { return false; } });
@@ -134,6 +164,7 @@ function ensureFlatCursor(cursors, providerName, env, preferredKey) {
 module.exports = {
   resolveInstallPaths,
   resolveZcodeNativeDbPath,
+  resolveMimoNativeDbPath,
   ensureNamespacedCursors,
   ensureFlatCursor,
 };

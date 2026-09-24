@@ -112,7 +112,7 @@ const {
 } = require("../lib/trae-cn-config");
 const wsl = require("../lib/wsl-probe");
 const { getWslMode, isInvalidWslMode, shouldProbeWsl, discoverWslHome } = wsl;
-const { resolveInstallPaths, resolveZcodeNativeDbPath } = require("../lib/install-resolver");
+const { resolveInstallPaths, resolveZcodeNativeDbPath, resolveMimoNativeDbPath } = require("../lib/install-resolver");
 const { probeGrokHookState, resolveGrokHome } = require("../lib/grok-hook");
 const { probeOmpHookState } = require("../lib/omp-hook");
 
@@ -503,10 +503,7 @@ async function cmdStatus(argv = []) {
   const kiloDbPath = kiloActive.join(" | ");
 
   // Mimo (mimocode — OpenCode-fork SQLite) — passive scan of mimocode.db.
-  const mimoHome = process.env.MIMO_HOME || path.join(xdgDataHome, "mimocode");
-  const mimoNativeValue = process.platform === "win32" && typeof process.env.APPDATA === "string"
-    ? path.join(process.env.APPDATA.trim(), "mimocode", "mimocode.db")
-    : path.join(mimoHome, "mimocode.db");
+  const mimoNativeValue = resolveMimoNativeDbPath({ home });
   const wslMimoDir = process.platform === "win32" && wsl.shouldProbeWsl(process.env)
     ? wsl.discoverWslHome(".local/share/mimocode")
     : null;

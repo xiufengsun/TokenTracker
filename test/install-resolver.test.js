@@ -5,7 +5,7 @@ const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
 
-const { resolveInstallPaths, resolveZcodeNativeDbPath, ensureNamespacedCursors } = require("../src/lib/install-resolver");
+const { resolveInstallPaths, resolveZcodeNativeDbPath, ensureNamespacedCursors, resolveMimoNativeDbPath } = require("../src/lib/install-resolver");
 const wsl = require("../src/lib/wsl-probe");
 
 // ── resolveInstallPaths ───────────────────────────────────────────────────────
@@ -149,6 +149,50 @@ test("mimo native path defaults to XDG on Linux, APPDATA on Windows", (t) => {
   );
   assert.equal(r.native, path.join(home, ".local", "share", "mimocode", "mimocode.db"));
   assert.equal(r.wsl, null);
+});
+
+test("mimo native path on Windows prefers ~/.local/share and falls back to APPDATA (#629)", () => {
+  const home = "C:\\Users\\u";
+  const env = { APPDATA: "C:\\Users\\u\\AppData\\Roaming" };
+  const xdg = path.join(home, ".local", "share", "mimocode", "mimocode.db");
+  const appdata = path.join(env.APPDATA, "mimocode", "mimocode.db");
+
+  // The MiMo desktop app's engine DB lives under ~/.local/share, like OpenCode.
+  assert.equal(
+    resolveMimoNativeDbPath({ home, env, platform: "win32", deps: { existsSync: (p) => p === xdg } }),
+    xdg,
+  );
+  // An install that really is under %APPDATA% is still found.
+  assert.equal(
+    resolveMimoNativeDbPath({ home, env, platform: "win32", deps: { existsSync: (p) => p === appdata } }),
+    appdata,
+  );
+  // Both present: the XDG location wins, since that is where the engine writes.
+  assert.equal(
+    resolveMimoNativeDbPath({ home, env, platform: "win32", deps: { existsSync: () => true } }),
+    xdg,
+  );
+  // Neither present: report the XDG path so status can name where it looked.
+  assert.equal(
+    resolveMimoNativeDbPath({ home, env, platform: "win32", deps: { existsSync: () => false } }),
+    xdg,
+  );
+});
+
+test("mimo native path honours MIMO_HOME and XDG_DATA_HOME, and never probes APPDATA off Windows", () => {
+  const home = "/home/user";
+  assert.equal(
+    resolveMimoNativeDbPath({ home, env: { MIMO_HOME: "/opt/mimo" }, platform: "win32", deps: { existsSync: () => false } }),
+    path.join(path.resolve("/opt/mimo"), "mimocode.db"),
+  );
+  assert.equal(
+    resolveMimoNativeDbPath({ home, env: { XDG_DATA_HOME: "/data" }, platform: "linux", deps: { existsSync: () => false } }),
+    path.join("/data", "mimocode", "mimocode.db"),
+  );
+  assert.equal(
+    resolveMimoNativeDbPath({ home, env: { APPDATA: "/appdata" }, platform: "linux", deps: { existsSync: (p) => p.startsWith("/appdata") } }),
+    path.join(home, ".local", "share", "mimocode", "mimocode.db"),
+  );
 });
 
 test("mimo WSL path resolves on Windows both mode", (t) => {

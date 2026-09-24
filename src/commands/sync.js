@@ -5,7 +5,7 @@ const fssync = require("node:fs");
 const cp = require("node:child_process");
 const readline = require("node:readline");
 
-const { resolveInstallPaths, resolveZcodeNativeDbPath, ensureFlatCursor } = require("../lib/install-resolver");
+const { resolveInstallPaths, resolveZcodeNativeDbPath, resolveMimoNativeDbPath, ensureFlatCursor } = require("../lib/install-resolver");
 const { multiInstallParse, mergeBothFileSources } = require("../lib/multi-install-parser");
 const wsl = require("../lib/wsl-probe");
 const {
@@ -637,7 +637,6 @@ async function cmdSync(argv, context = {}) {
     const claudeProjectsDirs = claudeInstallHomes.map((h) => path.join(h, "projects"));
     const xdgDataHome = process.env.XDG_DATA_HOME || path.join(home, ".local", "share");
     const kiloHome = process.env.KILO_HOME || path.join(xdgDataHome, "kilo");
-    const mimoHome = process.env.MIMO_HOME || path.join(xdgDataHome, "mimocode");
 
     // OpenClaw session plugin integration: lifecycle hooks request an
     // OpenClaw-only auto sync so unrelated providers do not get walked.
@@ -1547,9 +1546,7 @@ async function cmdSync(argv, context = {}) {
     // double-counting usage already counted as source=claude.
     let mimoResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
     if (sourceAllowed("mimo")) {
-      const mimoNativeValue = process.platform === "win32" && typeof process.env.APPDATA === "string"
-        ? path.join(process.env.APPDATA.trim(), "mimocode", "mimocode.db")
-        : path.join(mimoHome, "mimocode.db");
+      const mimoNativeValue = resolveMimoNativeDbPath({ home });
       const wslMimoDir = process.platform === "win32" && wsl.shouldProbeWsl(process.env)
         ? wsl.discoverWslHome(".local/share/mimocode")
         : null;

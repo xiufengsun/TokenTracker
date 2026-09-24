@@ -12,6 +12,7 @@ const {
   writeJson,
   chmod600IfPossible,
 } = require("../lib/fs");
+const { resolveMimoNativeDbPath } = require("../lib/install-resolver");
 const { prompt, promptHidden } = require("../lib/prompt");
 const {
   upsertCodexNotify,
@@ -884,9 +885,7 @@ async function applyIntegrationSetup({
   // OpenCode-fork SQLite schema at ~/.local/share/mimocode/mimocode.db
   // (override via MIMO_HOME).
   {
-    const xdgDataHome = process.env.XDG_DATA_HOME || path.join(home, ".local", "share");
-    const mimoHome = process.env.MIMO_HOME || path.join(xdgDataHome, "mimocode");
-    const mimoDbPath = path.join(mimoHome, "mimocode.db");
+    const mimoDbPath = resolveMimoNativeDbPath({ home });
     if (fssync.existsSync(mimoDbPath)) {
       summary.push({ label: "Mimo", status: "detected", detail: "Passive reader (no hook needed)" });
     }
