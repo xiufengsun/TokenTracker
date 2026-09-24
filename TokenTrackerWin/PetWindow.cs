@@ -177,6 +177,11 @@ internal sealed class PetWindow : Window
     {
         base.OnSourceInitialized(e);
         _hwnd = new WindowInteropHelper(this).Handle;
+        // Keep the pet out of Alt+Tab and Win+Tab (#680). ShowInTaskbar = false only
+        // removes the taskbar button; the task switchers list every top-level window
+        // unless it carries WS_EX_TOOLWINDOW. Set it here, before the window is first
+        // shown; SetClickThrough below only flips WS_EX_TRANSPARENT so it persists.
+        SetWindowExStyle(_hwnd, (nint)(GetWindowExStyle(_hwnd).ToInt64() | WS_EX_TOOLWINDOW));
         _clickThrough = (GetWindowExStyle(_hwnd).ToInt64() & WS_EX_TRANSPARENT) != 0;
         ClickThroughTick();
     }
@@ -1263,6 +1268,7 @@ internal sealed class PetWindow : Window
     private const int HTCAPTION = 2;
     private const int GWL_EXSTYLE = -20;
     private const long WS_EX_TRANSPARENT = 0x00000020L;
+    private const long WS_EX_TOOLWINDOW = 0x00000080L;
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_NOZORDER = 0x0004;
