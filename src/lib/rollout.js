@@ -55,6 +55,13 @@ const CLAUDE_MEM_OBSERVER_PROJECT_REF =
   "https://local.tokentracker/claude-mem/observer-sessions";
 const PROJECT_ABSENT_CONTEXT_RESCAN_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_CODEX_COLD_SKIP_RECENT_DAYS = 2;
+// A rollout keeps its creation date in its name, but Codex appends to a session
+// for as long as it stays open, so a file dated Monday can still be growing on
+// Thursday. Cold files younger than this are stat'ed every sync and re-read when
+// they grew past the cursor (#592); older ones stay stat-free and rely on the
+// daily cold-scan audit, which bounds the per-sync cost on machines with tens of
+// thousands of rollouts.
+const DEFAULT_CODEX_COLD_GROWTH_STAT_DAYS = 30;
 const FILE_METADATA_CONCURRENCY = 32;
 
 async function mapConcurrent(items, concurrency, mapper) {
@@ -701,6 +708,7 @@ async function filterColdCodexRolloutFiles({
   auditDue = false,
   nowMs = Date.now(),
   recentDays = DEFAULT_CODEX_COLD_SKIP_RECENT_DAYS,
+  growthStatDays = DEFAULT_CODEX_COLD_GROWTH_STAT_DAYS,
   diagnostics = null,
 } = {}) {
   const files = Array.isArray(rolloutFiles) ? rolloutFiles : [];
@@ -785,6 +793,29 @@ async function filterColdCodexRolloutFiles({
       continue;
     }
 
+    // Neither check below notices an append: the day-level skip keys off the
+    // directory stat, which only changes when a file is added or removed, and
+    // the cursor offset records how far we read, not how big the file is. A
+    // still-open session whose name-date fell out of the active window was
+    // therefore skipped without ever being looked at, and its later days only
+    // surfaced at the daily audit (#592). Stat recent cold files and keep any
+    // that grew past the cursor; the parse resumes from the offset.
+    if (isRecentColdRollout(rolloutDate, { nowMs, growthStatDays })) {
+      await loadCodexCursorDirectory(filePath);
+      if (cursorStoreRestarted) break;
+      const readOffset = Number(cursors.files[filePath]?.offset);
+      if (Number.isFinite(readOffset) && readOffset > 0) {
+        const stat = await fs.stat(filePath).catch(() => null);
+        if (syncDiagnostics) {
+          syncDiagnostics.cold_growth_stats = Number(syncDiagnostics.cold_growth_stats || 0) + 1;
+        }
+        if (stat && stat.size > readOffset) {
+          out.push(entry);
+          continue;
+        }
+      }
+    }
+
     if (await canSkipCodexDirectory(filePath)) {
       skipped += 1;
       continue;
@@ -840,6 +871,18 @@ async function filterColdCodexRolloutFiles({
     );
   }
   return { rolloutFiles: out, skipped, restarted: false };
+}
+
+// True when the rollout's name-date (local calendar day) is within
+// `growthStatDays` of now. The date in the name is the session's creation day.
+function isRecentColdRollout(rolloutDate, { nowMs = Date.now(), growthStatDays } = {}) {
+  const days = Number(growthStatDays);
+  if (!Number.isFinite(days) || days <= 0) return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(rolloutDate || ""));
+  if (!match) return false;
+  const created = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).getTime();
+  if (!Number.isFinite(created)) return false;
+  return nowMs - created <= days * 24 * 60 * 60 * 1000;
 }
 
 function activeCodexRolloutDates(
