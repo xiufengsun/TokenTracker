@@ -1177,7 +1177,7 @@ test("index: computeRowCost prefers a provider-reported Grok cost", () => {
 
 test("index: computeRowCost ignores reported costs from non-authoritative sources", () => {
   const row = {
-    source: "command-code",
+    source: "claude",
     model: "claude-sonnet-4-6",
     input_tokens: 1_000_000,
     cached_input_tokens: 0,
@@ -1191,6 +1191,21 @@ test("index: computeRowCost ignores reported costs from non-authoritative source
     pricing.computeRowCost({ ...row, total_cost_usd: 999 }),
     estimatedCost,
   );
+});
+
+test("index: computeRowCost prefers the reported cost for authoritative sources", () => {
+  const row = {
+    source: "command-code",
+    model: "claude-sonnet-4-6",
+    input_tokens: 1_000_000,
+    cached_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+    output_tokens: 1_000_000,
+    reasoning_output_tokens: 0,
+  };
+  assert.equal(pricing.computeRowCost({ ...row, total_cost_usd: 0.42 }), 0.42);
+  // Zero stays the "unreported" sentinel and falls through to model pricing.
+  assert.equal(pricing.computeRowCost({ ...row, total_cost_usd: 0 }), pricing.computeRowCost(row));
 });
 
 test("index: Pi GitHub Copilot rows keep token usage but have zero estimated API cost", () => {

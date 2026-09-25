@@ -29,7 +29,10 @@ const LOCAL_INFERENCE_SOURCES = new Set(["lmstudio"]);
 // including cached tokens, never a session/day aggregate. Astra supports
 // a larger context window; only observed request subsets receive the premium.
 const OPENAI_LONG_CONTEXT_INPUT_THRESHOLD = 272_000;
-const SOURCES_WITH_AUTHORITATIVE_COST = new Set(["grok"]);
+// Prefer the cost recorded with each request for these CLI sources rather than
+// replacing it with TokenTracker's model-table estimate. Command Code records
+// costUsd even for models without a public rate table (see issue #630).
+const SOURCES_WITH_AUTHORITATIVE_COST = new Set(["grok", "command-code"]);
 const SEED_SNAPSHOT_PATH = path.resolve(__dirname, "seed-snapshot.json");
 const DEEPSEEK_TIME_PRICED_MODELS = [
   "deepseek-v4-flash",

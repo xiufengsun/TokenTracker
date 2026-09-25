@@ -4174,7 +4174,49 @@ function normalizeOpencodeModelFields(msg) {
   return { modelId: null, providerId: "" };
 }
 
-async function resolveProjectMetaForPath(startDir, cache) {
+// Reconciliation callers can require complete metadata observations. Other
+// providers retain the existing best-effort missing-project fallback.
+function projectMetadataFallback(error, strictIo, fallback) {
+  const missing = error?.code === "ENOENT" || error?.code === "ENOTDIR" || error?.code === "EISDIR";
+  if (strictIo && !missing) throw error;
+  return fallback;
+}
+
+// Pin metadata text and its type/fingerprint to one opened file identity. A
+// pathname replacement after fstat must not substitute another file's bytes.
+async function readGitMetadataSnapshot(filePath, { strictIo = false, allowDirectory = false } = {}) {
+  let handle = null;
+  let snapshot = null;
+  let failure = null;
+  try {
+    // On POSIX, inspecting a FIFO/non-file must not wait for a writer first.
+    const flags = fssync.constants.O_RDONLY | (fssync.constants.O_NONBLOCK || 0);
+    handle = await fs.open(filePath, flags);
+    const stat = await handle.stat();
+    if (stat.isFile()) {
+      snapshot = { stat, text: await handle.readFile("utf8") };
+    } else if (allowDirectory && stat.isDirectory()) {
+      snapshot = { directory: true };
+    }
+  } catch (error) {
+    // An open that reports EISDIR can still select a config child; this
+    // result is never used to read the directory path itself as text.
+    if (!handle && allowDirectory && error?.code === "EISDIR") snapshot = { directory: true };
+    else failure = error;
+  } finally {
+    if (handle) {
+      try {
+        await handle.close();
+      } catch (error) {
+        // A cleanup failure must not hide the original stat/read failure.
+        if (!failure) failure = error;
+      }
+    }
+  }
+  return failure ? projectMetadataFallback(failure, strictIo, null) : snapshot;
+}
+
+async function resolveProjectMetaForPath(startDir, cache, { strictIo = false } = {}) {
   if (!startDir || typeof startDir !== "string") return null;
   if (cache && cache.has(startDir)) return cache.get(startDir);
 
@@ -4195,10 +4237,11 @@ async function resolveProjectMetaForPath(startDir, cache) {
     }
     visited.push(current);
 
-    const configPath = await resolveGitConfigPath(current);
+    const configPath = await resolveGitConfigPath(current, { strictIo });
     if (configPath) {
-      const configStat = await fs.stat(configPath).catch(() => null);
-      const remoteUrl = await readGitRemoteUrl(configPath);
+      const snapshot = await readGitMetadataSnapshot(configPath, { strictIo });
+      const configStat = snapshot?.stat || null;
+      const remoteUrl = parseGitRemoteUrl(snapshot?.text || "");
       const projectRef = canonicalizeProjectRef(remoteUrl);
       const meta = {
         projectRef: projectRef || null,
@@ -4436,9 +4479,10 @@ async function resolveProjectContextForPath({
   publicRepoCache,
   publicRepoResolver,
   projectState,
+  strictIo = false,
 }) {
   if (!startDir) return null;
-  const projectMeta = await resolveProjectMetaForPath(startDir, projectMetaCache);
+  const projectMeta = await resolveProjectMetaForPath(startDir, projectMetaCache, { strictIo });
   if (!projectMeta) return null;
   const resolver =
     typeof publicRepoResolver === "function" ? publicRepoResolver : defaultPublicRepoResolver;
@@ -4515,18 +4559,17 @@ async function resolveClaudeFileCwd(filePath) {
   return null;
 }
 
-async function resolveGitConfigPath(rootDir) {
+async function resolveGitConfigPath(rootDir, { strictIo = false } = {}) {
   const gitPath = path.join(rootDir, ".git");
-  const st = await fs.stat(gitPath).catch(() => null);
-  if (!st) return null;
-  if (st.isDirectory()) {
+  const git = await readGitMetadataSnapshot(gitPath, { strictIo, allowDirectory: true });
+  if (!git) return null;
+  if (git.directory) {
     const configPath = path.join(gitPath, "config");
-    const cfg = await fs.stat(configPath).catch(() => null);
+    const cfg = await fs.stat(configPath).catch((error) => projectMetadataFallback(error, strictIo, null));
     return cfg && cfg.isFile() ? configPath : null;
   }
-  if (st.isFile()) {
-    const content = await fs.readFile(gitPath, "utf8").catch(() => "");
-    const match = content.match(/gitdir:\s*(.+)/i);
+  if (git.stat?.isFile()) {
+    const match = git.text.match(/gitdir:\s*(.+)/i);
     if (!match) return null;
     let gitDir = match[1].trim();
     if (!gitDir) return null;
@@ -4534,10 +4577,10 @@ async function resolveGitConfigPath(rootDir) {
       gitDir = path.resolve(rootDir, gitDir);
     }
     const configPath = path.join(gitDir, "config");
-    const cfg = await fs.stat(configPath).catch(() => null);
+    const cfg = await fs.stat(configPath).catch((error) => projectMetadataFallback(error, strictIo, null));
     if (cfg && cfg.isFile()) return configPath;
 
-    const commonDirRaw = await fs.readFile(path.join(gitDir, "commondir"), "utf8").catch(() => "");
+    const commonDirRaw = (await readGitMetadataSnapshot(path.join(gitDir, "commondir"), { strictIo }))?.text || "";
     const commonDirRel = commonDirRaw.trim();
     if (!commonDirRel) return null;
     let commonDir = commonDirRel;
@@ -4545,14 +4588,18 @@ async function resolveGitConfigPath(rootDir) {
       commonDir = path.resolve(gitDir, commonDir);
     }
     const commonConfigPath = path.join(commonDir, "config");
-    const commonCfg = await fs.stat(commonConfigPath).catch(() => null);
+    const commonCfg = await fs.stat(commonConfigPath).catch((error) => projectMetadataFallback(error, strictIo, null));
     return commonCfg && commonCfg.isFile() ? commonConfigPath : null;
   }
   return null;
 }
 
-async function readGitRemoteUrl(configPath) {
-  const raw = await fs.readFile(configPath, "utf8").catch(() => "");
+async function readGitRemoteUrl(configPath, { strictIo = false } = {}) {
+  const snapshot = await readGitMetadataSnapshot(configPath, { strictIo });
+  return parseGitRemoteUrl(snapshot?.text || "");
+}
+
+function parseGitRemoteUrl(raw) {
   if (!raw.trim()) return null;
 
   const remotes = new Map();
@@ -23063,6 +23110,591 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
 }
 
 
+// ── Command Code (`cmd`, commandcode.ai) — passive session-log reader (issue #630) ──
+//
+// Command Code keeps one JSONL transcript per conversation under
+// `~/.commandcode/projects/<cwd-slug>/<session-id>.jsonl`. The first line is a
+// session header carrying the launch `cwd`; every completed assistant turn
+// appends a record whose TOP-LEVEL `model` and `usage` are Command Code's own
+// accounting for that request:
+//
+//   {"type":"message","id":"…","parentId":"…","timestamp":"…","effort":"…",
+//    "model":"deepseek/deepseek-v4.1-flash",
+//    "usage":{"inputTokens":…,"outputTokens":…,"cacheReadTokens":…,
+//             "cacheWriteTokens":…,"costUsd":…},"message":{…}}
+//
+// Two accounting conventions are load-bearing:
+//
+//  1. AI SDK-normalized `inputTokens` ALREADY INCLUDES cache reads and writes.
+//     `uncached = inputTokens - cacheReadTokens - cacheWriteTokens`; keeping
+//     either cache category in input double counts it in `total_tokens`.
+//  2. `costUsd` is the request cost reported by Command Code. Local readers
+//     prefer positive recorded values (SOURCES_WITH_AUTHORITATIVE_COST in
+//     pricing/index.js) to model-table estimates; this is not bill verification.
+//
+// Transcripts are append-only in practice, but a resume/compaction REWRITES the
+// file, so byte offsets are the wrong cursor shape here. This reader rebuilds a
+// per-file snapshot and reconciles it against a subtract-on-change ledger keyed
+// by `sessionId|recordId` — the shape the Qoder-new reader uses. Files whose
+// (size, mtime) pair is unchanged can reuse their owned ledger records. A
+// non-owning duplicate is re-read rather than storing a second full ledger.
+const COMMAND_CODE_SOURCE = "command-code";
+const COMMAND_CODE_STATE_VERSION = 1;
+const COMMAND_CODE_FILE_CACHE_VERSION = 1;
+const COMMAND_CODE_HEADER_MAX_BYTES = 65536;
+const COMMAND_CODE_HOME_DIR = ".commandcode";
+const COMMAND_CODE_PROJECTS_DIR = "projects";
+
+function isCommandCodeSessionLogName(name) {
+  return (
+    typeof name === "string" &&
+    name.endsWith(".jsonl") &&
+    !name.endsWith(".checkpoints.jsonl")
+  );
+}
+
+// Precedence mirrors the other passive readers: an explicit TokenTracker
+// override first, then the CLI's own `~/.commandcode`.
+function resolveCommandCodeHome(env = process.env) {
+  const explicit = env?.TOKENTRACKER_COMMANDCODE_HOME;
+  if (typeof explicit === "string" && explicit.trim()) return path.resolve(explicit.trim());
+  return path.join(os.homedir(), COMMAND_CODE_HOME_DIR);
+}
+
+// Windows users commonly run the `cmd` CLI inside WSL while TokenTracker itself
+// runs natively. Respect the repository-wide WSL mode contract and keep explicit
+// home overrides authoritative: an override is a complete user choice, not one
+// half of an automatic native/WSL discovery pair.
+function resolveCommandCodeHomes(env = process.env, deps = {}) {
+  const override = env?.TOKENTRACKER_COMMANDCODE_HOME;
+  const overridden = typeof override === "string" && override.trim().length > 0;
+  const nativeHome = deps.nativeHome || resolveCommandCodeHome(env);
+  const platform = deps.platform || process.platform;
+  if (overridden || platform !== "win32") return [nativeHome];
+
+  // existsSync hides permission/sharing failures as absence. Capture those
+  // failures even when the shared WSL discovery helper swallows its probes.
+  const probePath = deps.existsSync || ((candidate) => fssync.statSync(candidate).isDirectory());
+  let probeError = null;
+  const existsSync = (candidate) => {
+    try {
+      return probePath(candidate);
+    } catch (error) {
+      if (!isCommandCodePathMissing(error) && !probeError) probeError = error;
+      return false;
+    }
+  };
+  const nativeValue = wsl.shouldProbeNative(env) && existsSync(nativeHome) ? nativeHome : null;
+
+  const discoverWslHome = deps.discoverWslHome || wsl.discoverWslHome;
+  const wslValue = wsl.shouldProbeWsl(env)
+    ? discoverWslHome(COMMAND_CODE_HOME_DIR, { ...deps, env, existsSync, strict: true })
+    : null;
+  if (probeError) throw probeError;
+  const resolved = wsl.resolveAllWin32Paths({
+    nativeValue,
+    wslValue,
+    env,
+    platform,
+  });
+  return [...new Set([resolved.native, resolved.wsl].filter(Boolean))];
+}
+
+// Walk `<home>/projects/<cwd-slug>/` for `<session-id>.jsonl` transcripts. The
+// sibling `<session-id>.checkpoints.jsonl` snapshot files carry no usage and
+// must never be parsed as transcripts.
+async function resolveCommandCodeSessionFiles(env = process.env, deps = {}) {
+  const out = [];
+  const seen = new Set();
+  for (const home of resolveCommandCodeHomes(env, deps)) {
+    const projectsRoot = path.join(home, COMMAND_CODE_PROJECTS_DIR);
+    for (const project of await readCommandCodeDirectory(projectsRoot)) {
+      if (!project.isDirectory()) continue;
+      const projectDir = path.join(projectsRoot, project.name);
+      for (const entry of await readCommandCodeDirectory(projectDir)) {
+        if (!entry.isFile() || !isCommandCodeSessionLogName(entry.name)) continue;
+        const full = path.join(projectDir, entry.name);
+        if (seen.has(full)) continue;
+        seen.add(full);
+        out.push(full);
+      }
+    }
+  }
+  out.sort((a, b) => a.localeCompare(b));
+  return out;
+}
+
+function isCommandCodePathMissing(error) {
+  return error?.code === "ENOENT" || error?.code === "ENOTDIR" || error?.code === "EISDIR";
+}
+
+async function readCommandCodeDirectory(directory) {
+  try {
+    return await fs.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (isCommandCodePathMissing(error)) return [];
+    // An incomplete discovery must not reconcile inaccessible roots as empty.
+    throw error;
+  }
+}
+
+// Row models are provider-qualified ("deepseek/deepseek-v4.1-flash"); the
+// pricing tables and bucket keys use the bare id, matching the dsh reader.
+function normalizeCommandCodeModelName(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const slash = trimmed.lastIndexOf("/");
+  const name = slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+  return name || null;
+}
+
+// Map Command Code's usage object onto disjoint queue columns. `inputTokens`
+// already includes cache reads and writes (see the section comment), so subtract
+// both back out first; returns null for an all-zero record. `costUsd` is the
+// CLI-recorded cost; zero keeps the repository-wide "unreported" sentinel
+// and falls through to model pricing on the read side.
+function commandCodeUsageToTotals(usage) {
+  if (!usage || typeof usage !== "object") return null;
+  const inclusiveInput = toNonNegativeInt(usage.inputTokens);
+  const cachedInput = toNonNegativeInt(usage.cacheReadTokens);
+  const cacheWrite = toNonNegativeInt(usage.cacheWriteTokens);
+  const output = toNonNegativeInt(usage.outputTokens);
+  const input = Math.max(0, inclusiveInput - cachedInput - cacheWrite);
+  if (input === 0 && cachedInput === 0 && cacheWrite === 0 && output === 0) return null;
+  const total = input + cachedInput + cacheWrite + output;
+  const reportedCost = Number(usage.costUsd);
+  return {
+    input_tokens: input,
+    cached_input_tokens: cachedInput,
+    cache_creation_input_tokens: cacheWrite,
+    output_tokens: output,
+    reasoning_output_tokens: 0,
+    total_tokens: total,
+    billable_total_tokens: total,
+    total_cost_usd: Number.isFinite(reportedCost) && reportedCost > 0 ? reportedCost : 0,
+    conversation_count: 1,
+  };
+}
+
+// Extract selected top-level metadata from transcript text scanned locally.
+// findDshJsonProperty slices the needed fields; JSON decoding is limited to
+// selected metadata rather than whole message records or their bodies.
+// Raw transcript text is present in memory while scanning; prompt, reply and
+// code bodies are not persisted or uploaded by this reader. The parser test's
+// JSON.parse guard checks that body content is not JSON-decoded.
+function extractCommandCodeLine(line) {
+  const raw = String(line || "");
+  if (!raw.trim()) return null;
+  const type = parseDshJsonString(findDshJsonProperty(raw, "type"));
+  if (type === "session") {
+    return {
+      kind: "session",
+      sessionId: parseDshJsonString(findDshJsonProperty(raw, "id")),
+      cwd: parseDshJsonString(findDshJsonProperty(raw, "cwd")),
+    };
+  }
+  if (type !== "message") return null;
+  const id = parseDshJsonString(findDshJsonProperty(raw, "id"));
+  const timestamp = parseDshJsonString(findDshJsonProperty(raw, "timestamp"));
+  if (!id || !timestamp) return null;
+  const usageRaw = findDshJsonProperty(raw, "usage");
+  if (!usageRaw) return null;
+  let usage = null;
+  try {
+    usage = JSON.parse(usageRaw);
+  } catch (_error) {
+    return null;
+  }
+  const totals = commandCodeUsageToTotals(usage);
+  if (!totals) return null;
+  const bucketStart = toUtcHalfHourStart(timestamp);
+  if (!bucketStart) return null;
+  const model = normalizeCommandCodeModelName(
+    parseDshJsonString(findDshJsonProperty(raw, "model")),
+  );
+  return {
+    kind: "message",
+    id,
+    timestamp,
+    model: model || DEFAULT_MODEL,
+    totals,
+    bucketStart,
+  };
+}
+
+// Parse one transcript. A torn tail simply contributes nothing — the rebuild
+// reconciliation picks it up on the next sync once the record is complete.
+function extractCommandCodeSessionUsage(text) {
+  const records = [];
+  const headerRanges = [];
+  let sessionId = null;
+  let cwd = null;
+  let byteOffset = 0;
+  for (const line of String(text || "").split("\n")) {
+    const length = Buffer.byteLength(line);
+    const start = byteOffset;
+    byteOffset += length + 1;
+    const parsed = extractCommandCodeLine(line);
+    if (!parsed) continue;
+    if (parsed.kind === "session") {
+      const headerLength = Buffer.byteLength(line.trimStart());
+      headerRanges.push({ start: start + length - headerLength, length: headerLength });
+      if (!sessionId && parsed.sessionId) sessionId = parsed.sessionId;
+      if (!cwd && parsed.cwd) cwd = parsed.cwd;
+      continue;
+    }
+    records.push(parsed);
+  }
+  return { sessionId, cwd, records, headerRanges };
+}
+
+function normalizeCommandCodeState(raw) {
+  const messages = {};
+  if (raw && typeof raw === "object" && raw.messages && typeof raw.messages === "object") {
+    for (const [key, value] of Object.entries(raw.messages)) {
+      if (!value || typeof value !== "object") continue;
+      if (!value.totals || !value.bucketStart || !value.model) continue;
+      messages[key] = value;
+    }
+  }
+  const files = {};
+  // Re-read older accounting versions even when file metadata is unchanged,
+  // retaining their message totals above so reconciliation subtracts them first.
+  if (
+    raw && typeof raw === "object" && raw.version === COMMAND_CODE_STATE_VERSION &&
+    raw.files && typeof raw.files === "object"
+  ) {
+    for (const [key, value] of Object.entries(raw.files)) {
+      if (!value || typeof value !== "object") continue;
+      const size = Number(value.size);
+      const mtimeMs = Number(value.mtimeMs);
+      if (!Number.isFinite(size) || !Number.isFinite(mtimeMs)) continue;
+      files[key] = { size, mtimeMs };
+    }
+  }
+  const fileIndex = {};
+  // Accounting-v1 fingerprints alone do not prove a complete file snapshot.
+  // Missing/older indexes force one reread while retaining the old ledger for
+  // subtraction, including caches whose surviving duplicate was retracted.
+  if (raw?.fileCacheVersion === COMMAND_CODE_FILE_CACHE_VERSION && raw.fileIndex) {
+    for (const [key, value] of Object.entries(raw.fileIndex)) {
+      if (!files[key] || !Array.isArray(value?.messageKeys) || !Array.isArray(value.headerRanges)) continue;
+      if (value.messageKeys.some((entry) => typeof entry !== "string")) continue;
+      let end = 0;
+      const validRanges = value.headerRanges.every((range) => {
+        if (!Number.isSafeInteger(range?.start) || !Number.isSafeInteger(range.length)) return false;
+        if (range.start < end || range.length < 0 || range.start + range.length > files[key].size) return false;
+        end = range.start + range.length;
+        return true;
+      });
+      if (!validRanges) continue;
+      fileIndex[key] = {
+        messageKeys: [...new Set(value.messageKeys)],
+        headerRanges: value.headerRanges.map(({ start, length }) => ({ start, length })),
+      };
+    }
+  }
+  return {
+    version: COMMAND_CODE_STATE_VERSION,
+    fileCacheVersion: COMMAND_CODE_FILE_CACHE_VERSION,
+    messages,
+    files,
+    fileIndex,
+    updatedAt: typeof raw?.updatedAt === "string" ? raw.updatedAt : null,
+  };
+}
+
+// Snapshot one transcript through a single descriptor: the change check and the
+// read share one handle, so a writer cannot swap the file between them (the
+// TOCTOU shape CodeQL reports as js/file-system-race). Returns null for a
+// missing or non-file path so reconciliation can retract it. Other observation
+// failures propagate before any queues or cursors are published.
+async function readCommandCodeSessionSnapshot(filePath, previous = null, headerRanges = null) {
+  let handle;
+  try {
+    handle = await fs.open(filePath, "r");
+    const stat = await handle.stat();
+    if (!stat.isFile()) return null;
+    const metadata = { size: stat.size, mtimeMs: stat.mtimeMs };
+    if (
+      previous &&
+      previous.size === metadata.size &&
+      previous.mtimeMs === metadata.mtimeMs &&
+      (!headerRanges || headerRanges.reduce((sum, range) => sum + range.length, 0) <= COMMAND_CODE_HEADER_MAX_BYTES)
+    ) {
+      if (!headerRanges) return { ...metadata, unchanged: true, text: null };
+      // Store byte ranges, never cwd. Positional reads through this same handle
+      // refresh only header lines, preserving Unicode and leading whitespace
+      // without materializing any of the cached message bodies.
+      const headers = [];
+      let complete = true;
+      for (const { start, length } of headerRanges) {
+        const data = Buffer.alloc(length);
+        let offset = 0;
+        while (offset < length) {
+          const { bytesRead } = await handle.read(data, offset, length - offset, start + offset);
+          if (!bytesRead) { complete = false; break; }
+          offset += bytesRead;
+        }
+        if (!complete) break;
+        headers.push(data.toString("utf8"));
+      }
+      const finalStat = await handle.stat();
+      if (complete && finalStat.size === stat.size && finalStat.mtimeMs === stat.mtimeMs) {
+        return { ...metadata, unchanged: true, text: headers.join("\n") };
+      }
+      // The file changed during the header read. Rebuild through this handle;
+      // positional reads above did not advance its full-read file position.
+    }
+    const data = await handle.readFile();
+    const finalStat = await handle.stat();
+    const finalMetadata = { size: finalStat.size, mtimeMs: finalStat.mtimeMs };
+    // A writer that appended while this handle was being read must be retried
+    // on the next sync instead of acknowledging a tail that was never parsed.
+    if (finalMetadata.size !== data.length) finalMetadata.mtimeMs = -1;
+    return { ...finalMetadata, unchanged: false, text: data.toString("utf8") };
+  } catch (error) {
+    if (isCommandCodePathMissing(error)) return null;
+    throw error;
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
+// Rebuild-and-diff sync for `~/.commandcode/projects/**/*.jsonl`. A record's
+// identity is `sessionId|recordId`, so a rewritten transcript (resume /
+// compaction) reconciles instead of double counting, and a deleted session
+// stops contributing. Cursor state is committed only after both queue appends
+// succeed, so a failed write retries without losing or inflating usage.
+async function parseCommandCodeIncremental({
+  sessionFiles,
+  cursors,
+  queuePath,
+  projectQueuePath,
+  onProgress,
+  publicRepoResolver,
+} = {}) {
+  await ensureDir(path.dirname(queuePath));
+  const files = Array.isArray(sessionFiles) ? sessionFiles : [];
+  // Normalizers retain nested bucket objects. Isolate this provider's working
+  // state so an append failure cannot publish totals or queuedKey changes
+  // through the original cursors before both queues have succeeded.
+  const hourlyState = normalizeHourlyState(structuredClone(cursors?.hourly));
+  const state = normalizeCommandCodeState(cursors?.commandCode);
+  const projectEnabled = typeof projectQueuePath === "string" && projectQueuePath.length > 0;
+  const projectState = projectEnabled
+    ? normalizeProjectState(structuredClone(cursors?.projectHourly))
+    : null;
+  const projectTouchedBuckets = projectEnabled ? new Set() : null;
+  const projectMetaCache = projectEnabled ? new Map() : null;
+  const publicRepoCache = projectEnabled ? new Map() : null;
+  const touchedBuckets = new Set();
+  const cb = typeof onProgress === "function" ? onProgress : null;
+
+  const currentByKey = new Map();
+  const nextFiles = {};
+  const nextFileIndex = {};
+  let recordsProcessed = 0;
+
+  for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
+    const filePath = files[fileIdx];
+    const index = state.fileIndex[filePath];
+    const ownsSnapshot = index && index.messageKeys.every((key) => state.messages[key]?.filePath === filePath);
+    const snapshot = await readCommandCodeSessionSnapshot(
+      filePath,
+      ownsSnapshot ? state.files[filePath] : null,
+      projectEnabled && ownsSnapshot ? index.headerRanges : null,
+    );
+    if (!snapshot) continue;
+    nextFiles[filePath] = { size: snapshot.size, mtimeMs: snapshot.mtimeMs };
+
+    const parsed = extractCommandCodeSessionUsage(snapshot.text);
+    const sessionId = parsed.sessionId || path.basename(filePath, ".jsonl");
+
+    let projectKey = null;
+    let projectRef = null;
+    if (projectEnabled) {
+      const rawCwd = typeof parsed.cwd === "string" ? parsed.cwd.trim() : "";
+      if (rawCwd) {
+        const startDir = wsl.mapWslCwdToUnc(rawCwd, filePath);
+        const context = await resolveProjectContextForPath({
+          startDir,
+          projectMetaCache,
+          publicRepoCache,
+          publicRepoResolver,
+          projectState,
+          strictIo: true,
+        });
+        projectKey = context?.projectKey || null;
+        projectRef = context?.projectRef || null;
+      }
+    }
+
+    if (snapshot.unchanged) {
+      nextFileIndex[filePath] = index;
+      for (const key of index.messageKeys) {
+        const value = state.messages[key];
+        currentByKey.set(key, projectEnabled ? { ...value, projectKey, projectRef } : value);
+      }
+      continue;
+    }
+
+    const messageKeys = new Set();
+    for (const record of parsed.records) {
+      recordsProcessed += 1;
+      const key = `${COMMAND_CODE_SOURCE}:${sessionId}|${record.id}`;
+      messageKeys.add(key);
+      currentByKey.set(key, {
+        totals: record.totals,
+        bucketStart: record.bucketStart,
+        model: record.model,
+        projectKey,
+        projectRef,
+        filePath,
+      });
+    }
+    nextFileIndex[filePath] = { messageKeys: [...messageKeys], headerRanges: parsed.headerRanges };
+
+    if (cb && (fileIdx % 25 === 0 || fileIdx === files.length - 1)) {
+      cb({
+        index: fileIdx + 1,
+        total: files.length,
+        messagesProcessed: currentByKey.size,
+        eventsAggregated: 0,
+        bucketsQueued: 0,
+      });
+    }
+  }
+
+  let eventsAggregated = 0;
+
+  // Subtract contributions that disappeared or changed.
+  for (const [key, prev] of Object.entries(state.messages)) {
+    const cur = currentByKey.get(key);
+    const unchanged =
+      cur &&
+      totalsKey(prev.totals) === totalsKey(cur.totals) &&
+      prev.bucketStart === cur.bucketStart &&
+      prev.model === cur.model &&
+      (prev.projectKey || null) === (cur.projectKey || null) &&
+      (prev.totals?.total_cost_usd || 0) === (cur.totals.total_cost_usd || 0);
+    if (unchanged) {
+      // A move or surviving duplicate can have identical totals but a new
+      // canonical owner. Persist that provenance for the next unchanged scan.
+      state.messages[key] = { ...prev, filePath: cur.filePath, projectRef: cur.projectRef };
+      continue;
+    }
+    if (prev.totals && prev.bucketStart && prev.model) {
+      const oldBucket = getHourlyBucket(hourlyState, COMMAND_CODE_SOURCE, prev.model, prev.bucketStart);
+      subtractTotals(oldBucket.totals, prev.totals);
+      touchedBuckets.add(bucketKey(COMMAND_CODE_SOURCE, prev.model, prev.bucketStart));
+      if (projectEnabled && prev.projectKey) {
+        const oldProjectBucket = getProjectBucket(
+          projectState,
+          prev.projectKey,
+          COMMAND_CODE_SOURCE,
+          prev.bucketStart,
+          prev.projectRef || null,
+        );
+        subtractTotals(oldProjectBucket.totals, prev.totals);
+        projectTouchedBuckets.add(
+          projectBucketKey(prev.projectKey, COMMAND_CODE_SOURCE, prev.bucketStart),
+        );
+      }
+    }
+    if (cur) {
+      const bucket = getHourlyBucket(hourlyState, COMMAND_CODE_SOURCE, cur.model, cur.bucketStart);
+      addTotals(bucket.totals, cur.totals);
+      touchedBuckets.add(bucketKey(COMMAND_CODE_SOURCE, cur.model, cur.bucketStart));
+      if (projectEnabled && cur.projectKey) {
+        const projectBucket = getProjectBucket(
+          projectState,
+          cur.projectKey,
+          COMMAND_CODE_SOURCE,
+          cur.bucketStart,
+          cur.projectRef,
+        );
+        addTotals(projectBucket.totals, cur.totals);
+        projectTouchedBuckets.add(
+          projectBucketKey(cur.projectKey, COMMAND_CODE_SOURCE, cur.bucketStart),
+        );
+      }
+      state.messages[key] = {
+        totals: cur.totals,
+        conversationCount: cur.totals.conversation_count,
+        bucketStart: cur.bucketStart,
+        model: cur.model,
+        projectKey: cur.projectKey,
+        projectRef: cur.projectRef,
+        filePath: cur.filePath,
+        updatedAt: new Date().toISOString(),
+      };
+      eventsAggregated += 1;
+    } else {
+      delete state.messages[key];
+      eventsAggregated += 1;
+    }
+  }
+
+  // Add brand-new keys.
+  for (const [key, cur] of currentByKey.entries()) {
+    if (state.messages[key]) continue;
+    const bucket = getHourlyBucket(hourlyState, COMMAND_CODE_SOURCE, cur.model, cur.bucketStart);
+    addTotals(bucket.totals, cur.totals);
+    touchedBuckets.add(bucketKey(COMMAND_CODE_SOURCE, cur.model, cur.bucketStart));
+    if (projectEnabled && cur.projectKey) {
+      const projectBucket = getProjectBucket(
+        projectState,
+        cur.projectKey,
+        COMMAND_CODE_SOURCE,
+        cur.bucketStart,
+        cur.projectRef,
+      );
+      addTotals(projectBucket.totals, cur.totals);
+      projectTouchedBuckets.add(
+        projectBucketKey(cur.projectKey, COMMAND_CODE_SOURCE, cur.bucketStart),
+      );
+    }
+    state.messages[key] = {
+      totals: cur.totals,
+      conversationCount: cur.totals.conversation_count,
+      bucketStart: cur.bucketStart,
+      model: cur.model,
+      projectKey: cur.projectKey,
+      projectRef: cur.projectRef,
+      filePath: cur.filePath,
+      updatedAt: new Date().toISOString(),
+    };
+    eventsAggregated += 1;
+  }
+
+  const bucketsQueued = await enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets });
+  const projectBucketsQueued = projectEnabled
+    ? await enqueueTouchedProjectBuckets({ projectQueuePath, projectState, projectTouchedBuckets })
+    : 0;
+
+  const updatedAt = new Date().toISOString();
+  hourlyState.updatedAt = updatedAt;
+  state.updatedAt = updatedAt;
+  state.files = nextFiles;
+  state.fileIndex = nextFileIndex;
+  cursors.hourly = hourlyState;
+  cursors.commandCode = state;
+  if (projectState) {
+    projectState.updatedAt = updatedAt;
+    cursors.projectHourly = projectState;
+  }
+
+  return {
+    recordsProcessed,
+    messagesProcessed: currentByKey.size,
+    eventsAggregated,
+    bucketsQueued,
+    projectBucketsQueued,
+  };
+}
+
 module.exports = {
   listRolloutFiles,
   listRolloutFilesDeep,
@@ -23293,4 +23925,13 @@ module.exports = {
   dshUsageToTotals,
   extractDshSessionUsage,
   parseDshIncremental,
+  // Command Code (`cmd`) — passive session-log reader
+  resolveCommandCodeHome,
+  resolveCommandCodeHomes,
+  resolveCommandCodeSessionFiles,
+  isCommandCodeSessionLogName,
+  normalizeCommandCodeModelName,
+  commandCodeUsageToTotals,
+  extractCommandCodeSessionUsage,
+  parseCommandCodeIncremental,
 };

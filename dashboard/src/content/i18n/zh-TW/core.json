@@ -157,6 +157,7 @@
   "provider.display.omp": "oh-my-pi",
   "provider.display.omo": "OmO",
   "provider.display.minimax_code": "MiniMax Code",
+  "provider.display.command_code": "Command Code",
   "provider.display.deepseek_harness": "DeepSeek Harness",
   "provider.display.trae_work_cn": "TRAE Work 中國版",
   "limits.provider.antigravity": "Antigravity",
