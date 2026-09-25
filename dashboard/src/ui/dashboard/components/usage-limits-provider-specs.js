@@ -142,7 +142,8 @@ export const PROVIDER_LIMIT_SPECS = {
   zcode: {
     windows(data) {
       // Coding plans expose 5h / weekly / tools windows (ZCode 3.3.x).
-      // Start plans keep the per-model GLM-5.2 / GLM-5-Turbo balances.
+      // Start plans list one row per balance bucket; the label comes from the API
+      // (model name, plus the promotion name for one-time grants), so `label` is set.
       if (data.plan_kind === "coding-plan") {
         return [
           { key: "5h", labelKey: "limits.label.zcode_5h", window: data.primary_window },
@@ -150,6 +151,11 @@ export const PROVIDER_LIMIT_SPECS = {
           { key: "tools", labelKey: "limits.label.zcode_tools", window: data.tertiary_window },
         ];
       }
+      const labeled = Array.isArray(data.buckets) ? data.buckets.filter((b) => b?.label && b.window) : [];
+      if (labeled.length) {
+        return labeled.map((b, i) => ({ key: `bucket-${b.entitlement_id || i}`, label: b.label, window: b.window }));
+      }
+      // Payloads from older servers carry no bucket labels.
       return [
         { key: "glm52", labelKey: "limits.label.zcode_glm52", window: data.primary_window },
         { key: "glm5t", labelKey: "limits.label.zcode_glm5t", window: data.secondary_window },

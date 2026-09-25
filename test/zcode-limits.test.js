@@ -1133,3 +1133,171 @@ describe("fetchZcodeLimits", () => {
     }
   });
 });
+
+describe("ZCode 3.14 credential-only layout", () => {
+  const DEVICE_MID = "11111111-2222-4333-8444-555555555555";
+
+  /** Build a ZCode 3.14 home: no v2/config.json, plans live only in credentials.json. */
+  function withZcode314Home(credentials, run, { setting } = {}) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tt-zcode-314-"));
+    const v2 = path.join(tmp, ".zcode", "v2");
+    fs.mkdirSync(v2, { recursive: true });
+    writeZcodeCredentials(v2, tmp, credentials);
+    fs.writeFileSync(path.join(v2, "telemetry-state.json"), JSON.stringify({ deviceMid: DEVICE_MID }));
+    fs.writeFileSync(path.join(v2, "setting.json"), JSON.stringify(setting || {
+      providerFamilyDomain: "zai",
+      providerFamilyConnectionSelections: { zai: { kind: "individual-coding-plan" } },
+    }));
+    return Promise.resolve().then(() => run(tmp, v2)).finally(() => {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+  }
+
+  it("detects ZCode and builds candidates without v2/config.json", async () => {
+    await withZcode314Home({
+      "oauth:active_provider": "zai",
+      zcodejwttoken: "jwt-token",
+      "account-provider:coding-plan:account:zai-individual-coding-plan:account:acct-1:api-key": "coding-key",
+    }, (home) => {
+      assert.equal(isZcodeInstalled({ home }), true);
+      const auths = loadZcodeAuthCandidates({ home, env: {} });
+      assert.deepEqual(auths.map((auth) => [auth.providerKey, auth.auth_source, auth.apiKey]), [
+        ["builtin:zai-coding-plan", "credential:account-provider", "coding-key"],
+        ["builtin:zai-start-plan", "credential:zcodejwttoken", "jwt-token"],
+      ]);
+      assert.equal(auths[0].quotaUrl, "https://api.z.ai/api/monitor/usage/quota/limit");
+      assert.equal(auths[1].billingBaseUrl, "https://zcode.z.ai/api/v1/zcode-plan");
+    });
+  });
+
+  it("falls back to the start plan and sends the telemetry device id to billing/balance", async () => {
+    await withZcode314Home({
+      "oauth:active_provider": "zai",
+      zcodejwttoken: "jwt-token",
+      "account-provider:coding-plan:account:zai-individual-coding-plan:account:acct-1:api-key": "coding-key",
+    }, async (home) => {
+      const requests = [];
+      const result = await fetchZcodeLimits({
+        home,
+        env: { TOKENTRACKER_ZCODE_APP_VERSION: "3.14.3" },
+        /** Mirror the live API: no coding plan on this account, billing needs X-Device-Mid. */
+        fetchImpl: async (url, options) => {
+          requests.push(url);
+          if (url.includes("/api/monitor/usage/quota/limit")) {
+            assert.equal(options.headers.authorization, "coding-key");
+            return { ok: true, status: 200, async json() {
+              return { code: 500, success: false, msg: "当前用户不存在coding plan" };
+            } };
+          }
+          assert.equal(options.headers.Authorization, "Bearer jwt-token");
+          if (options.headers["X-Device-Mid"] !== DEVICE_MID) {
+            return { ok: false, status: 400, async json() { return { code: 3001, msg: "parameter error" }; } };
+          }
+          return { ok: true, status: 200, async json() { return balanceBody(); } };
+        },
+      });
+      assert.equal(result.configured, true);
+      assert.equal(result.error, null);
+      assert.equal(result.provider_key, "builtin:zai-start-plan");
+      assert.equal(requests.length, 2);
+    });
+  });
+
+  it("routes a team account key with its own organization and project scope", async () => {
+    const name = [
+      "account-provider:team",
+      encodeURIComponent("account:bigmodel-team-coding-plan"),
+      "product-max",
+      encodeURIComponent("org:example"),
+      "proj-example",
+      "account:acct-2:api-key",
+    ].join(":");
+    await withZcode314Home({ [name]: "team-key" }, async (home) => {
+      const result = await fetchZcodeLimits({
+        home,
+        env: {},
+        /** Accept only the fully scoped team request. */
+        fetchImpl: async (url, options) => {
+          assert.equal(url, "https://bigmodel.cn/api/monitor/usage/quota/limit?type=2");
+          assert.equal(options.headers.authorization, "team-key");
+          assert.equal(options.headers["bigmodel-organization"], "org:example");
+          assert.equal(options.headers["bigmodel-project"], "proj-example");
+          return { ok: true, status: 200, async json() { return realLiteCodingPlanQuotaBody(); } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.equal(result.provider_key, "builtin:bigmodel-coding-plan");
+    }, { setting: { providerFamilyDomain: "bigmodel" } });
+  });
+
+  it("keeps ignoring the shared JWT for providers a legacy config.json does not list", async () => {
+    await withZcode314Home({ "oauth:active_provider": "zai", zcodejwttoken: "jwt-token" }, (home, v2) => {
+      fs.writeFileSync(path.join(v2, "config.json"), JSON.stringify({
+        provider: { "builtin:zai-coding-plan": { enabled: true, options: { apiKey: "config-key" } } },
+      }));
+      const auths = loadZcodeAuthCandidates({ home, env: {} });
+      assert.deepEqual(auths.map((auth) => [auth.providerKey, auth.auth_source]), [
+        ["builtin:zai-coding-plan", "provider:config"],
+      ]);
+    });
+  });
+});
+
+describe("ZCode start-plan promotional grants", () => {
+  // Shape captured from billing/balance in ZCode 3.14.3: a daily Start Plan plus a
+  // one-time weekend promotion that grants extra GLM-5.3-Flash units.
+  function promoBalanceBody() {
+    const daily = (id, name, total, used, priority) => ({
+      user_plan_id: "upl_daily", plan_id: "zcode-v3-start-plan-0817", entitlement_id: id,
+      show_name: name, priority, plan_priority: 90, total_units: total, used_units: used,
+      remaining_units: total - used, period_end: 1790351999, expires_at: 1790351999,
+    });
+    return {
+      code: 0,
+      data: {
+        server_time: 1790300000,
+        plans: [
+          {
+            user_plan_id: "upl_weekend", plan_id: "zcode-v3-start-plan-0924-wk", name: "ZCode Weekend Build",
+            status: "active", entitlements: [{ entitlement_id: "ent-wk-1", show_name: "GLM-5.3-Flash", period: "one_time" }],
+          },
+          {
+            user_plan_id: "upl_daily", plan_id: "zcode-v3-start-plan-0817", name: "ZCode Start Plan",
+            status: "active",
+            entitlements: [
+              { entitlement_id: "ent_glm_5p3", show_name: "GLM-5.3", period: "daily" },
+              { entitlement_id: "ent_glm_5p3f", show_name: "GLM-5.3-Flash", period: "daily" },
+            ],
+          },
+        ],
+        balances: [
+          {
+            user_plan_id: "upl_weekend", plan_id: "zcode-v3-start-plan-0924-wk", entitlement_id: "ent-wk-1",
+            show_name: "GLM-5.3-Flash", total_units: 300_000_000, used_units: 3_000_000,
+            remaining_units: 297_000_000, period_end: 1790557200, expires_at: 1790557200,
+          },
+          daily("ent_glm_5p3", "GLM-5.3", 3_000_000, 3_000_000, 110),
+          daily("ent_glm_5p3f", "GLM-5.3-Flash", 5_000_000, 1_000_000, 80),
+        ],
+      },
+    };
+  }
+
+  it("keeps daily allowances as the primary windows and labels promotions by plan name", () => {
+    const out = normalizeZcodeBalanceResponse(promoBalanceBody());
+    assert.deepEqual(out.buckets.map((b) => [b.label, b.period, b.window.used_percent]), [
+      ["GLM-5.3", "daily", 100],
+      ["GLM-5.3-Flash", "daily", 20],
+      ["GLM-5.3-Flash · ZCode Weekend Build", "one_time", 1],
+    ]);
+    assert.equal(out.primary_window.used_percent, 100);
+    assert.equal(out.secondary_window.used_percent, 20);
+    assert.equal(out.plan_id, "zcode-v3-start-plan-0817");
+    assert.equal(out.plan_label, "Start");
+  });
+
+  it("keeps the legacy total-based order when the payload has no plans", () => {
+    const out = normalizeZcodeBalanceResponse(balanceBody());
+    assert.deepEqual(out.buckets.map((b) => [b.label, b.period]), [["GLM-5.2", null], ["GLM-5-Turbo", null]]);
+  });
+});

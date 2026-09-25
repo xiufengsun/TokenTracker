@@ -437,6 +437,13 @@ struct UsageLimitsView: View {
             if let w = z.primaryWindow { s.append(makeSpec("5h", w.usedPercent, iso: w.resetAt)) }
             if let w = z.secondaryWindow { s.append(makeSpec("Weekly", w.usedPercent, iso: w.resetAt)) }
             if let w = z.tertiaryWindow { s.append(makeSpec("Tools", w.usedPercent, iso: w.resetAt)) }
+        } else if let buckets = z.buckets, buckets.contains(where: { $0.label?.isEmpty == false }) {
+            // One row per balance bucket, labelled by the server (model, plus promotion name for one-time grants).
+            for b in buckets {
+                guard let label = b.label, !label.isEmpty, let w = b.window,
+                      !s.contains(where: { $0.label == label }) else { continue }
+                s.append(makeSpec(label, w.usedPercent, iso: w.resetAt))
+            }
         } else {
             if let w = z.primaryWindow { s.append(makeSpec("GLM-5.2", w.usedPercent, iso: w.resetAt)) }
             if let w = z.secondaryWindow { s.append(makeSpec("GLM-5-Turbo", w.usedPercent, iso: w.resetAt)) }

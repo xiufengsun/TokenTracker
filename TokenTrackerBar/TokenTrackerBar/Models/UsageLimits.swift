@@ -492,15 +492,22 @@ struct ZcodeLimits: Codable, Equatable {
     let primaryWindow: GenericLimitWindow?
     let secondaryWindow: GenericLimitWindow?
     let tertiaryWindow: GenericLimitWindow?
+    let buckets: [ZcodeBucket]?
 
     enum CodingKeys: String, CodingKey {
-        case configured, error
+        case configured, error, buckets
         case planLabel = "plan_label"
         case planKind = "plan_kind"
         case primaryWindow = "primary_window"
         case secondaryWindow = "secondary_window"
         case tertiaryWindow = "tertiary_window"
     }
+}
+
+/// One ZCode start-plan balance (daily allowance or one-time promotional grant).
+struct ZcodeBucket: Codable, Equatable {
+    let label: String?
+    let window: GenericLimitWindow?
 }
 
 // OpenCode Go: $12/5h + $30/week + $60/month rolling usage scraped from

@@ -78,6 +78,8 @@ function isZcodeInstalled({ home, env } = {}) {
   const zcodeHome = resolveZcodeHome({ home, env });
   const configPath = path.join(zcodeHome, "v2", "config.json");
   if (fs.existsSync(configPath)) return true;
+  // ZCode 3.14+ no longer writes v2/config.json; a signed-in desktop app still keeps credentials.
+  if (fs.existsSync(path.join(zcodeHome, "v2", "credentials.json"))) return true;
   const dbPath = path.join(zcodeHome, "cli", "db", "db.sqlite");
   return fs.existsSync(dbPath);
 }
@@ -128,8 +130,10 @@ function loadZcodeSelectedPlans({ home, env } = {}) {
   try {
     const setting = JSON.parse(fs.readFileSync(settingPath, "utf8"));
     const selected = setting?.modelProviderFamilySelectedKeys;
-    if (!selected || typeof selected !== "object") return [];
     const domain = typeof setting?.providerFamilyDomain === "string" ? setting.providerFamilyDomain : "";
+    if (!selected || typeof selected !== "object") {
+      return loadZcodeConnectionSelectedPlans(setting?.providerFamilyConnectionSelections, domain);
+    }
     const domains = [domain, ...Object.keys(selected)].filter(Boolean);
     const out = [];
     for (const key of domains) {
@@ -142,6 +146,26 @@ function loadZcodeSelectedPlans({ home, env } = {}) {
   } catch (_error) {
     return [];
   }
+}
+
+/**
+ * ZCode 3.14+ records the chosen plan per family as `providerFamilyConnectionSelections`
+ * (`{ zai: { kind: "individual-coding-plan" } }`) instead of `modelProviderFamilySelectedKeys`.
+ * Team scope for these selections lives on the account credential, not here.
+ */
+function loadZcodeConnectionSelectedPlans(selections, domain) {
+  if (!selections || typeof selections !== "object") return [];
+  const families = [domain, ...Object.keys(selections)].filter((family) => family === "bigmodel" || family === "zai");
+  const out = [];
+  for (const family of families) {
+    const kind = typeof selections[family]?.kind === "string" ? selections[family].kind : "";
+    const planKind = /coding-plan$/.test(kind) ? "coding" : kind === "start-plan" ? "start" : null;
+    if (!planKind) continue;
+    const providerKey = `builtin:${family}-${planKind}-plan`;
+    if (out.some((plan) => plan.providerKey === providerKey)) continue;
+    out.push({ providerKey, teamContext: null });
+  }
+  return out;
 }
 
 /** Return the ordered provider keys without exposing the internal team context. */
@@ -218,6 +242,47 @@ function resolveZcodeCredentialAuth(providerKey, { home, env } = {}) {
   return "";
 }
 
+/**
+ * Map a ZCode 3.14+ per-account key name onto the built-in coding-plan provider it serves:
+ *   account-provider:coding-plan:account:<family>-individual-coding-plan:account:<id>:api-key
+ *   account-provider:team:<providerId>:<productId>:<orgId>:<projectId>:account:<id>:api-key
+ * Team segments are URI-encoded by ZCode. Start-plan balances use the zcodejwttoken instead.
+ * @returns {{ providerKey: string, teamContext: { organizationId: string, projectId: string } | null } | null}
+ */
+function parseZcodeAccountProviderCredentialName(name) {
+  const match = typeof name === "string" ? name.match(/^account-provider:(.+):account:[^:]+:api-key$/) : null;
+  if (!match) return null;
+  const scope = match[1];
+  const individual = scope.match(/^coding-plan:account:(bigmodel|zai)-individual-coding-plan$/);
+  if (individual) return { providerKey: `builtin:${individual[1]}-coding-plan`, teamContext: null };
+  if (!scope.startsWith("team:")) return null;
+  const parts = scope.slice("team:".length).split(":");
+  if (parts.length !== 4) return null;
+  try {
+    const [providerId, productId, organizationId, projectId] = parts.map((part) => decodeURIComponent(part).trim());
+    const team = providerId.match(/^account:(bigmodel|zai)-team-coding-plan$/);
+    if (!team || !productId || !organizationId || !projectId) return null;
+    return { providerKey: `builtin:${team[1]}-coding-plan`, teamContext: { organizationId, projectId } };
+  } catch (_error) {
+    return null;
+  }
+}
+
+/** Collect decrypted per-account coding-plan keys, grouped by built-in provider key. */
+function loadZcodeAccountProviderAuths({ home, env } = {}) {
+  const credentials = loadZcodeCredentials({ home, env });
+  const out = {};
+  for (const name of Object.keys(credentials)) {
+    const parsed = parseZcodeAccountProviderCredentialName(name);
+    if (!parsed) continue;
+    const decrypted = decryptZcodeCredentialValue(credentials[name], { home, env });
+    const apiKey = typeof decrypted === "string" ? decrypted.trim() : "";
+    if (!apiKey) continue;
+    (out[parsed.providerKey] ||= []).push({ apiKey, teamContext: parsed.teamContext });
+  }
+  return out;
+}
+
 function isZcodeBuiltinPlanProvider(providerKey) {
   return /^builtin:(bigmodel|zai)-(start|coding)-plan$/.test(providerKey);
 }
@@ -281,15 +346,18 @@ function resolveZcodeProviderQuotaUrl(providerKey, provider, env = process.env) 
 /**
  * Build quota/billing candidates from enabled providers and their existing keys.
  * Selected plans take precedence; team scope stays attached to its own provider.
+ * ZCode 3.14+ dropped v2/config.json: there, candidates come from credentials.json
+ * alone (the active family's zcodejwttoken for start plans, per-account coding-plan keys).
  */
 function loadZcodeAuthCandidates({ home, env } = {}) {
   const zcodeHome = resolveZcodeHome({ home, env });
   const configPath = path.join(zcodeHome, "v2", "config.json");
-  if (!fs.existsSync(configPath)) return [];
+  const hasConfig = fs.existsSync(configPath);
   try {
-    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    const config = hasConfig ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
     if (!config || typeof config !== "object") return [];
     const providers = config.provider || {};
+    const accountAuths = loadZcodeAccountProviderAuths({ home, env });
     const defaultCandidates = [
       "builtin:bigmodel-start-plan",
       "builtin:zai-start-plan",
@@ -309,18 +377,25 @@ function loadZcodeAuthCandidates({ home, env } = {}) {
     ].filter((key, index, all) => all.indexOf(key) === index);
     const auths = [];
     for (const key of candidates) {
-      const provider = providers[key];
-      if (!provider || typeof provider !== "object") continue;
-      if (provider.enabled === false) continue;
+      const configured = providers[key];
+      const provider = configured && typeof configured === "object" ? configured : null;
+      if (provider?.enabled === false) continue;
       if (hasAvailability && availability?.[key]?.status && availability[key].status !== "available") continue;
       const apiKey = typeof provider?.options?.apiKey === "string" ? provider.options.apiKey.trim() : "";
       const billingBaseUrl = resolveZcodeProviderBillingBaseUrl(key, provider, env);
       const quotaUrl = resolveZcodeProviderQuotaUrl(key, provider, env);
       const teamContext = selectedPlans.find((plan) => plan.providerKey === key)?.teamContext;
-      const credentialApiKey = resolveZcodeCredentialAuth(key, { home, env });
+      // Legacy layouts only trust the shared JWT for providers config.json still lists.
+      const credentialApiKey = provider || !hasConfig ? resolveZcodeCredentialAuth(key, { home, env }) : "";
+      const accountEntries = (accountAuths[key] || []).map((entry) => ({
+        apiKey: entry.apiKey,
+        authSource: "credential:account-provider",
+        teamContext: entry.teamContext,
+      }));
       const authEntries = [
-        credentialApiKey ? { apiKey: credentialApiKey, authSource: "credential:zcodejwttoken" } : null,
-        apiKey ? { apiKey, authSource: "provider:config" } : null,
+        credentialApiKey ? { apiKey: credentialApiKey, authSource: "credential:zcodejwttoken", teamContext } : null,
+        ...accountEntries,
+        apiKey ? { apiKey, authSource: "provider:config", teamContext } : null,
       ].filter(Boolean);
       const seenKeys = new Set();
       for (const entry of authEntries) {
@@ -334,7 +409,7 @@ function loadZcodeAuthCandidates({ home, env } = {}) {
           baseUrl: provider?.options?.baseURL || null,
           billingBaseUrl,
           quotaUrl,
-          ...(teamContext ? { teamContext } : {}),
+          ...(entry.teamContext ? { teamContext: entry.teamContext } : {}),
           availability: availability?.[key]?.status || null,
         });
       }
@@ -361,9 +436,24 @@ function buildZcodeSourceHeaders({ home, env } = {}) {
     "X-Os-Category": process.platform,
     "X-Os-Version": os.release(),
   };
-  const deviceMid = loadZcodeCredential("zcodefeedbackclientid", { home, env });
+  const deviceMid = loadZcodeCredential("zcodefeedbackclientid", { home, env })
+    || loadZcodeTelemetryDeviceMid({ home, env });
   if (deviceMid) headers["X-Device-Mid"] = deviceMid;
   return headers;
+}
+
+// ZCode 3.14+ keeps the device id in v2/telemetry-state.json, and billing/balance
+// rejects requests without X-Device-Mid as `code=3001 parameter error`.
+function loadZcodeTelemetryDeviceMid({ home, env } = {}) {
+  const statePath = path.join(resolveZcodeHome({ home, env }), "v2", "telemetry-state.json");
+  if (!fs.existsSync(statePath)) return "";
+  try {
+    const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    const deviceMid = typeof state?.deviceMid === "string" ? state.deviceMid.trim() : "";
+    return /^[\x20-\x7e]+$/.test(deviceMid) ? deviceMid : "";
+  } catch (_error) {
+    return "";
+  }
 }
 
 function zcodeValNumber(value) {
@@ -428,6 +518,19 @@ function normalizeZcodeBalanceResponse(body) {
   }
 
   const serverTime = zcodeValNumber(data.server_time);
+  // Promotional grants ("free eggs", weekend builds) arrive as extra plans whose
+  // entitlements are one-time; index them so each bucket can say where it came from.
+  const plans = Array.isArray(data.plans) ? data.plans : [];
+  const planByUserPlanId = new Map();
+  const periodByEntitlementId = new Map();
+  for (const plan of plans) {
+    if (typeof plan?.user_plan_id === "string") planByUserPlanId.set(plan.user_plan_id, plan);
+    for (const ent of Array.isArray(plan?.entitlements) ? plan.entitlements : []) {
+      if (typeof ent?.entitlement_id === "string" && typeof ent?.period === "string") {
+        periodByEntitlementId.set(ent.entitlement_id, ent.period);
+      }
+    }
+  }
   const buckets = balances.map((b) => {
     const total = zcodeValNumber(b.total_units);
     const used = zcodeValNumber(b.used_units);
@@ -437,9 +540,21 @@ function normalizeZcodeBalanceResponse(body) {
     const usedPercent =
       total != null && total > 0 && used != null ? (used / total) * 100 : null;
 
+    const showName = typeof b.show_name === "string" ? b.show_name : "";
+    const entitlementId = typeof b.entitlement_id === "string" ? b.entitlement_id : "";
+    const plan = planByUserPlanId.get(b.user_plan_id) || null;
+    const period = periodByEntitlementId.get(entitlementId) || null;
+    const oneTime = period === "one_time";
+    const planName = typeof plan?.name === "string" && plan.name.trim() ? plan.name.trim() : null;
+
     return {
-      show_name: typeof b.show_name === "string" ? b.show_name : "",
-      entitlement_id: typeof b.entitlement_id === "string" ? b.entitlement_id : "",
+      show_name: showName,
+      label: oneTime && planName ? `${showName} · ${planName}` : showName,
+      entitlement_id: entitlementId,
+      plan_id: typeof b.plan_id === "string" ? b.plan_id : null,
+      plan_name: planName,
+      period,
+      priority: zcodeValNumber(b.priority),
       total_units: total,
       used_units: used,
       remaining_units: remaining,
@@ -447,15 +562,20 @@ function normalizeZcodeBalanceResponse(body) {
     };
   });
 
-  // Primary window: highest-priority bucket (GLM-5.2 typically)
-  // Secondary window: second bucket (GLM-5-Turbo typically)
+  // Recurring (daily) allowances first so the primary/secondary windows keep meaning
+  // "today's main models"; one-time promotional grants follow. Within each group, ZCode's
+  // own bucket priority (flagship model first), then larger totals.
   const sorted = buckets.slice().sort((a, b) => {
+    const aOneTime = a.period === "one_time" ? 1 : 0;
+    const bOneTime = b.period === "one_time" ? 1 : 0;
+    if (aOneTime !== bOneTime) return aOneTime - bOneTime;
+    if (a.priority != null && b.priority != null && a.priority !== b.priority) return b.priority - a.priority;
     const aTotal = a.total_units || 0;
     const bTotal = b.total_units || 0;
     return bTotal - aTotal;
   });
 
-  const planId = typeof balances[0]?.plan_id === "string" ? balances[0].plan_id : null;
+  const planId = sorted[0]?.plan_id || (typeof balances[0]?.plan_id === "string" ? balances[0].plan_id : null);
   return {
     server_time: serverTime,
     plan_kind: "start-plan",
