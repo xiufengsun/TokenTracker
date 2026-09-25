@@ -74,6 +74,7 @@ function resolveZcodeAppVersion({ home, env = process.env } = {}) {
   return DEFAULT_ZCODE_APP_VERSION;
 }
 
+/** True when any ZCode layout is present: legacy v2/config.json, 3.14+ credentials, or the CLI db. */
 function isZcodeInstalled({ home, env } = {}) {
   const zcodeHome = resolveZcodeHome({ home, env });
   const configPath = path.join(zcodeHome, "v2", "config.json");
@@ -357,7 +358,8 @@ function loadZcodeAuthCandidates({ home, env } = {}) {
     const config = hasConfig ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
     if (!config || typeof config !== "object") return [];
     const providers = config.provider || {};
-    const accountAuths = loadZcodeAccountProviderAuths({ home, env });
+    // Per-account keys are a 3.14+ concept; a legacy config.json stays the only key source there.
+    const accountAuths = hasConfig ? {} : loadZcodeAccountProviderAuths({ home, env });
     const defaultCandidates = [
       "builtin:bigmodel-start-plan",
       "builtin:zai-start-plan",
@@ -424,6 +426,7 @@ function loadZcodeApiKey({ home, env } = {}) {
   return loadZcodeAuthCandidates({ home, env })[0] || null;
 }
 
+/** Client-identification headers ZCode sends to its own billing host, including X-Device-Mid when known. */
 function buildZcodeSourceHeaders({ home, env } = {}) {
   const headers = {
     "User-Agent": `ZCode/${resolveZcodeAppVersion({ home, env })}`,
@@ -442,8 +445,11 @@ function buildZcodeSourceHeaders({ home, env } = {}) {
   return headers;
 }
 
-// ZCode 3.14+ keeps the device id in v2/telemetry-state.json, and billing/balance
-// rejects requests without X-Device-Mid as `code=3001 parameter error`.
+/**
+ * ZCode 3.14+ keeps the device id in v2/telemetry-state.json, and billing/balance
+ * rejects requests without X-Device-Mid as `code=3001 parameter error`.
+ * @returns {string} the device id, or "" when absent or not header-safe
+ */
 function loadZcodeTelemetryDeviceMid({ home, env } = {}) {
   const statePath = path.join(resolveZcodeHome({ home, env }), "v2", "telemetry-state.json");
   if (!fs.existsSync(statePath)) return "";
@@ -497,6 +503,10 @@ function deriveZcodePlanLabel(planId) {
   return m[1].charAt(0).toUpperCase() + m[1].slice(1);
 }
 
+/**
+ * Normalize a start-plan billing/balance payload into labelled buckets plus the
+ * primary/secondary/tertiary windows (daily allowances first, promotional grants after).
+ */
 function normalizeZcodeBalanceResponse(body) {
   const data = body?.data;
   if (!data || typeof data !== "object") {
@@ -521,6 +531,7 @@ function normalizeZcodeBalanceResponse(body) {
   // Promotional grants ("free eggs", weekend builds) arrive as extra plans whose
   // entitlements are one-time; index them so each bucket can say where it came from.
   const plans = Array.isArray(data.plans) ? data.plans : [];
+  const hasPlans = plans.length > 0;
   const planByUserPlanId = new Map();
   const periodByEntitlementId = new Map();
   for (const plan of plans) {
@@ -569,7 +580,7 @@ function normalizeZcodeBalanceResponse(body) {
     const aOneTime = a.period === "one_time" ? 1 : 0;
     const bOneTime = b.period === "one_time" ? 1 : 0;
     if (aOneTime !== bOneTime) return aOneTime - bOneTime;
-    if (a.priority != null && b.priority != null && a.priority !== b.priority) return b.priority - a.priority;
+    if (hasPlans && a.priority != null && b.priority != null && a.priority !== b.priority) return b.priority - a.priority;
     const aTotal = a.total_units || 0;
     const bTotal = b.total_units || 0;
     return bTotal - aTotal;

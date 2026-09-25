@@ -1230,8 +1230,12 @@ describe("ZCode 3.14 credential-only layout", () => {
     }, { setting: { providerFamilyDomain: "bigmodel" } });
   });
 
-  it("keeps ignoring the shared JWT for providers a legacy config.json does not list", async () => {
-    await withZcode314Home({ "oauth:active_provider": "zai", zcodejwttoken: "jwt-token" }, (home, v2) => {
+  it("keeps a legacy config.json as the only key source (no shared JWT, no account keys)", async () => {
+    await withZcode314Home({
+      "oauth:active_provider": "zai",
+      zcodejwttoken: "jwt-token",
+      "account-provider:coding-plan:account:zai-individual-coding-plan:account:acct-1:api-key": "account-key",
+    }, (home, v2) => {
       fs.writeFileSync(path.join(v2, "config.json"), JSON.stringify({
         provider: { "builtin:zai-coding-plan": { enabled: true, options: { apiKey: "config-key" } } },
       }));
@@ -1299,5 +1303,13 @@ describe("ZCode start-plan promotional grants", () => {
   it("keeps the legacy total-based order when the payload has no plans", () => {
     const out = normalizeZcodeBalanceResponse(balanceBody());
     assert.deepEqual(out.buckets.map((b) => [b.label, b.period]), [["GLM-5.2", null], ["GLM-5-Turbo", null]]);
+  });
+
+  it("ignores bucket priority without plan metadata so legacy windows keep their order", () => {
+    const body = balanceBody();
+    body.data.balances[0].priority = 10;
+    body.data.balances[1].priority = 110;
+    const out = normalizeZcodeBalanceResponse(body);
+    assert.deepEqual(out.buckets.map((b) => b.label), ["GLM-5.2", "GLM-5-Turbo"]);
   });
 });

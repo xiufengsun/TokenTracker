@@ -140,6 +140,7 @@ export const PROVIDER_LIMIT_SPECS = {
     },
   },
   zcode: {
+    /** Limit rows for ZCode: fixed coding-plan windows, or one row per labelled start-plan bucket. */
     windows(data) {
       // Coding plans expose 5h / weekly / tools windows (ZCode 3.3.x).
       // Start plans list one row per balance bucket; the label comes from the API
