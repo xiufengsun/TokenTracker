@@ -8,6 +8,7 @@
   "login.verify_email_success": "郵箱已驗證。你現在可以登入。",
   "login.verify_email_pending": "請先在郵箱中完成驗證，然後再登入。",
   "login.oauth.continue": "使用 {{provider}} 繼續",
+  "login.oauth.desktop_start_failed": "無法啟動桌面版登入，請再試一次。",
   "login.divider": "或",
   "login.tab.sign_in": "登入",
   "login.tab.sign_up": "建立賬戶",

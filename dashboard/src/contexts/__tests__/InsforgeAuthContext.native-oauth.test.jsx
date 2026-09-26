@@ -72,11 +72,11 @@ describe("native OAuth sign-in", () => {
 
     const outcome = await signIn(result);
 
-    expect(outcome.error).toBeInstanceOf(Error);
+    expect(outcome.error.message).toBe("Could not start desktop sign-in. Please try again.");
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("reports a system browser that could not be opened", async () => {
+  it("reports a system browser that could not be opened and clears the marker", async () => {
     window.__TAURI_INTERNALS__ = {
       invoke: vi.fn(async () => {
         throw "failed to open the system browser: xdg-open not found";
@@ -87,6 +87,10 @@ describe("native OAuth sign-in", () => {
     const outcome = await signIn(result);
 
     expect(outcome.error.message).toMatch(/failed to open the system browser/);
+    const markerBodies = fetchMock.mock.calls
+      .filter(([path]) => path === "/api/auth-bridge/verifier")
+      .map(([, init]) => JSON.parse(init.body));
+    expect(markerBodies).toEqual([{ native: true }, { native: false }]);
   });
 
   it("keeps macOS/Windows best effort when the marker is rejected", async () => {

@@ -4,10 +4,26 @@ import { clearCloudDeviceSession, setCloudSyncEnabled } from "../lib/cloud-sync-
 import { isLikelyExpiredAccessToken } from "../lib/auth-token";
 import { getPublicVisibility } from "../lib/api";
 import { clearLocalApiAuthToken, getLocalApiAuthHeaders } from "../lib/local-api-auth";
+import { copy } from "../lib/copy";
 import { getNativeOAuthBridge, isNativeLinuxApp, isNativeWindowsApp } from "../lib/native-bridge.js";
 import { restoreInsforgeUser } from "../lib/insforge-session-recovery.mjs";
 
 const InsforgeAuthContext = createContext(null);
+
+// Tells the local server whether the next /auth/callback belongs to the app.
+async function putNativeAuthMarker(native) {
+  try {
+    const authHeaders = await getLocalApiAuthHeaders();
+    const response = await fetch("/api/auth-bridge/verifier", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders },
+      body: JSON.stringify({ native }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
 
 /** Pick a human-readable name from the InsForge user object (OAuth metadata). */
 function pickDisplayNameFromUser(user) {
@@ -152,27 +168,19 @@ export function InsforgeAuthProvider({ children }) {
         if (result.data?.url) {
           // Tell the local server that the next /auth/callback is a native app flow.
           // The callback page (in system browser) checks this flag to relay code back to app.
-          let markerStored = false;
-          try {
-            const authHeaders = await getLocalApiAuthHeaders();
-            const marker = await fetch("/api/auth-bridge/verifier", {
-              method: "PUT",
-              headers: { "Content-Type": "application/json", ...authHeaders },
-              body: JSON.stringify({ native: true }),
-            });
-            markerStored = marker.ok;
-          } catch {
-            // Best effort: native OAuth can still continue without the bridge marker.
-          }
-          // The Linux server only hands the browser's return to the app when the
-          // marker is set, so opening the browser without it can never finish.
+          // Best effort on macOS/Windows: native OAuth can still continue without
+          // the marker. The Linux server only hands the browser's return to the
+          // app when it is set, so there a sign-in without it can never finish.
+          const markerStored = await putNativeAuthMarker(true);
           if (!markerStored && isNativeLinuxApp()) {
-            return { error: new Error("Could not start desktop sign-in. Please try again.") };
+            return { error: new Error(copy("login.oauth.desktop_start_failed")) };
           }
           try {
             // Linux's Tauri command rejects when the system browser can't be opened.
             await nativeBridge.postMessage(result.data.url);
           } catch (err) {
+            // Don't leave the marker to pull an unrelated browser sign-in into the app.
+            await putNativeAuthMarker(false);
             return { error: err instanceof Error ? err : new Error(String(err)) };
           }
         }

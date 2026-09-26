@@ -8,6 +8,7 @@
   "login.verify_email_success": "メールアドレスが確認されました。ログインできます。",
   "login.verify_email_pending": "ログインの前に、メールでの確認を完了してください。",
   "login.oauth.continue": "{{provider}} で続ける",
+  "login.oauth.desktop_start_failed": "デスクトップアプリのログインを開始できませんでした。もう一度お試しください。",
   "login.divider": "または",
   "login.tab.sign_in": "ログイン",
   "login.tab.sign_up": "アカウント作成",

@@ -8,6 +8,7 @@
   "login.verify_email_success": "邮箱已验证。你现在可以登录。",
   "login.verify_email_pending": "请先在邮箱中完成验证，然后再登录。",
   "login.oauth.continue": "使用 {{provider}} 继续",
+  "login.oauth.desktop_start_failed": "无法启动桌面端登录，请重试。",
   "login.divider": "或",
   "login.tab.sign_in": "登录",
   "login.tab.sign_up": "创建账户",
