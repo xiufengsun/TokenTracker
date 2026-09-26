@@ -37,10 +37,28 @@ test("linux shell hands the app's browser oauth return to the running app", () =
 });
 
 test("a sign-in made in a normal browser tab stays in that tab", () => {
-  const { req, url } = page(`/?insforge_code=${CODE}`);
+  const { req, url } = page(`/auth/callback?insforge_code=${CODE}`);
   const mark = appMark(false);
   assert.equal(requestWantsLinuxOAuthHandoff(req, url, mark, LINUX), null);
   assert.equal(mark.taken, 1);
+});
+
+test("only the callback page can spend the app's mark", () => {
+  const mark = appMark(true);
+  for (const pathname of ["/", "/dashboard"]) {
+    const { req, url } = page(`${pathname}?insforge_code=${CODE}`);
+    assert.equal(requestWantsLinuxOAuthHandoff(req, url, mark, LINUX), null);
+  }
+  assert.equal(mark.taken, 0);
+});
+
+test("a HEAD request does not spend the app's mark", () => {
+  const head = page(`/auth/callback?insforge_code=${CODE}`, { method: "HEAD" });
+  const mark = appMark(true);
+  assert.equal(requestWantsLinuxOAuthHandoff(head.req, head.url, mark, LINUX), null);
+  assert.equal(mark.taken, 0);
+  const get = page(`/auth/callback?insforge_code=${CODE}`);
+  assert.ok(requestWantsLinuxOAuthHandoff(get.req, get.url, mark, LINUX));
 });
 
 test("the app's mark relays one return only", () => {
@@ -59,7 +77,7 @@ test("the in-app exchange page is served to the webview without spending the mar
 });
 
 test("a cli or browser session is not redirected onto the custom scheme", () => {
-  const { req, url } = page(`/?insforge_code=${CODE}`);
+  const { req, url } = page(`/auth/callback?insforge_code=${CODE}`);
   assert.equal(linuxOAuthHandoffTarget(url, {}), null);
   assert.equal(linuxOAuthHandoffTarget(url, { TOKENTRACKER_APP_SHELL: "macos" }), null);
   assert.equal(linuxOAuthHandoffTarget(url, { TOKENTRACKER_APP_SHELL: "windows" }), null);
@@ -68,9 +86,10 @@ test("a cli or browser session is not redirected onto the custom scheme", () => 
 
 test("ambiguous or malformed codes stay on the dashboard", () => {
   const linux = LINUX;
-  assert.equal(linuxOAuthHandoffTarget(new URL(`http://127.0.0.1:17680/?insforge_code=${CODE}&insforge_code=${"b".repeat(64)}`), linux), null);
-  assert.equal(linuxOAuthHandoffTarget(new URL("http://127.0.0.1:17680/?insforge_code=short"), linux), null);
-  assert.equal(linuxOAuthHandoffTarget(new URL("http://127.0.0.1:17680/?insforge_code=https://evil.example"), linux), null);
+  const callback = "http://127.0.0.1:17680/auth/callback";
+  assert.equal(linuxOAuthHandoffTarget(new URL(`${callback}?insforge_code=${CODE}&insforge_code=${"b".repeat(64)}`), linux), null);
+  assert.equal(linuxOAuthHandoffTarget(new URL(`${callback}?insforge_code=short`), linux), null);
+  assert.equal(linuxOAuthHandoffTarget(new URL(`${callback}?insforge_code=https://evil.example`), linux), null);
 });
 
 test("oauth handoff ignores asset and api requests", () => {

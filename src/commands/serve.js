@@ -157,7 +157,7 @@ async function cmdServe(argv) {
       // Send the code to the running app before the SPA loads.
       const oauthHandoff = requestWantsLinuxOAuthHandoff(req, url, handleApi.takeNativeAuthPending);
       if (oauthHandoff) {
-        sendHtmlDocument(res, req.method, linuxOAuthHandoffHtml(oauthHandoff));
+        sendHtmlDocument(res, linuxOAuthHandoffHtml(oauthHandoff));
         return;
       }
 
@@ -531,12 +531,13 @@ function isLinuxAppShell(env = process.env) {
 
 /**
  * Linux desktop sign-in opens the system browser, which must return the
- * InsForge code to the already-running app via tokentracker://. Hand a
- * document navigation carrying that code back to the app, except the in-app
+ * InsForge code to the already-running app via tokentracker://. The app pins
+ * that return to /auth/callback; hand it back to the app, except the in-app
  * exchange page (`app=1`).
  */
 function linuxOAuthHandoffTarget(url, env = process.env) {
   if (!isLinuxAppShell(env)) return null;
+  if (url.pathname !== "/auth/callback") return null;
   if (url.searchParams.get("app") === "1") return null;
   const codes = url.searchParams
     .getAll("insforge_code")
@@ -552,8 +553,8 @@ function linuxOAuthHandoffTarget(url, env = process.env) {
  * sign-in made in a normal browser tab would be pulled into the app.
  */
 function requestWantsLinuxOAuthHandoff(req, url, takeNativeAuthPending, env = process.env) {
-  const method = String(req.method || "GET").toUpperCase();
-  if (method !== "GET" && method !== "HEAD") return null;
+  // A HEAD would spend the one-time mark without delivering the page.
+  if (String(req.method || "GET").toUpperCase() !== "GET") return null;
   if (!shouldServeSpaFallback(req, url)) return null;
   const target = linuxOAuthHandoffTarget(url, env);
   if (!target || !takeNativeAuthPending()) return null;
@@ -565,15 +566,14 @@ function linuxOAuthHandoffHtml(target) {
   return `<!doctype html><html><head><meta charset="utf-8"><title>Returning to Token Tracker</title></head><body><p>Returning to Token Tracker… <a href=${href}>Open Token Tracker</a></p><script>location.replace(${href});</script></body></html>`;
 }
 
-function sendHtmlDocument(res, method, html) {
+function sendHtmlDocument(res, html) {
   const body = Buffer.from(html);
   res.writeHead(200, {
     "Content-Type": "text/html; charset=utf-8",
     "Content-Length": body.length,
     "Cache-Control": "no-store",
   });
-  if (String(method || "GET").toUpperCase() === "HEAD") res.end();
-  else res.end(body);
+  res.end(body);
 }
 
 function sendNotFound(res) {
