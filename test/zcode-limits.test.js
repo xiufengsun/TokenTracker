@@ -1203,6 +1203,30 @@ describe("ZCode 3.14 credential-only layout", () => {
     });
   });
 
+  it("prefers the telemetry device id over a leftover feedback client id", async () => {
+    await withZcode314Home({
+      "oauth:active_provider": "zai",
+      zcodejwttoken: "jwt-token",
+      zcodefeedbackclientid: "stale-feedback-client-id",
+    }, async (home) => {
+      const deviceMids = [];
+      const result = await fetchZcodeLimits({
+        home,
+        env: { TOKENTRACKER_ZCODE_APP_VERSION: "3.14.3" },
+        /** The live billing host rejects the old feedback client id with 3001. */
+        fetchImpl: async (_url, options) => {
+          deviceMids.push(options.headers["X-Device-Mid"]);
+          if (options.headers["X-Device-Mid"] !== DEVICE_MID) {
+            return { ok: false, status: 400, async json() { return { code: 3001, msg: "parameter error" }; } };
+          }
+          return { ok: true, status: 200, async json() { return balanceBody(); } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.deepEqual(deviceMids, [DEVICE_MID]);
+    });
+  });
+
   it("routes a team account key with its own organization and project scope", async () => {
     const name = [
       "account-provider:team",

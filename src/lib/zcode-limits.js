@@ -439,8 +439,8 @@ function buildZcodeSourceHeaders({ home, env } = {}) {
     "X-Os-Category": process.platform,
     "X-Os-Version": os.release(),
   };
-  const deviceMid = loadZcodeCredential("zcodefeedbackclientid", { home, env })
-    || loadZcodeTelemetryDeviceMid({ home, env });
+  const deviceMid = loadZcodeTelemetryDeviceMid({ home, env })
+    || loadZcodeCredential("zcodefeedbackclientid", { home, env });
   if (deviceMid) headers["X-Device-Mid"] = deviceMid;
   return headers;
 }
