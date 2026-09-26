@@ -152,17 +152,29 @@ export function InsforgeAuthProvider({ children }) {
         if (result.data?.url) {
           // Tell the local server that the next /auth/callback is a native app flow.
           // The callback page (in system browser) checks this flag to relay code back to app.
+          let markerStored = false;
           try {
             const authHeaders = await getLocalApiAuthHeaders();
-            await fetch("/api/auth-bridge/verifier", {
+            const marker = await fetch("/api/auth-bridge/verifier", {
               method: "PUT",
               headers: { "Content-Type": "application/json", ...authHeaders },
               body: JSON.stringify({ native: true }),
             });
+            markerStored = marker.ok;
           } catch {
             // Best effort: native OAuth can still continue without the bridge marker.
           }
-          nativeBridge.postMessage(result.data.url);
+          // The Linux server only hands the browser's return to the app when the
+          // marker is set, so opening the browser without it can never finish.
+          if (!markerStored && isNativeLinuxApp()) {
+            return { error: new Error("Could not start desktop sign-in. Please try again.") };
+          }
+          try {
+            // Linux's Tauri command rejects when the system browser can't be opened.
+            await nativeBridge.postMessage(result.data.url);
+          } catch (err) {
+            return { error: err instanceof Error ? err : new Error(String(err)) };
+          }
         }
         return result;
       }
