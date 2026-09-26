@@ -4,10 +4,26 @@ import { clearCloudDeviceSession, setCloudSyncEnabled } from "../lib/cloud-sync-
 import { isLikelyExpiredAccessToken } from "../lib/auth-token";
 import { getPublicVisibility } from "../lib/api";
 import { clearLocalApiAuthToken, getLocalApiAuthHeaders } from "../lib/local-api-auth";
-import { isNativeWindowsApp } from "../lib/native-bridge.js";
+import { copy } from "../lib/copy";
+import { getNativeOAuthBridge, isNativeLinuxApp, isNativeWindowsApp } from "../lib/native-bridge.js";
 import { restoreInsforgeUser } from "../lib/insforge-session-recovery.mjs";
 
 const InsforgeAuthContext = createContext(null);
+
+// Tells the local server whether the next /auth/callback belongs to the app.
+async function putNativeAuthMarker(native) {
+  try {
+    const authHeaders = await getLocalApiAuthHeaders();
+    const response = await fetch("/api/auth-bridge/verifier", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders },
+      body: JSON.stringify({ native }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
 
 /** Pick a human-readable name from the InsForge user object (OAuth metadata). */
 function pickDisplayNameFromUser(user) {
@@ -127,20 +143,18 @@ export function InsforgeAuthProvider({ children }) {
   const signInWithOAuth = useCallback(
     async (provider, redirectToOverride) => {
       if (!client) return { error: new Error("InsForge client not configured") };
-      const nativeBridge =
-        typeof window !== "undefined" && window.webkit?.messageHandlers?.nativeOAuth;
+      const nativeBridge = getNativeOAuthBridge();
       if (nativeBridge) {
-        // Native desktop app (macOS WKWebView / Windows WebView2): open the system
-        // browser for OAuth. PKCE must be initialized in the same context that handles
-        // the callback. The callback MUST land on /auth/callback — only that page relays
-        // the code back into the app via the tokentracker:// URL scheme.
+        // Native desktop app (macOS WKWebView / Windows WebView2 / Linux Tauri):
+        // open the system browser for OAuth. PKCE must be initialized in the same
+        // context that handles the callback. The callback MUST land on /auth/callback
+        // — only that page relays the code back into the app via tokentracker://.
         //
-        // On Windows the nativeOAuth shim can be injected AFTER LoginModal computed its
-        // (root "/") override, which would send the browser to "/" with no callback
-        // handler and the login never completes — so on Windows we pin /auth/callback and
-        // ignore redirectToOverride. macOS keeps its original behavior untouched (it
-        // already passes /auth/callback) so this stays fully decoupled from the mac path.
-        const redirectTo = isNativeWindowsApp()
+        // A caller can compute its redirect before the Windows nativeOAuth shim
+        // appears, which sends the browser to "/" and the login never completes.
+        // Pin /auth/callback for Windows and Linux and ignore redirectToOverride.
+        // macOS already passes /auth/callback, so its override is left intact.
+        const redirectTo = isNativeWindowsApp() || isNativeLinuxApp()
           ? `${window.location.origin}/auth/callback`
           : typeof redirectToOverride === "string" && redirectToOverride.trim()
             ? redirectToOverride.trim()
@@ -154,17 +168,21 @@ export function InsforgeAuthProvider({ children }) {
         if (result.data?.url) {
           // Tell the local server that the next /auth/callback is a native app flow.
           // The callback page (in system browser) checks this flag to relay code back to app.
-          try {
-            const authHeaders = await getLocalApiAuthHeaders();
-            await fetch("/api/auth-bridge/verifier", {
-              method: "PUT",
-              headers: { "Content-Type": "application/json", ...authHeaders },
-              body: JSON.stringify({ native: true }),
-            });
-          } catch {
-            // Best effort: native OAuth can still continue without the bridge marker.
+          // Best effort on macOS/Windows: native OAuth can still continue without
+          // the marker. The Linux server only hands the browser's return to the
+          // app when it is set, so there a sign-in without it can never finish.
+          const markerStored = await putNativeAuthMarker(true);
+          if (!markerStored && isNativeLinuxApp()) {
+            return { error: new Error(copy("login.oauth.desktop_start_failed")) };
           }
-          nativeBridge.postMessage(result.data.url);
+          try {
+            // Linux's Tauri command rejects when the system browser can't be opened.
+            await nativeBridge.postMessage(result.data.url);
+          } catch (err) {
+            // Don't leave the marker to pull an unrelated browser sign-in into the app.
+            await putNativeAuthMarker(false);
+            return { error: err instanceof Error ? err : new Error(String(err)) };
+          }
         }
         return result;
       }

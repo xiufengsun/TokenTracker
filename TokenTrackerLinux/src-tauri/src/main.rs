@@ -13,14 +13,23 @@ const WEBKIT_DMABUF_ENV: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
 
 const NATIVE_OAUTH_BRIDGE: &str = r#"
 (() => {
-  if (window.location.hostname !== '127.0.0.1') return;
-  window.webkit = window.webkit || {};
-  window.webkit.messageHandlers = window.webkit.messageHandlers || {};
-  window.webkit.messageHandlers.nativeOAuth = {
+  const host = window.location.hostname;
+  if (host !== '127.0.0.1' && host !== 'localhost') return;
+  const handler = {
     postMessage(url) {
       return window.__TAURI_INTERNALS__.invoke('open_oauth', { url });
     }
   };
+  // WebKit's messageHandlers object is a host object and assigning onto it can
+  // throw. The dashboard then calls the Tauri command directly
+  // (getNativeOAuthBridge), so a failure here is not fatal.
+  try {
+    window.webkit = window.webkit || {};
+    if (!window.webkit.messageHandlers) window.webkit.messageHandlers = {};
+    if (!window.webkit.messageHandlers.nativeOAuth) {
+      window.webkit.messageHandlers.nativeOAuth = handler;
+    }
+  } catch (e) {}
 })();
 "#;
 

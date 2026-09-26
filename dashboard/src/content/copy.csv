@@ -8,6 +8,7 @@ login.dismiss,shared,LoginPage,LoginPage,dismiss,"Dismiss",,active
 login.verify_email_success,shared,LoginPage,LoginPage,verify_ok,"Email verified. You can sign in below.",,active
 login.verify_email_pending,shared,LoginPage,LoginPage,verify_pending,"Check your email to verify your account, then sign in.",,active
 login.oauth.continue,shared,LoginPage,LoginPage,oauth_continue,"Continue with {{provider}}",,active
+login.oauth.desktop_start_failed,shared,LoginPage,LoginPage,oauth_desktop_start_failed,"Could not start desktop sign-in. Please try again.",,active
 login.divider,shared,LoginPage,LoginPage,divider,"Or",,active
 login.tab.sign_in,shared,LoginPage,LoginPage,tab_sign_in,"Sign in",,active
 login.tab.sign_up,shared,LoginPage,LoginPage,tab_sign_up,"Create account",,active

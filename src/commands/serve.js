@@ -153,6 +153,14 @@ async function cmdServe(argv) {
         if (handled) return;
       }
 
+      // The system browser's OAuth return for a sign-in the Linux app started.
+      // Send the code to the running app before the SPA loads.
+      const oauthHandoff = requestWantsLinuxOAuthHandoff(req, url, handleApi.takeNativeAuthPending);
+      if (oauthHandoff) {
+        sendHtmlDocument(res, linuxOAuthHandoffHtml(oauthHandoff));
+        return;
+      }
+
       // Static files
       const served = await serveStaticFile(dashboardDir, url.pathname, res);
       if (served) return;
@@ -513,6 +521,61 @@ function shouldServeSpaFallback(req, url) {
   return !accept || accept.includes("text/html") || accept.includes("*/*");
 }
 
+// InsForge authorization codes observed in the wild are 64 hex chars. Bound
+// the length so a document navigation cannot become an open redirect.
+const OAUTH_CODE_RE = /^[a-f0-9]{32,128}$/i;
+
+function isLinuxAppShell(env = process.env) {
+  return String(env?.TOKENTRACKER_APP_SHELL || "").trim().toLowerCase() === "linux";
+}
+
+/**
+ * Linux desktop sign-in opens the system browser, which must return the
+ * InsForge code to the already-running app via tokentracker://. The app pins
+ * that return to /auth/callback; hand it back to the app, except the in-app
+ * exchange page (`app=1`).
+ */
+function linuxOAuthHandoffTarget(url, env = process.env) {
+  if (!isLinuxAppShell(env)) return null;
+  if (url.pathname !== "/auth/callback") return null;
+  if (url.searchParams.get("app") === "1") return null;
+  const codes = url.searchParams
+    .getAll("insforge_code")
+    .map((code) => String(code || "").trim())
+    .filter(Boolean);
+  if (codes.length !== 1 || !OAUTH_CODE_RE.test(codes[0])) return null;
+  return `tokentracker://auth/callback?insforge_code=${encodeURIComponent(codes[0])}`;
+}
+
+/**
+ * Only a sign-in the app itself started is handed off: the app marks it via
+ * /api/auth-bridge/verifier before opening the browser. Without that mark a
+ * sign-in made in a normal browser tab would be pulled into the app.
+ */
+function requestWantsLinuxOAuthHandoff(req, url, takeNativeAuthPending, env = process.env) {
+  // A HEAD would spend the one-time mark without delivering the page.
+  if (String(req.method || "GET").toUpperCase() !== "GET") return null;
+  if (!shouldServeSpaFallback(req, url)) return null;
+  const target = linuxOAuthHandoffTarget(url, env);
+  if (!target || !takeNativeAuthPending()) return null;
+  return target;
+}
+
+function linuxOAuthHandoffHtml(target) {
+  const href = JSON.stringify(target);
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Returning to Token Tracker</title></head><body><p>Returning to Token Tracker… <a href=${href}>Open Token Tracker</a></p><script>location.replace(${href});</script></body></html>`;
+}
+
+function sendHtmlDocument(res, html) {
+  const body = Buffer.from(html);
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": body.length,
+    "Cache-Control": "no-store",
+  });
+  res.end(body);
+}
+
 function sendNotFound(res) {
   res.writeHead(404, {
     "Content-Type": "text/plain; charset=utf-8",
@@ -658,6 +721,9 @@ module.exports = {
   parseServeScriptPath,
   resolveDefaultPort,
   shouldServeSpaFallback,
+  linuxOAuthHandoffTarget,
+  requestWantsLinuxOAuthHandoff,
+  linuxOAuthHandoffHtml,
   startNativeBackgroundSync,
   NATIVE_BACKGROUND_SYNC_INTERVAL_MS,
 };
