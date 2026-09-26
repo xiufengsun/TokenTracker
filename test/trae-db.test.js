@@ -281,16 +281,25 @@ for (const encrypted of [false, true]) {
   }
 }
 
-test("TRAE WAL rejects corrupted complete frames and ignores incomplete uncommitted tails", async (t) => {
+test("TRAE WAL stops at the first bad frame checksum and ignores incomplete uncommitted tails", async (t) => {
   const file = path.join(temp(t), "database.db");
   const initial = await fixture([context()]), committed = await fixture([context(200)]);
+  const later = await fixture([context(300)]);
   fs.writeFileSync(file, initial);
-  const wal = makeWal(allPages(committed));
+  const wal = makeWal([...allPages(committed), ...allPages(later)]);
   fs.writeFileSync(`${file}-wal`, Buffer.concat([wal, Buffer.alloc(19, 1)]));
+  assert.equal((await readTraeUsageRows(file, { env: {} }))[0].usage.prompt_tokens, 300);
+  // A torn frame in the second transaction leaves the first one visible,
+  // matching SQLite WAL recovery instead of failing the whole store.
+  const secondTransaction = 32 + committed.length / 4096 * 4120;
+  const torn = Buffer.from(wal);
+  torn[secondTransaction + 80] ^= 1;
+  fs.writeFileSync(`${file}-wal`, torn);
   assert.equal((await readTraeUsageRows(file, { env: {} }))[0].usage.prompt_tokens, 200);
-  wal[80] ^= 1;
-  fs.writeFileSync(`${file}-wal`, wal);
-  await assert.rejects(readTraeUsageRows(file, { env: {} }), /WAL frame checksum failed/);
+  // A bad first frame, even with a torn page number, leaves only the database.
+  torn.fill(0, 32, 40);
+  fs.writeFileSync(`${file}-wal`, torn);
+  assert.equal((await readTraeUsageRows(file, { env: {} }))[0].usage.prompt_tokens, 100);
 });
 
 test("TRAE encrypted WAL page authentication is independent of its frame checksum", async (t) => {
@@ -313,6 +322,26 @@ test("TRAE WAL ignores old frames after a salt reset", async (t) => {
   wal.writeUInt32BE(999, oldFrame + 8);
   fs.writeFileSync(`${file}-wal`, wal);
   assert.equal((await readTraeUsageRows(file, { env: {} }))[0].usage.prompt_tokens, 200);
+});
+
+test("TRAE reader retries a store that changes while it is being opened", async (t) => {
+  const file = path.join(temp(t), "database.db");
+  fs.writeFileSync(file, await fixture([context()]));
+  const fstatSync = fs.fstatSync;
+  let races = 1;
+  let opens = 0;
+  // Simulate TRAE writing between the path stat and the descriptor stat.
+  t.mock.method(fs, "fstatSync", (...args) => {
+    opens += 1;
+    const stat = fstatSync(...args);
+    return races-- > 0 ? { ...stat, size: stat.size + 4096n } : stat;
+  });
+  assert.equal((await readTraeUsageRows(file, { env: {} }))[0].usage.prompt_tokens, 100);
+  assert.equal(opens, 2);
+  races = Infinity;
+  opens = 0;
+  await assert.rejects(readTraeUsageRows(file, { env: {} }), /database changed while opening/);
+  assert.equal(opens, 3);
 });
 
 test("TRAE reader rejects an active rollback journal instead of reading uncommitted changes", async (t) => {

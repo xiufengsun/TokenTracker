@@ -101,7 +101,14 @@ async function projectUsage(queryRows) {
 
 async function readTraeUsageRows(dbPath, { env = process.env } = {}) {
   for (let attempt = 0; attempt < 3; attempt++) {
-    const snapshot = openTraeSnapshot(dbPath, env);
+    let snapshot;
+    try { snapshot = openTraeSnapshot(dbPath, env); }
+    catch (err) {
+      // The same writer race can surface while opening; retry it, but report
+      // the specific failure once the attempts run out.
+      if (err?.transient && attempt < 2) continue;
+      throw err;
+    }
     try {
       let result;
       try { result = await withTraeSqlite(snapshot, projectUsage); }
