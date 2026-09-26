@@ -112,6 +112,10 @@ test("marketing logo wall includes the same supported product integrations", () 
   const providers = [...source.matchAll(/provider:\s*"([^"]+)"/g)].map((match) => match[1]);
   assert.equal(providers.length, TOOL_COUNT);
   assert.equal(new Set(providers).size, TOOL_COUNT);
+  // LogoCarousel keys tiles by id, so a duplicate id collides React keys.
+  const ids = [...source.matchAll(/\bid:\s*(\d+)/g)].map((match) => Number(match[1]));
+  assert.equal(ids.length, TOOL_COUNT);
+  assert.equal(new Set(ids).size, TOOL_COUNT, "logo ids are unique");
 
   for (const provider of ["every-code", "acode", "reasonix", "kilocode", "roocode", "zed", "goose", "droid", "qoder", "anythingllm", "dsh", "prime-agent", "trae-cn", "dots", "lmstudio", "unsloth", "devin", "minimax-code"]) {
     assert.ok(providers.includes(provider), `logo wall includes ${provider}`);

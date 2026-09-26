@@ -9,6 +9,8 @@
   "usage.overview.cache_hit_rate_detail": "{{reused}} 复用 / {{input}} 输入",
   "usage.overview.antigravity_notice_body": "本地存在会话元数据时，将直接从 Antigravity 读取精确的 Token 用量与 Prompt 缓存命中；缺少元数据的会话则按字符长度（约 4 字符/Token）估算。",
   "usage.overview.devin_notice_title": "费用未估算",
+  "usage.overview.trae_notice_title": "TRAE 估算说明",
+  "usage.overview.trae_notice_body": "部分 TRAE 记录缺少历史缓存或推理详情，因此 Token 分类仅为估算。模型定价计算出的费用是估算值，并非实际账单金额。",
   "usage.overview.devin_notice_body": "Devin 上报的是真实的本地 Token 计数，但本版本没有 swe-2、swe-2-high 和 compactor 的定价数据，这部分用量不参与美元费用估算——显示 $0 并不代表用量免费。",
   "stats.period.last_7d": "7 天",
   "stats.period.last_30d": "30 天",

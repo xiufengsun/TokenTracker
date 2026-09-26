@@ -9,6 +9,8 @@
   "usage.overview.cache_hit_rate_detail": "{{reused}} 重用 / {{input}} 輸入",
   "usage.overview.antigravity_notice_body": "本機存在工作階段元資料時，將直接從 Antigravity 讀取精確的 Token 用量與 Prompt 快取命中；缺少元資料的工作階段則依字元長度（約 4 字元/Token）估算。",
   "usage.overview.devin_notice_title": "費用未估算",
+  "usage.overview.trae_notice_title": "TRAE 估算說明",
+  "usage.overview.trae_notice_body": "部分 TRAE 記錄缺少歷史快取或推理詳情，因此 Token 分類僅為估算。依模型定價計算的費用是估算值，並非實際帳單金額。",
   "usage.overview.devin_notice_body": "Devin 回報的是真實的本機 Token 計數，但此版本沒有 swe-2、swe-2-high 和 compactor 的定價資料，這部分用量不計入美元費用估算——顯示 $0 並不代表用量免費。",
   "stats.period.last_7d": "7 天",
   "stats.period.last_30d": "30 天",

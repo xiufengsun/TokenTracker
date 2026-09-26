@@ -136,6 +136,7 @@ const {
   resolveDshSessionFiles,
   parseDshIncremental,
   parseTraeCnApiIncremental,
+  parseTraeIncremental,
   bucketKey,
   toUtcHalfHourStart,
   totalsKey,
@@ -329,6 +330,7 @@ const AUTO_SYNC_SOURCES = new Set([
   "reasonix",
   "roocode",
   "trae-cn",
+  "trae",
   "unsloth",
   "workbuddy",
   "zcode",
@@ -1979,6 +1981,24 @@ async function cmdSync(argv, context = {}) {
       }
     }
 
+    let traeResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    if (sourceAllowed("trae")) {
+      try {
+        traeResult = await parseTraeIncremental({
+          cursors, queuePath, onProgress: makeProviderProgress("TRAE"),
+        });
+        for (const { database, message } of traeResult.errors) {
+          process.stderr.write(`TRAE sync: could not read ${database}: ${message}. Will retry on the next sync.\n`);
+        }
+        if (traeResult.recordsSkipped > 0 && !opts.auto) {
+          process.stderr.write(`TRAE sync: skipped ${traeResult.recordsSkipped} records with unsupported usage metadata.\n`);
+        }
+        if (traeResult.estimatedRecords > 0 && !opts.auto) {
+          process.stderr.write(`TRAE sync: ${traeResult.estimatedRecords} records have estimated token breakdowns because historical cache or reasoning details are incomplete.\n`);
+        }
+      } catch (err) { warnProviderParseFailure("TRAE", err); }
+    }
+
     // ── Trae Work CN (国内版) — account-level usage API ──
     // A simple explicit rolling 30-day window captured once per sync (no
     // cursor checkpoints / full-history import / page retries / background
@@ -3069,6 +3089,7 @@ async function cmdSync(argv, context = {}) {
       claudeScienceResult.recordsProcessed +
       cursorResult.recordsProcessed +
       traeCnResult.recordsProcessed +
+      traeResult.recordsProcessed +
       kiroResult.recordsProcessed +
       kiroCliResult.recordsProcessed +
       hermesResult.recordsProcessed +
@@ -3111,6 +3132,7 @@ async function cmdSync(argv, context = {}) {
       claudeScienceResult.bucketsQueued +
       cursorResult.bucketsQueued +
       traeCnResult.bucketsQueued +
+      traeResult.bucketsQueued +
       kiroResult.bucketsQueued +
       kiroCliResult.bucketsQueued +
       hermesResult.bucketsQueued +

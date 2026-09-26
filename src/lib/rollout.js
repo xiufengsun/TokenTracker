@@ -46,6 +46,8 @@ const {
   buildDevinUsageEvents,
 } = require("./devin-usage");
 const { USD_TICKS_PER_USD, normalizeGrokUsage } = require("./grok-usage");
+const { resolveTraeDbPaths, readTraeUsageRows } = require("./trae-db");
+const { normalizeTraeUsage, normalizeTraeModel, traeTimestamp } = require("./trae-usage");
 
 const DEFAULT_SOURCE = "codex";
 const DEFAULT_MODEL = "unknown";
@@ -21685,13 +21687,132 @@ function isCjkCodePoint(code) {
 // ── Trae SOLO (ByteDance AI IDE) ─────────────────────────────────────────────
 // https://www.trae.ai
 //
-// Trae SOLO is scoped to detection (init) + entitlement display (status):
-//   - init: resolveTraeStoragePath() proves an install exists.
-//   - status: readTraeEntitlementFromStorage() serves the plan/limits snapshot.
-// Trae SOLO does NOT expose per-request token usage in a readable local format
-// (session transcripts are SQLCipher-encrypted; memory summaries carry no
-// token counts), so the token-count-only queue is intentionally never written
-// for this provider — the cloud hourly table stays clean.
+// International TRAE usage comes from local encrypted chat_turn metadata.
+async function parseTraeIncremental({
+  dbPaths,
+  cursors,
+  queuePath,
+  env = process.env,
+  onProgress,
+  readUsageRows = readTraeUsageRows,
+} = {}) {
+  const paths = dbPaths || resolveTraeDbPaths(env);
+  const prior = cursors.trae || {};
+  const turns = { ...prior.turns };
+  // v1 fingerprints skipped whole-turn counters and null fields; drop them so
+  // every store is reconciled once (the ledger is kept).
+  const databases = prior.version === 2 ? { ...prior.databases } : {};
+  const hourlyState = normalizeHourlyState(cursors.hourly);
+  // Queue writes and reads may fail. Publish cursor changes only after the
+  // append succeeds, including copies of the mutable bucket totals.
+  hourlyState.buckets = Object.fromEntries(Object.entries(hourlyState.buckets).map(([key, bucket]) => [
+    key, key.startsWith("trae|") ? { ...bucket, totals: { ...bucket.totals } } : bucket,
+  ]));
+  hourlyState.groupQueued = { ...hourlyState.groupQueued };
+  const touchedBuckets = new Set();
+  const conversations = new Set(Object.values(turns)
+    .filter((turn) => turn.totals?.conversation_count > 0).map((turn) => turn.session));
+  const digest = (value) => crypto.createHash("sha256").update(value).digest("hex");
+  let recordsProcessed = 0;
+  let eventsAggregated = 0;
+  let recordsSkipped = 0;
+  let estimatedRecords = 0;
+  const errors = [];
+  for (const dbPath of [...new Set(paths)]) {
+    const databaseKey = digest(path.resolve(dbPath));
+    let rows;
+    let fingerprint;
+    let finalFingerprint;
+    try {
+      // existsSync also returns false for permission errors. Let stat/read
+      // report inaccessible stores instead of treating them as absent.
+      fssync.statSync(dbPath);
+      fingerprint = devinSqliteFingerprint(dbPath);
+      if (sameSqliteFingerprint(fingerprint, databases[databaseKey])) continue;
+      rows = await readUsageRows(dbPath, { env });
+      finalFingerprint = devinSqliteFingerprint(dbPath);
+    } catch (err) {
+      // One install can be locked, corrupt, or use a different key while
+      // another remains readable. Its prior fingerprint stays retryable;
+      // successful stores still publish together after the queue append.
+      errors.push({ database: dbPath, message: err?.message || String(err) });
+      continue;
+    }
+    for (const row of rows) {
+      recordsProcessed += 1;
+      const totals = normalizeTraeUsage(row.usage, { model: row.model });
+      const timestamp = traeTimestamp(row.created_at);
+      const bucketStart = timestamp && toUtcHalfHourStart(timestamp);
+      const rowId = row.turn_id || row.id;
+      if (!totals || !bucketStart || rowId == null || rowId === "") {
+        recordsSkipped += 1;
+        continue;
+      }
+      const session = digest(String(row.session_id || `${databaseKey}:${rowId}`));
+      // Stable turn ids deduplicate copies across the two international app
+      // stores. Numeric SQLite ids are only unique within their database.
+      const identity = digest(JSON.stringify(row.turn_id
+        ? [session, row.turn_id] : [databaseKey, rowId]));
+      const previous = turns[identity];
+      const modifiedAt = traeTimestamp(row.updated_at) || timestamp;
+      // A copied turn in another install can lag behind the original. Never
+      // let an unrelated rescan of that stale store retract newer usage.
+      // Without a newer timestamp, conflicting copies retain their owner.
+      if (previous && previous.database !== databaseKey &&
+        (!previous.modifiedAt || modifiedAt <= previous.modifiedAt)) continue;
+      if (!previous && totals.total_tokens === 0) continue;
+      if (totals.usage_precision === "estimated") estimatedRecords += 1;
+      totals.conversation_count = previous
+        ? previous.totals.conversation_count
+        : conversations.has(session) ? 0 : 1;
+      conversations.add(session);
+      const model = normalizeTraeModel(row.model);
+      if (previous && previous.model === model && previous.bucketStart === bucketStart
+        && totalsKey(previous.totals) === totalsKey(totals)
+        && previous.totals.usage_precision === totals.usage_precision) {
+        turns[identity] = { ...previous, modifiedAt, database: databaseKey };
+        continue;
+      }
+      if (previous) {
+        const old = getHourlyBucket(hourlyState, "trae", previous.model, previous.bucketStart);
+        subtractTotals(old.totals, previous.totals);
+        touchedBuckets.add(bucketKey("trae", previous.model, previous.bucketStart));
+      }
+      const bucket = getHourlyBucket(hourlyState, "trae", model, bucketStart);
+      addTotals(bucket.totals, totals);
+      touchedBuckets.add(bucketKey("trae", model, bucketStart));
+      turns[identity] = { session, model, bucketStart, totals, modifiedAt, database: databaseKey };
+      eventsAggregated += 1;
+    }
+    // A read that races with a writer must be retried on the next sync.
+    databases[databaseKey] = sameSqliteFingerprint(fingerprint, finalFingerprint)
+      ? fingerprint : null;
+    if (typeof onProgress === "function") {
+      onProgress({ recordsProcessed, eventsAggregated, bucketsQueued: touchedBuckets.size });
+    }
+  }
+  // Rebuild precision from the retained contributions, including unchanged
+  // stores. A correction can replace the last estimated turn with reported
+  // usage without changing numeric totals, or move it to another bucket.
+  const bucketPrecisions = new Map();
+  for (const turn of Object.values(turns)) {
+    const key = bucketKey("trae", turn.model, turn.bucketStart);
+    if (!touchedBuckets.has(key) || turn.totals.total_tokens === 0) continue;
+    bucketPrecisions.set(key, mergeGrokUsagePrecision(
+      bucketPrecisions.get(key), turn.totals.usage_precision || "reported",
+    ));
+  }
+  for (const key of touchedBuckets) {
+    const precision = bucketPrecisions.get(key);
+    hourlyState.buckets[key].usage_precision = precision === "reported" ? null : precision || null;
+  }
+  await ensureDir(path.dirname(queuePath));
+  const bucketsQueued = await enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets });
+  cursors.hourly = hourlyState;
+  cursors.trae = { version: 2, turns, databases };
+  return { recordsProcessed, eventsAggregated, bucketsQueued, recordsSkipped, estimatedRecords, errors };
+}
+
 // Ordered candidate app-dir names. The CN IDE build installs as "Trae CN" on
 // Windows; the international build installs as "TRAE SOLO". Both expose the same
 // iCubeServerData entitlement key, so either is a valid Trae IDE install.
@@ -23553,6 +23674,7 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
 
 
 module.exports = {
+  parseTraeIncremental,
   listRolloutFiles,
   listRolloutFilesDeep,
   codexSessionIdFromPath,

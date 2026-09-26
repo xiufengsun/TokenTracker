@@ -63,4 +63,9 @@ export const AGENT_LOGOS = [
     nameKey: "provider.display.minimax_code",
     provider: "minimax-code",
   },
+  {
+    id: 42,
+    nameKey: "provider.display.trae",
+    provider: "trae",
+  },
 ];

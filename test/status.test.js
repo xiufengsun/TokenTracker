@@ -499,10 +499,9 @@ test("status renders the Trae SOLO entitlement snapshot from Local State", async
     // Text render: the plan line must describe the snapshot.
     out = "";
     await cmdStatus();
-    // Not "passive reader" — that wording means "tokens are counted" on every
-    // other provider line, and Trae contributes no usage at all.
-    assert.match(out, /- Trae SOLO: plan info only, no token usage \(/);
-    assert.doesNotMatch(out, /- Trae SOLO: passive reader/);
+    // This fixture only has an entitlement snapshot, not a usage database.
+    assert.match(out, /- TRAE: plan info only, no local usage database found \(/);
+    assert.doesNotMatch(out, /- TRAE: local usage reader/);
     assert.match(out, /- Trae SOLO plan: plan Pro, year period, package billing/);
     assert.match(out, /20 fast requests\/hr/);
     assert.match(out, /snapshot \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/);

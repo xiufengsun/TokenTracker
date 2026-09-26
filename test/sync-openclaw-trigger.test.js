@@ -23,6 +23,8 @@ test("sync --from-openclaw records last OpenClaw trigger marker", async () => {
   const prevCodeHome = process.env.CODE_HOME;
   const prevGeminiHome = process.env.GEMINI_HOME;
   const prevOpencodeHome = process.env.OPENCODE_HOME;
+  const prevTraeHome = process.env.TOKENTRACKER_TRAE_HOME;
+  const prevTraeDb = process.env.TOKENTRACKER_TRAE_DB;
 
   try {
     restoreHome = withHome(tmp);
@@ -30,6 +32,8 @@ test("sync --from-openclaw records last OpenClaw trigger marker", async () => {
     process.env.CODE_HOME = path.join(tmp, ".code");
     process.env.GEMINI_HOME = path.join(tmp, ".gemini");
     process.env.OPENCODE_HOME = path.join(tmp, ".opencode");
+    process.env.TOKENTRACKER_TRAE_HOME = path.join(tmp, ".trae");
+    delete process.env.TOKENTRACKER_TRAE_DB;
 
     await cmdSync(["--from-openclaw"]);
 
@@ -47,6 +51,10 @@ test("sync --from-openclaw records last OpenClaw trigger marker", async () => {
     else process.env.GEMINI_HOME = prevGeminiHome;
     if (prevOpencodeHome === undefined) delete process.env.OPENCODE_HOME;
     else process.env.OPENCODE_HOME = prevOpencodeHome;
+    if (prevTraeHome === undefined) delete process.env.TOKENTRACKER_TRAE_HOME;
+    else process.env.TOKENTRACKER_TRAE_HOME = prevTraeHome;
+    if (prevTraeDb === undefined) delete process.env.TOKENTRACKER_TRAE_DB;
+    else process.env.TOKENTRACKER_TRAE_DB = prevTraeDb;
     await fs.rm(tmp, { recursive: true, force: true });
   }
 });
@@ -58,6 +66,8 @@ test("sync keeps Grok hook signal when another sync owns the lock", async () => 
   const prevCodeHome = process.env.CODE_HOME;
   const prevGeminiHome = process.env.GEMINI_HOME;
   const prevOpencodeHome = process.env.OPENCODE_HOME;
+  const prevTraeHome = process.env.TOKENTRACKER_TRAE_HOME;
+  const prevTraeDb = process.env.TOKENTRACKER_TRAE_DB;
   const prevTokenTrackerGrokHome = process.env.TOKENTRACKER_GROK_HOME;
   const prevGrokHome = process.env.GROK_HOME;
   const prevToken = process.env.TOKENTRACKER_DEVICE_TOKEN;
@@ -68,6 +78,8 @@ test("sync keeps Grok hook signal when another sync owns the lock", async () => 
     process.env.CODE_HOME = path.join(tmp, ".code");
     process.env.GEMINI_HOME = path.join(tmp, ".gemini");
     process.env.OPENCODE_HOME = path.join(tmp, ".opencode");
+    process.env.TOKENTRACKER_TRAE_HOME = path.join(tmp, ".trae");
+    delete process.env.TOKENTRACKER_TRAE_DB;
     delete process.env.TOKENTRACKER_GROK_HOME;
     process.env.GROK_HOME = path.join(tmp, ".grok");
     delete process.env.TOKENTRACKER_DEVICE_TOKEN;
@@ -103,6 +115,10 @@ test("sync keeps Grok hook signal when another sync owns the lock", async () => 
     else process.env.GEMINI_HOME = prevGeminiHome;
     if (prevOpencodeHome === undefined) delete process.env.OPENCODE_HOME;
     else process.env.OPENCODE_HOME = prevOpencodeHome;
+    if (prevTraeHome === undefined) delete process.env.TOKENTRACKER_TRAE_HOME;
+    else process.env.TOKENTRACKER_TRAE_HOME = prevTraeHome;
+    if (prevTraeDb === undefined) delete process.env.TOKENTRACKER_TRAE_DB;
+    else process.env.TOKENTRACKER_TRAE_DB = prevTraeDb;
     if (prevTokenTrackerGrokHome === undefined) delete process.env.TOKENTRACKER_GROK_HOME;
     else process.env.TOKENTRACKER_GROK_HOME = prevTokenTrackerGrokHome;
     if (prevGrokHome === undefined) delete process.env.GROK_HOME;
@@ -120,6 +136,8 @@ test("sync queues and consumes Grok hook signal after cursor persistence", async
   const prevCodeHome = process.env.CODE_HOME;
   const prevGeminiHome = process.env.GEMINI_HOME;
   const prevOpencodeHome = process.env.OPENCODE_HOME;
+  const prevTraeHome = process.env.TOKENTRACKER_TRAE_HOME;
+  const prevTraeDb = process.env.TOKENTRACKER_TRAE_DB;
   const prevTokenTrackerGrokHome = process.env.TOKENTRACKER_GROK_HOME;
   const prevGrokHome = process.env.GROK_HOME;
   const prevToken = process.env.TOKENTRACKER_DEVICE_TOKEN;
@@ -130,6 +148,8 @@ test("sync queues and consumes Grok hook signal after cursor persistence", async
     process.env.CODE_HOME = path.join(tmp, ".code");
     process.env.GEMINI_HOME = path.join(tmp, ".gemini");
     process.env.OPENCODE_HOME = path.join(tmp, ".opencode");
+    process.env.TOKENTRACKER_TRAE_HOME = path.join(tmp, ".trae");
+    delete process.env.TOKENTRACKER_TRAE_DB;
     delete process.env.TOKENTRACKER_GROK_HOME;
     process.env.GROK_HOME = path.join(tmp, ".grok");
     delete process.env.TOKENTRACKER_DEVICE_TOKEN;
@@ -185,6 +205,10 @@ test("sync queues and consumes Grok hook signal after cursor persistence", async
     else process.env.GEMINI_HOME = prevGeminiHome;
     if (prevOpencodeHome === undefined) delete process.env.OPENCODE_HOME;
     else process.env.OPENCODE_HOME = prevOpencodeHome;
+    if (prevTraeHome === undefined) delete process.env.TOKENTRACKER_TRAE_HOME;
+    else process.env.TOKENTRACKER_TRAE_HOME = prevTraeHome;
+    if (prevTraeDb === undefined) delete process.env.TOKENTRACKER_TRAE_DB;
+    else process.env.TOKENTRACKER_TRAE_DB = prevTraeDb;
     if (prevTokenTrackerGrokHome === undefined) delete process.env.TOKENTRACKER_GROK_HOME;
     else process.env.TOKENTRACKER_GROK_HOME = prevTokenTrackerGrokHome;
     if (prevGrokHome === undefined) delete process.env.GROK_HOME;
@@ -202,6 +226,8 @@ test("sync keeps malformed Grok hook signal without a session id", async () => {
   const prevCodeHome = process.env.CODE_HOME;
   const prevGeminiHome = process.env.GEMINI_HOME;
   const prevOpencodeHome = process.env.OPENCODE_HOME;
+  const prevTraeHome = process.env.TOKENTRACKER_TRAE_HOME;
+  const prevTraeDb = process.env.TOKENTRACKER_TRAE_DB;
   const prevTokenTrackerGrokHome = process.env.TOKENTRACKER_GROK_HOME;
   const prevGrokHome = process.env.GROK_HOME;
   const prevToken = process.env.TOKENTRACKER_DEVICE_TOKEN;
@@ -212,6 +238,8 @@ test("sync keeps malformed Grok hook signal without a session id", async () => {
     process.env.CODE_HOME = path.join(tmp, ".code");
     process.env.GEMINI_HOME = path.join(tmp, ".gemini");
     process.env.OPENCODE_HOME = path.join(tmp, ".opencode");
+    process.env.TOKENTRACKER_TRAE_HOME = path.join(tmp, ".trae");
+    delete process.env.TOKENTRACKER_TRAE_DB;
     delete process.env.TOKENTRACKER_GROK_HOME;
     process.env.GROK_HOME = path.join(tmp, ".grok");
     delete process.env.TOKENTRACKER_DEVICE_TOKEN;
@@ -252,6 +280,10 @@ test("sync keeps malformed Grok hook signal without a session id", async () => {
     else process.env.GEMINI_HOME = prevGeminiHome;
     if (prevOpencodeHome === undefined) delete process.env.OPENCODE_HOME;
     else process.env.OPENCODE_HOME = prevOpencodeHome;
+    if (prevTraeHome === undefined) delete process.env.TOKENTRACKER_TRAE_HOME;
+    else process.env.TOKENTRACKER_TRAE_HOME = prevTraeHome;
+    if (prevTraeDb === undefined) delete process.env.TOKENTRACKER_TRAE_DB;
+    else process.env.TOKENTRACKER_TRAE_DB = prevTraeDb;
     if (prevTokenTrackerGrokHome === undefined) delete process.env.TOKENTRACKER_GROK_HOME;
     else process.env.TOKENTRACKER_GROK_HOME = prevTokenTrackerGrokHome;
     if (prevGrokHome === undefined) delete process.env.GROK_HOME;
@@ -269,6 +301,8 @@ test("sync --from-openclaw falls back to previous session totals when jsonl has 
   const prevCodeHome = process.env.CODE_HOME;
   const prevGeminiHome = process.env.GEMINI_HOME;
   const prevOpencodeHome = process.env.OPENCODE_HOME;
+  const prevTraeHome = process.env.TOKENTRACKER_TRAE_HOME;
+  const prevTraeDb = process.env.TOKENTRACKER_TRAE_DB;
   const prevAgentId = process.env.TOKENTRACKER_OPENCLAW_AGENT_ID;
   const prevSessionId = process.env.TOKENTRACKER_OPENCLAW_PREV_SESSION_ID;
   const prevOpenclawHome = process.env.TOKENTRACKER_OPENCLAW_HOME;
@@ -284,6 +318,8 @@ test("sync --from-openclaw falls back to previous session totals when jsonl has 
     process.env.CODE_HOME = path.join(tmp, ".code");
     process.env.GEMINI_HOME = path.join(tmp, ".gemini");
     process.env.OPENCODE_HOME = path.join(tmp, ".opencode");
+    process.env.TOKENTRACKER_TRAE_HOME = path.join(tmp, ".trae");
+    delete process.env.TOKENTRACKER_TRAE_DB;
 
     const openclawHome = path.join(tmp, ".openclaw");
     const sessionDir = path.join(openclawHome, "agents", "coding", "sessions");
@@ -360,6 +396,10 @@ test("sync --from-openclaw falls back to previous session totals when jsonl has 
     else process.env.GEMINI_HOME = prevGeminiHome;
     if (prevOpencodeHome === undefined) delete process.env.OPENCODE_HOME;
     else process.env.OPENCODE_HOME = prevOpencodeHome;
+    if (prevTraeHome === undefined) delete process.env.TOKENTRACKER_TRAE_HOME;
+    else process.env.TOKENTRACKER_TRAE_HOME = prevTraeHome;
+    if (prevTraeDb === undefined) delete process.env.TOKENTRACKER_TRAE_DB;
+    else process.env.TOKENTRACKER_TRAE_DB = prevTraeDb;
     if (prevAgentId === undefined) delete process.env.TOKENTRACKER_OPENCLAW_AGENT_ID;
     else process.env.TOKENTRACKER_OPENCLAW_AGENT_ID = prevAgentId;
     if (prevSessionId === undefined) delete process.env.TOKENTRACKER_OPENCLAW_PREV_SESSION_ID;

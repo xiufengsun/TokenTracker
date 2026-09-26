@@ -482,4 +482,68 @@ describe("UsageOverview", () => {
     expect(screen.getByText("Sep 7 — Sep 13")).toBeTruthy();
     expect(screen.queryByText(copy("usage.overview.week_cross_month_hint"))).toBeNull();
   });
+
+  it("keeps the TRAE estimate notice visible beside combined totals in collapsed and expanded views", async () => {
+    const user = userEvent.setup();
+    render(
+      <UsageOverview
+        period="month"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="1,300"
+        summaryCostValue="$0.03"
+        fleetData={[
+          {
+            source: "trae",
+            label: "TRAE",
+            totalPercent: "80.00",
+            usage: 1_000,
+            usd: 0.02,
+            models: [{ id: "gpt-5", name: "gpt-5", share: 100, usage: 1_000, cost: 0.02 }],
+          },
+          {
+            source: "codex",
+            label: "CODEX",
+            totalPercent: "20.00",
+            usage: 300,
+            usd: 0.01,
+            models: [{ id: "gpt-5.2", name: "gpt-5.2", share: 100, usage: 300, cost: 0.01 }],
+          },
+        ]}
+      />,
+    );
+    const notice = copy("usage.overview.trae_notice_body");
+    expect(screen.getByText(notice)).toBeVisible();
+    for (const provider of [/TRAE:/i, /CODEX:/i, /All tools:/i]) {
+      await act(async () => {
+        await user.click(screen.getByRole("button", { name: provider }));
+      });
+      expect(screen.getByText(notice)).toBeVisible();
+    }
+  });
+
+  it("does not apply the international TRAE estimate notice to TRAE-CN or unrelated sources", () => {
+    const props = {
+      period: "month",
+      periods: [],
+      summaryLabel: "Total",
+      summaryValue: "100",
+    };
+    const fleet = (source) => [{
+      source,
+      label: source.toUpperCase(),
+      totalPercent: "100.00",
+      usage: 100,
+      models: [{ id: "gpt-5", name: "gpt-5", share: 100, usage: 100, cost: 0.01 }],
+    }];
+    const { rerender } = render(<UsageOverview {...props} fleetData={fleet("trae-cn")} />);
+    const showSource = (source) => {
+      rerender(<UsageOverview {...props} fleetData={fleet(source)} />);
+    };
+    expect(screen.queryByText(copy("usage.overview.trae_notice_body"))).toBeNull();
+    showSource("trae");
+    expect(screen.getByText(copy("usage.overview.trae_notice_body"))).toBeVisible();
+    showSource("codex");
+    expect(screen.queryByText(copy("usage.overview.trae_notice_body"))).toBeNull();
+  });
 });

@@ -142,6 +142,8 @@ async function withTempSyncEnv(fn) {
     OPENCODE_HOME: process.env.OPENCODE_HOME,
     XDG_DATA_HOME: process.env.XDG_DATA_HOME,
     TOKENTRACKER_REASONIX_HOME: process.env.TOKENTRACKER_REASONIX_HOME,
+    TOKENTRACKER_TRAE_HOME: process.env.TOKENTRACKER_TRAE_HOME,
+    TOKENTRACKER_TRAE_DB: process.env.TOKENTRACKER_TRAE_DB,
     REASONIX_STATE_HOME: process.env.REASONIX_STATE_HOME,
     TOKENTRACKER_DEVICE_TOKEN: process.env.TOKENTRACKER_DEVICE_TOKEN,
     TOKENTRACKER_INSFORGE_BASE_URL: process.env.TOKENTRACKER_INSFORGE_BASE_URL,
@@ -161,6 +163,8 @@ async function withTempSyncEnv(fn) {
     process.env.OPENCODE_HOME = path.join(home, ".opencode");
     process.env.XDG_DATA_HOME = path.join(home, ".local", "share");
     process.env.TOKENTRACKER_OPENCLAW_HOME = path.join(home, ".openclaw");
+    process.env.TOKENTRACKER_TRAE_HOME = path.join(home, "trae-data");
+    delete process.env.TOKENTRACKER_TRAE_DB;
     delete process.env.TOKENTRACKER_REASONIX_HOME;
     delete process.env.REASONIX_STATE_HOME;
     delete process.env.TOKENTRACKER_DEVICE_TOKEN;
