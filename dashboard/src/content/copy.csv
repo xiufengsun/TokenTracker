@@ -515,6 +515,11 @@ dashboard.island.enable,ui,DashboardPage,IslandOnboardingCard,island_enable,"Tur
 dashboard.island.settings_link,ui,DashboardPage,IslandOnboardingCard,island_settings,"View in Settings",,active
 dashboard.island.enabled_toast,ui,DashboardPage,IslandOnboardingCard,island_toast,"Dynamic Island is on — look up at the notch",,active
 dashboard.island.dismiss_aria,ui,DashboardPage,IslandOnboardingCard,island_dismiss,"Dismiss Dynamic Island tip",,active
+dashboard.linux_pet.title,ui,DashboardPage,LinuxPetCard,linux_pet_title,"Meet your desktop pet",,active
+dashboard.linux_pet.hint,ui,DashboardPage,LinuxPetCard,linux_pet_hint,"Clawd floats above your windows — hover for today's tokens, spend and limits, drag it anywhere.",,active
+dashboard.linux_pet.show,ui,DashboardPage,LinuxPetCard,linux_pet_show,"Show pet",,active
+dashboard.linux_pet.settings_link,ui,DashboardPage,LinuxPetCard,linux_pet_settings,"Pet settings",,active
+dashboard.linux_pet.dismiss_aria,ui,DashboardPage,LinuxPetCard,linux_pet_dismiss,"Dismiss desktop pet tip",,active
 settings.labs.qpd.label,ui,SettingsPage,LabsSection,qpd_label,"Analyze PR cost-efficiency",,active
 settings.labs.qpd.hint,ui,SettingsPage,LabsSection,qpd_hint,"Analyze average delivery costs and effective Tokens per model from merged PRs and AI-attributed commits.",,active
 settings.labs.qpd.aria,ui,SettingsPage,LabsSection,qpd_aria,"Toggle PR cost-efficiency analysis",,active

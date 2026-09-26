@@ -23,6 +23,7 @@ import { FadeIn } from "../../foundation/FadeIn.jsx";
 import { MacAppBanner } from "../components/MacAppBanner.jsx";
 import { WidgetOnboardingCard } from "../components/WidgetOnboardingCard.jsx";
 import { IslandOnboardingCard } from "../components/IslandOnboardingCard.jsx";
+import { LinuxPetCard } from "../components/LinuxPetCard.jsx";
 import { QualityPerDollarCard } from "../components/QualityPerDollarCard.jsx";
 import { SessionInsightsCard } from "../components/SessionInsightsCard.jsx";
 import { LoginCard } from "../../../components/LoginCard.jsx";
@@ -226,6 +227,7 @@ export function DashboardView(props) {
     macAppBanner: isLocalMode,
     statsPanel: true,
     islandOnboarding: isLocalMode,
+    linuxPetCard: isLocalMode,
     widgetOnboarding: isLocalMode,
     installCopy: shouldShowInstall,
     activityHeatmap: Boolean(activityHeatmapBlock),
@@ -276,6 +278,9 @@ export function DashboardView(props) {
       }
       case "islandOnboarding": {
         return <IslandOnboardingCard enterDelay={delay} />;
+      }
+      case "linuxPetCard": {
+        return <LinuxPetCard enterDelay={delay} />;
       }
       case "widgetOnboarding": {
         return <WidgetOnboardingCard enterDelay={delay} />;
