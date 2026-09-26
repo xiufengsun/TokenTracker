@@ -225,6 +225,12 @@ function localTimeZoneQuery() {
     return {tz, offset};
 }
 
+// The server answered, just not with usable data. Only a transport failure
+// (refused, timed out) means the app isn't running.
+class ServerError extends Error {}
+
+const LOAD_FAILED_MESSAGE = 'Couldn’t load the dashboard. Try Sync or open the app.';
+
 function isCancelled(error) {
     return Boolean(error?.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED));
 }
@@ -944,9 +950,14 @@ class TokenTrackerIndicator extends PanelMenu.Button {
             message.set_request_body_from_bytes('application/json', new GLib.Bytes(new TextEncoder().encode(body)));
         const bytes = await this._session.send_and_read_async(
             message, GLib.PRIORITY_DEFAULT, this._cancellable);
+        const path = url.slice(BASE_URL.length).split('?')[0];
         if (message.get_status() !== Soup.Status.OK)
-            throw new Error(`HTTP ${message.get_status()} for ${url.slice(BASE_URL.length).split('?')[0]}`);
-        return {message, json: JSON.parse(new TextDecoder().decode(bytes.get_data()))};
+            throw new ServerError(`HTTP ${message.get_status()} for ${path}`);
+        try {
+            return {message, json: JSON.parse(new TextDecoder().decode(bytes.get_data()))};
+        } catch (e) {
+            throw new ServerError(`Bad JSON from ${path}: ${e.message}`);
+        }
     }
 
     async _request(method, path, {params = {}, ...options} = {}) {
@@ -1052,12 +1063,14 @@ class TokenTrackerIndicator extends PanelMenu.Button {
         try {
             todaySummary = await this._getJson('/functions/tokentracker-usage-summary', {from: today, to: today});
         } catch (e) {
-            if (!isCancelled(e))
+            if (isCancelled(e)) return;
+            if (e instanceof ServerError)
+                this._setServerError(e);
+            else
                 this._setOffline(e);
             return;
         }
-        this._offline = false;
-        this._clawd.opacity = 255;
+        this._setOnline();
         this._tokensColumn.value.text = formatCompact(todaySummary.totals?.total_tokens);
         this._costColumn.value.text = formatCost(todaySummary.totals?.total_cost_usd);
         this._setStatsVisible(true);
@@ -1086,7 +1099,7 @@ class TokenTrackerIndicator extends PanelMenu.Button {
             console.warn(`TokenTracker: dashboard fetch failed: ${e}`);
             // Keep an already rendered dashboard; the top bar is still live.
             if (!this._data)
-                this._renderMessage('Couldn’t load the dashboard. Try Sync or open the app.');
+                this._renderMessage(LOAD_FAILED_MESSAGE);
             return;
         }
 
@@ -1108,6 +1121,21 @@ class TokenTrackerIndicator extends PanelMenu.Button {
         this._limitsLoading = false;
         if (this._data && this.menu.isOpen)
             this._renderDashboard();
+    }
+
+    _setOnline() {
+        this._offline = false;
+        this._clawd.opacity = 255;
+    }
+
+    // The app is up, so stay on the normal poll and keep whatever the top bar
+    // already shows rather than blanking it until the next read.
+    _setServerError(error) {
+        console.warn(`TokenTracker: refresh failed: ${error}`);
+        this._setOnline();
+        // A closed menu refetches when opened; don't leave an error to flash.
+        if (!this._data)
+            this._renderMessage(this.menu.isOpen ? LOAD_FAILED_MESSAGE : 'Loading…');
     }
 
     _setOffline(error) {
