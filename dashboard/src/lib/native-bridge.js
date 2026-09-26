@@ -87,30 +87,18 @@ export function isNativeLinuxApp() {
 }
 
 /**
- * Install the OAuth bridge the dashboard already uses on macOS
- * (`webkit.messageHandlers.nativeOAuth`). The Linux shell's document-start
- * script can fail to attach that property to WebKit's host object; doing it
- * from the page, once Tauri's own bootstrap has run, is what makes sign-in
- * target /auth/callback instead of the dashboard root.
+ * The handler that opens OAuth in the system browser, or null in a normal
+ * browser. macOS and Windows expose `webkit.messageHandlers.nativeOAuth`. The
+ * Linux shell's copy of it may never attach to WebKitGTK's host object, so
+ * there the Tauri command is called directly.
  */
-export function ensureNativeOAuthBridge() {
-  if (typeof window === "undefined") return false;
-  if (window.webkit?.messageHandlers?.nativeOAuth) return true;
+export function getNativeOAuthBridge() {
+  if (typeof window === "undefined") return null;
+  const handler = window.webkit?.messageHandlers?.nativeOAuth;
+  if (handler) return handler;
   const invoke = window.__TAURI_INTERNALS__?.invoke;
-  if (!isNativeLinuxApp() || typeof invoke !== "function") return false;
-  const handler = {
-    postMessage(url) {
-      return invoke("open_oauth", { url });
-    },
-  };
-  try {
-    window.webkit = window.webkit || {};
-    if (!window.webkit.messageHandlers) window.webkit.messageHandlers = {};
-    window.webkit.messageHandlers.nativeOAuth = handler;
-  } catch {
-    return false;
-  }
-  return Boolean(window.webkit?.messageHandlers?.nativeOAuth);
+  if (typeof invoke !== "function") return null;
+  return { postMessage: (url) => invoke("open_oauth", { url }) };
 }
 
 function getHandler() {

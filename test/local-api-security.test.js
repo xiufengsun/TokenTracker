@@ -1393,6 +1393,37 @@ test("auth bridge mutation requires the local auth token", async () => {
   }
 });
 
+test("an app-started sign-in marks exactly one browser relay", async () => {
+  const { mod, restore } = loadLocalApiWithSpawn(createSuccessfulSpawn([]));
+
+  try {
+    const handler = mod.createLocalApiHandler({ queuePath: path.join(process.cwd(), "tmp-queue.jsonl") });
+    const verifier = new URL("http://127.0.0.1/api/auth-bridge/verifier");
+    assert.equal(handler.takeNativeAuthPending(), false);
+
+    const localAuthToken = await getLocalAuthToken(handler);
+    const put = createResponse();
+    await handler(
+      createRequest({
+        method: "PUT",
+        headers: { "x-tokentracker-local-auth": localAuthToken },
+        body: JSON.stringify({ native: true }),
+      }),
+      put,
+      verifier,
+    );
+    assert.equal(put.statusCode, 200);
+
+    assert.equal(handler.takeNativeAuthPending(), true);
+    assert.equal(handler.takeNativeAuthPending(), false);
+    const get = createResponse();
+    await handler(createRequest({ method: "GET" }), get, verifier);
+    assert.deepEqual(JSON.parse(get.body.toString("utf8")), { native: false });
+  } finally {
+    restore();
+  }
+});
+
 test("usage-limits honors devin=1 only on locally authenticated requests", async () => {
   const { mod, restore } = loadLocalApiWithSpawn(createSuccessfulSpawn([]));
   // Stub the aggregate seam so the handler never touches real credentials or

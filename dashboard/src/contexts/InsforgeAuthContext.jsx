@@ -4,7 +4,7 @@ import { clearCloudDeviceSession, setCloudSyncEnabled } from "../lib/cloud-sync-
 import { isLikelyExpiredAccessToken } from "../lib/auth-token";
 import { getPublicVisibility } from "../lib/api";
 import { clearLocalApiAuthToken, getLocalApiAuthHeaders } from "../lib/local-api-auth";
-import { ensureNativeOAuthBridge, isNativeLinuxApp, isNativeWindowsApp } from "../lib/native-bridge.js";
+import { getNativeOAuthBridge, isNativeLinuxApp, isNativeWindowsApp } from "../lib/native-bridge.js";
 import { restoreInsforgeUser } from "../lib/insforge-session-recovery.mjs";
 
 const InsforgeAuthContext = createContext(null);
@@ -127,19 +127,16 @@ export function InsforgeAuthProvider({ children }) {
   const signInWithOAuth = useCallback(
     async (provider, redirectToOverride) => {
       if (!client) return { error: new Error("InsForge client not configured") };
-      if (typeof window !== "undefined") ensureNativeOAuthBridge();
-      const nativeBridge =
-        typeof window !== "undefined" && window.webkit?.messageHandlers?.nativeOAuth;
+      const nativeBridge = getNativeOAuthBridge();
       if (nativeBridge) {
         // Native desktop app (macOS WKWebView / Windows WebView2 / Linux Tauri):
         // open the system browser for OAuth. PKCE must be initialized in the same
         // context that handles the callback. The callback MUST land on /auth/callback
         // — only that page relays the code back into the app via tokentracker://.
         //
-        // LoginCard memos its redirect when it first renders. On Windows and Linux
-        // the nativeOAuth shim can appear after that memo captured the dashboard
-        // root, which sends the browser to "/" and the login never completes.
-        // Pin /auth/callback for those shells and ignore redirectToOverride.
+        // A caller can compute its redirect before the Windows nativeOAuth shim
+        // appears, which sends the browser to "/" and the login never completes.
+        // Pin /auth/callback for Windows and Linux and ignore redirectToOverride.
         // macOS already passes /auth/callback, so its override is left intact.
         const redirectTo = isNativeWindowsApp() || isNativeLinuxApp()
           ? `${window.location.origin}/auth/callback`

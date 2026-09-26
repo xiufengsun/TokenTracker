@@ -20,9 +20,9 @@ const NATIVE_OAUTH_BRIDGE: &str = r#"
       return window.__TAURI_INTERNALS__.invoke('open_oauth', { url });
     }
   };
-  // WebKit's messageHandlers object is a host object. Assigning onto it can
-  // throw; the page then thinks it is a normal browser and OAuth returns to
-  // the dashboard root. Keep going so a later page script can install it.
+  // WebKit's messageHandlers object is a host object and assigning onto it can
+  // throw. The dashboard then calls the Tauri command directly
+  // (getNativeOAuthBridge), so a failure here is not fatal.
   try {
     window.webkit = window.webkit || {};
     if (!window.webkit.messageHandlers) window.webkit.messageHandlers = {};

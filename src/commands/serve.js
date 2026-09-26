@@ -153,9 +153,9 @@ async function cmdServe(argv) {
         if (handled) return;
       }
 
-      // A browser OAuth return that missed /auth/callback never reaches the
-      // webview. Send the code to the running app before the SPA loads.
-      const oauthHandoff = requestWantsLinuxOAuthHandoff(req, url);
+      // The system browser's OAuth return for a sign-in the Linux app started.
+      // Send the code to the running app before the SPA loads.
+      const oauthHandoff = requestWantsLinuxOAuthHandoff(req, url, handleApi.takeNativeAuthPending);
       if (oauthHandoff) {
         sendHtmlDocument(res, req.method, linuxOAuthHandoffHtml(oauthHandoff));
         return;
@@ -165,17 +165,9 @@ async function cmdServe(argv) {
       const served = await serveStaticFile(dashboardDir, url.pathname, res);
       if (served) return;
 
-      // SPA fallback. The Linux shell injects the OAuth bridge before the
-      // bundle so sign-in targets /auth/callback instead of the dashboard root.
+      // SPA fallback
       if (shouldServeSpaFallback(req, url)) {
-        if (isLinuxAppShell()) {
-          const html = injectLinuxOAuthBridge(
-            fssync.readFileSync(path.join(dashboardDir, "index.html")),
-          );
-          sendHtmlDocument(res, req.method, html);
-        } else {
-          await serveStaticFile(dashboardDir, "/index.html", res);
-        }
+        await serveStaticFile(dashboardDir, "/index.html", res);
         return;
       }
 
@@ -533,18 +525,15 @@ function shouldServeSpaFallback(req, url) {
 // the length so a document navigation cannot become an open redirect.
 const OAUTH_CODE_RE = /^[a-f0-9]{32,128}$/i;
 
-const LINUX_OAUTH_BRIDGE_SNIPPET = "<script>(function(){try{if(window.isTauri!==true||!window.__TAURI_INTERNALS__||typeof window.__TAURI_INTERNALS__.invoke!==\"function\")return;var handler={postMessage:function(url){return window.__TAURI_INTERNALS__.invoke(\"open_oauth\",{url:url});}};window.webkit=window.webkit||{};var handlers=window.webkit.messageHandlers;if(!handlers){window.webkit.messageHandlers={nativeOAuth:handler};return;}if(!handlers.nativeOAuth)handlers.nativeOAuth=handler;}catch(e){}})();</script>";
-
 function isLinuxAppShell(env = process.env) {
   return String(env?.TOKENTRACKER_APP_SHELL || "").trim().toLowerCase() === "linux";
 }
 
 /**
  * Linux desktop sign-in opens the system browser, which must return the
- * InsForge code to the already-running app via tokentracker://. When the
- * webview is not recognized as native, the provider is told to return to
- * the dashboard root and the code dies in Chrome. Hand any such document
- * navigation back to the app, except the in-app exchange page (`app=1`).
+ * InsForge code to the already-running app via tokentracker://. Hand a
+ * document navigation carrying that code back to the app, except the in-app
+ * exchange page (`app=1`).
  */
 function linuxOAuthHandoffTarget(url, env = process.env) {
   if (!isLinuxAppShell(env)) return null;
@@ -557,26 +546,23 @@ function linuxOAuthHandoffTarget(url, env = process.env) {
   return `tokentracker://auth/callback?insforge_code=${encodeURIComponent(codes[0])}`;
 }
 
-function requestWantsLinuxOAuthHandoff(req, url, env = process.env) {
+/**
+ * Only a sign-in the app itself started is handed off: the app marks it via
+ * /api/auth-bridge/verifier before opening the browser. Without that mark a
+ * sign-in made in a normal browser tab would be pulled into the app.
+ */
+function requestWantsLinuxOAuthHandoff(req, url, takeNativeAuthPending, env = process.env) {
   const method = String(req.method || "GET").toUpperCase();
   if (method !== "GET" && method !== "HEAD") return null;
   if (!shouldServeSpaFallback(req, url)) return null;
-  return linuxOAuthHandoffTarget(url, env);
+  const target = linuxOAuthHandoffTarget(url, env);
+  if (!target || !takeNativeAuthPending()) return null;
+  return target;
 }
 
 function linuxOAuthHandoffHtml(target) {
   const href = JSON.stringify(target);
   return `<!doctype html><html><head><meta charset="utf-8"><title>Returning to Token Tracker</title></head><body><p>Returning to Token Tracker… <a href=${href}>Open Token Tracker</a></p><script>location.replace(${href});</script></body></html>`;
-}
-
-function injectLinuxOAuthBridge(html, env = process.env) {
-  const text = Buffer.isBuffer(html) ? html.toString("utf8") : String(html);
-  if (!isLinuxAppShell(env)) return text;
-  if (text.includes("invoke(\"open_oauth\"")) return text;
-  const head = text.match(/<head[^>]*>/i);
-  if (!head) return LINUX_OAUTH_BRIDGE_SNIPPET + text;
-  const at = head.index + head[0].length;
-  return text.slice(0, at) + LINUX_OAUTH_BRIDGE_SNIPPET + text.slice(at);
 }
 
 function sendHtmlDocument(res, method, html) {
@@ -738,8 +724,6 @@ module.exports = {
   linuxOAuthHandoffTarget,
   requestWantsLinuxOAuthHandoff,
   linuxOAuthHandoffHtml,
-  injectLinuxOAuthBridge,
-  isLinuxAppShell,
   startNativeBackgroundSync,
   NATIVE_BACKGROUND_SYNC_INTERVAL_MS,
 };

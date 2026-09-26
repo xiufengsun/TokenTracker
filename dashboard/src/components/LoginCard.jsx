@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Mail, ArrowLeft } from "lucide-react";
 import { useInsforgeAuth } from "../contexts/InsforgeAuthContext.jsx";
-import { ensureNativeOAuthBridge, isNativeLinuxApp } from "../lib/native-bridge.js";
+import { getNativeOAuthBridge } from "../lib/native-bridge.js";
 import { useLocale } from "../hooks/useLocale.js";
 import { copy } from "../lib/copy";
 import { cn } from "../lib/cn";
@@ -133,9 +133,7 @@ export function LoginCard({
   // browser then lands on the dashboard root with a code nobody exchanges.
   const oauthRedirectUrl = useCallback(() => {
     if (typeof window === "undefined") return "";
-    ensureNativeOAuthBridge();
-    const isNativeContext = Boolean(window.webkit?.messageHandlers?.nativeOAuth) || isNativeLinuxApp();
-    return isNativeContext
+    return getNativeOAuthBridge()
       ? `${window.location.origin}/auth/callback`
       : `${window.location.origin}/`;
   }, []);
