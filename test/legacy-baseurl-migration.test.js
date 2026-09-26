@@ -27,6 +27,8 @@ async function withTempHome(fn) {
     XDG_DATA_HOME: process.env.XDG_DATA_HOME,
     DSH_HOME: process.env.DSH_HOME,
     TOKENTRACKER_DSH_HOME: process.env.TOKENTRACKER_DSH_HOME,
+    TOKENTRACKER_TRAE_HOME: process.env.TOKENTRACKER_TRAE_HOME,
+    TOKENTRACKER_TRAE_DB: process.env.TOKENTRACKER_TRAE_DB,
     TOKENTRACKER_DEVICE_TOKEN: process.env.TOKENTRACKER_DEVICE_TOKEN,
     TOKENTRACKER_INSFORGE_BASE_URL: process.env.TOKENTRACKER_INSFORGE_BASE_URL,
     TOKENTRACKER_INSFORGE_ANON_KEY: process.env.TOKENTRACKER_INSFORGE_ANON_KEY,
@@ -38,6 +40,8 @@ async function withTempHome(fn) {
     process.env.CODEX_HOME = path.join(home, ".codex");
     process.env.CODE_HOME = path.join(home, ".code");
     process.env.XDG_DATA_HOME = path.join(home, ".local", "share");
+    process.env.TOKENTRACKER_TRAE_HOME = path.join(home, ".trae");
+    delete process.env.TOKENTRACKER_TRAE_DB;
     delete process.env.TOKENTRACKER_DEVICE_TOKEN;
     delete process.env.TOKENTRACKER_INSFORGE_BASE_URL;
     delete process.env.TOKENTRACKER_INSFORGE_ANON_KEY;

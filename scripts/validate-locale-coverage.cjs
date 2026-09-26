@@ -32,7 +32,7 @@ const SOURCE_IDENTICAL_KEY_ALLOWLIST = [
   /^limits[.]provider[.]/,
   /^limits[.]agentPlan[.]setupHint[.]snippet_install$/,
   /^limits[.]commandCode[.]setupHint[.]snippet_(?:login|login_windows|env_windows|read|export|setenv)$/,
-  /^provider[.]display[.](?:omp|omo|minimax_code|deepseek_harness|cline)$/,
+  /^provider[.]display[.](?:omp|omo|minimax_code|deepseek_harness|cline|trae)$/,
   /^limits[.]label[.](?:cursor_api|zcode_glm52|zcode_glm5t|claude_opus|codex_spark_[57][hd]|gemini_(?:pro|flash|lite)|antigravity_)/,
   /^skills[.]mode[.]skillssh$/,
   /^skills[.]repo[.]placeholder$/,

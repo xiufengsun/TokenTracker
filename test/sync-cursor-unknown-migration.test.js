@@ -424,6 +424,8 @@ describe("repairGrokQueueFromSessionSnapshots", () => {
     const prevCodeHome = process.env.CODE_HOME;
     const prevGrokHome = process.env.GROK_HOME;
     const prevTrackerGrokHome = process.env.TOKENTRACKER_GROK_HOME;
+    const prevTraeHome = process.env.TOKENTRACKER_TRAE_HOME;
+    const prevTraeDb = process.env.TOKENTRACKER_TRAE_DB;
     try {
       restoreHome = withHome(dir);
       delete process.env.TOKENTRACKER_DEVICE_TOKEN;
@@ -431,6 +433,8 @@ describe("repairGrokQueueFromSessionSnapshots", () => {
       process.env.CODE_HOME = path.join(dir, ".code");
       delete process.env.GROK_HOME;
       process.env.TOKENTRACKER_GROK_HOME = path.join(dir, ".grok");
+      process.env.TOKENTRACKER_TRAE_HOME = path.join(dir, ".trae");
+      delete process.env.TOKENTRACKER_TRAE_DB;
       const trackerDir = path.join(dir, ".tokentracker", "tracker");
       await fs.mkdir(trackerDir, { recursive: true });
       const queuePath = path.join(trackerDir, "queue.jsonl");
@@ -483,6 +487,10 @@ describe("repairGrokQueueFromSessionSnapshots", () => {
       else process.env.GROK_HOME = prevGrokHome;
       if (prevTrackerGrokHome === undefined) delete process.env.TOKENTRACKER_GROK_HOME;
       else process.env.TOKENTRACKER_GROK_HOME = prevTrackerGrokHome;
+      if (prevTraeHome === undefined) delete process.env.TOKENTRACKER_TRAE_HOME;
+      else process.env.TOKENTRACKER_TRAE_HOME = prevTraeHome;
+      if (prevTraeDb === undefined) delete process.env.TOKENTRACKER_TRAE_DB;
+      else process.env.TOKENTRACKER_TRAE_DB = prevTraeDb;
       await fs.rm(dir, { recursive: true, force: true });
     }
   });

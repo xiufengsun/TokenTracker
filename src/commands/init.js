@@ -149,6 +149,7 @@ const SUPPORTED_PROVIDERS = [
   "Claude Science",
   "DeepSeek Harness",
   "TRAE Work CN",
+  "TRAE",
   "LM Studio",
   "Unsloth Studio",
   "Devin CLI",
@@ -838,17 +839,18 @@ async function applyIntegrationSetup({
     }
   }
 
-  // Trae SOLO (ByteDance AI IDE): plan snapshot only. Trae keeps its session
-  // transcripts SQLCipher-encrypted and its plaintext summaries hold no token
-  // counts, so there is no usage to read — the detail line must not promise
-  // otherwise ("Passive reader" reads, everywhere else, as "tokens counted").
+  // International TRAE usage is read locally; no hook or vendor login is needed.
   {
+    const { resolveTraeDbPaths } = require("../lib/trae-db");
+    const traeDbPaths = resolveTraeDbPaths(process.env);
     const traeStoragePath = resolveTraeStoragePath(process.env);
-    if (traeStoragePath) {
+    if (traeDbPaths.length || traeStoragePath) {
       summary.push({
-        label: "Trae SOLO",
+        label: "TRAE",
         status: "detected",
-        detail: "Plan info only — Trae exposes no readable token usage",
+        detail: traeDbPaths.length
+          ? "Local usage reader (shared application key; optional TOKENTRACKER_TRAE_SQLCIPHER_KEY override)"
+          : "Plan info only — no local usage database found",
       });
     }
   }

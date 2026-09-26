@@ -72,6 +72,14 @@ describe("formatProviderDisplayName", () => {
     expect(formatProviderDisplayName("deepseek")).toBe("DeepSeek Harness");
   });
 
+  it.each(["trae", "TRAE", "Trae"])(
+    "uses the catalog-backed international TRAE name for %s",
+    (value) => {
+      expect(formatProviderDisplayName(value)).toBe("TRAE");
+      expect(formatProviderDisplayName(value)).not.toBe(formatProviderDisplayName("trae-cn"));
+    },
+  );
+
   it.each(["trae-cn", "TRAE-CN", "Trae_Cn", "TRAE Work CN"])(
     "uses the catalog-backed TRAE Work CN name for %s",
     (value) => {

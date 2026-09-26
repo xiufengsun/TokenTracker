@@ -1,7 +1,7 @@
 {
   "name": "tokentracker-cli",
   "version": "1.1.0",
-  "description": "Local-first AI coding token usage and cost tracker for 41 tools, with a dashboard, desktop pet, widgets, achievements, and native macOS/Windows apps.",
+  "description": "Local-first AI coding token usage and cost tracker for 42 tools, with a dashboard, desktop pet, widgets, achievements, and native macOS/Windows apps.",
   "main": "src/cli.js",
   "bin": {
     "tokentracker-cli": "bin/tracker.js",
@@ -50,6 +50,7 @@
     "version": "node scripts/sync-versions.cjs && git add TokenTrackerBar/project.yml TokenTrackerWin/TokenTrackerWin.csproj TokenTrackerLinux/package.json TokenTrackerLinux/package-lock.json TokenTrackerLinux/src-tauri/Cargo.toml TokenTrackerLinux/src-tauri/Cargo.lock TokenTrackerLinux/src-tauri/tauri.conf.json TokenTrackerLinux/packaging/arch/tokentracker-linux/PKGBUILD"
   },
   "dependencies": {
+    "@journeyapps/wa-sqlite": "2.0.6",
     "@mongodb-js/zstd": "^2.0.1",
     "undici": "8.10.2",
     "yauzl": "^3.4.0"
@@ -57,7 +58,8 @@
   "devDependencies": {
     "@sourcegraph/scip-typescript": "^0.4.0",
     "esbuild": "0.28.2",
-    "pngjs": "^7.0.0"
+    "pngjs": "^7.0.0",
+    "sql.js": "1.14.2"
   },
   "repository": {
     "type": "git",

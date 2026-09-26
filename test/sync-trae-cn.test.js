@@ -61,12 +61,18 @@ async function withTempTraeEnv(fn) {
     TOKENTRACKER_OPENCLAW_PREV_SESSION_ID: process.env.TOKENTRACKER_OPENCLAW_PREV_SESSION_ID,
     TOKENTRACKER_OPENCLAW_SESSION_KEY: process.env.TOKENTRACKER_OPENCLAW_SESSION_KEY,
     TOKENTRACKER_TRAE_CN_HOME: process.env.TOKENTRACKER_TRAE_CN_HOME,
+    TOKENTRACKER_TRAE_HOME: process.env.TOKENTRACKER_TRAE_HOME,
+    TOKENTRACKER_TRAE_DB: process.env.TOKENTRACKER_TRAE_DB,
     TOKENTRACKER_TRAE_CN_USAGE: process.env.TOKENTRACKER_TRAE_CN_USAGE,
     TOKENTRACKER_WSL_MODE: process.env.TOKENTRACKER_WSL_MODE,
+    APPDATA: process.env.APPDATA,
+    LOCALAPPDATA: process.env.LOCALAPPDATA,
   };
   try {
     process.env.HOME = home;
     process.env.USERPROFILE = home;
+    process.env.APPDATA = path.join(home, "AppData", "Roaming");
+    process.env.LOCALAPPDATA = path.join(home, "AppData", "Local");
     process.env.CODEX_HOME = path.join(home, ".codex");
     process.env.CODE_HOME = path.join(home, ".code");
     process.env.GEMINI_HOME = path.join(home, ".gemini");
@@ -74,6 +80,8 @@ async function withTempTraeEnv(fn) {
     process.env.XDG_DATA_HOME = path.join(home, ".local", "share");
     process.env.TOKENTRACKER_OPENCLAW_HOME = path.join(home, ".openclaw");
     process.env.TOKENTRACKER_TRAE_CN_HOME = traeCnHome;
+    process.env.TOKENTRACKER_TRAE_HOME = path.join(home, "trae-data");
+    delete process.env.TOKENTRACKER_TRAE_DB;
     process.env.TOKENTRACKER_TRAE_CN_USAGE = "1";
     delete process.env.TOKENTRACKER_REASONIX_HOME;
     delete process.env.REASONIX_STATE_HOME;

@@ -744,6 +744,8 @@ usage.overview.antigravity_notice_title,ui,DashboardPage,UsageOverview,antigravi
 usage.overview.antigravity_notice_body,ui,DashboardPage,UsageOverview,antigravity_notice_body,"Exact token usage and prompt-cache hits are parsed from Antigravity session metadata when available. Fallback transcripts without metadata are estimated from text length (~4 chars/token).",,active
 usage.overview.devin_notice_title,ui,DashboardPage,UsageOverview,devin_notice_title,"Cost not estimated",,active
 usage.overview.devin_notice_body,ui,DashboardPage,UsageOverview,devin_notice_body,"Devin reports real local token counts, but swe-2, swe-2-high and compactor have no pricing data in this build, so they are excluded from dollar estimates. A $0 figure does not mean the usage was free.",,active
+usage.overview.trae_notice_title,ui,DashboardPage,UsageOverview,trae_notice_title,"TRAE estimates",,active
+usage.overview.trae_notice_body,ui,DashboardPage,UsageOverview,trae_notice_body,"Some TRAE records omit historical cache or reasoning details, so their token breakdowns are approximate. Model-price costs are estimates, not billed amounts.",,active
 usage.overview.week_cross_month_hint,ui,DashboardPage,UsageOverview,week_cross_month_hint,"This week spans two calendar months, so its total is not directly comparable with a single month's usage",,active
 limits.panel.title,ui,LimitsPage,UsageLimitsPanel,title,"Usage Limits",,active
 limits.panel.mode_separator,ui,LimitsPage,UsageLimitsPanel,title_separator," · ",,active
@@ -790,6 +792,7 @@ provider.display.omp,ui,*,ProviderDisplay,omp,"oh-my-pi",,active
 provider.display.omo,ui,*,ProviderDisplay,omo,"OmO",,active
 provider.display.minimax_code,ui,*,ProviderDisplay,minimax_code,"MiniMax Code",,active
 provider.display.deepseek_harness,ui,*,ProviderDisplay,deepseek_harness,"DeepSeek Harness",,active
+provider.display.trae,ui,*,ProviderDisplay,trae,"TRAE",,active
 provider.display.trae_work_cn,ui,*,ProviderDisplay,trae_work_cn,"TRAE Work CN",,active
 provider.display.cline,ui,*,ProviderDisplay,cline,"Cline",,active
 limits.label.zcode_glm52,ui,LimitsPage,UsageLimitsPanel,zcode_glm52,"GLM-5.2",,active

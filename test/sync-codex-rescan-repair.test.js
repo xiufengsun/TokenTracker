@@ -96,6 +96,8 @@ async function withTempSyncEnv(fn) {
     OPENCODE_HOME: process.env.OPENCODE_HOME,
     DSH_HOME: process.env.DSH_HOME,
     TOKENTRACKER_DSH_HOME: process.env.TOKENTRACKER_DSH_HOME,
+    TOKENTRACKER_TRAE_HOME: process.env.TOKENTRACKER_TRAE_HOME,
+    TOKENTRACKER_TRAE_DB: process.env.TOKENTRACKER_TRAE_DB,
     TOKENTRACKER_DEVICE_TOKEN: process.env.TOKENTRACKER_DEVICE_TOKEN,
     TOKENTRACKER_AUTO_RETRY_NO_SPAWN: process.env.TOKENTRACKER_AUTO_RETRY_NO_SPAWN,
   };
@@ -106,6 +108,8 @@ async function withTempSyncEnv(fn) {
     process.env.CODE_HOME = path.join(home, ".code");
     process.env.GEMINI_HOME = path.join(home, ".gemini");
     process.env.OPENCODE_HOME = path.join(home, ".opencode");
+    process.env.TOKENTRACKER_TRAE_HOME = path.join(home, ".trae");
+    delete process.env.TOKENTRACKER_TRAE_DB;
     process.env.TOKENTRACKER_DEVICE_TOKEN = "test-device-token";
     process.env.TOKENTRACKER_AUTO_RETRY_NO_SPAWN = "1";
     delete process.env.DSH_HOME;

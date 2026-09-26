@@ -739,9 +739,10 @@ async function cmdStatus(argv = []) {
   const devinDbPath = resolveDevinDbPath(process.env);
   const devinInstalled = Boolean(devinDbPath && fssync.existsSync(devinDbPath));
 
-  // Trae SOLO (ByteDance AI IDE) — passive entitlement snapshot reader.
+  const { resolveTraeDbPaths } = require("../lib/trae-db");
+  const traeDbPaths = resolveTraeDbPaths(process.env);
   const traeStoragePath = resolveTraeStoragePath(process.env);
-  const traeInstalled = Boolean(traeStoragePath);
+  const traeInstalled = Boolean(traeStoragePath || traeDbPaths.length);
   // Render path for the entitlement snapshot: read it straight from the
   // Trae Local State storage.json via the shared parser. The queue stays
   // token-count-only, so the status read path never depends on queue rows
@@ -1099,7 +1100,10 @@ async function cmdStatus(argv = []) {
         trae: traeInstalled
           ? {
               installed: true,
-              detail: traeStoragePath,
+              detail: traeDbPaths[0] || traeStoragePath,
+              usage_databases: traeDbPaths.length,
+              usage_key_configured: true,
+              usage_key_source: process.env.TOKENTRACKER_TRAE_SQLCIPHER_KEY?.trim() ? "environment" : "application",
               ...(traeEntitlement ? { entitlement: traeEntitlement } : {}),
             }
           : { installed: false },
@@ -1298,12 +1302,9 @@ async function cmdStatus(argv = []) {
         ? `- Devin CLI: passive reader (${devinDbPath})`
         : null,
       traeInstalled
-        // Deliberately NOT "passive reader": every other line with that wording
-        // means tokens are being counted. Trae encrypts its session transcripts
-        // (SQLCipher) and its plaintext summaries carry no token counts, so this
-        // provider contributes plan info and nothing else — say so, or users go
-        // looking for Trae usage in the dashboard that will never appear.
-        ? `- Trae SOLO: plan info only, no token usage (${traeStoragePath})`
+        ? traeDbPaths.length
+          ? `- TRAE: local usage reader, ${traeDbPaths.length} database(s) (shared application key; optional key override)`
+          : `- TRAE: plan info only, no local usage database found (${traeStoragePath})`
         : null,
       traeEntitlement
         ? `- Trae SOLO plan: ${formatTraeEntitlementLine(traeEntitlement)}`
