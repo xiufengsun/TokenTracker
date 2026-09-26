@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Mail, ArrowLeft } from "lucide-react";
 import { useInsforgeAuth } from "../contexts/InsforgeAuthContext.jsx";
+import { ensureNativeOAuthBridge, isNativeLinuxApp } from "../lib/native-bridge.js";
 import { useLocale } from "../hooks/useLocale.js";
 import { copy } from "../lib/copy";
 import { cn } from "../lib/cn";
@@ -127,9 +128,13 @@ export function LoginCard({
     }
   }, [signedIn, onSuccess]);
 
-  const redirectUrl = useMemo(() => {
+  // Resolved at click time. A memo captured on first render stays at "/"
+  // when the Linux/Windows OAuth bridge is installed a moment later, and the
+  // browser then lands on the dashboard root with a code nobody exchanges.
+  const oauthRedirectUrl = useCallback(() => {
     if (typeof window === "undefined") return "";
-    const isNativeContext = Boolean(window.webkit?.messageHandlers?.nativeOAuth);
+    ensureNativeOAuthBridge();
+    const isNativeContext = Boolean(window.webkit?.messageHandlers?.nativeOAuth) || isNativeLinuxApp();
     return isNativeContext
       ? `${window.location.origin}/auth/callback`
       : `${window.location.origin}/`;
@@ -144,12 +149,12 @@ export function LoginCard({
     setError(null);
     setBusy(true);
     try {
-      const { error: err } = await signInWithOAuth(provider, redirectUrl);
+      const { error: err } = await signInWithOAuth(provider, oauthRedirectUrl());
       if (err) setError(err.message || String(err));
     } finally {
       setBusy(false);
     }
-  }, [signInWithOAuth, redirectUrl]);
+  }, [signInWithOAuth, oauthRedirectUrl]);
 
   // Auto-trigger OAuth when opened with ?native=1&provider=xxx
   useEffect(() => {
