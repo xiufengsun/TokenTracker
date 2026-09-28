@@ -96,6 +96,7 @@ export function formatTokenCount(
     thousandSuffix = "K",
     millionSuffix = "M",
     billionSuffix = "B",
+    trillionSuffix = "T",
   } = {},
 ) {
   if (forceFull || normalizeTokenFormatMode(mode) === TOKEN_FORMAT_MODES.FULL) {
@@ -112,6 +113,7 @@ export function formatTokenCount(
     thousandSuffix,
     millionSuffix,
     billionSuffix,
+    trillionSuffix,
   });
 }
 

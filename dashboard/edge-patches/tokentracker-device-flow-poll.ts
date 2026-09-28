@@ -32,23 +32,6 @@ function isLeaderboardBlockedUser(userId: string): boolean {
     .some((candidate) => candidate.trim() === userId);
 }
 
-// deno-lint-ignore no-explicit-any
-async function isUsageBlocked(client: any, userId: string): Promise<boolean> {
-  if (isLeaderboardBlockedUser(userId)) return true;
-  const { data, error } = await client.database
-    .from("tokentracker_leaderboard_anomaly_flags")
-    .select("user_id")
-    .eq("user_id", userId)
-    .eq("status", "auto_excluded")
-    .limit(1)
-    .maybeSingle();
-  if (error) {
-    console.error("[device-flow-poll] anomaly guard failed:", error.message);
-    return false;
-  }
-  return Boolean(data);
-}
-
 async function sha256Hex(input: string): Promise<string> {
   const data = new TextEncoder().encode(input);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
@@ -354,8 +337,9 @@ export default async function (req: Request): Promise<Response> {
 
   if (row.status === "approved" && row.user_id) {
     // Do not let an already-approved device code bypass an account ban by
-    // polling after its existing devices and tokens were revoked.
-    if (await isUsageBlocked(client, row.user_id)) {
+    // polling after its existing devices and tokens were revoked. Heuristic
+    // anomaly flags are not a ban; see tokentracker-ingest for why.
+    if (isLeaderboardBlockedUser(row.user_id)) {
       return json({ error: "Account blocked" }, 403);
     }
     try {

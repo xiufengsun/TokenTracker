@@ -38,7 +38,7 @@ targets:
         PRODUCT_NAME: TokenTracker
         INFOPLIST_VALUES: |
           LSUIElement = YES
-        MARKETING_VERSION: "0.96.4"
+        MARKETING_VERSION: "1.1.2"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_EMIT_LOC_STRINGS: "YES"
         CODE_SIGN_STYLE: Automatic
@@ -89,7 +89,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tokentracker.bar.widget
         PRODUCT_NAME: TokenTrackerWidget
-        MARKETING_VERSION: "0.96.4"
+        MARKETING_VERSION: "1.1.2"
         CURRENT_PROJECT_VERSION: "1"
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         SWIFT_EMIT_LOC_STRINGS: "YES"
@@ -123,6 +123,7 @@ targets:
       - path: TokenTrackerBar/Models/MenuBarDisplayPreferences.swift
       - path: TokenTrackerBar/Models/DynamicIslandLayoutPolicy.swift
       - path: TokenTrackerBar/Models/DynamicIslandCompactPolicy.swift
+      - path: TokenTrackerBar/Models/PopoverPlacementPolicy.swift
       - path: TokenTrackerBar/Models/MenuBarIconStyle.swift
       - path: TokenTrackerBar/Models/UsageLimits.swift
       - path: TokenTrackerBar/Models/LimitPace.swift
@@ -137,6 +138,7 @@ targets:
       - path: TokenTrackerBar/Models/CompanionAnimationPolicy.swift
       - path: TokenTrackerBar/Models/ServerHealthCheckPolicy.swift
       - path: TokenTrackerBar/Utilities/DateHelpers.swift
+      - path: TokenTrackerBar/Utilities/TokenFormatter.swift
       - path: TokenTrackerBar/Models/AutoUpdatePolicy.swift
       # WeeklyLimitResetDetector's window labels come from Strings, which
       # resolves the locale via Shared/NativeLocalization (Shared is

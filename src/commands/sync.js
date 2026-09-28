@@ -5,7 +5,7 @@ const fssync = require("node:fs");
 const cp = require("node:child_process");
 const readline = require("node:readline");
 
-const { resolveInstallPaths, resolveZcodeNativeDbPath, ensureFlatCursor } = require("../lib/install-resolver");
+const { resolveInstallPaths, resolveZcodeNativeDbPath, resolveMimoNativeDbPath, ensureFlatCursor } = require("../lib/install-resolver");
 const { multiInstallParse, mergeBothFileSources } = require("../lib/multi-install-parser");
 const wsl = require("../lib/wsl-probe");
 const {
@@ -18,6 +18,7 @@ const {
   updateJsonLocked,
 } = require("../lib/fs");
 const { physicalJsonlRecords } = require("../lib/jsonl-lines");
+const { countRecordOnlyFiles, formatRecordOnlyWarning } = require("../lib/codex-usage-record");
 const {
   listRolloutFiles,
   listRolloutFilesDeep,
@@ -82,18 +83,25 @@ const {
   resolveOmpSessionFiles,
   resolveOmpSubagentFiles,
   parseOmpIncremental,
+  resolveOmoSessionFiles,
+  resolveOmoSubagentFiles,
+  parseOmoIncremental,
+  omoAgentDirCollidesWithOmp,
   resolvePiSessionFiles,
   parsePiIncremental,
   piAgentDirCollidesWithOmp,
   resolvePrimeAgentSessionFiles,
   parsePrimeAgentIncremental,
+  resolveMinimaxCodeSessionFiles,
+  parseMinimaxCodeIncremental,
   resolveCraftSessionFiles,
   parseCraftIncremental,
   resolveReasonixTelemetryFiles,
   parseReasonixIncremental,
   resolveGrokBuildSessions,
   parseGrokBuildIncremental,
-  listAntigravityTranscripts,
+  resolveAntigravityDbPath,
+  listAntigravityTranscriptsWithStatus,
   parseAntigravityIncremental,
   resolveCodebuddyProjectFiles,
   codebuddyJsonlHasUsage,
@@ -107,6 +115,8 @@ const {
   parseKilocodeIncremental,
   resolveRoocodeTaskFiles,
   parseRoocodeIncremental,
+  resolveClineSessionFilesWithStatus,
+  parseClineIncremental,
   resolveZedDbPath,
   parseZedIncremental,
   resolveLmstudioLogFiles,
@@ -287,6 +297,7 @@ const AUTO_SYNC_SOURCES = new Set([
   "anythingllm",
   "claude",
   "claude-science",
+  "cline",
   "codebuddy",
   "codex",
   "copilot",
@@ -307,6 +318,8 @@ const AUTO_SYNC_SOURCES = new Set([
   "kimi-code",
   "lmstudio",
   "mimo",
+  "minimax-code",
+  "omo",
   "omp",
   "opencode",
   "openclaw",
@@ -627,7 +640,6 @@ async function cmdSync(argv, context = {}) {
     const claudeProjectsDirs = claudeInstallHomes.map((h) => path.join(h, "projects"));
     const xdgDataHome = process.env.XDG_DATA_HOME || path.join(home, ".local", "share");
     const kiloHome = process.env.KILO_HOME || path.join(xdgDataHome, "kilo");
-    const mimoHome = process.env.MIMO_HOME || path.join(xdgDataHome, "mimocode");
 
     // OpenClaw session plugin integration: lifecycle hooks request an
     // OpenClaw-only auto sync so unrelated providers do not get walked.
@@ -1145,17 +1157,26 @@ async function cmdSync(argv, context = {}) {
     }
 
     let antigravityFiles = [];
+    let antigravityInventoryComplete = true;
     if (sourceAllowed("antigravity") && geminiPaths) {
+      const knownAntigravityFiles = new Set(
+        Object.keys(cursors.files || {}).filter((filePath) => resolveAntigravityDbPath(filePath)),
+      );
       const fileSets = [];
       if (geminiPaths.native) {
-        fileSets.push(await listAntigravityTranscripts(geminiPaths.native));
+        fileSets.push(
+          await listAntigravityTranscriptsWithStatus(geminiPaths.native, knownAntigravityFiles),
+        );
       }
       if (geminiPaths.wsl) {
-        fileSets.push(await listAntigravityTranscripts(geminiPaths.wsl));
+        fileSets.push(
+          await listAntigravityTranscriptsWithStatus(geminiPaths.wsl, knownAntigravityFiles),
+        );
       }
+      antigravityInventoryComplete = fileSets.every((set) => set.complete);
       const seen = new Set();
       for (const set of fileSets) {
-        for (const f of set) {
+        for (const f of set.files) {
           if (!seen.has(f)) {
             seen.add(f);
             antigravityFiles.push(f);
@@ -1186,6 +1207,7 @@ async function cmdSync(argv, context = {}) {
             );
           },
           source: "antigravity",
+          inventoryComplete: antigravityInventoryComplete,
         });
       } catch (err) {
         warnProviderParseFailure("Antigravity", err, opts);
@@ -1527,9 +1549,7 @@ async function cmdSync(argv, context = {}) {
     // double-counting usage already counted as source=claude.
     let mimoResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
     if (sourceAllowed("mimo")) {
-      const mimoNativeValue = process.platform === "win32" && typeof process.env.APPDATA === "string"
-        ? path.join(process.env.APPDATA.trim(), "mimocode", "mimocode.db")
-        : path.join(mimoHome, "mimocode.db");
+      const mimoNativeValue = resolveMimoNativeDbPath({ home });
       const wslMimoDir = process.platform === "win32" && wsl.shouldProbeWsl(process.env)
         ? wsl.discoverWslHome(".local/share/mimocode")
         : null;
@@ -1869,6 +1889,40 @@ async function cmdSync(argv, context = {}) {
         });
       } catch (err) {
         warnProviderParseFailure("Roo Code", err, opts);
+      }
+    }
+
+    // ── Cline (CLI v3 / desktop app — ~/.cline/data/sessions) ──
+    let clineResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    if (sourceAllowed("cline")) {
+      try {
+        const clineScan = resolveClineSessionFilesWithStatus(process.env);
+        const clineSessionFiles = clineScan.files;
+        for (const failure of clineScan.errors) {
+          warnProviderParseFailure("Cline", failure.error, opts);
+        }
+        if (progress?.enabled && clineSessionFiles.length > 0) {
+          progress.start(
+            `Parsing Cline ${renderBar(0)} 0/${formatNumber(clineSessionFiles.length)} transcripts | buckets 0`,
+          );
+        }
+        clineResult = await parseClineIncremental({
+          sessionFiles: clineSessionFiles,
+          scanCompleteRoots: clineScan.completedRoots,
+          cursors,
+          queuePath,
+          onProgress: (p) => {
+            if (!progress?.enabled) return;
+            const pct = p.total > 0 ? p.index / p.total : 1;
+            progress.update(
+              `Parsing Cline ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(
+                p.total,
+              )} transcripts | buckets ${formatNumber(p.bucketsQueued)}`,
+            );
+          },
+        });
+      } catch (err) {
+        warnProviderParseFailure("Cline", err, opts);
       }
     }
 
@@ -2399,6 +2453,45 @@ async function cmdSync(argv, context = {}) {
       }
     }
 
+    // ── OmO (passive ~/.omo/agent/sessions/**/*.jsonl reader) ──
+    // Same session format as oh-my-pi, but a separate install root, cursor
+    // namespace and source label, so the two never shadow each other.
+    let omoResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    // Skip OmO when its agent dir resolves to the same path as omp's, so an
+    // explicit TOKENTRACKER_OMO_AGENT_DIR pointing at ~/.omp/agent cannot
+    // double-count the same transcripts under two source labels.
+    const omoCollidesWithOmp = omoAgentDirCollidesWithOmp(process.env);
+    const omoFiles = !sourceAllowed("omo") || omoCollidesWithOmp
+      ? []
+      : mergeBothFileSources({ resolveFiles: resolveOmoSessionFiles, env: process.env });
+    const omoSubagentFiles = !sourceAllowed("omo") || omoCollidesWithOmp
+      ? []
+      : mergeBothFileSources({ resolveFiles: resolveOmoSubagentFiles, env: process.env });
+    if (omoFiles.length > 0 || omoSubagentFiles.length > 0) {
+      if (progress?.enabled) {
+        progress.start(`Parsing OmO ${renderBar(0)} | buckets 0`);
+      }
+      try {
+        omoResult = await parseOmoIncremental({
+          sessionFiles: omoFiles,
+          subagentFiles: omoSubagentFiles,
+          cursors,
+          queuePath,
+          projectQueuePath,
+          env: process.env,
+          onProgress: (p) => {
+            if (!progress?.enabled) return;
+            const pct = p.total > 0 ? p.index / p.total : 1;
+            progress.update(
+              `Parsing OmO ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(p.total)} files | buckets ${formatNumber(p.bucketsQueued)}`,
+            );
+          },
+        });
+      } catch (err) {
+        warnProviderParseFailure("OmO", err, opts);
+      }
+    }
+
     // ── pi (@mariozechner/pi-coding-agent) — passive ~/.pi/agent/sessions/**/*.jsonl reader ──
     // Skip pi parse if its agent dir resolves to the same path as omp's. This
     // prevents double-counting when explicit overrides (TOKENTRACKER_OMP_AGENT_DIR /
@@ -2456,6 +2549,34 @@ async function cmdSync(argv, context = {}) {
         });
       } catch (err) {
         warnProviderParseFailure("Prime Agent", err, opts);
+      }
+    }
+
+    // ── MiniMax Code — passive ~/.minimax/v2/sessions/**/messages.jsonl usage reader ──
+    let minimaxCodeResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    const minimaxCodeFiles = sourceAllowed("minimax-code")
+      ? mergeBothFileSources({ resolveFiles: resolveMinimaxCodeSessionFiles, env: process.env })
+      : [];
+    if (minimaxCodeFiles.length > 0) {
+      if (progress?.enabled) {
+        progress.start(`Parsing MiniMax Code ${renderBar(0)} | buckets 0`);
+      }
+      try {
+        minimaxCodeResult = await parseMinimaxCodeIncremental({
+          sessionFiles: minimaxCodeFiles,
+          cursors,
+          queuePath,
+          env: process.env,
+          onProgress: (p) => {
+            if (!progress?.enabled) return;
+            const pct = p.total > 0 ? p.index / p.total : 1;
+            progress.update(
+              `Parsing MiniMax Code ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(p.total)} files | buckets ${formatNumber(p.bucketsQueued)}`,
+            );
+          },
+        });
+      } catch (err) {
+        warnProviderParseFailure("MiniMax Code", err, opts);
       }
     }
 
@@ -2956,8 +3077,10 @@ async function cmdSync(argv, context = {}) {
       codebuddyResult.recordsProcessed +
       workbuddyResult.recordsProcessed +
       ompResult.recordsProcessed +
+      omoResult.recordsProcessed +
       piResult.recordsProcessed +
       primeAgentResult.recordsProcessed +
+      minimaxCodeResult.recordsProcessed +
       craftResult.recordsProcessed +
       reasonixResult.recordsProcessed +
       grokResult.recordsProcessed +
@@ -2971,6 +3094,7 @@ async function cmdSync(argv, context = {}) {
       zcodeResult.recordsProcessed +
       kilocodeResult.recordsProcessed +
       roocodeResult.recordsProcessed +
+      clineResult.recordsProcessed +
       zedResult.recordsProcessed +
       gooseResult.recordsProcessed +
       dshResult.recordsProcessed +
@@ -2995,8 +3119,10 @@ async function cmdSync(argv, context = {}) {
       codebuddyResult.bucketsQueued +
       workbuddyResult.bucketsQueued +
       ompResult.bucketsQueued +
+      omoResult.bucketsQueued +
       piResult.bucketsQueued +
       primeAgentResult.bucketsQueued +
+      minimaxCodeResult.bucketsQueued +
       craftResult.bucketsQueued +
       reasonixResult.bucketsQueued +
       grokResult.bucketsQueued +
@@ -3010,6 +3136,7 @@ async function cmdSync(argv, context = {}) {
       zcodeResult.bucketsQueued +
       kilocodeResult.bucketsQueued +
       roocodeResult.bucketsQueued +
+      clineResult.bucketsQueued +
       zedResult.bucketsQueued +
       gooseResult.bucketsQueued +
       dshResult.bucketsQueued +
@@ -3215,6 +3342,7 @@ async function cmdSync(argv, context = {}) {
     }
 
     if (!opts.auto) {
+      const codexRecordOnlyWarning = formatRecordOnlyWarning(countRecordOnlyFiles(cursors));
       process.stdout.write(
         [
           "Sync finished:",
@@ -3226,6 +3354,7 @@ async function cmdSync(argv, context = {}) {
           runtime.deviceToken && pendingBytes > 0 && !opts.drain
             ? `- Remaining: ${formatBytes(pendingBytes)} pending (run sync again, or use --drain)`
             : null,
+          codexRecordOnlyWarning ? `- Warning: ${codexRecordOnlyWarning}` : null,
           "",
         ]
           .filter(Boolean)
@@ -4722,8 +4851,10 @@ async function migrateRolloutCumulativeDeltaBuckets({ cursors, queuePath, rollou
   // The migration clears Codex buckets and reparses the discovered corpus from
   // byte zero. Persisted event keys belong to the cleared buckets, so retaining
   // them can suppress the rebuild when a moved session still has an old path
-  // cursor. Rebuild the hash inventory together with the buckets.
+  // cursor. Rebuild the hash inventory together with the buckets. Counted
+  // compaction ids (#652) belong to the cleared buckets the same way.
   cursors.codexHashes = [];
+  cursors.codexCompactionResponseIds = [];
 
   const buckets = cursors.hourly?.buckets;
   const retractions = [];
@@ -5275,6 +5406,9 @@ async function repairCodexRescanInflation({
       buckets: tmpCursors.hourly.buckets || {},
       groupQueued: tmpCursors.hourly.groupQueued || {},
       codexHashes: Array.isArray(tmpCursors.codexHashes) ? tmpCursors.codexHashes : [],
+      codexCompactionResponseIds: Array.isArray(tmpCursors.codexCompactionResponseIds)
+        ? tmpCursors.codexCompactionResponseIds
+        : [],
       files: tmpCursors.files || {},
       queueRows: tmpRaw.split("\n").filter((l) => l.trim()),
       projectHourly: tmpCursors.projectHourly || null,
@@ -5429,6 +5563,7 @@ async function repairCodexRescanInflation({
     cursors.files[fp] = v;
   }
   cursors.codexHashes = rebuilt.codexHashes;
+  cursors.codexCompactionResponseIds = rebuilt.codexCompactionResponseIds;
 
   // 3. Project usage mirrors the main Codex repair: drop inflated Codex project
   //    rows, append the rebuilt rows, and swap only Codex project buckets. Project

@@ -246,6 +246,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
             PushDashboardNativeSettings();
         });
         _updateChecker.QuitRequested += () => PostToUi(Quit);
+        // A failed checksum is not transient noise — the download was discarded and
+        // nothing was installed, so say so instead of silently reverting the menu item.
+        _updateChecker.IntegrityCheckFailed += () => PostToUi(() =>
+            _trayIcon.ShowBalloonTip(8000, _updateStrings.IntegrityErrorTitle,
+                _updateStrings.IntegrityErrorMessage, ToolTipIcon.Warning));
         _ = _updateChecker.CheckAsync(silent: true);
         _updateCheckTimer.Tick += (_, _) => _ = _updateChecker.CheckAsync(silent: true);
         _updateCheckTimer.Start();

@@ -136,3 +136,20 @@ it("accepts a legacy Chinese preference from another window", () => {
   act(() => window.dispatchEvent(new StorageEvent("storage", { key: TOKEN_FORMAT_STORAGE_KEY, newValue: "chinese" })));
   expect(screen.getByText("1234.6万")).toBeInTheDocument();
 });
+
+it("mirrors the unit system to the macOS menu bar on mount and on change", async () => {
+  const postMessage = vi.fn();
+  window.webkit = { messageHandlers: { nativeBridge: { postMessage } } };
+  try {
+    const user = userEvent.setup();
+    render(<LocaleProvider><TokenFormatProvider><Probe /></TokenFormatProvider></LocaleProvider>);
+    const unitPushes = () =>
+      postMessage.mock.calls.map(([m]) => m).filter((m) => m.key === "tokenUnitSystem");
+    expect(unitPushes()).toEqual([{ type: "setSetting", key: "tokenUnitSystem", value: "english" }]);
+
+    await user.click(screen.getByRole("button", { name: "unit-english" }));
+    expect(unitPushes().at(-1)).toEqual({ type: "setSetting", key: "tokenUnitSystem", value: "chinese" });
+  } finally {
+    delete window.webkit;
+  }
+});

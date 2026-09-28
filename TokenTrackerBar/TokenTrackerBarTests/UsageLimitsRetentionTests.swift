@@ -1,3 +1,4 @@
+import CFNetwork
 import XCTest
 
 /// Covers the "retain last usage limits record" feature: the
@@ -11,6 +12,21 @@ final class UsageLimitsRetentionTests: XCTestCase {
         XCTAssertNil(session.configuration.urlCache)
         XCTAssertEqual(session.configuration.timeoutIntervalForRequest, 10)
         XCTAssertEqual(session.configuration.timeoutIntervalForResource, 30)
+    }
+
+    /// A system proxy that does not bypass localhost otherwise swallows every
+    /// loopback request and the app reports the local server as unreachable.
+    func testLocalAPISessionBypassesSystemProxies() {
+        let proxies = LocalAPIConfiguration.makeSessionConfiguration().connectionProxyDictionary
+        XCTAssertNotNil(proxies)
+        for key in [
+            kCFNetworkProxiesHTTPEnable,
+            kCFNetworkProxiesHTTPSEnable,
+            kCFNetworkProxiesSOCKSEnable,
+            kCFNetworkProxiesProxyAutoConfigEnable,
+        ] {
+            XCTAssertEqual(proxies?[key as AnyHashable] as? Int, 0, "\(key) should be disabled")
+        }
     }
 
     func testLastGoodCacheRoundTripsAcrossAppRestarts() throws {

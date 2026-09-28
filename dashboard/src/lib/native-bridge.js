@@ -76,6 +76,16 @@ export function isNativeWindowsApp() {
   return Boolean(window.chrome?.webview) && isNativeApp();
 }
 
+/**
+ * True when running inside the Linux Tauri app. Tauri injects
+ * `__TAURI_INTERNALS__` into every webview it hosts, and the Linux app loads
+ * the dashboard without `?app=1`, so this can't key off `isNativeApp()`.
+ */
+export function isNativeLinuxApp() {
+  if (typeof window === "undefined") return false;
+  return Boolean(window.__TAURI_INTERNALS__);
+}
+
 function getHandler() {
   if (typeof window === "undefined") return null;
   return window.webkit?.messageHandlers?.nativeBridge ?? null;

@@ -86,3 +86,40 @@ test("Windows server teardown and health probes keep process identity", () => {
     "only the current health loop may request recovery",
   );
 });
+
+test("Windows background sync cannot hold the single-flight slot forever", () => {
+  const source = readServerManager();
+
+  // The loopback client is deliberately unbounded, so the only thing standing
+  // between a dead socket (a suspended laptop is the usual cause) and a
+  // permanently stuck tray is a watchdog on the per-request token. Without it
+  // _syncInFlight never clears, which silences both the five-minute timer and
+  // the "Sync Now" menu item while `tracker sync` in a terminal still works.
+  assert.match(
+    source,
+    /Timeout = Timeout\.InfiniteTimeSpan/,
+    "the local API still owns the sync budget; do not add a finite client timeout",
+  );
+  assert.match(
+    source,
+    /private static readonly TimeSpan BackgroundSyncDeadline = TimeSpan\.FromMinutes\((\d+)\)/,
+    "the background sync slot needs an explicit deadline constant",
+  );
+  const minutes = Number(
+    /private static readonly TimeSpan BackgroundSyncDeadline = TimeSpan\.FromMinutes\((\d+)\)/.exec(source)[1],
+  );
+  // The local API kills its sync child at SYNC_TIMEOUT_MS (120s), and macOS
+  // caps the same exchange at 130s. Stay above that so a slow but live publish
+  // is never cut short.
+  assert.ok(minutes >= 3, `BackgroundSyncDeadline must exceed the server's own 120s budget, got ${minutes}m`);
+
+  const trigger = source.slice(
+    source.indexOf("public void TriggerBackgroundSync()"),
+    source.indexOf("private bool StartDirectSync()"),
+  );
+  assert.match(
+    trigger,
+    /cts = new CancellationTokenSource\(\);\n\s*cts\.CancelAfter\(BackgroundSyncDeadline\);/,
+    "every background sync token must carry the deadline before the slot is claimed",
+  );
+});

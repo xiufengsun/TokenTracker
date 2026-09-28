@@ -37,8 +37,17 @@ test("every account-* endpoint delegates guarded device scoping through the shar
     );
     assert.match(src, /const requestedDeviceId\s*=\s*rawDeviceId\s*&&\s*\/\^\[0-9a-f\]/u,
       `${name}: must reject malformed device UUIDs before the RPC`);
-    assert.ok(src.includes('rpc("account_usage_grouped_cached"'),
-      `${name}: must use the cached atomic device-scoping RPC`);
+    // summary/heatmap call a compact RPC that itself delegates to
+    // account_usage_grouped_cached (see the fold-account-summary-and-heatmap
+    // migration), so device scoping is still resolved atomically in Postgres.
+    assert.ok(
+      src.includes('rpc("account_usage_grouped_cached"') ||
+        src.includes('rpc("account_summary_compact"') ||
+        src.includes('rpc("account_heatmap_compact"') ||
+        src.includes('rpc("account_model_breakdown_compact"') ||
+        src.includes('rpc("account_daily_compact"'),
+      `${name}: must use the cached atomic device-scoping RPC`,
+    );
     assert.match(src, /p_device_id:\s*requestedDeviceId/u,
       `${name}: must pass the requested device to the RPC`);
     assert.ok(!src.includes('.from("tokentracker_devices")'),

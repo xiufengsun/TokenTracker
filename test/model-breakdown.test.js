@@ -712,3 +712,175 @@ test("(source, model) collapse: IDE + CLI both resolving to claude-sonnet-4 merg
     await fs.promises.rm(tmp, { recursive: true, force: true });
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #653: the hero and the per-model list priced the same queue differently.
+//
+// computeRowCost is NOT linear for models carrying a priority_multiplier (Fast
+// tier) or long-context rates: priority_* / long_context_* are annotations that
+// mark a SUBSET of the base columns, not extra token volume. The hero prices
+// every half-hour row and so applies them; the model list summed the base
+// columns first and priced once, which dropped every premium to zero.
+//
+// On the reporter's 2026-09-21 data that was a $16.49 gap on $37.97 with the
+// token counts matching exactly, and nothing in the UI said why.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ASTRA_FAST_ROW = {
+  source: "codex",
+  model: "gpt-6-astra",
+  hour_start: "2026-04-20T10:00:00.000Z",
+  input_tokens: 1_000_000,
+  output_tokens: 100_000,
+  cached_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+  reasoning_output_tokens: 0,
+  total_tokens: 1_100_000,
+  conversation_count: 1,
+  // The whole row was served on the Fast tier.
+  priority_input_tokens: 1_000_000,
+  priority_output_tokens: 100_000,
+};
+
+const ASTRA_STANDARD_ROW = {
+  ...ASTRA_FAST_ROW,
+  hour_start: "2026-04-20T10:30:00.000Z",
+  priority_input_tokens: undefined,
+  priority_output_tokens: undefined,
+};
+
+test("gpt-6-astra Fast tier really does cost more per row (guards the fixture)", () => {
+  const fast = localApi.computeRowCost(ASTRA_FAST_ROW);
+  const standard = localApi.computeRowCost(ASTRA_STANDARD_ROW);
+  assert.ok(standard > 0, "fixture must price above zero or the test proves nothing");
+  assert.ok(
+    fast > standard * 1.5,
+    `Fast tier must carry a visible premium (fast=${fast}, standard=${standard})`,
+  );
+});
+
+test("#653 per-model cost equals the per-row cost the hero shows, Fast premium included", async () => {
+  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tt-astra-fast-"));
+  try {
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const rows = [ASTRA_FAST_ROW, ASTRA_STANDARD_ROW];
+    await writeQueue(queuePath, rows);
+
+    // The hero's definition, straight from aggregateByDay: price each row.
+    const heroCost = rows.reduce((sum, r) => sum + localApi.computeRowCost(r), 0);
+
+    const { body } = await callModelBreakdown(queuePath, "2026-04-20", "2026-04-20");
+    const astra = body.sources.flatMap((s) => s.models).find((m) => m.model === "gpt-6-astra");
+    assert.ok(astra, "gpt-6-astra must appear in the breakdown");
+
+    assert.equal(
+      Number(astra.totals.total_cost_usd).toFixed(6),
+      heroCost.toFixed(6),
+      "the per-model row must carry the same dollars the hero counted for these rows",
+    );
+
+    // And the source rollup has to agree with its own models.
+    const source = body.sources.find((s) => s.models.some((m) => m.model === "gpt-6-astra"));
+    const modelSum = source.models.reduce((sum, m) => sum + Number(m.totals.total_cost_usd), 0);
+    assert.equal(Number(source.totals.total_cost_usd).toFixed(6), modelSum.toFixed(6));
+  } finally {
+    await fs.promises.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("#653 pricing stays correct for models with no premium tier", async () => {
+  // The fix must not disturb the ordinary path, which is nearly all usage.
+  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tt-astra-plain-"));
+  try {
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const rows = [
+      {
+        source: "claude",
+        model: "claude-sonnet-4-6",
+        hour_start: "2026-04-20T10:00:00.000Z",
+        input_tokens: 500_000,
+        output_tokens: 50_000,
+        cached_input_tokens: 10_000,
+        cache_creation_input_tokens: 5_000,
+        reasoning_output_tokens: 0,
+        total_tokens: 565_000,
+        conversation_count: 1,
+      },
+      {
+        source: "claude",
+        model: "claude-sonnet-4-6",
+        hour_start: "2026-04-20T11:00:00.000Z",
+        input_tokens: 200_000,
+        output_tokens: 20_000,
+        cached_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        reasoning_output_tokens: 0,
+        total_tokens: 220_000,
+        conversation_count: 1,
+      },
+    ];
+    await writeQueue(queuePath, rows);
+    const heroCost = rows.reduce((sum, r) => sum + localApi.computeRowCost(r), 0);
+    const { body } = await callModelBreakdown(queuePath, "2026-04-20", "2026-04-20");
+    const sonnet = body.sources.flatMap((s) => s.models).find((m) => m.model === "claude-sonnet-4-6");
+    assert.equal(Number(sonnet.totals.total_cost_usd).toFixed(6), heroCost.toFixed(6));
+    assert.equal(sonnet.totals.total_tokens, 785_000, "token aggregation must be untouched");
+  } finally {
+    await fs.promises.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("#653 server-reported cost survives aggregation (Grok has no published rate)", async () => {
+  // Second failure mode of the same bug, and the more common one: Grok persists
+  // an exact per-row cost and carries usage_precision:"reported". Neither field
+  // exists on a summed object, so the old path priced these rows off a
+  // zero-rate model and showed $0.00 in the list while the hero showed real
+  // dollars. Found on live queue data: 2 rows, $0.13 the list never displayed.
+  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tt-grok-reported-"));
+  try {
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const rows = [
+      {
+        source: "grok",
+        model: "grok-4.6",
+        hour_start: "2026-04-20T10:00:00.000Z",
+        input_tokens: 32_822,
+        output_tokens: 5,
+        cached_input_tokens: 128,
+        cache_creation_input_tokens: 0,
+        reasoning_output_tokens: 37,
+        total_tokens: 32_992,
+        conversation_count: 1,
+        total_cost_usd: 0.06596,
+        usage_precision: "reported",
+      },
+      {
+        source: "grok",
+        model: "grok-4.6",
+        hour_start: "2026-04-20T10:30:00.000Z",
+        input_tokens: 33_463,
+        output_tokens: 1,
+        cached_input_tokens: 128,
+        cache_creation_input_tokens: 0,
+        reasoning_output_tokens: 31,
+        total_tokens: 33_623,
+        conversation_count: 1,
+        total_cost_usd: 0.06718,
+        usage_precision: "reported",
+      },
+    ];
+    await writeQueue(queuePath, rows);
+
+    assert.deepEqual(
+      localApi.getModelPricing("grok-4.6"),
+      { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+      "fixture assumes grok-4.6 has no published rate; if that changes this test proves nothing",
+    );
+
+    const { body } = await callModelBreakdown(queuePath, "2026-04-20", "2026-04-20");
+    const grok = body.sources.flatMap((s) => s.models).find((m) => m.model === "grok-4.6");
+    assert.equal(Number(grok.totals.total_cost_usd).toFixed(5), (0.06596 + 0.06718).toFixed(5));
+  } finally {
+    await fs.promises.rm(tmp, { recursive: true, force: true });
+  }
+});

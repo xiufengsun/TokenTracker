@@ -520,6 +520,23 @@ jobs:
             fi
           }
 
+          # The browser returns OAuth sign-in through tokentracker://. deb and rpm
+          # rely on their packaged desktop entry for that (the AppImage registers
+          # its own at runtime), so a package without it can never sign in.
+          verify_scheme_handler() {
+            local label="$1" desktop="$2/usr/share/applications/TokenTracker.desktop"
+            if [ ! -f "$desktop" ]; then
+              echo "::error::$label is missing usr/share/applications/TokenTracker.desktop"
+              exit 1
+            fi
+            if ! grep -Fxq 'MimeType=x-scheme-handler/tokentracker;' "$desktop" \
+              || ! grep -Fxq 'Exec=tokentracker-linux %u' "$desktop"; then
+              echo "::error::$label desktop entry does not register tokentracker://"
+              cat "$desktop"
+              exit 1
+            fi
+          }
+
           # Exactly one artifact per format, so a silent extra build is caught.
           pick_one() {
             local label="$1"; shift
@@ -549,6 +566,7 @@ jobs:
           mkdir -p "$workdir/deb"
           dpkg-deb -x "$deb" "$workdir/deb"
           verify_payload "deb" "$workdir/deb"
+          verify_scheme_handler "deb" "$workdir/deb"
           cp "$deb" "dist-linux/TokenTracker-linux-x86_64.deb"
 
           # --- rpm ------------------------------------------------------------
@@ -564,6 +582,7 @@ jobs:
             echo "::warning::RPM extraction returned a non-zero status; checking the extracted payload"
           fi
           verify_payload "rpm" "$workdir/rpm"
+          verify_scheme_handler "rpm" "$workdir/rpm"
           cp "$rpm_pkg" "dist-linux/TokenTracker-linux-x86_64.rpm"
 
           rm -rf "$workdir"
@@ -598,7 +617,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Publish the release
+      - name: Verify every platform asset landed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ inputs.version }}
@@ -617,6 +636,71 @@ jobs:
             fi
           done
 
+      # Checksums are produced HERE, between "all assets landed" and the un-draft, so
+      # a release is never public -- and never reachable by an updater -- without them.
+      # We hash the DOWNLOADED assets rather than each build job's local copy: that is
+      # what proves the bytes GitHub actually serves, which is the only thing a client
+      # can check. The Windows updater verifies TokenTracker-Setup.exe against this
+      # file before it executes the installer (TokenTrackerWin/UpdateIntegrity.cs).
+      #
+      # SHA256SUMS is a DERIVED seventh asset, deliberately not part of the required
+      # asset list above: that list gates the six artifacts the platform jobs build.
+      - name: Publish SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          workdir="$(mktemp -d)"
+          # OUTSIDE $workdir on purpose: a "> $workdir/SHA256SUMS" redirection is set
+          # up before find lists the directory, so the file would hash itself (empty).
+          sums="$workdir.SHA256SUMS"
+
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$workdir"
+          # A resumed/re-run publish would otherwise hash the previous SHA256SUMS.
+          rm -f "$workdir/SHA256SUMS"
+
+          # Standard sha256sum format ("<hash>  <name>"), sorted for a stable diff, so
+          # `sha256sum -c SHA256SUMS` works as-is next to the downloaded files.
+          ( cd "$workdir" && find . -maxdepth 1 -type f -printf '%P\n' | sort | xargs -r sha256sum ) > "$sums"
+          if [ ! -s "$sums" ]; then
+            echo "::error::Computed no checksums for $tag."
+            exit 1
+          fi
+          if grep -q ' SHA256SUMS$' "$sums"; then
+            echo "::error::SHA256SUMS listed itself."
+            exit 1
+          fi
+          cat "$sums"
+
+          cp "$sums" "$workdir/SHA256SUMS"
+          gh release upload "$tag" "$workdir/SHA256SUMS" --clobber --repo "$GITHUB_REPOSITORY"
+
+          # `gh release edit --notes` REPLACES the body, and the body here is the
+          # --generate-notes output we must keep. So read it back, drop anything from
+          # our marker on (which makes a re-run idempotent), and append the table.
+          notes="$workdir.notes.md"   # outside $workdir: nothing new may appear there
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' \
+            | awk '/^<!-- sha256sums -->$/ { exit } { print }' > "$notes"
+          {
+            echo "<!-- sha256sums -->"
+            echo
+            echo "### SHA-256 checksums"
+            echo
+            echo '```'
+            cat "$sums"
+            echo '```'
+          } >> "$notes"
+          gh release edit "$tag" --notes-file "$notes" --repo "$GITHUB_REPOSITORY"
+
+      - name: Flip the draft live
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
           gh release edit "$tag" --draft=false --latest --repo "$GITHUB_REPOSITORY"
 
       - name: Dispatch homebrew tap update

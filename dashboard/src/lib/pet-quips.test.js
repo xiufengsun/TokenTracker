@@ -46,6 +46,31 @@ describe("desktop pet limit dialogue", () => {
     expect(atLimit).not.toMatch(/\d+%/);
   });
 
+  it("names ZCode windows by plan kind and start-plan bucket labels", () => {
+    const zcodeStart = {
+      configured: true,
+      error: null,
+      plan_kind: "start-plan",
+      primary_window: { used_percent: 40, reset_at: "2099-01-01T00:00:00Z" },
+      buckets: [
+        { label: "GLM-5.3", window: { used_percent: 40, reset_at: "2099-01-01T00:00:00Z" } },
+        { label: "GLM-5.3-Flash · ZCode Weekend Build", window: { used_percent: 20, reset_at: "2099-01-03T00:00:00Z" } },
+      ],
+    };
+    expect(buildPetLimitSummaries({ zcode: zcodeStart }).map(({ window }) => window)).toEqual([
+      "GLM-5.3",
+      "GLM-5.3-Flash · ZCode Weekend Build",
+    ]);
+
+    const zcodeCoding = {
+      configured: true,
+      error: null,
+      plan_kind: "coding-plan",
+      primary_window: { used_percent: 30, reset_at: "2099-01-01T00:00:00Z" },
+    };
+    expect(buildPetLimitSummaries({ zcode: zcodeCoding }).map(({ window }) => window)).toEqual(["5h"]);
+  });
+
   it("surfaces Command Code 5h/weekly windows when they are partially used", () => {
     const limits = {
       commandCode: {

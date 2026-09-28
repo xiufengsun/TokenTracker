@@ -1,0 +1,7 @@
+{
+  "uuid": "tokentracker@tokentracker.cc",
+  "name": "TokenTracker",
+  "description": "Today's AI token usage and cost in the top bar, read from the TokenTracker desktop app.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://github.com/xiufengsun/TokenTracker"
+}

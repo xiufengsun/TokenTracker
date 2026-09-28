@@ -48,4 +48,19 @@ export const AGENT_LOGOS = [
   { id: 36, name: "LM Studio", provider: "lmstudio" },
   { id: 37, name: "Unsloth Studio", provider: "unsloth" },
   { id: 38, name: "Devin CLI", provider: "devin" },
+  {
+    id: 39,
+    nameKey: "provider.display.omo",
+    provider: "omo",
+  },
+  {
+    id: 40,
+    nameKey: "provider.display.cline",
+    provider: "cline",
+  },
+  {
+    id: 41,
+    nameKey: "provider.display.minimax_code",
+    provider: "minimax-code",
+  },
 ];

@@ -18,4 +18,10 @@ test("formatCompactNumber rounds and carries", async () => {
   assert.equal(formatCompactNumber(999950000), "1B");
   assert.equal(formatCompactNumber(1000000000), "1B");
   assert.equal(formatCompactNumber(1250000000), "1.3B");
+  assert.equal(formatCompactNumber(999949999999), "999.9B");
+  assert.equal(formatCompactNumber(999950000000), "1T");
+  assert.equal(formatCompactNumber(1000000000000), "1T");
+  assert.equal(formatCompactNumber(98621200000000), "98.6T");
+  assert.equal(formatCompactNumber(-98621200000000), "-98.6T");
+  assert.equal(formatCompactNumber(98621200000000, { trillionSuffix: "Bio." }), "98.6Bio.");
 });

@@ -22,10 +22,15 @@ function createStorage(initial = {}) {
 }
 
 describe("token number formatting", () => {
-  it("uses compact K/M/B output by default", () => {
+  it("uses compact K/M/B/T output by default", () => {
     expect(formatTokenCount(12_345)).toBe("12.3K");
     expect(formatTokenCount(12_345_678)).toBe("12.3M");
     expect(formatTokenCount(12_345_678_901)).toBe("12.3B");
+    expect(formatTokenCount(84_663_300_000_000)).toBe("84.7T");
+  });
+
+  it("passes a localized trillion suffix through", () => {
+    expect(formatTokenCount(84_663_300_000_000, { trillionSuffix: "Bio." })).toBe("84.7Bio.");
   });
 
   it("returns grouped exact digits in full mode or forced-full locations", () => {

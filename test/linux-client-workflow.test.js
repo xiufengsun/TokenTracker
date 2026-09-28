@@ -148,6 +148,27 @@ test('no workflow or doc still references the old release workflow name', () => 
   }
 });
 
+test('deb and rpm register tokentracker:// so the OAuth return reaches the app', () => {
+  // Tauri's default desktop template has no %u and no scheme handler, and the
+  // runtime xdg-mime registration only runs for the AppImage, so v1.1.0's deb
+  // and rpm could never finish a browser sign-in.
+  const tauriDir = path.join(root, 'TokenTrackerLinux/src-tauri');
+  const conf = JSON.parse(fs.readFileSync(path.join(tauriDir, 'tauri.conf.json'), 'utf8'));
+  const debTemplate = conf.bundle?.linux?.deb?.desktopTemplate;
+  assert.ok(debTemplate, 'deb needs a custom desktop template');
+  assert.equal(conf.bundle?.linux?.rpm?.desktopTemplate, debTemplate, 'rpm must use the same template');
+
+  const template = fs.readFileSync(path.join(tauriDir, debTemplate), 'utf8');
+  assert.match(template, /^Exec=\{\{exec\}\} %u$/m);
+  assert.match(template, /^MimeType=x-scheme-handler\/tokentracker;$/m);
+
+  const linuxJob = release.slice(release.indexOf('\n  linux:'), release.indexOf('\n  publish:'));
+  assert.match(linuxJob, /verify_scheme_handler "deb" "\$workdir\/deb"/);
+  assert.match(linuxJob, /verify_scheme_handler "rpm" "\$workdir\/rpm"/);
+  assert.match(linuxJob, /grep -Fxq 'MimeType=x-scheme-handler\/tokentracker;'/);
+  assert.match(linuxJob, /grep -Fxq 'Exec=tokentracker-linux %u'/);
+});
+
 test('Arch package build disables the unused split debug package', () => {
   assert.match(pkgbuild, /^options=\(!debug\)$/m);
 });

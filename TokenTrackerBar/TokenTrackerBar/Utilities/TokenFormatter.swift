@@ -2,9 +2,22 @@ import Foundation
 
 enum TokenFormatter {
 
+    /// Pushed by the dashboard (Settings → Appearance → Number units) via
+    /// NativeBridge; "chinese" selects the Wan/Yi scale, anything else K/M/B.
+    static let unitSystemDefaultsKey = "MenuBarTokenUnitSystem"
+
+    static func usesChineseUnits(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.string(forKey: unitSystemDefaultsKey) == "chinese"
+    }
+
     /// Formats a token count into a compact human-readable string.
     /// Examples: 789 -> "789", 1500 -> "1.5K", 2300000 -> "2.3M", 5000000000 -> "5.0B"
     static func formatCompact(_ value: Int) -> String {
+        formatCompact(value, chineseUnits: usesChineseUnits())
+    }
+
+    static func formatCompact(_ value: Int, chineseUnits: Bool) -> String {
+        if chineseUnits { return formatChinese(value) }
         let abs = abs(value)
         let sign = value < 0 ? "-" : ""
 
@@ -21,6 +34,31 @@ enum TokenFormatter {
         default:
             return "\(value)"
         }
+    }
+
+    /// Mirrors `formatChineseNumber` in dashboard/src/lib/format.ts: exact digits
+    /// below 1万, then one decimal with a trailing ".0" dropped, carrying into the
+    /// next unit when rounding reaches 10000 (99999999 -> "1亿", not "10000万").
+    /// Examples: 9999 -> "9999", 12345 -> "1.2万", 123456789 -> "1.2亿"
+    static func formatChinese(_ value: Int) -> String {
+        let sign = value < 0 ? "-" : ""
+        let absValue = Double(value.magnitude)
+        if absValue < 10_000 { return "\(sign)\(value.magnitude)" }
+
+        func rounded(_ v: Double) -> Double { (v * 10).rounded() / 10 }
+        func text(_ v: Double, _ unit: String) -> String {
+            var digits = String(format: "%.1f", rounded(v))
+            if digits.hasSuffix(".0") { digits.removeLast(2) }
+            return "\(sign)\(digits)\(unit)"
+        }
+
+        if absValue >= 1e12 { return text(absValue / 1e12, "万亿") }
+        if absValue >= 1e8 {
+            let yi = rounded(absValue / 1e8)
+            return yi >= 10_000 ? text(yi / 10_000, "万亿") : text(yi, "亿")
+        }
+        let wan = rounded(absValue / 1e4)
+        return wan >= 10_000 ? text(wan / 10_000, "亿") : text(wan, "万")
     }
 
     /// Symbol + rate are pushed by the dashboard via NativeBridge. Swift never

@@ -268,7 +268,14 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
       window.addEventListener("pointermove", onPointerMove, { passive: true });
     }
 
-    const clock = new THREE.Clock();
+    // THREE.Timer, not the deprecated THREE.Clock (issue 651). `import * as THREE`
+    // is a namespace import, so the day three drops Clock this line would not
+    // fail the build — `THREE.Clock` would just be undefined and the `new`
+    // would throw inside the effect, outside the try/catch that only guards the
+    // WebGLRenderer. The nearest boundary is the root one in App.jsx, so the
+    // whole landing page would be replaced by the error card, shipped by a
+    // dependabot bump that looks like any other.
+    const timer = new THREE.Timer();
     let fade = 0;
     let intro = 0;
     let prevT = 0;
@@ -277,9 +284,13 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
 
     function animate() {
       rafId = requestAnimationFrame(animate);
+      // Advance before the early return so elapsed time tracks the wall clock
+      // the way getElapsedTime() did, rather than freezing while off-screen.
+      timer.update();
       if (paused.current || !inView.current) return;
 
-      const t = clock.getElapsedTime();
+      // getElapsed() only reports; unlike getElapsedTime() it does not advance.
+      const t = timer.getElapsed();
       const dt = Math.min(Math.max(t - prevT, 0.001), 0.033);
       prevT = t;
       // Damped scroll progress: the camera dive glides instead of tracking

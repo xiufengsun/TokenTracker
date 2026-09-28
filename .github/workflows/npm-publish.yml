@@ -7,6 +7,12 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  # Recovery path. The version-commit gate below means a version whose own CI
+  # failed can never publish: the fix-up commit passes CI but leaves the version
+  # unchanged, so both are skipped and that version is stranded. This lets a
+  # maintainer publish main's current version after its CI has gone green, with
+  # the same "not already on npm" guarantee and an explicit CI check.
+  workflow_dispatch:
 
 concurrency:
   group: npm-publish
@@ -17,16 +23,19 @@ jobs:
     # workflow_run can represent PR CI as well. Expose npm credentials only
     # after a successful push CI run on main.
     if: >-
-      ${{ github.event.workflow_run.conclusion == 'success' &&
-          github.event.workflow_run.event == 'push' &&
-          github.event.workflow_run.head_branch == 'main' }}
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.workflow_run.conclusion == 'success' &&
+           github.event.workflow_run.event == 'push' &&
+           github.event.workflow_run.head_branch == 'main') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # The dispatch path reads this commit's CI conclusion before publishing.
+      actions: read
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 2
           persist-credentials: false
 
@@ -42,20 +51,42 @@ jobs:
       # provenance when the version commit's CI finishes earlier or later.
       - name: Verify version commit and check npm
         id: version-check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
           echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
-          PARENT_VERSION=$(git show HEAD^:package.json 2>/dev/null | node -e \
-            "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const v=JSON.parse(s).version;if(typeof v!=='string'||!v)throw new Error('parent package version is missing');process.stdout.write(v)})")
-          node -e "const {assertReleaseVersion}=require('./scripts/version-files.cjs');assertReleaseVersion(process.argv[1],'package.json version');assertReleaseVersion(process.argv[2],'parent package.json version')" \
-            "$PACKAGE_VERSION" "$PARENT_VERSION"
-          if [ "$PARENT_VERSION" = "$PACKAGE_VERSION" ]; then
-            echo "eligible=false" >> "$GITHUB_OUTPUT"
-            echo "package.json version did not change in this tested commit; skipping publish."
-            exit 0
+          node -e "const {assertReleaseVersion}=require('./scripts/version-files.cjs');assertReleaseVersion(process.argv[1],'package.json version')" \
+            "$PACKAGE_VERSION"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # Manual recovery: the automatic path is keyed to the commit that
+            # changed the version, so a version whose own CI failed can never
+            # publish afterwards. Here the version-change check is replaced by
+            # an explicit check that THIS commit's CI succeeded; the
+            # already-on-npm guard below still applies.
+            HEAD_SHA=$(git rev-parse HEAD)
+            CI_CONCLUSION=$(gh run list --workflow CI --branch main --commit "$HEAD_SHA" \
+              --limit 1 --json conclusion --jq '.[0].conclusion // ""')
+            if [ "$CI_CONCLUSION" != "success" ]; then
+              echo "::error::CI for $HEAD_SHA is '${CI_CONCLUSION:-missing}', not success. Refusing to publish."
+              exit 1
+            fi
+            echo "CI for $HEAD_SHA succeeded; proceeding with manual publish of v$PACKAGE_VERSION."
+            echo "eligible=true" >> "$GITHUB_OUTPUT"
+          else
+            PARENT_VERSION=$(git show HEAD^:package.json 2>/dev/null | node -e \
+              "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const v=JSON.parse(s).version;if(typeof v!=='string'||!v)throw new Error('parent package version is missing');process.stdout.write(v)})")
+            node -e "const {assertReleaseVersion}=require('./scripts/version-files.cjs');assertReleaseVersion(process.argv[1],'parent package.json version')" \
+              "$PARENT_VERSION"
+            if [ "$PARENT_VERSION" = "$PACKAGE_VERSION" ]; then
+              echo "eligible=false" >> "$GITHUB_OUTPUT"
+              echo "package.json version did not change in this tested commit; skipping publish."
+              exit 0
+            fi
+            echo "eligible=true" >> "$GITHUB_OUTPUT"
           fi
-          echo "eligible=true" >> "$GITHUB_OUTPUT"
           npm_result=$(mktemp)
           npm_error=$(mktemp)
           trap 'rm -f "$npm_result" "$npm_error"' EXIT

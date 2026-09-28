@@ -17,11 +17,13 @@ export function formatCompactNumber(
     thousandSuffix = "K",
     millionSuffix = "M",
     billionSuffix = "B",
+    trillionSuffix = "T",
     decimals = 1,
   }: {
     thousandSuffix?: string;
     millionSuffix?: string;
     billionSuffix?: string;
+    trillionSuffix?: string;
     decimals?: number;
   } = {},
 ) {
@@ -48,8 +50,12 @@ export function formatCompactNumber(
     return `${sign}${normalized.toString()}${suffix}`;
   };
 
+  if (abs >= 1e12) {
+    return formatWithSuffix(abs / 1e12, trillionSuffix);
+  }
+
   if (abs >= 1000000000) {
-    return formatWithSuffix(abs / 1000000000, billionSuffix);
+    return formatWithCarry(abs / 1000000000, billionSuffix, trillionSuffix);
   }
 
   if (abs >= 1000000) {

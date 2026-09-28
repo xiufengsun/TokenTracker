@@ -26,6 +26,7 @@
     <Compile Include="../TokenTrackerWin/DispatcherExceptionPolicy.cs" Link="DispatcherExceptionPolicy.cs" />
     <Compile Include="../TokenTrackerWin/UsagePoller.cs" Link="UsagePoller.cs" />
     <Compile Include="../TokenTrackerWin/AutoUpdatePolicy.cs" Link="AutoUpdatePolicy.cs" />
+    <Compile Include="../TokenTrackerWin/UpdateIntegrity.cs" Link="UpdateIntegrity.cs" />
   </ItemGroup>
 
 </Project>

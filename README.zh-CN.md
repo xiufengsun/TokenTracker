@@ -6,7 +6,7 @@
 
 ### 跨所有 CLI，看清你到底在 AI 上花了多少钱
 
-自动采集 **38 款 AI 编码工具** 的 token 用量，全程本地聚合，用一套漂亮的 Dashboard 看真实成本与趋势。不需要云账号、不需要 API Key、不需要任何配置 —— 一条命令搞定。
+自动采集 **41 款 AI 编码工具** 的 token 用量，全程本地聚合，用一套漂亮的 Dashboard 看真实成本与趋势。不需要云账号、不需要 API Key、不需要任何配置 —— 一条命令搞定。
 
 [![npm version](https://img.shields.io/npm/v/tokentracker-cli.svg?color=blue)](https://www.npmjs.com/package/tokentracker-cli)
 [![npm downloads](https://img.shields.io/npm/dm/tokentracker-cli.svg?color=brightgreen)](https://www.npmjs.com/package/tokentracker-cli)
@@ -19,8 +19,8 @@
 
 <br/>
 
-<video src="https://github.com/user-attachments/assets/5e709422-5af8-4e4c-8109-f5bb711eb3f8" controls muted playsinline poster="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/dashboard-dark.png" width="820">
-  <img src="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/dashboard-dark.png" alt="Token Tracker Dashboard" width="820" />
+<video src="https://github.com/user-attachments/assets/efb89086-b7d7-4cb6-ae3c-3a6cb50188d2" controls muted playsinline poster="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/intro-film-poster.png" width="820">
+  <img src="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/intro-film-poster.png" alt="TokenTracker intro film" width="820" />
 </video>
 
 <video src="https://github.com/user-attachments/assets/3275979d-bbed-4639-83e2-8b7d83bed6af" controls muted playsinline poster="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/dashboard-light.png" width="820"></video>
@@ -90,7 +90,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ## ✨ 特性
 
-- 🔌 **开箱即用支持 38 款 AI 工具** —— Claude Code、Codex CLI、AStudio、Cursor、Gemini CLI、Kiro、OpenCode、OpenClaw、Every Code、Hermes Agent、GitHub Copilot、Kimi Code、CodeBuddy、WorkBuddy、Grok Build、oh-my-pi、pi、Dots、Prime Agent、Craft Agents、Reasonix、Kilo CLI、Kilo Code、Roo Code、Antigravity、Zed Agent、Goose、Droid、Mimo Code、ZCode、Qoder、AnythingLLM Desktop、Claude Science、DeepSeek Harness、TRAE Work CN、LM Studio、Unsloth Studio、Devin CLI
+- 🔌 **开箱即用支持 41 款 AI 工具** —— Claude Code、Codex CLI、AStudio、Cursor、Gemini CLI、Kiro、OpenCode、OpenClaw、Every Code、Hermes Agent、GitHub Copilot、Kimi Code、CodeBuddy、WorkBuddy、Grok Build、oh-my-pi、OmO、pi、Dots、Prime Agent、Craft Agents、Reasonix、Kilo CLI、Kilo Code、Roo Code、Antigravity、Zed Agent、Goose、Droid、Mimo Code、ZCode、Qoder、AnythingLLM Desktop、Claude Science、DeepSeek Harness、TRAE Work CN、LM Studio、Unsloth Studio、Devin CLI、Cline、MiniMax Code
 - 🏠 **本地优先** —— 跑在本地。直接在本地机器解析日志，无需账号或 API Key。
 - 🚀 **零配置** —— 首次运行自动安装所有 hook。30 秒从零到 Dashboard
 - 📊 **漂亮的 Dashboard** —— 用量趋势、按模型的成本分解、GitHub 风格活跃度热力图、按项目归因
@@ -203,6 +203,8 @@ brew install xiufengsun/tokentracker/tokentracker
 | **Unsloth Studio** | ✅ 自动 | 被动读取 `$UNSLOTH_STUDIO_HOME/studio.db`（默认 `~/.unsloth/studio/studio.db`）；只投影标量 `contextUsage` 元数据和不含内容的 `api_usage_events`。不会读取提示词、回复、附件、API subject、凭据或训练指标；本地路由成本为 $0，已知付费 provider 路由按实际响应模型估算 token 成本。 |
 | **AnythingLLM Desktop** | ✅ 自动 | 被动 SQLite 读取（`anythingllm-desktop/storage/anythingllm.db`；只读取每条消息的 token 指标，不读取 prompt 或回复） |
 | **Devin CLI** (Cognition) | ✅ 自动 | 被动 SQLite 读取（`$XDG_DATA_HOME/devin/cli/sessions.db`，默认 `~/.local/share/devin/cli/sessions.db`；按 `request_id` 对每次请求的用量指标去重——replay/fork/compaction 副本不会重复计数——使用记录的 generation model，不读取 prompt、回复或 `cogs_json`）。Devin 模型（`swe-2`、`swe-2-high`、`compactor`）当前没有定价数据，token 数照常统计但不计入美元估算——显示 $0 并不代表免费。没有已知的原生 Windows 数据目录；WSL 安装通过 `\\wsl$` 读取。 |
+| **Cline**（CLI v3 / 桌面 App） | ✅ 自动 | 被动读取 `~/.cline/data/sessions/<id>/*.messages.json`。每轮的 `metrics` 是用量增量，其中 `inputTokens` 已包含 cache 读+写、`outputTokens` 已包含 reasoning——因此缓存前缀会被扣除、reasoning 不会重复计费；Cline 自己上报的 `cost` 优先采用。`cline-free/*` 与 `cline-pass/*` 网关模型计 $0。不读取 VS Code 扩展的 globalStorage 目录。路径覆盖：`TOKENTRACKER_CLINE_SESSIONS_DIR`、`TOKENTRACKER_CLINE_DATA_DIR`、`TOKENTRACKER_CLINE_HOME`、`CLINE_SESSION_DATA_DIR`、`CLINE_DATA_DIR` 或 `CLINE_DIR` |
+| **MiniMax Code** | ✅ 自动 | 被动读取（`~/.minimax/v2/sessions/YYYY/MM/DD/<session>/messages.jsonl`）。按 `message_id` 去重，按消息记录实际路由到的上游模型；`usage.cost` 恒为 0，不采用，按常规定价计算。可用 `TOKENTRACKER_MINIMAX_HOME` 覆盖目录 |
 | **Claude Science** | ✅ 自动 | 被动 SQLite 读取（`~/.claude-science/operon-cli.db`；只读取 `frames` 表的 token 计数，不读取 prompt、产物或研究内容）。没有原生 Windows 版——Windows 上该应用运行在 WSL 内，从 WSL 中读取。 |
 | **DeepSeek Harness** | ✅ 自动 | 被动读取会话日志（`~/.dsh/sessions/**/session.jsonl[.zstd]`；解析会话头部与 assistant 事件，支持多帧 zstd 解压） |
 | **TRAE Work CN** | ✅ 自动 | **需要显式开启：设置 `TOKENTRACKER_TRAE_CN_USAGE=1`。** 读取用量会把本地保存的登录授权发送到 TRAE 的内部 API，因此在你开启之前不会发出任何请求。开启后：仅在存在本地 TRAE Work CN 登录授权的可执行非后台同步期间，读取 macOS / Windows 本地登录应用的 session-token 用量；内部 API 可能变化 |
@@ -211,7 +213,7 @@ brew install xiufengsun/tokentracker/tokentracker
 > - **基于 hook 的工具**（Claude Code、Codex、AStudio、Gemini、Every Code、**CodeBuddy**、**WorkBuddy**、**Grok Build**）—— 我们把 SessionEnd hook 或 TOML notify 条目写入它们自己的配置文件
 > - **基于插件的工具**（OpenCode、**OpenClaw**）—— 插件随 npm 包一起分发。OpenClaw 的 session plugin 位于 `~/.tokentracker/tracker/openclaw-plugin/openclaw-session-sync/`；TokenTracker 会通过 OpenClaw 自己的 CLI 挂接并启用它，然后写入 `hooks.allowConversationAccess=true`，让 OpenClaw 放行触发同步的会话结束事件。无需下载、无需拖拽
 > - **oh-my-pi** —— 被动会话扫描始终是计费/token 的事实来源（`~/.omp/agent/sessions/**/*.jsonl`）。检测到 OMP 时，`tokentracker init` 还会写入托管的 notify 扩展到 `~/.omp/agent/extensions/tokentracker-notify.ts`，以便回合结束后近实时触发同步。仅当文件带有 TokenTracker 托管标记时才视为我们拥有：同名用户自写扩展绝不会被覆盖或删除。`tokentracker uninstall` 也仅在文件仍为托管状态时删除它。
-> - **被动读取类**（Cursor、Kiro、Hermes、Kimi Code、Copilot、**Grok Build**、**pi**、**Craft Agents**、**Reasonix**、**Kilo CLI**、**Kilo Code**、**Roo Code**、**Antigravity**、**Zed Agent**、**Goose**、**Droid**、**Mimo Code**、**ZCode**、**Qoder**、**LM Studio**、**Unsloth Studio**、**AnythingLLM Desktop**、**Devin CLI**、**Claude Science**、**DeepSeek Harness**) —— 完全不往它们里面塞东西，只读取它们自己产生的文件（SQLite DB、JSONL、OTEL 导出、会话轨迹日志）。Copilot App / CLI 的用量按请求读取 `~/.copilot/session-store.db`；`data.db` 只提供一次旧数据迁移基线，并在 store 成为主源后保持仅观察，Chat 扩展和旧版 CLI 继续使用 OTEL。TokenTracker 会协调这些数据源，使重叠请求只统计一次。迁移前无法无损拆分模型的 App/CLI 混合历史会保留为 `github-copilot-legacy` 聚合量，而不会猜测请求模型
+> - **被动读取类**（Cursor、Kiro、Hermes、Kimi Code、Copilot、**Grok Build**、**pi**、**Craft Agents**、**Reasonix**、**Kilo CLI**、**Kilo Code**、**Roo Code**、**Antigravity**、**Zed Agent**、**Goose**、**Droid**、**Mimo Code**、**ZCode**、**Qoder**、**LM Studio**、**Unsloth Studio**、**AnythingLLM Desktop**、**Devin CLI**、**MiniMax Code**、**Claude Science**、**DeepSeek Harness**、**Cline**) —— 完全不往它们里面塞东西，只读取它们自己产生的文件（SQLite DB、JSONL、OTEL 导出、会话轨迹日志）。Copilot App / CLI 的用量按请求读取 `~/.copilot/session-store.db`；`data.db` 只提供一次旧数据迁移基线，并在 store 成为主源后保持仅观察，Chat 扩展和旧版 CLI 继续使用 OTEL。TokenTracker 会协调这些数据源，使重叠请求只统计一次。迁移前无法无损拆分模型的 App/CLI 混合历史会保留为 `github-copilot-legacy` 聚合量，而不会猜测请求模型
 > - **Grok Build 估算说明** —— Grok 当前本地遥测提供 `updates.jsonl` 里的累计 `totalTokens`，但还没有稳定的输入/输出/cache 拆分；`signals.json` 仍作为 `contextTokensUsed` 快照兜底。所以在 Grok 提供按调用粒度的用量明细之前，TokenTracker 对 Grok 成本仍是估算值
 >
 > 任何时候都可以用 `tokentracker status` 查看每个集成的状态。如果显示 `skipped`，`detail` 列会解释原因（例如某工具 CLI 不在 `PATH` 上、config 不可读等）。
@@ -228,7 +230,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 | 功能维度 | **[TokenTracker](https://github.com/xiufengsun/TokenTracker)** | **[ccusage](https://github.com/ccusage/ccusage)** | **[Tokscale](https://github.com/junhoyeo/tokscale)** |
 |---|:---:|:---:|:---:|
-| **支持的 AI 工具数** | **38** | 多 Agent / 工具支持 | 多 Agent / 工具支持 |
+| **支持的 AI 工具数** | **41** | 多 Agent / 工具支持 | 多 Agent / 工具支持 |
 | **主要交互方式** | 原生桌面 App 与 Web Dashboard | 终端命令行（CLI） | 终端 TUI 与 CLI |
 | **本地优先分析** | ✅ | ✅ | ✅ |
 | **原生桌面 App** | ✅ macOS、Windows、Linux | ❌ | ❌ |
@@ -244,7 +246,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ```mermaid
 flowchart LR
-    A["AI 编码工具<br/>Claude Code · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE Work CN · LM Studio · Unsloth Studio · Devin CLI"]
+    A["AI 编码工具<br/>Claude Code · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE Work CN · LM Studio · Unsloth Studio · Devin CLI · MiniMax Code · Cline"]
     A -->|hook 触发| B[Token Tracker]
     B -->|解析日志<br/>30 分钟 UTC 桶| C[(本地 SQLite)]
     C --> D[Web Dashboard]

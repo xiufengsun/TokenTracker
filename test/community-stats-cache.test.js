@@ -40,6 +40,19 @@ test("community stats refresh aggregates the daily rollup plus a live tail", () 
   assert.match(schedule, /17 \* \* \* \*/);
 });
 
+test("community stats refresh reads the v2 rollup and drops anti-cheat excluded accounts", () => {
+  const migration = read("migrations/20260923093000_community-stats-v2-rollup-exclusions.sql");
+
+  assert.match(migration, /FROM public\.tokentracker_leaderboard_rollup_meta_v2 m/);
+  assert.match(migration, /FROM public\.tokentracker_leaderboard_rollup_daily_v2 r\s+WHERE r\.day < \(v_cut AT TIME ZONE 'UTC'\)::date/);
+  assert.match(migration, /leaderboard_hourly_dedup_v2\(v_cut, v_to\)/);
+  // The v1 rollup froze at 2026-08-14; reading it forces weeks of live dedup.
+  assert.doesNotMatch(migration, /tokentracker_leaderboard_rollup_daily r\b/);
+  assert.doesNotMatch(migration, /leaderboard_hourly_dedup\(/);
+  assert.match(migration, /f\.status IN \('auto_excluded', 'banned'\)/);
+  assert.match(migration, /NOT EXISTS \(\s*SELECT 1 FROM excluded_users e WHERE e\.user_id = p\.user_id\s*\)/);
+});
+
 test("community stats cache table is server-only and singleton keyed", () => {
   const migration = read("migrations/20260716110044_add-community-stats-cache.sql");
 

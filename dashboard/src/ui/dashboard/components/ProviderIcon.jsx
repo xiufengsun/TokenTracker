@@ -390,6 +390,8 @@ const PROVIDER_ICON_MAP = {
   KIRO: KiroIcon,
   KILOCODE: KilocodeIcon,
   MINIMAX: MinimaxIcon,
+  // MiniMax Code (desktop agent) ships under the MiniMax brand mark.
+  "MINIMAX-CODE": MinimaxIcon,
   OPENCODE: OpenCodeIcon,
   OMP: OmpIcon,
   PI: PiIcon,
@@ -443,8 +445,8 @@ const PROVIDER_LOGO_MAP = {
   "QODER-CN": "/brand-logos/qoder-cn.svg",
   // Volcano Ark (火山方舟) Coding Plan — the Volcengine 3-mountain mark.
   "VOLCANO-ARK": "/brand-logos/volcano-ark.svg",
-  // Devin (devin.ai) — the three-hexagon "nodes" mark, mono like Qoder.
-  DEVIN: "/brand-logos/devin.svg",
+  // Cline (CLI v3 / desktop app) — the official robot mark.
+  CLINE: "/brand-logos/cline.png",
 };
 
 // AnythingLLM publishes this compact mark in white. Keep the official asset

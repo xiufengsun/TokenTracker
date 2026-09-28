@@ -131,9 +131,20 @@ const MODEL_USAGE_SUM_FIELDS = [
   "long_context_cache_creation_input_tokens",
   "long_context_output_tokens",
   "long_context_reasoning_output_tokens",
+  "priority_input_tokens",
+  "priority_cached_input_tokens",
+  "priority_cache_creation_input_tokens",
+  "priority_output_tokens",
+  "priority_reasoning_output_tokens",
+  "priority_long_context_input_tokens",
+  "priority_long_context_cached_input_tokens",
+  "priority_long_context_cache_creation_input_tokens",
+  "priority_long_context_output_tokens",
+  "priority_long_context_reasoning_output_tokens",
   "usage_events",
   "rerouted_usage_events",
   "long_context_usage_events",
+  "priority_usage_events",
   // Not a token counter: an edit turn is a turn, and turn_context both marks
   // where a turn begins and names its model, so an edit turn has exactly one
   // owner. Splitting it here keeps by_model.tokens_per_edit a ratio over one

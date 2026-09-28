@@ -1,7 +1,7 @@
 import { formatCompactNumber } from "./format";
 
 // Landing-only compact formatter: the community total is past a trillion
-// tokens, which the shared formatCompactNumber caps at "B" (e.g. "2211.8B").
+// tokens, shown with two decimals at "T" (e.g. "2.21T") so the counter moves.
 export function formatTokensCompact(value) {
   const n = Number(value) || 0;
   if (n >= 1e12) {

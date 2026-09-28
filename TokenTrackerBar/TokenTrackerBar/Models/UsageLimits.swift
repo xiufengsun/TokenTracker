@@ -492,14 +492,42 @@ struct ZcodeLimits: Codable, Equatable {
     let primaryWindow: GenericLimitWindow?
     let secondaryWindow: GenericLimitWindow?
     let tertiaryWindow: GenericLimitWindow?
+    let buckets: [ZcodeBucket]?
 
     enum CodingKeys: String, CodingKey {
-        case configured, error
+        case configured, error, buckets
         case planLabel = "plan_label"
         case planKind = "plan_kind"
         case primaryWindow = "primary_window"
         case secondaryWindow = "secondary_window"
         case tertiaryWindow = "tertiary_window"
+    }
+}
+
+/// One ZCode start-plan balance (daily allowance or one-time promotional grant).
+struct ZcodeBucket: Codable, Equatable {
+    let label: String?
+    let entitlementId: String?
+    let window: GenericLimitWindow?
+
+    enum CodingKeys: String, CodingKey {
+        case label, window
+        case entitlementId = "entitlement_id"
+    }
+}
+
+extension ZcodeLimits {
+    /// Start-plan buckets that carry a server label, de-duplicated by label; nil when the
+    /// payload predates bucket labels so callers keep their fixed GLM fallback.
+    var labeledBuckets: [(key: String, label: String, window: GenericLimitWindow)]? {
+        var out: [(key: String, label: String, window: GenericLimitWindow)] = []
+        for b in buckets ?? [] {
+            guard let label = b.label, !label.isEmpty, let window = b.window,
+                  !out.contains(where: { $0.label == label }) else { continue }
+            let entitlement = b.entitlementId ?? ""
+            out.append((entitlement.isEmpty ? label : entitlement, label, window))
+        }
+        return out.isEmpty ? nil : out
     }
 }
 

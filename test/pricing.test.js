@@ -1175,6 +1175,37 @@ test("index: computeRowCost prefers a provider-reported Grok cost", () => {
   assert.equal(cost, 0.130486);
 });
 
+test("index: Cline reported cost is authoritative and reasoning is a subset", () => {
+  const row = {
+    source: "cline",
+    model: "claude-sonnet-4-6",
+    input_tokens: 8_000,
+    cached_input_tokens: 2_000,
+    cache_creation_input_tokens: 0,
+    output_tokens: 1_000,
+    reasoning_output_tokens: 400,
+    total_cost_usd: 0.25,
+  };
+  assert.equal(pricing.computeRowCost(row), 0.25);
+  const estimated = pricing.computeRowCost({ ...row, total_cost_usd: 0 });
+  assert.equal(
+    estimated,
+    pricing.computeRowCost({ ...row, total_cost_usd: 0, reasoning_output_tokens: 0 }),
+  );
+});
+
+test("index: Cline free-suffixed models remain zero-cost", () => {
+  assert.equal(pricing.computeRowCost({
+    source: "cline",
+    model: "deepseek/deepseek-r1:free",
+    input_tokens: 1_000_000,
+    output_tokens: 1_000_000,
+    cached_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+    reasoning_output_tokens: 0,
+  }), 0);
+});
+
 test("index: computeRowCost ignores reported costs from non-authoritative sources", () => {
   const row = {
     source: "command-code",
@@ -1276,4 +1307,49 @@ test("WorkBuddy: computeRowCost bills auto + hy3 rows at the hy3 rate", () => {
   });
   assert.equal(pricing.computeRowCost(row("auto")), 0.167);
   assert.equal(pricing.computeRowCost(row("hy3-preview-agent")), 0.167);
+});
+
+test("index: DeepSeek V4.1 Flash (deepseek-v4.1-flash / deepseek-flash) prices at the official rates with peak/off-peak tiers", () => {
+  pricing.resetPricingForTests();
+  const curated = require("../src/lib/pricing/curated-overrides.json");
+  const litellm = {};
+  // The official API id is deepseek-flash; OpenRouter, Command Code and
+  // WorkBuddy report deepseek-v4.1-flash, usually with a provider prefix.
+  // Before these entries existed every form fell through to zero: the
+  // v4-flash fuzzy needle does not match the ".1" string, and LiteLLM only
+  // keys the model under openrouter/ and together_ai/ prefixes.
+  const cases = [
+    ["deepseek-v4.1-flash", "curated:exact"],
+    ["deepseek-flash", "curated:exact"],
+    ["deepseek/deepseek-v4.1-flash", "curated:fuzzy"],
+    ["deepseek/deepseek-flash", "curated:fuzzy"],
+    ["deepseek-v4-1-flash", "curated:exact-dot"],
+  ];
+  for (const [model, source] of cases) {
+    const r = matcher.lookupPricing(model, { curated, litellm });
+    assert.equal(r.hit, true, `${model} should resolve`);
+    assert.equal(r.source, source, `${model} source`);
+    assert.deepEqual(
+      { input: r.value.input, output: r.value.output, cache_read: r.value.cache_read, cache_write: r.value.cache_write },
+      { input: 0.3, output: 1.2, cache_read: 0.006, cache_write: 0.3 },
+      `${model} rates`,
+    );
+  }
+  // V4 Flash must not be captured by the new needles (no substring relation).
+  assert.equal(matcher.lookupPricing("deepseek-v4-flash", { curated, litellm }).value.input, 0.44);
+
+  const row = (model, hour_start) => ({
+    source: "command-code",
+    model,
+    hour_start,
+    input_tokens: 1_000_000,
+    cached_input_tokens: 1_000_000,
+    cache_creation_input_tokens: 1_000_000,
+    output_tokens: 1_000_000,
+    reasoning_output_tokens: 0,
+  });
+  // 01:00Z is inside the 01-04 UTC peak window; 04:00Z is off-peak (half price).
+  assert.equal(pricing.computeRowCost(row("deepseek/deepseek-v4.1-flash", "2026-08-21T01:00:00Z")), 1.806);
+  assert.equal(pricing.computeRowCost(row("deepseek/deepseek-v4.1-flash", "2026-08-21T04:00:00Z")), 0.903);
+  assert.equal(pricing.computeRowCost(row("deepseek-flash", "2026-08-21T04:00:00Z")), 0.903);
 });

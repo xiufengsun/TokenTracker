@@ -60,9 +60,9 @@ export function computePace({ usedPercent, windowSeconds, resetMs, mode, now = D
   out.expectedPercent = Math.round(expected * 100);
   out.paceOver = isOverPace(usedFraction, expected);
 
-  // Show the mark only once the window has meaningful usage (≥5%), so a fresh
-  // window doesn't float a mark in the empty track.
-  if (usedFraction >= 0.05) {
+  // Hide the mark only on an unused window. Even small usage needs an
+  // even-pace reference (for example, Grok at 3% used / 97% remaining).
+  if (usedFraction > 0) {
     const display = mode === "remaining" ? 1 - expected : expected;
     out.pacePercent = display * 100;
   }

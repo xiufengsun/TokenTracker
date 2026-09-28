@@ -54,6 +54,19 @@ internal sealed class UsagePoller : IDisposable
     /// </summary>
     private volatile bool _showingAccountData;
 
+    // `streak_days` and `active_days` are day-grained — they change at most once
+    // a day — but they arrive inside a 52-week grid that is by far the largest
+    // response the tray pulls (~40 KB). Re-reading it on every 60-second tick
+    // spent the bulk of the backend's egress budget re-learning two integers.
+    // Holding the pair for five minutes is invisible to the pet's quip pool.
+    // Keyed by (timezone, account-authority) so signing out, or a cloud
+    // downgrade, drops the cached pair instead of showing stale cross-device
+    // figures.
+    private static readonly TimeSpan HeatmapTtl = TimeSpan.FromMinutes(5);
+    private string _heatmapCacheKey = string.Empty;
+    private (int Streak, int ActiveDays) _heatmapCacheValue;
+    private DateTime _heatmapCachedUtc = DateTime.MinValue;
+
     /// <summary>
     /// When true, each poll also gathers the heatmap + model-breakdown stats the pet's
     /// quip pool uses (two extra calls). The tray sets this from the pet's visibility so
@@ -303,6 +316,12 @@ internal sealed class UsagePoller : IDisposable
     private async Task<(int Streak, int ActiveDays)?> FetchHeatmapAsync(
         string tzQuery, bool retainAccount, CancellationToken cancellationToken = default)
     {
+        var cacheKey = $"{tzQuery}|{retainAccount}";
+        if (_heatmapCacheKey == cacheKey && DateTime.UtcNow - _heatmapCachedUtc < HeatmapTtl)
+        {
+            return _heatmapCacheValue;
+        }
+
         try
         {
             var url = $"{_baseUrl()}/functions/tokentracker-usage-heatmap?weeks=52{tzQuery}&{AccountQuery}";
@@ -312,7 +331,11 @@ internal sealed class UsagePoller : IDisposable
             await using var stream = await resp.Content.ReadAsStreamAsync(cancellationToken);
             using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
             var root = doc.RootElement;
-            return ((int)GetLong(root, "streak_days"), (int)GetLong(root, "active_days"));
+            var parsed = ((int)GetLong(root, "streak_days"), (int)GetLong(root, "active_days"));
+            _heatmapCacheValue = parsed;
+            _heatmapCacheKey = cacheKey;
+            _heatmapCachedUtc = DateTime.UtcNow;
+            return parsed;
         }
         catch { return (0, 0); }
     }

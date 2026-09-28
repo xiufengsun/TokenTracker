@@ -3888,7 +3888,7 @@ async function fetchUsageLimitsUncached({
     ).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
     withProviderTimeout(fetchCopilotLimits({ home, env, fetchImpl: providerFetch, platform, securityRunner }), "GitHub Copilot", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
-    withProviderTimeout(fetchGrokLimits({ home, env, fetchImpl: providerFetch }), "Grok Build", providerTimeoutMs)
+    withProviderTimeout(fetchGrokLimits({ home, env, fetchImpl: providerFetch, timeoutMs: providerTimeoutMs }), "Grok Build", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
     withProviderTimeout(fetchZcodeLimits({ home, env, fetchImpl: providerFetch }), "ZCode", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
@@ -4208,7 +4208,13 @@ async function fetchUsageLimitsUncached({
     kiro: withPlanLabel(kiro, kiro.plan_name, "Kiro"),
     antigravity: withPlanLabel(antigravity, antigravity.account_plan, "Antigravity"),
     copilot: withPlanLabel(copilot, copilot.plan_name, "Copilot"),
-    grok: withPlanLabel(grok, null, "Grok"),
+    // grok-limits already maps subscriptionTier to xAI's own product names
+    // ("SuperGrok Heavy", "X Premium+", "API Key"). The shared normalization
+    // would Title-Case them into "Supergrok Heavy" / "Api Key" and drop "Free"
+    // outright, so surface the label as-is like CommandCode below. Error and
+    // unconfigured branches never carry plan_label, so the panel still falls
+    // back to the bare brand name.
+    grok,
     zcode: withPlanLabel(zcode, zcode.plan_label, "ZCode"),
     opencodeGo: withPlanLabel(opencodeGo, opencodeGo?.plan_label, "OpenCode Go"),
     // CommandCode tiers are acronym brands (GOAT/Pro/Max) — the fetcher already

@@ -4,6 +4,7 @@ const path = require("node:path");
 
 const DEFAULT_BILLING_BASE_URL = "https://cli-chat-proxy.grok.com";
 const DEFAULT_BILLING_TIMEOUT_MS = 15_000;
+const DEFAULT_SETTINGS_TIMEOUT_MS = 2_000;
 const DEFAULT_OIDC_ISSUER = "https://auth.x.ai";
 const DEFAULT_TOKEN_ENDPOINT = "https://auth.x.ai/oauth2/token";
 // Refresh slightly before wall-clock expiry so Limits doesn't race a just-expired JWT.
@@ -495,6 +496,39 @@ async function resolveGrokAccessToken({
   };
 }
 
+// Grok Build enriches billing with a display tier from remote settings. The
+// billing HTTP response itself may contain only `config`.
+const GROK_PLAN_TIERS = new Map([
+  ["supergrokheavy", "SuperGrok Heavy"],
+  ["supergrokplus", "SuperGrok Plus"],
+  ["supergroklite", "SuperGrok Lite"],
+  ["supergrok", "SuperGrok"],
+  ["xpremiumplus", "X Premium+"],
+  ["premiumplus", "X Premium+"],
+  ["xpremium", "X Premium+"],
+  ["apikey", "API Key"],
+  ["free", "Free"],
+]);
+
+/**
+ * Map xAI's subscription tier to the name its own UI shows.
+ *
+ * Separators are folded away before matching so the same table covers whichever
+ * casing the API returns ("SuperGrok Heavy", "SUPER_GROK_HEAVY", "superGrokHeavy").
+ * Unknown values return null rather than being passed through: the Limits panel
+ * falls back to the bare brand name, which is better than rendering a raw enum
+ * (issue #130 shipped "Kimi Type_event" that way).
+ */
+function deriveGrokPlanLabel(rawTier) {
+  if (rawTier == null) return null;
+  const key = String(rawTier).toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (!key) return null;
+  // Exact match only. Prefix matching would read an unseen tier such as
+  // "SuperGrok Business" as plain "SuperGrok", and a confidently wrong plan on
+  // the card is worse than no plan at all.
+  return GROK_PLAN_TIERS.get(key) ?? null;
+}
+
 /**
  * Parse either:
  *   - Unified billing (`?format=credits`): weekly/monthly period + creditUsagePercent
@@ -567,6 +601,8 @@ function normalizeGrokBillingResponse(body) {
   }
 
   return {
+    // Read from the response root, not from `config`.
+    plan_label: deriveGrokPlanLabel(body?.subscriptionTier),
     period_type: periodType,
     monthly_credits_limit: monthlyLimit,
     monthly_credits_used: used,
@@ -639,6 +675,26 @@ async function fetchGrokBilling(
   return legacyResult.body;
 }
 
+async function fetchGrokPlanLabel(accessToken, { fetchImpl = fetch, env, timeoutMs } = {}) {
+  const root = resolveGrokBillingBaseUrl(env);
+  if (timeoutMs <= 0) return null;
+  try {
+    const result = await fetchGrokBillingAttempt(
+      fetchImpl,
+      `${root}/v1/settings`,
+      { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+      Date.now() + Math.min(timeoutMs || DEFAULT_SETTINGS_TIMEOUT_MS, DEFAULT_SETTINGS_TIMEOUT_MS),
+    );
+    if (!result.ok) return null;
+    return deriveGrokPlanLabel(
+      result.body?.subscription_tier_display ?? result.body?.subscription_tier,
+    );
+  } catch (_error) {
+    // A failed settings lookup must not hide a successfully fetched quota.
+    return null;
+  }
+}
+
 async function fetchGrokLimits({ home, env, fetchImpl = fetch, timeoutMs, nowMs } = {}) {
   if (!isGrokInstalled({ home, env })) {
     return { configured: false };
@@ -664,8 +720,10 @@ async function fetchGrokLimits({ home, env, fetchImpl = fetch, timeoutMs, nowMs 
     };
   }
 
+  const startedAtMs = Date.now();
   try {
     let body;
+    let accessToken = resolved.accessToken;
     try {
       body = await fetchGrokBilling(resolved.accessToken, { fetchImpl, env, timeoutMs });
     } catch (error) {
@@ -685,15 +743,25 @@ async function fetchGrokLimits({ home, env, fetchImpl = fetch, timeoutMs, nowMs 
         if (!retry.accessToken) {
           throw retry.error || grokReauthError();
         }
+        accessToken = retry.accessToken;
         body = await fetchGrokBilling(retry.accessToken, { fetchImpl, env, timeoutMs });
       } else {
         throw error;
       }
     }
+    const limits = normalizeGrokBillingResponse(body);
+    if (!limits.plan_label) {
+      const remainingMs = Number.isFinite(timeoutMs)
+        ? timeoutMs - (Date.now() - startedAtMs) - 100
+        : DEFAULT_SETTINGS_TIMEOUT_MS;
+      limits.plan_label = await fetchGrokPlanLabel(accessToken, {
+        fetchImpl, env, timeoutMs: remainingMs,
+      });
+    }
     return {
       configured: true,
       error: null,
-      ...normalizeGrokBillingResponse(body),
+      ...limits,
     };
   } catch (error) {
     return {
@@ -721,6 +789,7 @@ module.exports = {
   normalizeGrokPeriodType,
   inferGrokPeriodTypeFromDates,
   sumProductUsagePercent,
+  deriveGrokPlanLabel,
   normalizeGrokBillingResponse,
   fetchGrokBilling,
   fetchGrokLimits,

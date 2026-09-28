@@ -46,22 +46,71 @@ test("user-authenticated edge functions verify current RS256 and legacy HS256 to
   }
 });
 
+// account-summary and account-heatmap read through a per-endpoint compact RPC
+// that folds the rollup into Postgres instead of shipping per-row detail to the
+// edge (migrations/*_fold-account-summary-and-heatmap-aggregation.sql). Those
+// RPCs delegate to account_usage_grouped_cached themselves, so the shared-cache
+// guarantee still holds — it is asserted against the migration below.
+const COMPACT_ACCOUNT_RPCS = new Map([
+  ["tokentracker-account-summary.ts", ["account_summary_compact", "fold-account-summary-and-heatmap-aggregation"]],
+  ["tokentracker-account-heatmap.ts", ["account_heatmap_compact", "fold-account-summary-and-heatmap-aggregation"]],
+  ["tokentracker-account-model-breakdown.ts", ["account_model_breakdown_compact", "fold-account-model-breakdown-aggregation"]],
+  ["tokentracker-account-daily.ts", ["account_daily_compact", "fold-account-daily-aggregation"]],
+]);
+
 test("cloud account reads use the shared cached RPC instead of a device lookup plus aggregation", () => {
   for (const file of ACCOUNT_FUNCTIONS) {
     const source = read(`dashboard/edge-patches/${file}`);
-    assert.match(source, /rpc\("account_usage_grouped_cached"/u,
-      `${file} must use the cross-isolate cached RPC`);
+    const compact = COMPACT_ACCOUNT_RPCS.get(file);
+    if (compact) {
+      assert.match(source, new RegExp(`rpc\\("${compact[0]}"`, "u"),
+        `${file} must read through its compact RPC`);
+    } else {
+      assert.match(source, /rpc\("account_usage_grouped_cached"/u,
+        `${file} must use the cross-isolate cached RPC`);
+    }
     assert.doesNotMatch(
       source,
       /\.from\("tokentracker_devices"\)/u,
       `${file} must not spend a second PostgREST connection resolving devices`,
     );
-    assert.match(source, /const groupedRowsInFlight = new Map/u,
+    // Same coalescing / TTL / stale-fallback contract either way; the compact
+    // readers name the symbols COMPACT_* instead of GROUPED_ROWS_*.
+    assert.match(source, /const (?:groupedRows|compact)InFlight = new Map/u,
       `${file} must coalesce identical concurrent RPC reads`);
-    assert.match(source, /GROUPED_ROWS_TTL_MS = 30_000/u,
+    assert.match(source, /(?:GROUPED_ROWS|COMPACT)_TTL_MS = 30_000/u,
       `${file} must shield the backend from old-client polling storms`);
-    assert.match(source, /GROUPED_ROWS_STALE_IF_ERROR_MS = 5 \* 60_000/u,
+    assert.match(source, /(?:GROUPED_ROWS|COMPACT)_STALE_IF_ERROR_MS = 5 \* 60_000/u,
       `${file} must retain a bounded stale fallback for transient 5xx responses`);
+  }
+});
+
+test("compact account RPCs delegate to the shared cached RPC and stay project_admin-only", () => {
+  const seen = new Map();
+  for (const [rpc, suffix] of COMPACT_ACCOUNT_RPCS.values()) {
+    const migration = readMigrationBySuffix(suffix);
+    seen.set(suffix, migration);
+    assert.match(migration, new RegExp(`CREATE OR REPLACE FUNCTION public\\.${rpc}\\(`, "u"),
+      `${rpc} must be defined in migration *_${suffix}.sql`);
+    // Postgres grants EXECUTE to PUBLIC by default; without this an anon caller
+    // could pass any p_user_id and read another account's usage.
+    assert.match(migration, new RegExp(`REVOKE ALL ON FUNCTION public\\.${rpc}\\([^)]*\\) FROM PUBLIC, anon, authenticated;`, "u"),
+      `${rpc} must revoke the default PUBLIC execute grant`);
+    assert.match(migration, new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${rpc}\\([^)]*\\) TO project_admin;`, "u"),
+      `${rpc} must be executable by project_admin`);
+  }
+  // Every compact RPC must read through the shared 30s cache, never re-scan.
+  const allRpcs = [...COMPACT_ACCOUNT_RPCS.values()].map(([rpc]) => rpc);
+  for (const [suffix, migration] of seen) {
+    const definedHere = allRpcs.filter((rpc) =>
+      new RegExp(`CREATE OR REPLACE FUNCTION public\\.${rpc}\\(`, "u").test(migration)).length;
+    assert.equal(
+      (migration.match(/public\.account_usage_grouped_cached\(/gu) || []).length,
+      definedHere,
+      `each compact RPC in *_${suffix}.sql must delegate to account_usage_grouped_cached exactly once`,
+    );
+    assert.doesNotMatch(migration, /FROM public\.tokentracker_hourly/u,
+      `compact RPCs in *_${suffix}.sql must not bypass the shared cache with their own scan`);
   }
 });
 
@@ -460,28 +509,40 @@ test("leaderboard bans block token issuance and usage ingestion", () => {
   }
 
   assert.ok(
-    tokenIssue.indexOf("if (await isUsageBlocked(dbClient, userId))")
+    tokenIssue.indexOf("if (isLeaderboardBlockedUser(userId))")
       < tokenIssue.indexOf("// Device identity resolution"),
     "normal token issuance must reject the account before mutating a device",
   );
   assert.ok(
-    devicePoll.indexOf("if (await isUsageBlocked(client, row.user_id))")
+    devicePoll.indexOf("if (isLeaderboardBlockedUser(row.user_id))")
       < devicePoll.indexOf("issueDeviceToken(client, row.user_id"),
     "device-flow polling must reject the account before issuing a token",
   );
   assert.ok(
-    ingest.indexOf("if (await isUsageBlocked(client, userId))")
+    ingest.indexOf("if (isLeaderboardBlockedUser(userId))")
       < ingest.indexOf('.from("tokentracker_hourly")'),
     "ingest must reject the account before writing usage",
   );
+
+  // A heuristic anomaly flag must NOT gate the write path. The detector is
+  // automatic, and tokentracker-leaderboard-refresh already drops flagged
+  // accounts from the public snapshot -- so blocking ingest as well bought no
+  // extra protection and made a false positive unrecoverable: the account
+  // could not upload the corrected numbers that would clear the flag, and
+  // stayed cut off until someone read an issue (#639). Only an explicit,
+  // human-curated ban stops uploads.
   for (const [file, source] of [
     ["tokentracker-device-token-issue.ts", tokenIssue],
     ["tokentracker-device-flow-poll.ts", devicePoll],
     ["tokentracker-ingest.ts", ingest],
   ]) {
-    assert.match(source, /\.eq\("status", "auto_excluded"\)/u,
-      `${file} must reversibly pause machine-excluded accounts`);
+    assert.doesNotMatch(source, /\.eq\("status", "auto_excluded"\)/u,
+      `${file} must not turn an automatic anomaly flag into an upload ban`);
   }
+  const refresh = read("dashboard/edge-patches/tokentracker-leaderboard-refresh.ts");
+  assert.match(refresh, /\.eq\("status", "auto_excluded"\)/u,
+    "the refresh job is what keeps flagged accounts out of the public snapshot",
+  );
 });
 
 test("leaderboard reads expose snapshot freshness and disable response caching", () => {
@@ -538,4 +599,40 @@ test("unused direct profile-like table grants stay revoked", () => {
     source,
     /REVOKE ALL ON public\.tokentracker_profile_likes FROM anon, authenticated;/u,
   );
+});
+
+// Do not reintroduce Content-Encoding in an edge function.
+//
+// The obvious read of these endpoints is that the big ones should gzip: a
+// 52-week heatmap serializes ~65 KB and a leaderboard page ~77 KB of highly
+// repetitive JSON, and every caller advertises gzip by default. That branch was
+// written twice and shipped once, and it never reached a client.
+//
+// The InsForge gateway decompresses an encoded edge response and forwards it as
+// identity. Measured end to end on 2026-09-20 against the public leaderboard
+// endpoint, cache-busted, with and without `Accept-Encoding: gzip`: 77529 bytes
+// on the wire both times, `Vary: Accept-Encoding` passed through but
+// `Content-Encoding` stripped, `Content-Length` and the ETag both computed over
+// the plain body, and the body itself starting `{"en` rather than the gzip
+// magic 1f 8b.
+//
+// So the compression cost is paid twice and saves nothing. Shrink these
+// responses by sending fewer bytes (the *_compact RPCs above) or fewer requests
+// (the CLI and tray caches). If the gateway ever starts passing an encoding
+// through, delete this test along with the change that proves it.
+test("edge functions do not compress their own responses", () => {
+  const edgeDir = path.join(ROOT, "dashboard/edge-patches");
+  for (const file of fs.readdirSync(edgeDir).filter((name) => name.endsWith(".ts"))) {
+    const source = read(`dashboard/edge-patches/${file}`);
+    assert.doesNotMatch(
+      source,
+      /new CompressionStream\(/u,
+      `${file} must not compress: the gateway decompresses it again (see comment above)`,
+    );
+    assert.doesNotMatch(
+      source,
+      /"Content-Encoding"\]?\s*[:=]/u,
+      `${file} must not set Content-Encoding: the gateway strips it (see comment above)`,
+    );
+  }
 });

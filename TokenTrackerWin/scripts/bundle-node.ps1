@@ -129,6 +129,9 @@ New-Item -ItemType Directory -Force -Path (Join-Path $ttDir 'bin') | Out-Null
 Copy-Item (Join-Path $RepoRoot 'bin\tracker.js') (Join-Path $ttDir 'bin\')
 Copy-Item (Join-Path $RepoRoot 'src') (Join-Path $ttDir 'src') -Recurse
 Copy-Item (Join-Path $RepoRoot 'package.json') $ttDir
+# The lockfile pins transitive versions; without it `npm install` resolves
+# whatever is newest at build time (undici 8.11.0 shipped in 1.0.2 this way).
+Copy-Item (Join-Path $RepoRoot 'package-lock.json') $ttDir
 
 $dashDist = Join-Path $RepoRoot 'dashboard\dist'
 if (Test-Path $dashDist) {
@@ -142,7 +145,8 @@ if (Test-Path $dashDist) {
 Write-Host 'Installing production dependencies...'
 Push-Location $ttDir
 try {
-    & npm install --omit=dev --no-optional --ignore-scripts | Out-Null
+    & npm ci --omit=dev --no-optional --ignore-scripts | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit code $LASTEXITCODE" }
 } finally {
     Pop-Location
 }

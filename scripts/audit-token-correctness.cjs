@@ -32,7 +32,11 @@ function toNumber(value) {
 }
 
 function isReasoningInformational(source) {
-  return String(source || "").trim().toLowerCase() === "codex";
+  const normalized = String(source || "").trim().toLowerCase();
+  // Codex and OmO both fold reasoning into output_tokens, so their
+  // reasoning_output_tokens column is informational and must not be summed
+  // into the total-token invariant.
+  return normalized === "codex" || normalized === "omo";
 }
 
 function isLegacyInclusiveCodexRow(row) {

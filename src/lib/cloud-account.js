@@ -11,6 +11,7 @@
 // schema exactly, so the popover renders the cloud payload unchanged.
 
 const { DEFAULT_BASE_URL, DEFAULT_ANON_KEY } = require("./runtime-config");
+const { expandHeatmapCompact } = require("./heatmap-compact");
 
 // usage-* (local CLI) → account-* (cloud) slug map. Only these have a
 // cross-device cloud equivalent; project-usage / usage-limits / category
@@ -27,6 +28,14 @@ const USAGE_TO_ACCOUNT_SLUG = {
 function accountSlugFor(usageSlug) {
   return USAGE_TO_ACCOUNT_SLUG[usageSlug] || null;
 }
+
+// The heatmap renders a 52-week grid out of a handful of active days, so the
+// dense form is mostly zero-filled cells and repeated keys: ~42 KB on the wire
+// for ~12 KB of data, and this proxy accounts for 94% of those reads. Asking
+// for the sparse rows and rebuilding the grid in `expandHeatmapCompact` gives
+// the caller a byte-identical payload. An edge that predates the compact branch
+// ignores the param and answers densely, which that helper passes through.
+const HEATMAP_ACCOUNT_SLUG = "tokentracker-account-heatmap";
 
 // Mirror of dashboard/src/contexts/InsforgeAuthContext.jsx
 // `accessTokenFromRefreshPayload`: the refresh response may put the token at the
@@ -68,6 +77,23 @@ function decodeJwtExpMs(token) {
   return 0;
 }
 
+// The account id the access token was minted for. Used to key the payload cache
+// below on something the backend does NOT rotate: the refresh token changes
+// under us on rotation, which would throw away a still-warm cache entry on
+// exactly the reads that repeat most.
+function decodeJwtSub(token) {
+  try {
+    const part = String(token || "").split(".")[1];
+    if (!part) return "";
+    const json = Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+    const payload = JSON.parse(json);
+    if (payload && typeof payload.sub === "string") return payload.sub;
+  } catch {
+    /* ignore */
+  }
+  return "";
+}
+
 // Module-level access-token cache, keyed by the cloud base URL and refresh token
 // that produced it.
 // The popover polls frequently, so caching avoids hammering /api/auth/refresh.
@@ -81,9 +107,78 @@ let tokenCache = { cacheKey: null, accessToken: null, expMs: 0 };
 // intermittent "Activity silently dropped to this-machine data" symptom.
 const mintInflight = new Map();
 
+// Response cache for the account reads, mirroring the 30-second window the edge
+// functions already keep.
+//
+// Each `tokentracker-account-*` function caches the RPC snapshot it renders
+// from for 30 seconds (`COMPACT_TTL_MS` in dashboard/edge-patches/*), so two
+// reads inside one window render the same numbers from the same snapshot. That
+// cache only saves the edge-to-PostgREST hop, though: the full body still goes
+// out to every caller. And the callers repeat a lot — the Windows tray poller
+// re-reads the 52-week heatmap every ~49 seconds, and one popover refresh fans
+// out six reads at once. Holding the payload here for the same 30 seconds
+// returns exactly what the cloud would have returned, without paying for the
+// transfer again.
+//
+// Bodies are stored serialized and re-parsed on a hit so a caller mutating the
+// object it got back cannot corrupt what the next caller reads.
+const PAYLOAD_TTL_MS = 30_000;
+const PAYLOAD_CACHE_MAX = 64;
+const payloadCache = new Map();
+
+// Mirrors the params `fetchAccountFunction` actually puts on the wire, so two
+// requests share an entry only when they would have produced the same URL.
+function payloadCacheKey({ root, sub, slug, searchParams }) {
+  const pairs = [];
+  if (searchParams && typeof searchParams.entries === "function") {
+    for (const [key, value] of searchParams.entries()) {
+      if (key === "account" || key === "scope") continue;
+      if (value == null || value === "") continue;
+      pairs.push(`${key}=${String(value)}`);
+    }
+  }
+  pairs.sort();
+  return `${root}\0${sub}\0${slug}\0${pairs.join("&")}`;
+}
+
+function payloadCacheGet(key, now) {
+  const hit = payloadCache.get(key);
+  if (!hit) return null;
+  if (hit.expMs <= now()) {
+    payloadCache.delete(key);
+    return null;
+  }
+  // Re-insert so the eviction below drops the coldest entry, not this one.
+  payloadCache.delete(key);
+  payloadCache.set(key, hit);
+  try {
+    return JSON.parse(hit.body);
+  } catch {
+    payloadCache.delete(key);
+    return null;
+  }
+}
+
+function payloadCacheSet(key, data, now) {
+  let body;
+  try {
+    body = JSON.stringify(data);
+  } catch {
+    return; // Not serializable: skip the cache rather than fail the read.
+  }
+  if (body === undefined) return;
+  payloadCache.set(key, { expMs: now() + PAYLOAD_TTL_MS, body });
+  while (payloadCache.size > PAYLOAD_CACHE_MAX) {
+    const oldest = payloadCache.keys().next();
+    if (oldest.done) break;
+    payloadCache.delete(oldest.value);
+  }
+}
+
 function __resetCloudAccountCacheForTests() {
   tokenCache = { cacheKey: null, accessToken: null, expMs: 0 };
   mintInflight.clear();
+  payloadCache.clear();
 }
 
 // Failure classes surfaced to local-api so it can tell an intentional local
@@ -254,6 +349,7 @@ async function fetchAccountFunction({
       if (value != null && value !== "") url.searchParams.set(key, String(value));
     }
   }
+  if (slug === HEATMAP_ACCOUNT_SLUG) url.searchParams.set("format", "compact");
   const headers = { Accept: "application/json", Authorization: `Bearer ${accessToken}` };
   if (anonKey) headers.apikey = anonKey;
 
@@ -275,7 +371,7 @@ async function fetchAccountFunction({
       throw err;
     }
     const data = await res.json();
-    return data;
+    return slug === HEATMAP_ACCOUNT_SLUG ? expandHeatmapCompact(data) : data;
   } finally {
     if (timeoutId) {
       clearTimeout(timeoutId);
@@ -328,6 +424,25 @@ async function fetchAccountUsage({
   });
   if (!minted) return null;
 
+  // Keyed after the mint so rotation cannot invalidate the entry, and so a
+  // revoked session fails here rather than being served from cache.
+  const sub = decodeJwtSub(minted.accessToken);
+  const cacheKey = sub
+    ? payloadCacheKey({ root: String(baseUrl || DEFAULT_BASE_URL).replace(/\/$/, ""), sub, slug, searchParams })
+    : null;
+  if (cacheKey) {
+    const cached = payloadCacheGet(cacheKey, now);
+    if (cached !== null) {
+      // Still surface a rotation from this mint: dropping it would leave the
+      // caller relaying a refresh token the backend has already consumed.
+      return {
+        data: cached,
+        rotatedRefreshToken: minted.refreshToken,
+        rotatedCsrfToken: minted.csrfToken,
+      };
+    }
+  }
+
   const data = await fetchAccountFunction({
     baseUrl,
     anonKey,
@@ -337,16 +452,20 @@ async function fetchAccountUsage({
     fetchImpl,
     timeoutMs: getRemainingTimeout(),
   });
+  if (cacheKey && data != null) payloadCacheSet(cacheKey, data, now);
   return { data, rotatedRefreshToken: minted.refreshToken, rotatedCsrfToken: minted.csrfToken };
 }
 
 module.exports = {
   AccountAuthError,
   USAGE_TO_ACCOUNT_SLUG,
+  PAYLOAD_TTL_MS,
+  HEATMAP_ACCOUNT_SLUG,
   accountSlugFor,
   accessTokenFromRefreshPayload,
   refreshTokenFromRefreshPayload,
   decodeJwtExpMs,
+  decodeJwtSub,
   mintAccessToken,
   fetchAccountFunction,
   fetchAccountUsage,

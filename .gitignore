@@ -1,5 +1,8 @@
 # Dependencies & build output
 node_modules/
+# Also match a symlink named node_modules: the trailing-slash form above only
+# matches directories, which let two self-referential symlinks get committed.
+node_modules
 dist/
 build/
 .tmp/

@@ -2380,20 +2380,21 @@ function createLocalApiHandler({ queuePath }) {
         ma.totals.cached_input_tokens += row.cached_input_tokens || 0;
         ma.totals.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
         ma.totals.reasoning_output_tokens += row.reasoning_output_tokens || 0;
-        ma.totals.total_cost_usd = Number(ma.totals.total_cost_usd || 0)
-          + (Number(row.total_cost_usd) || 0);
+        // Price each row, exactly as aggregateByDay does for the hero (#653).
+        // computeRowCost is not linear for models with a Fast tier or
+        // long-context rates: priority_* / long_context_* mark a subset of the
+        // base columns rather than adding volume, so they survive only while the
+        // row is intact. Summing the base columns first and pricing once silently
+        // dropped every premium — same tokens, fewer dollars than the hero.
+        ma.totals.total_cost_usd = Number(ma.totals.total_cost_usd || 0) + computeRowCost(row);
       }
 
       const sources = Array.from(bySource.values()).map((s) => {
         s.models = Array.from(s.models.values())
-          .map((m) => {
-            const cost = computeRowCost({
-              ...m.totals,
-              model: m.model,
-              source: s.source,
-            });
-            return { ...m, totals: { ...m.totals, total_cost_usd: cost.toFixed(6) } };
-          })
+          .map((m) => ({
+            ...m,
+            totals: { ...m.totals, total_cost_usd: Number(m.totals.total_cost_usd || 0).toFixed(6) },
+          }))
           .sort((a, b) => b.totals.total_tokens - a.totals.total_tokens);
         const sourceCost = s.models.reduce((sum, m) => sum + Number(m.totals.total_cost_usd), 0);
         s.totals.total_cost_usd = sourceCost.toFixed(6);

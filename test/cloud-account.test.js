@@ -12,6 +12,7 @@ const {
   fetchAccountFunction,
   fetchAccountUsage,
   AccountAuthError,
+  PAYLOAD_TTL_MS,
   __resetCloudAccountCacheForTests,
 } = require("../src/lib/cloud-account");
 
@@ -376,4 +377,285 @@ test("fetchAccountUsage throws (not returns null) when a signed-in refresh fails
     (err) => err.code === "auth_rejected",
     "Returning null here would look identical to 'not signed in'.",
   );
+});
+
+// --- Payload cache -----------------------------------------------------------
+//
+// The account edge functions already hold their RPC snapshot for 30 seconds, so
+// repeat reads inside that window render identical numbers — but each one still
+// shipped a full body. The Windows tray poller re-reads the 52-week heatmap
+// every ~49 seconds and one popover refresh fans out six reads at once, so the
+// repeats are the common case, not the edge case.
+
+function makeJwtFor(sub, expSeconds) {
+  return `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub, exp: expSeconds })}.sig`;
+}
+
+function countingFetch(access, payload, counter) {
+  return async (urlStr) => {
+    if (urlStr.includes("/api/auth/refresh")) return jsonResponse({ accessToken: access });
+    counter.n += 1;
+    return jsonResponse(typeof payload === "function" ? payload(counter.n) : payload);
+  };
+}
+
+test("a repeat account read inside the cache window skips the cloud round trip", async () => {
+  __resetCloudAccountCacheForTests();
+  const access = makeJwtFor("u1", Math.floor(Date.now() / 1000) + 3600);
+  const counter = { n: 0 };
+  const fetchImpl = countingFetch(access, (n) => ({ totals: { total_tokens: n } }), counter);
+  const call = (nowMs) =>
+    fetchAccountUsage({
+      usageSlug: "tokentracker-usage-heatmap",
+      searchParams: new URLSearchParams("weeks=52&tz=UTC"),
+      baseUrl: "https://cloud.example",
+      refreshToken: "r",
+      fetchImpl,
+      now: () => nowMs,
+    });
+
+  const first = await call(1_000_000);
+  const second = await call(1_000_000 + PAYLOAD_TTL_MS - 1);
+  assert.equal(counter.n, 1, "second read must not reach the edge function");
+  assert.deepEqual(second.data, first.data);
+});
+
+test("the cache window expires and the next read goes back to the cloud", async () => {
+  __resetCloudAccountCacheForTests();
+  const access = makeJwtFor("u1", Math.floor(Date.now() / 1000) + 3600);
+  const counter = { n: 0 };
+  const fetchImpl = countingFetch(access, (n) => ({ totals: { total_tokens: n } }), counter);
+  const call = (nowMs) =>
+    fetchAccountUsage({
+      usageSlug: "tokentracker-usage-heatmap",
+      searchParams: new URLSearchParams("weeks=52"),
+      baseUrl: "https://cloud.example",
+      refreshToken: "r",
+      fetchImpl,
+      now: () => nowMs,
+    });
+
+  await call(2_000_000);
+  const after = await call(2_000_000 + PAYLOAD_TTL_MS);
+  assert.equal(counter.n, 2);
+  assert.deepEqual(after.data, { totals: { total_tokens: 2 } });
+});
+
+test("different query params do not share a cache entry", async () => {
+  __resetCloudAccountCacheForTests();
+  const access = makeJwtFor("u1", Math.floor(Date.now() / 1000) + 3600);
+  const counter = { n: 0 };
+  const fetchImpl = countingFetch(access, (n) => ({ totals: { total_tokens: n } }), counter);
+  const call = (qs) =>
+    fetchAccountUsage({
+      usageSlug: "tokentracker-usage-heatmap",
+      searchParams: new URLSearchParams(qs),
+      baseUrl: "https://cloud.example",
+      refreshToken: "r",
+      fetchImpl,
+      now: () => 3_000_000,
+    });
+
+  await call("weeks=52");
+  await call("weeks=12");
+  assert.equal(counter.n, 2);
+  // Param order and the local-only routing knobs must not split an entry.
+  await call("weeks=12&account=1");
+  assert.equal(counter.n, 2);
+});
+
+test("a different account never reads another account's cached payload", async () => {
+  __resetCloudAccountCacheForTests();
+  const exp = Math.floor(Date.now() / 1000) + 3600;
+  const counter = { n: 0 };
+  const call = (sub, refreshToken) =>
+    fetchAccountUsage({
+      usageSlug: "tokentracker-usage-summary",
+      searchParams: new URLSearchParams("from=2026-01-01"),
+      baseUrl: "https://cloud.example",
+      refreshToken,
+      fetchImpl: countingFetch(makeJwtFor(sub, exp), () => ({ owner: sub }), counter),
+      now: () => 4_000_000,
+    });
+
+  const a = await call("user-a", "ra");
+  const b = await call("user-b", "rb");
+  assert.deepEqual(a.data, { owner: "user-a" });
+  assert.deepEqual(b.data, { owner: "user-b" });
+  assert.equal(counter.n, 2, "each account must fetch its own payload");
+});
+
+test("a cache hit still reports a refresh token rotated by that mint", async () => {
+  __resetCloudAccountCacheForTests();
+  const access = makeJwtFor("u1", Math.floor(Date.now() / 1000) + 3600);
+  let mints = 0;
+  const fetchImpl = async (urlStr) => {
+    if (urlStr.includes("/api/auth/refresh")) {
+      mints += 1;
+      return jsonResponse({ accessToken: access, refreshToken: `rot-${mints}`, csrfToken: `csrf-${mints}` });
+    }
+    return jsonResponse({ totals: {} });
+  };
+  const call = (refreshToken) =>
+    fetchAccountUsage({
+      usageSlug: "tokentracker-usage-summary",
+      searchParams: new URLSearchParams(),
+      baseUrl: "https://cloud.example",
+      refreshToken,
+      fetchImpl,
+      // Past the token cache's 60s skew, so every call mints again.
+      now: () => 5_000_000,
+      skewMs: 0,
+    });
+
+  await call("r0");
+  const second = await call("rot-1");
+  assert.equal(second.rotatedRefreshToken, "rot-2", "a rotation must survive a cache hit");
+  assert.equal(second.rotatedCsrfToken, "csrf-2");
+});
+
+test("mutating a returned payload cannot corrupt the cached copy", async () => {
+  __resetCloudAccountCacheForTests();
+  const access = makeJwtFor("u1", Math.floor(Date.now() / 1000) + 3600);
+  const counter = { n: 0 };
+  const fetchImpl = countingFetch(access, { totals: { total_tokens: 7 } }, counter);
+  const call = () =>
+    fetchAccountUsage({
+      usageSlug: "tokentracker-usage-summary",
+      searchParams: new URLSearchParams(),
+      baseUrl: "https://cloud.example",
+      refreshToken: "r",
+      fetchImpl,
+      now: () => 6_000_000,
+    });
+
+  const first = await call();
+  first.data.totals.total_tokens = 999;
+  const second = await call();
+  assert.equal(counter.n, 1);
+  assert.equal(second.data.totals.total_tokens, 7);
+});
+
+// --- heatmap compact wire format ------------------------------------------
+// The heatmap is the one account read whose rendered grid is far larger than
+// the data behind it, so the CLI asks for the sparse form and rebuilds the grid
+// locally. See src/lib/heatmap-compact.js.
+
+test("fetchAccountFunction asks the heatmap endpoint for the compact wire format", async () => {
+  const captured = {};
+  const fetchImpl = async (urlStr) => {
+    captured.urlStr = urlStr;
+    return jsonResponse({ weeks: [] });
+  };
+  await fetchAccountFunction({
+    baseUrl: "https://cloud.example",
+    accessToken: "jwt",
+    slug: "tokentracker-account-heatmap",
+    searchParams: new URLSearchParams("weeks=52"),
+    fetchImpl,
+  });
+  assert.equal(new URL(captured.urlStr).searchParams.get("format"), "compact");
+});
+
+test("fetchAccountFunction leaves the other account endpoints on their current format", async () => {
+  for (const slug of [
+    "tokentracker-account-summary",
+    "tokentracker-account-daily",
+    "tokentracker-account-model-breakdown",
+  ]) {
+    let urlStr = "";
+    await fetchAccountFunction({
+      baseUrl: "https://cloud.example",
+      accessToken: "jwt",
+      slug,
+      searchParams: new URLSearchParams(),
+      fetchImpl: async (u) => { urlStr = u; return jsonResponse({}); },
+    });
+    assert.equal(new URL(urlStr).searchParams.get("format"), null, `${slug} must not opt in`);
+  }
+});
+
+test("fetchAccountFunction expands a compact heatmap into the rendered schema", async () => {
+  const body = await fetchAccountFunction({
+    baseUrl: "https://cloud.example",
+    accessToken: "jwt",
+    slug: "tokentracker-account-heatmap",
+    searchParams: new URLSearchParams(),
+    fetchImpl: async () => jsonResponse({
+      format: "compact",
+      from: "2026-09-01",
+      to: "2026-09-07",
+      week_starts_on: "sun",
+      active_days: 1,
+      streak_days: 0,
+      max_value: 100,
+      model_names: ["gpt-5.4"],
+      days: [["2026-09-03", 100, [0, 100]]],
+    }),
+  });
+  assert.equal(body.weeks.length, 1);
+  assert.equal(body.weeks[0].length, 7);
+  assert.equal(body.active_days, 1);
+  assert.ok(!("days" in body) && !("format" in body));
+  assert.deepEqual(body.weeks[0][2], {
+    day: "2026-09-03",
+    total_tokens: 100,
+    billable_total_tokens: 100,
+    level: 4,
+    models: { "gpt-5.4": 100 },
+  });
+});
+
+test("a heatmap response from an edge without the compact branch passes straight through", async () => {
+  // New CLI, old edge: the unknown `format` param is ignored server-side and the
+  // dense payload comes back as before. Nothing may be rewritten.
+  const legacy = {
+    from: "2026-09-01",
+    to: "2026-09-07",
+    week_starts_on: "sun",
+    active_days: 0,
+    streak_days: 0,
+    weeks: [[{ day: "2026-09-01", total_tokens: 0, billable_total_tokens: 0, level: 0, models: null }]],
+  };
+  const body = await fetchAccountFunction({
+    baseUrl: "https://cloud.example",
+    accessToken: "jwt",
+    slug: "tokentracker-account-heatmap",
+    searchParams: new URLSearchParams(),
+    fetchImpl: async () => jsonResponse(legacy),
+  });
+  assert.deepEqual(body, legacy);
+});
+
+test("fetchAccountUsage caches the heatmap payload already expanded", async () => {
+  __resetCloudAccountCacheForTests();
+  let heatmapCalls = 0;
+  const fetchImpl = async (urlStr) => {
+    if (urlStr.includes("/api/auth/refresh")) {
+      return jsonResponse({ access_token: makeJwt({ expSeconds: Math.floor(Date.now() / 1000) + 3600 }) });
+    }
+    heatmapCalls += 1;
+    return jsonResponse({
+      format: "compact",
+      from: "2026-09-01",
+      to: "2026-09-07",
+      week_starts_on: "sun",
+      active_days: 1,
+      streak_days: 0,
+      max_value: 100,
+      model_names: [],
+      days: [["2026-09-03", 100, []]],
+    });
+  };
+  const call = () => fetchAccountUsage({
+    usageSlug: "tokentracker-usage-heatmap",
+    searchParams: new URLSearchParams("weeks=52"),
+    refreshToken: "r",
+    fetchImpl,
+  });
+  const first = await call();
+  const second = await call();
+  assert.equal(heatmapCalls, 1, "second read inside the TTL must not hit the cloud");
+  assert.deepEqual(second.data, first.data);
+  assert.equal(second.data.weeks[0].length, 7, "the cached copy is the rendered grid, not the compact rows");
 });

@@ -30,6 +30,11 @@ internal sealed class UpdateChecker
 
     private const string Repo = "xiufengsun/TokenTracker";
 
+    // The release uploads a stable, version-less "TokenTracker-Setup.exe"
+    // (release-windows.yml renames the versioned Inno output before upload), and
+    // the publish job lists that exact name in SHA256SUMS.
+    private const string SetupAssetName = "TokenTracker-Setup.exe";
+
     // External host (github.com): keep the DEFAULT proxy behaviour so CN proxy/VPN
     // users can reach it. The long timeout covers the installer download; the quick
     // API check wraps its own short cancellation token instead.
@@ -49,12 +54,20 @@ internal sealed class UpdateChecker
     /// <summary>Raised once the installer has been spawned; the tray must quit so its files unlock.</summary>
     public event Action? QuitRequested;
 
+    /// <summary>
+    /// Raised (off the UI thread) when a downloaded installer failed its SHA-256 check
+    /// and was discarded. Worth telling the user about: unlike a network error this is
+    /// never transient noise — the bytes that arrived are not the bytes CI published.
+    /// </summary>
+    public event Action? IntegrityCheckFailed;
+
     public UpdateState State { get; private set; } = UpdateState.Idle;
     public string? LatestVersion { get; private set; }
     public int ProgressPercent { get; private set; }
 
     private string? _setupUrl;
     private long _setupSize;
+    private string? _checksumsUrl;
 
     public string CurrentVersion { get; } = ResolveCurrentVersion();
 
@@ -98,6 +111,7 @@ internal sealed class UpdateChecker
                 LatestVersion = latest;
                 _setupUrl = release.Value.SetupUrl;
                 _setupSize = release.Value.SetupSize;
+                _checksumsUrl = release.Value.ChecksumsUrl;
                 SetState(UpdateState.UpdateAvailable);
                 Diag.Log("update", $"update available current={CurrentVersion} latest={latest}");
                 if (silent && AutoUpdatePolicy.IsEnabled())
@@ -155,6 +169,14 @@ internal sealed class UpdateChecker
             return false;
         }
 
+        // Verify BEFORE Process.Start: the size check inside ResumableDownloader
+        // cannot catch a mis-stitched resume (the length is correct by construction).
+        if (!await VerifySetupIntegrityAsync(setupPath))
+        {
+            SetState(UpdateState.UpdateAvailable);   // the discarded file is re-downloaded on retry
+            return false;
+        }
+
         SetState(UpdateState.Installing);
         try
         {
@@ -173,7 +195,7 @@ internal sealed class UpdateChecker
 
     // ── GitHub ─────────────────────────────────────────────────────────
 
-    private readonly record struct ReleaseInfo(string Version, string? SetupUrl, long SetupSize);
+    private readonly record struct ReleaseInfo(string Version, string? SetupUrl, long SetupSize, string? ChecksumsUrl);
 
     private static async Task<ReleaseInfo?> FetchLatestReleaseAsync()
     {
@@ -196,25 +218,33 @@ internal sealed class UpdateChecker
 
         string? setupUrl = null;
         long setupSize = 0;
+        string? checksumsUrl = null;
         if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
         {
             foreach (var asset in assets.EnumerateArray())
             {
                 var name = asset.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-                // The release uploads a stable, version-less "TokenTracker-Setup.exe"
-                // (release-windows.yml renames the versioned Inno output before upload).
-                // Match it exactly so a future co-released .exe can't be picked instead.
-                if (name.Equals("TokenTracker-Setup.exe", StringComparison.OrdinalIgnoreCase)
-                    && asset.TryGetProperty("browser_download_url", out var u))
+                if (!asset.TryGetProperty("browser_download_url", out var u)) continue;
+
+                // Match both names exactly so a future co-released .exe can't be
+                // picked instead, and keep scanning: the checksum asset may be
+                // listed either side of the installer.
+                if (setupUrl is null && name.Equals(SetupAssetName, StringComparison.OrdinalIgnoreCase))
                 {
                     setupUrl = u.GetString();
                     setupSize = asset.TryGetProperty("size", out var s) && s.TryGetInt64(out var sv) ? sv : 0;
-                    break;
                 }
+                else if (checksumsUrl is null
+                         && name.Equals(UpdateIntegrity.ChecksumsAssetName, StringComparison.OrdinalIgnoreCase))
+                {
+                    checksumsUrl = u.GetString();
+                }
+
+                if (setupUrl is not null && checksumsUrl is not null) break;
             }
         }
 
-        return new ReleaseInfo(version, setupUrl, setupSize);
+        return new ReleaseInfo(version, setupUrl, setupSize, checksumsUrl);
     }
 
     // ── Download ───────────────────────────────────────────────────────
@@ -256,6 +286,96 @@ internal sealed class UpdateChecker
 
         Diag.Log("update", $"downloaded setup -> {dest}");
         return dest;
+    }
+
+    // ── Integrity ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Gate the downloaded installer on the release's <c>SHA256SUMS</c> before we
+    /// execute it. Until now the only check was the byte count, which a resumed
+    /// download cannot fail even when the pieces were stitched together wrong — the
+    /// length is right by construction. The digest is the real gate.
+    ///
+    /// It always runs on the FINAL assembled file (<see cref="ResumableDownloader"/>
+    /// has already moved <c>.part</c> into place), never on a chunk.
+    ///
+    /// Back-compat: releases published before the checksum asset existed carry no
+    /// <c>SHA256SUMS</c>. Refusing to install from them would strand every user on an
+    /// older build, so a release WITHOUT the asset logs a line and installs exactly as
+    /// it does today. A release WITH the asset must produce a matching digest — and if
+    /// the file is there but unreadable/unparsable we fail rather than fall back,
+    /// because that path is retryable and strands nobody. Once no supported release
+    /// predates the asset, the missing-asset branch can be tightened to fail closed.
+    /// </summary>
+    private async Task<bool> VerifySetupIntegrityAsync(string setupPath)
+    {
+        if (_checksumsUrl is null)
+        {
+            Diag.Log("update", $"no {UpdateIntegrity.ChecksumsAssetName} asset on this release — installing unverified (legacy release)");
+            return true;
+        }
+
+        string? expected;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var body = await Http.GetStringAsync(_checksumsUrl, cts.Token);
+            expected = UpdateIntegrity.FindDigest(body, SetupAssetName);
+        }
+        catch (Exception ex)
+        {
+            Diag.Log("update", $"{UpdateIntegrity.ChecksumsAssetName} fetch failed: {ex.Message}");
+            expected = null;
+        }
+
+        if (expected is null)
+        {
+            // The release advertises checksums but we could not obtain the installer's
+            // line: transient network failure, or a publishing bug. Either way, don't
+            // run an unverified installer when the release says one is verifiable.
+            Diag.Log("update", $"no usable {UpdateIntegrity.ChecksumsAssetName} entry for {SetupAssetName} — refusing to install");
+            DiscardDownload(setupPath);
+            IntegrityCheckFailed?.Invoke();
+            return false;
+        }
+
+        string actual;
+        try
+        {
+            actual = await UpdateIntegrity.ComputeSha256Async(setupPath);
+        }
+        catch (Exception ex)
+        {
+            Diag.Log("update", $"sha256 computation failed: {ex.Message}");
+            DiscardDownload(setupPath);
+            IntegrityCheckFailed?.Invoke();
+            return false;
+        }
+
+        if (UpdateIntegrity.Matches(expected, actual))
+        {
+            Diag.Log("update", $"sha256 verified {actual}");
+            return true;
+        }
+
+        Diag.Log("update", $"sha256 MISMATCH expected={expected} actual={actual} — discarding download");
+        DiscardDownload(setupPath);
+        IntegrityCheckFailed?.Invoke();
+        return false;
+    }
+
+    /// <summary>
+    /// Delete a rejected download along with its resume state, so a retry starts from
+    /// zero instead of resuming the same bad bytes (and so nothing executable is left
+    /// lying in the updates folder).
+    /// </summary>
+    private static void DiscardDownload(string setupPath)
+    {
+        foreach (var path in new[] { setupPath, setupPath + ".part", setupPath + ".resume.json" })
+        {
+            try { File.Delete(path); }
+            catch (Exception ex) { Diag.Log("update", $"could not delete {path}: {ex.Message}"); }
+        }
     }
 
     // ── Install + relaunch ─────────────────────────────────────────────

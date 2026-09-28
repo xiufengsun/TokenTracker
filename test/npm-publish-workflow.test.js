@@ -57,11 +57,41 @@ test("successful push CI gates publish and the exact tested SHA is checked out",
   assert.ok(content.includes("workflow_run.event == 'push'"));
   assert.ok(content.includes("workflow_run.head_branch == 'main'"));
   assert.ok(
-    content.includes("ref: ${{ github.event.workflow_run.head_sha }}"),
+    content.includes("ref: ${{ github.event.workflow_run.head_sha || github.sha }}"),
     "publish must build the exact commit that passed CI"
   );
   assert.ok(content.includes("fetch-depth: 2"), "publish must inspect the tested commit's parent");
   assert.ok(!content.includes("\n  test:"), "must not maintain a weaker duplicate test job");
+});
+
+// The automatic gate keys on "this commit changed the version", so a version
+// whose own CI failed can never publish afterwards: the fix-up commit passes CI
+// but leaves the version unchanged. workflow_dispatch is the recovery path, and
+// it must not become a way to publish untested code.
+test("the manual publish path still requires green CI and an unpublished version", () => {
+  const content = loadWorkflow();
+  assert.ok(content.includes("workflow_dispatch:"), "a recovery path must exist");
+  assert.ok(
+    content.includes("github.event_name == 'workflow_dispatch' ||"),
+    "dispatch must be allowed alongside the workflow_run gate, not replace it",
+  );
+  assert.ok(
+    content.includes("gh run list --workflow CI --branch main --commit"),
+    "dispatch must verify this exact commit's CI rather than trusting the operator",
+  );
+  assert.ok(
+    content.includes('if [ "$CI_CONCLUSION" != "success" ]'),
+    "anything other than a successful CI conclusion must refuse to publish",
+  );
+  assert.ok(
+    content.includes("Refusing to publish."),
+    "the refusal must be explicit rather than a silent skip",
+  );
+  // The already-on-npm guard is shared by both paths; dispatch must not bypass it.
+  assert.ok(
+    content.includes("steps.version-check.outputs.exists == 'false'"),
+    "dispatch must still be blocked by an already-published version",
+  );
 });
 
 test("workflow sets npm registry URL", () => {
@@ -100,8 +130,8 @@ test("workflow checks version before publishing", () => {
     "other registry failures must stop publication",
   );
   assert.ok(
-    content.includes("assertReleaseVersion(process.argv[1]") &&
-      content.includes("assertReleaseVersion(process.argv[2]"),
+    content.includes("assertReleaseVersion(process.argv[1],'package.json version')") &&
+      content.includes("assertReleaseVersion(process.argv[1],'parent package.json version')"),
     "current and parent package versions must be validated before npm lookup",
   );
 });

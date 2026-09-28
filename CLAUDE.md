@@ -57,8 +57,8 @@ node bin/tracker.js serve --no-sync       # local dashboard server on :7680
 input_tokens                  = non-cached input only (no cache reads/writes)
 cached_input_tokens           = cache reads
 cache_creation_input_tokens   = cache writes
-reasoning_output_tokens       = reasoning tokens (Codex/every-code fold them into output_tokens for cost)
-total_tokens                  = input + output + cache_creation + cache_read + reasoning_output (sum of all columns; Gemini-style rows that omit reasoning still pass invariants if you set the column to 0)
+reasoning_output_tokens       = reasoning tokens (Codex/acode/every-code/OmO/Cline fold them into output_tokens for cost)
+total_tokens                  = input + output + cache_creation + cache_read (+ reasoning_output when output excludes reasoning); Codex/acode/every-code/OmO/Cline keep reasoning as an informational subset because it is already included in output_tokens
 ```
 
 **Cost is computed from `input_tokens + output_tokens + cached_input_tokens + cache_creation_input_tokens + reasoning_output_tokens` only — never `total_tokens`** (`computeRowCost` in `src/lib/pricing/index.js`). If a new provider only fills `total_tokens` with input=0/output=0, the dashboard renders **$0 cost** regardless of pricing entries. Distribute the total across columns or extend `computeRowCost`.
@@ -165,6 +165,11 @@ After `SMAppService.mainApp.register/unregister` from the bridge (not via `Launc
 - **`contextTokensUsed`-style fields are usually snapshots, not cumulative.** PR #74 (Grok) shipped on that bad assumption.
 - **Mimo (mimocode) mirrors your Claude Code + claude-mem history into its own DB.** It's an OpenCode-fork SQLite (`~/.local/share/mimocode/mimocode.db`) but pulls `~/.claude` sessions in via `claude_import` AND a live observer/session sync — so >99% of rows are anthropic-endpoint turns the Claude parser already counts as `source=claude` (~3.9B mirrored vs ~22M genuine on the dev's box). `readMimoDbMessages()` keys off `providerID`: keep only `mimo`/`xiaomi` (mimo's own runtime); drop everything `anthropic`. That `anthropic` bucket includes mimo-named models the user ran *inside* Claude Code (e.g. `model=mimo-v2.5-pro`, logged in `~/.claude`) — so do NOT key off the model id (re-counts it) and do NOT rely on `claude_import` (misses the observer mirror).
 - **Data-migration releases**: stress-test `sync` twice consecutively after touching `sync.js` / cursor schema — second run exposes state pollution the first hides.
+
+### Skills registry mutations
+
+- **`installSkill()` downloads for minutes before it writes, so read every field from a fresh `readRegistry()` at the sync checkpoint, never from the pre-download snapshot.** The guard before `removePath(dest)` (`skills-manager.js:984`) is the last point where nothing has awaited, so existence *and* `targets` (`:982`) must both be read there. #613 refreshed existence but kept `targets` from the stale copy, so toggling an agent mid-download silently reverted it.
+- **Temp dirs use `fs.mkdtempSync` (`skills-manager.js:963`), never `${name}-${Date.now()}`.** Millisecond names collide once mutations overlap, and `removePath(temp)` then deletes the other run's in-flight download. `SkillsPage.jsx:855` serialises the UI behind an `operationInFlight` ref because `busyKey` state commits too late to block a fast second click. `/functions/tokentracker-skills` has no such lock.
 
 ### Cloud moderation (leaderboard bans / quarantine)
 

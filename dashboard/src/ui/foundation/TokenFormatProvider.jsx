@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useLocale } from "../../hooks/useLocale.js";
 import { copy } from "../../lib/copy";
+import { isNativeEmbed, setNativeSetting } from "../../lib/native-bridge.js";
 import {
   TOKEN_FORMAT_MODES,
   TOKEN_FORMAT_STORAGE_KEY,
@@ -43,6 +44,12 @@ export function TokenFormatProvider({ children }) {
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
+  // The macOS menu bar formats its own numbers; mirror the unit choice there on
+  // every change and on mount, since UserDefaults may predate the setting.
+  useEffect(() => {
+    if (isNativeEmbed()) setNativeSetting("tokenUnitSystem", unitSystem);
+  }, [unitSystem]);
+
   const setMode = useCallback((value) => {
     const next = persistTokenFormatMode(value);
     setModeState(next);
@@ -58,6 +65,7 @@ export function TokenFormatProvider({ children }) {
       thousandSuffix: copy("shared.unit.thousand_abbrev"),
       millionSuffix: copy("shared.unit.million_abbrev"),
       billionSuffix: copy("shared.unit.billion_abbrev"),
+      trillionSuffix: copy("shared.unit.trillion_abbrev"),
     }),
     [resolvedLocale],
   );

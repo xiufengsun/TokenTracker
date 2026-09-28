@@ -10,6 +10,7 @@ const {
   parseReasonixIncremental,
   normalizeReasonixModel,
   resolveReasonixTelemetryFiles,
+  resolveReasonixHome,
 } = require("../src/lib/rollout");
 
 function writeSession(home, id, usage, model = "deepseek/deepseek-reasoner") {
@@ -166,5 +167,154 @@ test("parseReasonixIncremental bounds inconsistent estimated cache totals", asyn
     assert.equal(row.total_tokens, 1_050);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// Git Bash / MSYS / conda on Windows export a HOME of their own, so preferring
+// it sends the Reasonix scan to a directory that does not exist -- and because
+// `status` only prints a Reasonix line when the home resolves, the user sees no
+// data and no explanation (issue #641).
+test("reasonix: Windows resolves the home from USERPROFILE, not a shell-provided HOME", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "reasonix-win-"));
+  const profile = path.join(root, "profile");
+  const bogusHome = path.join(root, "msys-home");
+  fs.mkdirSync(bogusHome, { recursive: true });
+  const telemetry = writeSession(profile, "s1", {
+    input_tokens: 10,
+    output_tokens: 5,
+    total_tokens: 15,
+  });
+
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  try {
+    const found = resolveReasonixTelemetryFiles({ HOME: bogusHome, USERPROFILE: profile });
+    assert.deepEqual(found, [telemetry], "USERPROFILE must win over a shell HOME on win32");
+  } finally {
+    if (descriptor) Object.defineProperty(process, "platform", descriptor);
+  }
+
+  // Explicit overrides still take precedence over both.
+  const override = resolveReasonixTelemetryFiles({
+    TOKENTRACKER_REASONIX_HOME: path.join(profile, ".reasonix"),
+    HOME: bogusHome,
+  });
+  assert.deepEqual(override, [telemetry]);
+
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #641 round two. Taking USERPROFILE over a shell HOME (above) was not the
+//病因: on Windows Reasonix does not keep its data in a dot-directory under the
+// profile at all. The reporter's own "data location" panel shows sessions and
+// memory under %APPDATA%\reasonix (no leading dot), with only the cache under
+// %LOCALAPPDATA%. So ~/.reasonix never exists there, status.js:479 decides
+// Reasonix is not installed, and the whole row disappears with no "skipped"
+// line — which is exactly what the reporter saw again on 0.98.0.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function writeSessionAt(root, id, usage, model = "deepseek/deepseek-reasoner") {
+  const sessions = path.join(root, "projects", "project-a", "sessions");
+  fs.mkdirSync(sessions, { recursive: true });
+  const base = path.join(sessions, `${id}.jsonl`);
+  fs.writeFileSync(`${base}.telemetry.json`, JSON.stringify({ version: 2, usage }));
+  fs.writeFileSync(`${base}.meta`, JSON.stringify({ id, model, updated_at: "2026-08-12T03:12:00Z" }));
+  return `${base}.telemetry.json`;
+}
+
+function onWin32(fn) {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  try {
+    return fn();
+  } finally {
+    if (descriptor) Object.defineProperty(process, "platform", descriptor);
+  }
+}
+
+test("reasonix: Windows finds the roaming AppData install (#641)", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "reasonix-appdata-"));
+  try {
+    const profile = path.join(root, "profile");
+    const appData = path.join(root, "profile", "AppData", "Roaming");
+    fs.mkdirSync(profile, { recursive: true });
+    const telemetry = writeSessionAt(path.join(appData, "reasonix"), "s1", {
+      input_tokens: 10, output_tokens: 5, total_tokens: 15,
+    });
+
+    onWin32(() => {
+      const found = resolveReasonixTelemetryFiles({ USERPROFILE: profile, APPDATA: appData });
+      assert.deepEqual(found, [telemetry], "%APPDATA%\\reasonix must be scanned on win32");
+      // status.js / init.js gate the whole provider on this existing.
+      assert.equal(
+        resolveReasonixHome({ USERPROFILE: profile, APPDATA: appData }),
+        path.join(appData, "reasonix"),
+        "the detected home must be the one that exists, or the row stays hidden",
+      );
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reasonix: Windows scans both the dot-directory and AppData", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "reasonix-both-"));
+  try {
+    const profile = path.join(root, "profile");
+    const appData = path.join(profile, "AppData", "Roaming");
+    const dotTelemetry = writeSessionAt(path.join(profile, ".reasonix"), "dot", {
+      input_tokens: 1, output_tokens: 1, total_tokens: 2,
+    });
+    const appTelemetry = writeSessionAt(path.join(appData, "reasonix"), "roaming", {
+      input_tokens: 2, output_tokens: 2, total_tokens: 4,
+    });
+    onWin32(() => {
+      const found = resolveReasonixTelemetryFiles({ USERPROFILE: profile, APPDATA: appData });
+      assert.deepEqual(found.slice().sort(), [appTelemetry, dotTelemetry].sort());
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reasonix: sidecars are found whatever the subdirectory is named", () => {
+  // The reporter gave a screenshot, not a directory tree, so the layout under
+  // %APPDATA%\reasonix is unconfirmed. Recursing from the root means a renamed
+  // or reorganised subdirectory does not cost another release to discover.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "reasonix-layout-"));
+  try {
+    const home = path.join(root, ".reasonix");
+    const odd = path.join(home, "workspaces", "w1", "threads");
+    fs.mkdirSync(odd, { recursive: true });
+    const base = path.join(odd, "t1.jsonl");
+    fs.writeFileSync(`${base}.telemetry.json`, JSON.stringify({ version: 2, usage: { total_tokens: 9 } }));
+    assert.deepEqual(resolveReasonixTelemetryFiles({ HOME: root }), [`${base}.telemetry.json`]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reasonix: an explicit override is used alone, AppData is not appended", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "reasonix-override-"));
+  try {
+    const profile = path.join(root, "profile");
+    const appData = path.join(profile, "AppData", "Roaming");
+    writeSessionAt(path.join(appData, "reasonix"), "roaming", { total_tokens: 4 });
+    const explicit = path.join(root, "elsewhere");
+    const wanted = writeSessionAt(explicit, "picked", { total_tokens: 7 });
+    onWin32(() => {
+      assert.deepEqual(
+        resolveReasonixTelemetryFiles({
+          TOKENTRACKER_REASONIX_HOME: explicit,
+          USERPROFILE: profile,
+          APPDATA: appData,
+        }),
+        [wanted],
+        "an explicit home means that home only",
+      );
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

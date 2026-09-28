@@ -45,6 +45,7 @@
   "shared.unit.thousand_abbrev": "K",
   "shared.unit.million_abbrev": "M",
   "shared.unit.billion_abbrev": "B",
+  "shared.unit.trillion_abbrev": "T",
   "shared.data_source": "데이터 출처: {{source}}",
   "shared.error.prefix": "오류: {{error}}",
   "shared.status.unsynced": "—",

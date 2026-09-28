@@ -4,6 +4,7 @@ import { useLoginModal } from "../../../contexts/LoginModalContext.jsx";
 import { useInsforgeAuth } from "../../../contexts/InsforgeAuthContext.jsx";
 import { ClawdAnimated } from "../../foundation/ClawdAnimated.jsx";
 import { useClawdState } from "../../../hooks/useClawdState.js";
+import { isNativeLinuxApp } from "../../../lib/native-bridge.js";
 
 const DISMISS_KEY = "macAppBannerDismissed";
 const LOGIN_DISMISS_KEY = "leaderboardBannerDismissed";
@@ -57,6 +58,8 @@ export function MacAppBanner({ todayTokens = 0, isSyncing = false, enterDelay = 
   }, [dismissKey]);
 
   if (dismissed) return null;
+  // The Linux app would otherwise fall through to the macOS download CTA.
+  if (!isNativeApp && isNativeLinuxApp()) return null;
 
   // Determine banner content based on context
   let title, subtitle, buttonLabel, buttonIcon, onButtonClick, buttonHref;

@@ -454,17 +454,85 @@ final class UpdateChecker {
             throw UpdateError.installFailed("No .app found in DMG")
         }
 
+        let appsDir = URL(fileURLWithPath: "/Applications", isDirectory: true)
         let sourceApp = URL(fileURLWithPath: mountPoint).appendingPathComponent(appName)
-        let destApp = URL(fileURLWithPath: "/Applications").appendingPathComponent(appName)
+        let destApp = appsDir.appendingPathComponent(appName)
 
-        // 3. Replace
-        if fm.fileExists(atPath: destApp.path) { try fm.removeItem(at: destApp) }
-        try fm.copyItem(at: sourceApp, to: destApp)
+        // 3. Stage the new bundle next to the old one, then swap.
+        //
+        // Never delete the installed app before its replacement is fully on disk.
+        // The previous code removed /Applications/TokenTracker.app and copied into
+        // that same path, so a copy that died partway destroyed the install: one
+        // such failure on macOS 27 left 15 of 671 files behind, and the only way
+        // out was downloading the DMG and dragging it by hand.
+        //
+        // The staging name carries no `.app` extension, so the destination is not
+        // a recognisable app bundle until every file has landed. The swap is then
+        // one directory-entry rewrite in /Applications instead of 671 writes into
+        // a path the system already treats as an installed, running application.
+        let stagingName = ".\((appName as NSString).deletingPathExtension)-update-\(ProcessInfo.processInfo.processIdentifier)"
+        let stagingURL = appsDir.appendingPathComponent(stagingName)
+        Self.removeStaleStagingDirectories(in: appsDir, appName: appName, keeping: stagingName)
+        try? fm.removeItem(at: stagingURL)
+
+        do {
+            try fm.copyItem(at: sourceApp, to: stagingURL)
+        } catch {
+            try? fm.removeItem(at: stagingURL)
+            throw UpdateError.installFailed(Self.describe(error))
+        }
+
+        do {
+            if fm.fileExists(atPath: destApp.path) {
+                _ = try fm.replaceItemAt(destApp, withItemAt: stagingURL)
+            } else {
+                try fm.moveItem(at: stagingURL, to: destApp)
+            }
+        } catch {
+            try? fm.removeItem(at: stagingURL)
+            throw UpdateError.installFailed(Self.describe(error))
+        }
 
         // 4. Cleanup DMG
         try? fm.removeItem(atPath: dmgPath)
 
         return destApp
+    }
+
+    /// Clears staging directories orphaned by an earlier crash, so a failed install
+    /// cannot leave a few hundred MB behind in /Applications.
+    nonisolated private static func removeStaleStagingDirectories(
+        in appsDir: URL,
+        appName: String,
+        keeping currentName: String
+    ) {
+        let prefix = ".\((appName as NSString).deletingPathExtension)-update-"
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: appsDir,
+            includingPropertiesForKeys: nil,
+            options: [.skipsSubdirectoryDescendants]
+        ) else { return }
+        for entry in entries where entry.lastPathComponent.hasPrefix(prefix)
+            && entry.lastPathComponent != currentName {
+            try? FileManager.default.removeItem(at: entry)
+        }
+    }
+
+    /// Keeps the error domain, code and underlying POSIX errno in the message.
+    /// Without them a permission denial and a disk-full failure are indistinguishable
+    /// in a user's screenshot — both read only as "X couldn't be copied to Y".
+    nonisolated private static func describe(_ error: Error) -> String {
+        let nsError = error as NSError
+        var parts = [nsError.localizedDescription]
+        if let reason = nsError.localizedFailureReason { parts.append(reason) }
+        var code = "\(nsError.domain) \(nsError.code)"
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+            code += " / \(underlying.domain) \(underlying.code)"
+        }
+        parts.append("[\(code)]")
+        let message = parts.joined(separator: " ")
+        Swift.print("[UpdateChecker] Install failed: \(message)")
+        return message
     }
 
     private func relaunch(appURL: URL) {

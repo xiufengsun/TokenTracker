@@ -9,6 +9,7 @@ const {
   normalizeGrokPeriodType,
   inferGrokPeriodTypeFromDates,
   sumProductUsagePercent,
+  deriveGrokPlanLabel,
   fetchGrokBilling,
   fetchGrokLimits,
   readGrokAccessToken,
@@ -271,6 +272,11 @@ describe("fetchGrokLimits", () => {
         fetchImpl: async (url, options) => {
           urls.push(url);
           assert.equal(options.headers.Authorization, "Bearer test-token");
+          if (String(url).endsWith("/v1/settings")) {
+            return { ok: true, status: 200, async json() {
+              return { subscription_tier_display: "SuperGrok Heavy" };
+            } };
+          }
           return {
             ok: true,
             status: 200,
@@ -293,11 +299,42 @@ describe("fetchGrokLimits", () => {
       });
 
       assert.equal(urls[0], "https://cli-chat-proxy.grok.com/v1/billing?format=credits");
+      assert.equal(urls[1], "https://cli-chat-proxy.grok.com/v1/settings");
       assert.equal(result.configured, true);
       assert.equal(result.error, null);
+      assert.equal(result.plan_label, "SuperGrok Heavy");
       assert.equal(result.period_type, "weekly");
       assert.equal(result.primary_window.used_percent, 25);
       assert.equal(result.primary_window.reset_at, "2026-07-20T09:23:37.846Z");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the quota when the settings lookup fails", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tt-grok-settings-fail-"));
+    try {
+      const grokHome = path.join(tmp, ".grok");
+      fs.mkdirSync(grokHome, { recursive: true });
+      fs.writeFileSync(path.join(grokHome, "auth.json"), JSON.stringify({
+        "https://auth.x.ai::test": { key: "test-token" },
+      }));
+      const result = await fetchGrokLimits({
+        home: tmp,
+        env: { GROK_HOME: grokHome },
+        fetchImpl: async (url) => {
+          if (String(url).endsWith("/v1/settings")) throw new Error("settings unavailable");
+          return { ok: true, status: 200, async json() {
+            return { config: {
+              creditUsagePercent: 25,
+              currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end: "2026-09-30T00:00:00Z" },
+            } };
+          } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.equal(result.plan_label, null);
+      assert.equal(result.primary_window.used_percent, 25);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -356,6 +393,7 @@ describe("fetchGrokLimits", () => {
       assert.deepEqual(urls, [
         "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
         "https://cli-chat-proxy.grok.com/v1/billing",
+        "https://cli-chat-proxy.grok.com/v1/settings",
       ]);
       assert.equal(result.configured, true);
       assert.equal(result.period_type, "monthly");
@@ -430,6 +468,7 @@ describe("fetchGrokLimits", () => {
       assert.deepEqual(urls, [
         "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
         "https://cli-chat-proxy.grok.com/v1/billing",
+        "https://cli-chat-proxy.grok.com/v1/settings",
       ]);
       assert.equal(result.configured, true);
       assert.equal(result.error, null);
@@ -582,6 +621,9 @@ describe("fetchGrokLimits", () => {
 
       let billingHits = 0;
       let refreshHits = 0;
+      // Recorded rather than asserted inside fetchImpl: fetchGrokPlanLabel
+      // swallows errors, so an in-callback assert could never fail the test.
+      let settingsAuthorization = null;
       const result = await fetchGrokLimits({
         home: tmp,
         env: { GROK_HOME: grokHome },
@@ -593,6 +635,16 @@ describe("fetchGrokLimits", () => {
               status: 200,
               async json() {
                 return { access_token: "after-refresh", expires_in: 3600 };
+              },
+            };
+          }
+          if (String(url).endsWith("/v1/settings")) {
+            settingsAuthorization = options.headers.Authorization;
+            return {
+              ok: true,
+              status: 200,
+              async json() {
+                return { subscription_tier_display: "SuperGrok" };
               },
             };
           }
@@ -624,6 +676,8 @@ describe("fetchGrokLimits", () => {
 
       assert.equal(refreshHits, 1);
       assert.equal(billingHits, 2);
+      assert.equal(settingsAuthorization, "Bearer after-refresh");
+      assert.equal(result.plan_label, "SuperGrok");
       assert.equal(result.error, null);
       assert.equal(result.primary_window.used_percent, 12);
     } finally {
@@ -988,5 +1042,61 @@ describe("grok refresh hardening", () => {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("deriveGrokPlanLabel", () => {
+  // A live Free account's billing payload reads exactly {"subscriptionTier":"Free"},
+  // so the field is a display string rather than an enum. Fold separators away
+  // anyway: the paid literals are unverified and could arrive as SUPER_GROK_HEAVY.
+  it("maps xAI tiers to their own product names regardless of casing", () => {
+    assert.equal(deriveGrokPlanLabel("SuperGrok Heavy"), "SuperGrok Heavy");
+    assert.equal(deriveGrokPlanLabel("SUPER_GROK_HEAVY"), "SuperGrok Heavy");
+    assert.equal(deriveGrokPlanLabel("superGrokHeavy"), "SuperGrok Heavy");
+    assert.equal(deriveGrokPlanLabel("SuperGrok Lite"), "SuperGrok Lite");
+    assert.equal(deriveGrokPlanLabel("SuperGrok Plus"), "SuperGrok Plus");
+    assert.equal(deriveGrokPlanLabel("SuperGrok"), "SuperGrok");
+    assert.equal(deriveGrokPlanLabel("X Premium+"), "X Premium+");
+    assert.equal(deriveGrokPlanLabel("PremiumPlus"), "X Premium+");
+    assert.equal(deriveGrokPlanLabel("API Key"), "API Key");
+    assert.equal(deriveGrokPlanLabel("Free"), "Free");
+  });
+
+  it("returns null for unknown, empty and missing tiers", () => {
+    // Matching is exact: a prefix match would render an unseen
+    // "SuperGrok Business" as plain "SuperGrok", which is a confidently wrong
+    // plan on the card. Null lets the panel fall back to "Grok Build".
+    assert.equal(deriveGrokPlanLabel("SuperGrok Business"), null);
+    assert.equal(deriveGrokPlanLabel("TIER_UNSPECIFIED"), null);
+    assert.equal(deriveGrokPlanLabel(""), null);
+    assert.equal(deriveGrokPlanLabel(null), null);
+    assert.equal(deriveGrokPlanLabel(undefined), null);
+  });
+
+  it("reads subscriptionTier from the response root, not from config", () => {
+    const base = {
+      config: {
+        currentPeriod: {
+          type: "USAGE_PERIOD_TYPE_WEEKLY",
+          start: "2026-09-08T00:00:00+00:00",
+          end: "2026-09-15T00:00:00+00:00",
+        },
+        creditUsagePercent: 12,
+        onDemandCap: { val: 0 },
+        onDemandUsed: { val: 0 },
+        isUnifiedBillingUser: true,
+      },
+    };
+
+    assert.equal(
+      normalizeGrokBillingResponse({ ...base, subscriptionTier: "SuperGrok Heavy" }).plan_label,
+      "SuperGrok Heavy",
+    );
+    // Nested under config is the wrong place and must not be picked up.
+    assert.equal(
+      normalizeGrokBillingResponse({ config: { ...base.config, subscriptionTier: "SuperGrok Heavy" } }).plan_label,
+      null,
+    );
+    assert.equal(normalizeGrokBillingResponse(base).plan_label, null);
   });
 });

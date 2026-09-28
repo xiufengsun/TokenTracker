@@ -31,6 +31,7 @@
   "shared.unit.thousand_abbrev": "K",
   "shared.unit.million_abbrev": "Mio.",
   "shared.unit.billion_abbrev": "Mrd.",
+  "shared.unit.trillion_abbrev": "Bio.",
   "shared.data_source": "Datenquelle: {{source}}",
   "shared.error.prefix": "Fehler: {{error}}",
   "shared.status.unsynced": "—",

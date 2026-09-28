@@ -73,6 +73,7 @@ test("public discovery surfaces describe every supported tool", () => {
     assert.match(source, /LM Studio/, `${file} lists LM Studio`);
     assert.match(source, /Unsloth Studio/, `${file} lists Unsloth Studio`);
     assert.match(source, /Devin CLI/, `${file} lists Devin CLI`);
+    assert.match(source, /MiniMax Code/, `${file} lists MiniMax Code`);
     assert.match(source, limitCountPattern, `${file} rate-limit row carries the current usage-limits provider count`);
   }
 
@@ -112,7 +113,7 @@ test("marketing logo wall includes the same supported product integrations", () 
   assert.equal(providers.length, TOOL_COUNT);
   assert.equal(new Set(providers).size, TOOL_COUNT);
 
-  for (const provider of ["every-code", "acode", "reasonix", "kilocode", "roocode", "zed", "goose", "droid", "qoder", "anythingllm", "dsh", "prime-agent", "trae-cn", "dots", "lmstudio", "unsloth", "devin"]) {
+  for (const provider of ["every-code", "acode", "reasonix", "kilocode", "roocode", "zed", "goose", "droid", "qoder", "anythingllm", "dsh", "prime-agent", "trae-cn", "dots", "lmstudio", "unsloth", "devin", "minimax-code"]) {
     assert.ok(providers.includes(provider), `logo wall includes ${provider}`);
   }
 });
@@ -134,6 +135,7 @@ test("CLI onboarding advertises the same supported integrations", () => {
   assert.ok(SUPPORTED_PROVIDERS.includes("LM Studio"));
   assert.ok(SUPPORTED_PROVIDERS.includes("Unsloth Studio"));
   assert.ok(SUPPORTED_PROVIDERS.includes("Devin CLI"));
+  assert.ok(SUPPORTED_PROVIDERS.includes("MiniMax Code"));
 });
 
 test("npm metadata carries the current product hook", () => {
@@ -177,6 +179,7 @@ test("dashboard JSON-LD scripts parse as valid JSON", () => {
   assert.ok(tools.itemListElement.some((item) => item.name === "LM Studio"));
   assert.ok(tools.itemListElement.some((item) => item.name === "Unsloth Studio"));
   assert.ok(tools.itemListElement.some((item) => item.name === "Devin CLI"));
+  assert.ok(tools.itemListElement.some((item) => item.name === "MiniMax Code"));
   assert.match(supportedClis.acceptedAnswer.text, new RegExp(`${TOOL_COUNT} AI coding tools`));
   assert.match(supportedClis.acceptedAnswer.text, /AStudio/);
   assert.match(supportedClis.acceptedAnswer.text, /Devin CLI/);

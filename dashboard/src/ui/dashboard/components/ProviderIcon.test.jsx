@@ -54,6 +54,15 @@ describe("ProviderIcon", () => {
     expect(icon?.querySelector("circle")).toBeNull();
   });
 
+  it("renders MiniMax Code with the MiniMax brand mark", () => {
+    const { container } = render(<ProviderIcon provider="minimax-code" size={18} />);
+    const icon = container.querySelector("svg");
+
+    expect(icon).toHaveAttribute("width", "18");
+    expect(icon?.querySelector("path")).not.toBeNull();
+    expect(icon?.querySelector("circle")).toBeNull();
+  });
+
   it("renders AStudio with its theme-aware brand assets", () => {
     const { container } = render(<ProviderIcon provider="acode" size={18} />);
     const lightIcon = container.querySelector('img[src="/brand-logos/acode.png"]');

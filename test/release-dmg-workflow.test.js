@@ -196,6 +196,55 @@ test("missing releases cannot be recreated from an existing version tag", () => 
   );
 });
 
+test("SHA256SUMS is published before the release goes live", () => {
+  const content = loadWorkflow();
+  // The updaters run what they download, so checksums must exist the moment the
+  // release becomes reachable -- not after.
+  const sums = content.indexOf("- name: Publish SHA256SUMS");
+  const undraft = content.indexOf("--draft=false");
+  assert.ok(sums > 0, "publish must generate SHA256SUMS");
+  assert.ok(undraft > sums, "SHA256SUMS must be published before un-drafting");
+});
+
+test("SHA256SUMS hashes the assets GitHub actually serves", () => {
+  const content = loadWorkflow();
+  const step = content.slice(
+    content.indexOf("- name: Publish SHA256SUMS"),
+    content.indexOf("- name: Flip the draft live")
+  );
+  // Downloading the release is the point: it proves the published bytes, not the
+  // build job's local copy.
+  assert.ok(/gh release download/.test(step), "must hash the downloaded assets");
+  assert.ok(/sha256sum/.test(step), "must use standard sha256sum format");
+  assert.ok(
+    /gh release upload[^\n]*SHA256SUMS/.test(step),
+    "SHA256SUMS must be attached as a release asset"
+  );
+  // A stale SHA256SUMS from a re-run must not be hashed into the new one, and the
+  // new file must never end up listing itself.
+  assert.ok(/rm -f "\$workdir\/SHA256SUMS"/.test(step), "a previous SHA256SUMS must be removed first");
+  assert.ok(/SHA256SUMS listed itself/.test(step), "self-hashing must fail the job");
+});
+
+test("checksum notes are appended to the generated release notes, not replacing them", () => {
+  const content = loadWorkflow();
+  const step = content.slice(
+    content.indexOf("- name: Publish SHA256SUMS"),
+    content.indexOf("- name: Flip the draft live")
+  );
+  // `gh release edit --notes` overwrites the body, so the --generate-notes output
+  // has to be read back first.
+  assert.ok(
+    /gh release view[^\n]*--json body/.test(step),
+    "the generated notes must be read back before editing"
+  );
+  assert.ok(/--notes-file/.test(step), "notes must be rewritten from a file");
+  assert.ok(
+    /sha256sums -->/.test(step),
+    "an idempotency marker must delimit the appended block"
+  );
+});
+
 test("homebrew tap is notified only after publish (not mid-build)", () => {
   const content = loadWorkflow();
   // The dispatch must come AFTER the un-draft, so the tap fetches a public,

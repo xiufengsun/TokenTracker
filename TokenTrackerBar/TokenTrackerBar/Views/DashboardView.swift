@@ -54,6 +54,10 @@ struct DashboardView: View {
                 ServerOfflineView(message: message) {
                     await serverManager.retry()
                     if serverManager.isServerRunning {
+                        // A Dashboard window that gave up while the server was
+                        // down keeps its stale overlay unless it is told to
+                        // reload too. No-op when no window is open.
+                        DashboardWindowController.shared.reload()
                         await viewModel.loadAll()
                     }
                 }

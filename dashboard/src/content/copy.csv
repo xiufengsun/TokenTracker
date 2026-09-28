@@ -40,6 +40,7 @@ shared.unit.percent,shared,*,*,unit_percent,"%",,active
 shared.unit.thousand_abbrev,shared,*,*,unit_thousand_abbrev,"K",,active
 shared.unit.million_abbrev,shared,*,*,unit_million_abbrev,"M",,active
 shared.unit.billion_abbrev,shared,*,*,unit_billion_abbrev,"B",,active
+shared.unit.trillion_abbrev,shared,*,*,unit_trillion_abbrev,"T",,active
 shared.data_source,shared,*,*,label,"Data source: {{source}}",,active
 shared.error.prefix,shared,*,*,label,"Error: {{error}}",,active
 shared.status.unsynced,shared,*,*,status,"—",,active
@@ -739,8 +740,8 @@ usage.overview.all_models_note,ui,DashboardPage,UsageOverview,all_models_note,"M
 usage.overview.all_tools_card_aria,ui,DashboardPage,UsageOverview,all_tools_card_aria,"All tools: {{tokens}} tokens, {{cost}}, {{count}} models. Show combined model ranking",,active
 usage.overview.cache_hit_rate_label,ui,DashboardPage,UsageOverview,cache_hit_rate_label,"Cache hit rate",,active
 usage.overview.cache_hit_rate_detail,ui,DashboardPage,UsageOverview,cache_hit_rate_detail,"{{reused}} reused / {{input}} input",,active
-usage.overview.antigravity_notice_title,ui,DashboardPage,UsageOverview,antigravity_notice_title,"Estimated tokens",,active
-usage.overview.antigravity_notice_body,ui,DashboardPage,UsageOverview,antigravity_notice_body,"Antigravity transcripts don't record real usage numbers. These counts are estimated from text length (~4 chars/token) and don't reflect Gemini's prompt-cache discount, so treat them as an upper bound, not a billing figure.",,active
+usage.overview.antigravity_notice_title,ui,DashboardPage,UsageOverview,antigravity_notice_title,"Token details",,active
+usage.overview.antigravity_notice_body,ui,DashboardPage,UsageOverview,antigravity_notice_body,"Exact token usage and prompt-cache hits are parsed from Antigravity session metadata when available. Fallback transcripts without metadata are estimated from text length (~4 chars/token).",,active
 usage.overview.devin_notice_title,ui,DashboardPage,UsageOverview,devin_notice_title,"Cost not estimated",,active
 usage.overview.devin_notice_body,ui,DashboardPage,UsageOverview,devin_notice_body,"Devin reports real local token counts, but swe-2, swe-2-high and compactor have no pricing data in this build, so they are excluded from dollar estimates. A $0 figure does not mean the usage was free.",,active
 usage.overview.week_cross_month_hint,ui,DashboardPage,UsageOverview,week_cross_month_hint,"This week spans two calendar months, so its total is not directly comparable with a single month's usage",,active
@@ -786,8 +787,11 @@ limits.provider.copilot,ui,LimitsPage,UsageLimitsPanel,provider_copilot,"GitHub 
 limits.provider.antigravity,ui,LimitsPage,UsageLimitsPanel,provider_antigravity,"Antigravity",,active
 limits.provider.zcode,ui,LimitsPage,UsageLimitsPanel,provider_zcode,"ZCode",,active
 provider.display.omp,ui,*,ProviderDisplay,omp,"oh-my-pi",,active
+provider.display.omo,ui,*,ProviderDisplay,omo,"OmO",,active
+provider.display.minimax_code,ui,*,ProviderDisplay,minimax_code,"MiniMax Code",,active
 provider.display.deepseek_harness,ui,*,ProviderDisplay,deepseek_harness,"DeepSeek Harness",,active
 provider.display.trae_work_cn,ui,*,ProviderDisplay,trae_work_cn,"TRAE Work CN",,active
+provider.display.cline,ui,*,ProviderDisplay,cline,"Cline",,active
 limits.label.zcode_glm52,ui,LimitsPage,UsageLimitsPanel,zcode_glm52,"GLM-5.2",,active
 limits.label.zcode_glm5t,ui,LimitsPage,UsageLimitsPanel,zcode_glm5t,"GLM-5-Turbo",,active
 limits.label.zcode_5h,ui,LimitsPage,UsageLimitsPanel,zcode_5h,"5h",,active

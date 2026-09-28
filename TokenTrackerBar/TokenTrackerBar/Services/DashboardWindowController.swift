@@ -26,6 +26,11 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
     private var webView: WKWebView?
     private var loadingOverlay: NSView?
     private var loadingHostingController: NSHostingController<AnyView>?
+    /// Non-nil while the window is parked on the "couldn't load" state, which is
+    /// also how a reopen tells that the window needs a fresh load rather than a
+    /// plain order-front.
+    private var loadFailureOverlay: NSView?
+    private var loadFailureHostingController: NSHostingController<AnyView>?
     /// A newly launched app may overlap the previous version briefly while the
     /// updater relaunches it. Keep every WKWebView request queued until
     /// ServerManager has replaced the listener on the fixed dashboard port.
@@ -74,6 +79,12 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         if let window {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            // Reopening a window that never loaded must start a new attempt,
+            // otherwise the user keeps landing on the same dead overlay.
+            if loadFailureOverlay != nil {
+                reload()
+                return
+            }
             syncChromeAppearanceFromWebView()
             injectMainCardCornerRadius()
             return
@@ -132,10 +143,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         container.addSubview(dragBar)
 
         // Loading overlay with spinner
-        let overlay = makeLoadingOverlay()
-        overlay.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(overlay)
-        self.loadingOverlay = overlay
+        installLoadingOverlay(in: container)
 
         NSLayoutConstraint.activate([
             webView.topAnchor.constraint(equalTo: container.topAnchor),
@@ -148,10 +156,6 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
             // Must match dashboard `AppLayout` top `h-7` (28pt) drag strip. A taller bar covers the
             // sidebar Sign in button, causing mouseDown to be consumed by performDrag.
             dragBar.heightAnchor.constraint(equalToConstant: 28),
-            overlay.topAnchor.constraint(equalTo: container.topAnchor),
-            overlay.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            overlay.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            overlay.trailingAnchor.constraint(equalTo: container.trailingAnchor),
         ])
 
         // Create window
@@ -199,9 +203,20 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Restart the dashboard load from a clean state: clears the failure view,
+    /// resets the retry budget and puts the loading overlay back up. Shared by
+    /// the in-window Retry button, the menu-bar Retry button and a reopen of a
+    /// window parked on the failure state. A no-op when no window is open.
     func reload() {
+        guard let container = window?.contentView else { return }
+        dismissLoadFailureOverlay()
         retryCount = 0
-        webView?.reload()
+        installLoadingOverlay(in: container)
+        if let current = webView?.url, isLocalDashboardURL(current) {
+            loadDashboard(current)
+        } else if let url = URL(string: Constants.serverBaseURL + "?app=1") {
+            loadDashboard(url)
+        }
     }
 
     private func loadDashboard(_ url: URL) {
@@ -341,6 +356,20 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         return overlay
     }
 
+    private func installLoadingOverlay(in container: NSView) {
+        guard loadingOverlay == nil else { return }
+        let overlay = makeLoadingOverlay()
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(overlay)
+        NSLayoutConstraint.activate([
+            overlay.topAnchor.constraint(equalTo: container.topAnchor),
+            overlay.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            overlay.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+        ])
+        loadingOverlay = overlay
+    }
+
     private func dismissLoadingOverlay() {
         guard let overlay = loadingOverlay else { return }
         // Keep drawsBackground false so native glass / vibrancy shows through non-painted areas (sidebar + window chrome).
@@ -351,6 +380,61 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
             overlay.removeFromSuperview()
             self?.loadingOverlay = nil
             self?.loadingHostingController = nil
+        }
+    }
+
+    // MARK: - Load Failure
+
+    /// Replaces the loading overlay with an actionable error once the retry
+    /// budget is spent. The previous silent `return` left the mascot spinning
+    /// forever with no way back inside the app (issue #557).
+    private func presentLoadFailure(reason: String) {
+        guard let container = window?.contentView else { return }
+        dismissLoadingOverlay()
+        dismissLoadFailureOverlay()
+
+        let hosting = NSHostingController(
+            rootView: AnyView(
+                DashboardLoadFailureView(reason: reason) { [weak self] in
+                    self?.reload()
+                }
+            )
+        )
+        let overlay = hosting.view
+        overlay.wantsLayer = true
+        overlay.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(overlay)
+        NSLayoutConstraint.activate([
+            overlay.topAnchor.constraint(equalTo: container.topAnchor),
+            overlay.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            overlay.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+        ])
+        loadFailureOverlay = overlay
+        loadFailureHostingController = hosting
+    }
+
+    private func dismissLoadFailureOverlay() {
+        loadFailureOverlay?.removeFromSuperview()
+        loadFailureOverlay = nil
+        loadFailureHostingController = nil
+    }
+
+    /// Single failure path for both provisional and committed navigation errors.
+    private func handleNavigationFailure(_ error: Error) {
+        // `stopLoading()` and ordinary navigation replacement report a cancel;
+        // neither means the dashboard is unreachable.
+        if (error as NSError).code == NSURLErrorCancelled { return }
+        retryCount += 1
+        guard retryCount <= maxRetries else {
+            presentLoadFailure(reason: error.localizedDescription)
+            return
+        }
+        let delay = min(Double(retryCount) * 2, 10)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, let url = URL(string: Constants.serverBaseURL + "?app=1") else { return }
+            self.loadDashboard(url)
         }
     }
 
@@ -405,6 +489,8 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         closingWindow.contentView = nil
         loadingOverlay = nil
         loadingHostingController = nil
+        loadFailureOverlay = nil
+        loadFailureHostingController = nil
         pendingDashboardURL = nil
         self.webView = nil
         self.window = nil
@@ -575,6 +661,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         retryCount = 0
+        dismissLoadFailureOverlay()
         let completedNativeOAuth = webView.url?.path == "/dashboard" || webView.url?.path == "/"
         if oauthInFlight && completedNativeOAuth {
             completeNativeOAuth()
@@ -612,13 +699,17 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         didFailProvisionalNavigation navigation: WKNavigation!,
         withError error: Error
     ) {
-        retryCount += 1
-        guard retryCount <= maxRetries else { return }
-        let delay = min(Double(retryCount) * 2, 10)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, let url = URL(string: Constants.serverBaseURL + "?app=1") else { return }
-            self.loadDashboard(url)
-        }
+        handleNavigationFailure(error)
+    }
+
+    /// A main document that started loading and then failed leaves the loading
+    /// overlay up just as a provisional failure does, so it takes the same path.
+    func webView(
+        _ webView: WKWebView,
+        didFail navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        handleNavigationFailure(error)
     }
 }
 

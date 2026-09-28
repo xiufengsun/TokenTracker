@@ -39,8 +39,8 @@ enum LimitPace {
     }
 
     /// Compute the pace mark + current-rate projection for one window.
-    /// The mark is shown only once usage is ≥5% (so a fresh window doesn't float a
-    /// mark in the empty track). Projection uses rate = used / elapsed.
+    /// The mark is shown once usage is nonzero; an unused window has no mark.
+    /// Projection uses rate = used / elapsed.
     static func compute(usedFraction: Double, windowSeconds: Double, secondsUntilReset: Double, remainingMode: Bool) -> Result {
         var result = Result()
         guard windowSeconds > 0,
@@ -49,7 +49,7 @@ enum LimitPace {
         }
         result.expectedPercent = Int((expected * 100).rounded())
         result.paceOver = isOverPace(usedFraction: usedFraction, expectedFraction: expected)
-        if usedFraction >= 0.05 {
+        if usedFraction > 0 {
             result.pacePercent = (remainingMode ? (1 - expected) : expected) * 100
         }
         if expected > 0.02, usedFraction > 0 {

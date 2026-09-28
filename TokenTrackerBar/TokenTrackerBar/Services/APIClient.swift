@@ -27,7 +27,8 @@ actor APIClient {
     private init() {
         self.session = URLSession(configuration: LocalAPIConfiguration.makeSessionConfiguration())
 
-        let syncConfig = URLSessionConfiguration.default
+        // Same loopback target, so it needs the same system-proxy bypass.
+        let syncConfig = LocalAPIConfiguration.makeSessionConfiguration()
         syncConfig.timeoutIntervalForRequest = Self.localSyncResourceTimeout
         syncConfig.timeoutIntervalForResource = Self.localSyncResourceTimeout
         self.syncSession = URLSession(configuration: syncConfig)
