@@ -4,6 +4,7 @@ const SPECIAL_PROVIDER_NAMES = {
   acode: "AStudio",
   anythingllm: "AnythingLLM",
   claudescience: "Claude Science",
+  atomcode: "AtomCode",
   pianthropic: "Pi · Anthropic",
   pigithubcopilot: "Pi · GitHub Copilot",
   picopilot: "Pi · Copilot",
