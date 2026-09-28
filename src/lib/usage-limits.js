@@ -2388,29 +2388,33 @@ function claudeCacheCrossedReset(raw, { nowMs } = {}) {
   });
 }
 
-// After a user-initiated reset on claude.com, oauth/usage can return a 5h
-// window at 0% with `resets_at: null` until Anthropic stamps the new window.
-// That snapshot is still "fresh" by age, so serving it for the 10-minute TTL
-// freezes the bars at 100% remaining while live usage accumulates. Incomplete
-// windows skip the fresh short-circuit; the 7-day stale fallback still applies
-// if the live call fails.
-function claudeCacheHasIncompleteReset(raw) {
-  const windows = [
-    raw?.five_hour,
-    raw?.seven_day,
-    raw?.seven_day_opus,
-    ...(Array.isArray(raw?.weekly_scoped) ? raw.weekly_scoped : []),
-  ];
-  return windows.some((window) => (
-    window
-    && typeof window === "object"
-    && parseTimeMs(window.resets_at) === null
+// A 5h or 7d window that has not started yet (after a claude.com reset, or simply
+// idle) reports 0% with `resets_at: null`; the next prompt starts it. Serving that
+// snapshot for the fresh TTL after Claude was used again freezes the bar at 0% used
+// while real usage climbs, and Anthropic can keep returning null for a few minutes
+// after the first prompt. So an unstarted window stays cacheable until Claude is
+// used after the snapshot was written. Claude Code (including Claude Desktop's Code
+// sessions) appends every prompt to ~/.claude/history.jsonl, so its mtime is that
+// signal; the file's contents are never read. Model-scoped windows are excluded:
+// they stay unstarted for as long as that model goes unused.
+function claudeCacheAwaitsNewWindow(raw, { home } = {}) {
+  const unstarted = [raw?.five_hour, raw?.seven_day].some((window) => (
+    window && typeof window === "object" && parseTimeMs(window.resets_at) === null
   ));
+  if (!unstarted) return false;
+  const cachedAtMs = parseTimeMs(raw?.cached_at);
+  if (!Number.isFinite(cachedAtMs)) return false;
+  try {
+    const historyPath = path.join(home || os.homedir(), ".claude", "history.jsonl");
+    return fs.statSync(historyPath).mtimeMs > cachedAtMs;
+  } catch (_error) {
+    return false;
+  }
 }
 
 function readFreshClaudeLimitsCache({ home, nowMs = Date.now() } = {}) {
   const raw = readClaudeLimitsCacheRaw({ home });
-  if (!raw || claudeCacheCrossedReset(raw, { nowMs }) || claudeCacheHasIncompleteReset(raw)) {
+  if (!raw || claudeCacheCrossedReset(raw, { nowMs }) || claudeCacheAwaitsNewWindow(raw, { home })) {
     return null;
   }
   return normalizeClaudeCachedLimits(raw, {

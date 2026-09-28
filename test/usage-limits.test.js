@@ -2298,68 +2298,86 @@ describe("getUsageLimits", () => {
     }
   });
 
-  it("bypasses the fresh cache when a post-reset 5h window is missing resets_at", async () => {
-    resetUsageLimitsCache();
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-null-reset-"));
-    try {
-      const claudeDir = path.join(tmp, ".claude");
-      fs.mkdirSync(claudeDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(claudeDir, ".credentials.json"),
-        JSON.stringify({ claudeAiOauth: { accessToken: "null-reset-token" } }),
-      );
-      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
-      fs.mkdirSync(trackerDir, { recursive: true });
-      const futureReset = new Date(Date.now() + 3 * 86400 * 1000).toISOString();
-      // Anthropic's oauth/usage snapshot right after a claude.com usage reset:
-      // five_hour is 0% with no reset stamp, seven_day still has a real one.
-      // That snapshot is inside the 10-minute fresh TTL, so without this
-      // bypass the bars freeze at 100% remaining while live usage accumulates.
-      fs.writeFileSync(
-        path.join(trackerDir, "claude-usage-limits-cache.json"),
-        JSON.stringify({
-          claude: {
-            five_hour: { utilization: 0, resets_at: null },
-            seven_day: { utilization: 27, resets_at: futureReset },
-            seven_day_opus: null,
-            weekly_scoped: null,
-            extra_usage: null,
-            cached_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
-          },
-        }),
-      );
+  // Anthropic's oauth/usage snapshot for a 5h window that has not started yet
+  // (right after a claude.com usage reset, or simply idle): 0% with no reset
+  // stamp, while seven_day still has a real one. Cached 5 minutes ago, so it is
+  // inside the 10-minute fresh TTL. `historyAgeMs` sets when Claude Code last
+  // appended a prompt to ~/.claude/history.jsonl (null = no history file).
+  function setupUnstartedClaudeWindow(tmp, { historyAgeMs, cache = {} } = {}) {
+    const claudeDir = path.join(tmp, ".claude");
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(claudeDir, ".credentials.json"),
+      JSON.stringify({ claudeAiOauth: { accessToken: "unstarted-window-token" } }),
+    );
+    const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+    fs.mkdirSync(trackerDir, { recursive: true });
+    const futureReset = new Date(Date.now() + 3 * 86400 * 1000).toISOString();
+    fs.writeFileSync(
+      path.join(trackerDir, "claude-usage-limits-cache.json"),
+      JSON.stringify({
+        claude: {
+          five_hour: { utilization: 0, resets_at: null },
+          seven_day: { utilization: 27, resets_at: futureReset },
+          seven_day_opus: null,
+          weekly_scoped: null,
+          extra_usage: null,
+          cached_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+          ...cache,
+        },
+      }),
+    );
+    if (historyAgeMs !== null && historyAgeMs !== undefined) {
+      const historyPath = path.join(claudeDir, "history.jsonl");
+      fs.writeFileSync(historyPath, "{}\n");
+      const historyAt = new Date(Date.now() - historyAgeMs);
+      fs.utimesSync(historyPath, historyAt, historyAt);
+    }
+    return { futureReset };
+  }
 
+  function runUnstartedWindowLimits(tmp, claudeResponder) {
+    return getUsageLimits({
+      home: tmp,
+      platform: "linux",
+      providerTimeoutMs: 1000,
+      securityRunner() {
+        return { status: 1, stdout: "" };
+      },
+      commandRunner() {
+        return { status: 1, stdout: "" };
+      },
+      fetchImpl(url) {
+        if (typeof url === "string" && url === "https://api.anthropic.com/api/oauth/usage") {
+          return claudeResponder();
+        }
+        if (isCodexResetCreditsUrl(url)) return codexResetCreditsResponse();
+        return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+      },
+    });
+  }
+
+  it("refetches an unstarted 5h window once Claude is used after the snapshot", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-unstarted-used-"));
+    try {
+      const { futureReset } = setupUnstartedClaudeWindow(tmp, { historyAgeMs: 60 * 1000 });
       const liveFiveHourReset = new Date(Date.now() + 5 * 3600 * 1000).toISOString();
-      let upstreamCalled = false;
-      const result = await getUsageLimits({
-        home: tmp,
-        platform: "linux",
-        providerTimeoutMs: 1000,
-        securityRunner() {
-          return { status: 1, stdout: "" };
-        },
-        commandRunner() {
-          return { status: 1, stdout: "" };
-        },
-        fetchImpl(url) {
-          if (typeof url === "string" && url === "https://api.anthropic.com/api/oauth/usage") {
-            upstreamCalled = true;
-            return Promise.resolve({
-              ok: true,
-              status: 200,
-              json: async () => ({
-                five_hour: { utilization: 13, resets_at: liveFiveHourReset },
-                seven_day: { utilization: 29, resets_at: futureReset },
-                seven_day_opus: null,
-              }),
-            });
-          }
-          if (isCodexResetCreditsUrl(url)) return codexResetCreditsResponse();
-          return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
-        },
+      let upstreamCalls = 0;
+      const result = await runUnstartedWindowLimits(tmp, () => {
+        upstreamCalls += 1;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            five_hour: { utilization: 13, resets_at: liveFiveHourReset },
+            seven_day: { utilization: 29, resets_at: futureReset },
+            seven_day_opus: null,
+          }),
+        });
       });
 
-      assert.equal(upstreamCalled, true, "null 5h resets_at must force a live Claude call");
+      assert.equal(upstreamCalls, 1, "a prompt after the snapshot must force a live Claude call");
       assert.equal(result.claude.error, null);
       assert.deepEqual(result.claude.five_hour, { utilization: 13, resets_at: liveFiveHourReset });
       assert.deepEqual(result.claude.seven_day, { utilization: 29, resets_at: futureReset });
@@ -2369,56 +2387,66 @@ describe("getUsageLimits", () => {
     }
   });
 
-  it("still serves the incomplete post-reset snapshot when the live Claude call fails", async () => {
-    resetUsageLimitsCache();
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-null-reset-429-"));
-    try {
-      const claudeDir = path.join(tmp, ".claude");
-      fs.mkdirSync(claudeDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(claudeDir, ".credentials.json"),
-        JSON.stringify({ claudeAiOauth: { accessToken: "null-reset-429-token" } }),
-      );
-      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
-      fs.mkdirSync(trackerDir, { recursive: true });
-      const futureReset = new Date(Date.now() + 3 * 86400 * 1000).toISOString();
-      fs.writeFileSync(
-        path.join(trackerDir, "claude-usage-limits-cache.json"),
-        JSON.stringify({
-          claude: {
-            five_hour: { utilization: 0, resets_at: null },
-            seven_day: { utilization: 27, resets_at: futureReset },
-            seven_day_opus: null,
-            weekly_scoped: null,
-            extra_usage: null,
-            cached_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
-          },
-        }),
-      );
+  it("keeps the fresh cache for an unstarted 5h window while Claude sits idle", async () => {
+    for (const historyAgeMs of [30 * 60 * 1000, null]) {
+      resetUsageLimitsCache();
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-unstarted-idle-"));
+      try {
+        setupUnstartedClaudeWindow(tmp, { historyAgeMs });
+        let upstreamCalls = 0;
+        const result = await runUnstartedWindowLimits(tmp, () => {
+          upstreamCalls += 1;
+          return Promise.resolve({ ok: false, status: 500 });
+        });
 
-      const result = await getUsageLimits({
-        home: tmp,
-        platform: "linux",
-        providerTimeoutMs: 1000,
-        securityRunner() {
-          return { status: 1, stdout: "" };
-        },
-        commandRunner() {
-          return { status: 1, stdout: "" };
-        },
-        fetchImpl(url) {
-          if (typeof url === "string" && url === "https://api.anthropic.com/api/oauth/usage") {
-            return Promise.resolve({
-              ok: false,
-              status: 429,
-              headers: { get: () => "120" },
-              json: async () => ({}),
-            });
-          }
-          if (isCodexResetCreditsUrl(url)) return codexResetCreditsResponse();
-          return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+        assert.equal(upstreamCalls, 0, `idle (history age ${historyAgeMs}) must not spend a Claude request`);
+        assert.equal(result.claude.stale, false);
+        assert.deepEqual(result.claude.five_hour, { utilization: 0, resets_at: null });
+      } finally {
+        resetUsageLimitsCache();
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("keeps the fresh cache when only a model-scoped window is unstarted", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-unstarted-opus-"));
+    try {
+      const fiveHourReset = new Date(Date.now() + 2 * 3600 * 1000).toISOString();
+      setupUnstartedClaudeWindow(tmp, {
+        historyAgeMs: 60 * 1000,
+        cache: {
+          five_hour: { utilization: 40, resets_at: fiveHourReset },
+          seven_day_opus: { utilization: 0, resets_at: null },
+          weekly_scoped: [{ label: "Fable", utilization: 0, resets_at: null }],
         },
       });
+      let upstreamCalls = 0;
+      const result = await runUnstartedWindowLimits(tmp, () => {
+        upstreamCalls += 1;
+        return Promise.resolve({ ok: false, status: 500 });
+      });
+
+      assert.equal(upstreamCalls, 0, "an unused model's window must not disable the fresh cache");
+      assert.equal(result.claude.five_hour.utilization, 40);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("still serves the unstarted-window snapshot when the live Claude call fails", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-unstarted-429-"));
+    try {
+      setupUnstartedClaudeWindow(tmp, { historyAgeMs: 60 * 1000 });
+      const result = await runUnstartedWindowLimits(tmp, () => Promise.resolve({
+        ok: false,
+        status: 429,
+        headers: { get: () => "120" },
+        json: async () => ({}),
+      }));
 
       assert.equal(result.claude.error, null);
       assert.equal(result.claude.stale, true);
