@@ -2388,9 +2388,31 @@ function claudeCacheCrossedReset(raw, { nowMs } = {}) {
   });
 }
 
+// After a user-initiated reset on claude.com, oauth/usage can return a 5h
+// window at 0% with `resets_at: null` until Anthropic stamps the new window.
+// That snapshot is still "fresh" by age, so serving it for the 10-minute TTL
+// freezes the bars at 100% remaining while live usage accumulates. Incomplete
+// windows skip the fresh short-circuit; the 7-day stale fallback still applies
+// if the live call fails.
+function claudeCacheHasIncompleteReset(raw) {
+  const windows = [
+    raw?.five_hour,
+    raw?.seven_day,
+    raw?.seven_day_opus,
+    ...(Array.isArray(raw?.weekly_scoped) ? raw.weekly_scoped : []),
+  ];
+  return windows.some((window) => (
+    window
+    && typeof window === "object"
+    && parseTimeMs(window.resets_at) === null
+  ));
+}
+
 function readFreshClaudeLimitsCache({ home, nowMs = Date.now() } = {}) {
   const raw = readClaudeLimitsCacheRaw({ home });
-  if (!raw || claudeCacheCrossedReset(raw, { nowMs })) return null;
+  if (!raw || claudeCacheCrossedReset(raw, { nowMs }) || claudeCacheHasIncompleteReset(raw)) {
+    return null;
+  }
   return normalizeClaudeCachedLimits(raw, {
     nowMs,
     maxAgeMs: CLAUDE_LIMITS_CACHE_FRESH_TTL_MS,

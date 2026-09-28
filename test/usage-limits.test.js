@@ -2298,6 +2298,138 @@ describe("getUsageLimits", () => {
     }
   });
 
+  it("bypasses the fresh cache when a post-reset 5h window is missing resets_at", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-null-reset-"));
+    try {
+      const claudeDir = path.join(tmp, ".claude");
+      fs.mkdirSync(claudeDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(claudeDir, ".credentials.json"),
+        JSON.stringify({ claudeAiOauth: { accessToken: "null-reset-token" } }),
+      );
+      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+      fs.mkdirSync(trackerDir, { recursive: true });
+      const futureReset = new Date(Date.now() + 3 * 86400 * 1000).toISOString();
+      // Anthropic's oauth/usage snapshot right after a claude.com usage reset:
+      // five_hour is 0% with no reset stamp, seven_day still has a real one.
+      // That snapshot is inside the 10-minute fresh TTL, so without this
+      // bypass the bars freeze at 100% remaining while live usage accumulates.
+      fs.writeFileSync(
+        path.join(trackerDir, "claude-usage-limits-cache.json"),
+        JSON.stringify({
+          claude: {
+            five_hour: { utilization: 0, resets_at: null },
+            seven_day: { utilization: 27, resets_at: futureReset },
+            seven_day_opus: null,
+            weekly_scoped: null,
+            extra_usage: null,
+            cached_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+          },
+        }),
+      );
+
+      const liveFiveHourReset = new Date(Date.now() + 5 * 3600 * 1000).toISOString();
+      let upstreamCalled = false;
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        providerTimeoutMs: 1000,
+        securityRunner() {
+          return { status: 1, stdout: "" };
+        },
+        commandRunner() {
+          return { status: 1, stdout: "" };
+        },
+        fetchImpl(url) {
+          if (typeof url === "string" && url === "https://api.anthropic.com/api/oauth/usage") {
+            upstreamCalled = true;
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                five_hour: { utilization: 13, resets_at: liveFiveHourReset },
+                seven_day: { utilization: 29, resets_at: futureReset },
+                seven_day_opus: null,
+              }),
+            });
+          }
+          if (isCodexResetCreditsUrl(url)) return codexResetCreditsResponse();
+          return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+        },
+      });
+
+      assert.equal(upstreamCalled, true, "null 5h resets_at must force a live Claude call");
+      assert.equal(result.claude.error, null);
+      assert.deepEqual(result.claude.five_hour, { utilization: 13, resets_at: liveFiveHourReset });
+      assert.deepEqual(result.claude.seven_day, { utilization: 29, resets_at: futureReset });
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("still serves the incomplete post-reset snapshot when the live Claude call fails", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-null-reset-429-"));
+    try {
+      const claudeDir = path.join(tmp, ".claude");
+      fs.mkdirSync(claudeDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(claudeDir, ".credentials.json"),
+        JSON.stringify({ claudeAiOauth: { accessToken: "null-reset-429-token" } }),
+      );
+      const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+      fs.mkdirSync(trackerDir, { recursive: true });
+      const futureReset = new Date(Date.now() + 3 * 86400 * 1000).toISOString();
+      fs.writeFileSync(
+        path.join(trackerDir, "claude-usage-limits-cache.json"),
+        JSON.stringify({
+          claude: {
+            five_hour: { utilization: 0, resets_at: null },
+            seven_day: { utilization: 27, resets_at: futureReset },
+            seven_day_opus: null,
+            weekly_scoped: null,
+            extra_usage: null,
+            cached_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+          },
+        }),
+      );
+
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        providerTimeoutMs: 1000,
+        securityRunner() {
+          return { status: 1, stdout: "" };
+        },
+        commandRunner() {
+          return { status: 1, stdout: "" };
+        },
+        fetchImpl(url) {
+          if (typeof url === "string" && url === "https://api.anthropic.com/api/oauth/usage") {
+            return Promise.resolve({
+              ok: false,
+              status: 429,
+              headers: { get: () => "120" },
+              json: async () => ({}),
+            });
+          }
+          if (isCodexResetCreditsUrl(url)) return codexResetCreditsResponse();
+          return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+        },
+      });
+
+      assert.equal(result.claude.error, null);
+      assert.equal(result.claude.stale, true);
+      assert.equal(result.claude.five_hour.utilization, 0);
+      assert.equal(result.claude.seven_day.utilization, 27);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("keeps serving the fresh cache when a cached reset was already past at write time", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-stale-stamp-"));
