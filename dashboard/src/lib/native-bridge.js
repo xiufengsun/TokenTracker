@@ -189,10 +189,12 @@ export function onNativeSettings(handler) {
   return () => window.removeEventListener("native:settings", listener);
 }
 
-/** Desktop-pet settings are supported by both the macOS and Windows native hosts. */
+/** Desktop-pet settings are supported by the macOS, Windows and Linux native hosts. */
 export function isPetBridgeAvailable() {
   if (typeof window === "undefined") return false;
-  return Boolean(window.webkit?.messageHandlers?.nativeBridge || window.chrome?.webview);
+  return Boolean(
+    window.webkit?.messageHandlers?.nativeBridge || window.chrome?.webview || isNativeLinuxApp(),
+  );
 }
 
 function postPetMessage(message) {
@@ -207,6 +209,13 @@ function postPetMessage(message) {
   if (window.chrome?.webview) {
     try {
       window.chrome.webview.postMessage(JSON.stringify(message));
+      return true;
+    } catch { return false; }
+  }
+  // Linux Tauri host: replies arrive as `native:petSettings` events, same as the others.
+  if (isNativeLinuxApp()) {
+    try {
+      window.__TAURI_INTERNALS__.invoke("pet_bridge", { message })?.catch?.(() => {});
       return true;
     } catch { return false; }
   }

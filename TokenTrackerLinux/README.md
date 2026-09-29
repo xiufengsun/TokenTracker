@@ -175,10 +175,14 @@ single `server.log.1` generation.
 
 ```bash
 npm ci --prefix TokenTrackerLinux
-npm run dashboard:build                        # from the repo root
+TOKENTRACKER_BUILD_PET=1 npm run dashboard:build   # from the repo root; includes pet.html
 npm --prefix TokenTrackerLinux run bundle:node # stages EmbeddedServer/
 npm --prefix TokenTrackerLinux run dev
 ```
+
+`TOKENTRACKER_BUILD_PET=1` adds `pet.html`, the page the floating desktop pet
+loads (tray → **Show Pet**, or the dashboard's Pet page). Without it the pet
+window has nothing to show.
 
 `bundle:node` must run before any bundling build: `tauri.bundle.conf.json`
 declares `EmbeddedServer` as a bundle resource and `tauri-build` fails on a

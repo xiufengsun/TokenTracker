@@ -21,7 +21,7 @@ impl DashboardBaseUrl {
         }
     }
 
-    fn get(&self) -> Option<String> {
+    pub fn get(&self) -> Option<String> {
         self.0.lock().ok()?.clone()
     }
 }

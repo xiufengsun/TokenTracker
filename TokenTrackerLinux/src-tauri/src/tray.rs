@@ -1,11 +1,12 @@
 use std::time::Duration;
 
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{App, AppHandle, Manager, Runtime};
 
 const OPEN_ID: &str = "open-dashboard";
+const PET_ID: &str = "show-pet";
 const QUIT_ID: &str = "quit";
 const TRAY_ID: &str = "main-tray";
 
@@ -33,8 +34,29 @@ fn fallback_tray_icon() -> tauri::Result<Image<'static>> {
 /// too, so "Open Dashboard" as the first item is the primary entry point.
 fn build_menu<R: Runtime, M: Manager<R>>(manager: &M) -> tauri::Result<Menu<R>> {
     let open = MenuItem::with_id(manager, OPEN_ID, "Open Dashboard", true, None::<&str>)?;
+    let pet_visible = manager
+        .try_state::<crate::pet::PetState>()
+        .is_some_and(|state| state.get().visible);
+    let pet = CheckMenuItem::with_id(manager, PET_ID, "Show Pet", true, pet_visible, None::<&str>)?;
     let quit = MenuItem::with_id(manager, QUIT_ID, "Quit", true, None::<&str>)?;
-    Menu::with_items(manager, &[&open, &quit])
+    Menu::with_items(manager, &[&open, &pet, &quit])
+}
+
+/// Reflect the pet's visibility in the tray's "Show Pet" check after it changes.
+///
+/// Publishes a freshly built menu rather than flipping the existing item, for
+/// the same reason as `republish_menu`: GNOME's AppIndicator extension handles
+/// new menus reliably and in-place property updates less so.
+pub fn refresh_menu<R: Runtime>(app: &AppHandle<R>) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
+    match build_menu(app) {
+        Ok(menu) => {
+            let _ = tray.set_menu(Some(menu));
+        }
+        Err(error) => eprintln!("[TokenTracker] failed to rebuild the tray menu: {error}"),
+    }
 }
 
 /// Publish a second, freshly built menu once startup has quiesced.
@@ -86,6 +108,10 @@ pub fn install(app: &App) -> tauri::Result<()> {
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
             OPEN_ID => show_main_window(app),
+            PET_ID => {
+                let visible = app.state::<crate::pet::PetState>().get().visible;
+                crate::pet::set_visible(app, !visible);
+            }
             QUIT_ID => app.exit(0),
             _ => {}
         })
@@ -96,7 +122,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
     Ok(())
 }
 
-pub fn show_main_window(app: &AppHandle) {
+pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();

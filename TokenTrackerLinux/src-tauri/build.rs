@@ -9,7 +9,7 @@ fn main() {
     // grants `allow-open-oauth` as well.
     tauri_build::try_build(
         tauri_build::Attributes::new()
-            .app_manifest(tauri_build::AppManifest::new().commands(&["open_oauth"])),
+            .app_manifest(tauri_build::AppManifest::new().commands(&["open_oauth", "pet_bridge"])),
     )
     .expect("failed to run tauri-build");
 }
