@@ -194,3 +194,13 @@ test('Arch package validator checks the shipped runtime contract', () => {
   assert.match(validator, /22\.22\.2/);
   assert.match(validator, /tokentracker-user-status/);
 });
+
+test('Linux release builds the floating pet page into the dashboard', () => {
+  // The Linux pet window loads /pet.html from the embedded dashboard; vite only
+  // emits that entry when TOKENTRACKER_BUILD_PET=1, as on Windows.
+  const linuxJob = release.slice(release.indexOf('\n  linux:'), release.indexOf('\n  publish:'));
+  const buildStep = linuxJob.slice(linuxJob.indexOf('- name: Build dashboard'));
+  const stepEnd = buildStep.indexOf('run: npm run dashboard:build');
+  assert.ok(stepEnd > 0, 'Linux job must build the dashboard');
+  assert.match(buildStep.slice(0, stepEnd), /TOKENTRACKER_BUILD_PET: "1"/);
+});

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   isNativeApp,
+  isNativeLinuxApp,
   isPetBridgeAvailable,
   onNativePetSettings,
   requestNativePetSettings,
@@ -12,7 +13,8 @@ import { normalizePetCharacter } from "../lib/pet-personality";
 const DEFAULTS = { visible: false, character: "clawd", size: "medium", botColor: "auto" };
 
 export function usePetSettings() {
-  const available = isNativeApp() && isPetBridgeAvailable();
+  // The Linux app loads the dashboard without `?app=1`, so it can't pass isNativeApp().
+  const available = (isNativeApp() || isNativeLinuxApp()) && isPetBridgeAvailable();
   const [settings, setSettings] = useState(DEFAULTS);
 
   useEffect(() => {

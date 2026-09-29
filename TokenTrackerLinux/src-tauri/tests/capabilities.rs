@@ -92,6 +92,38 @@ fn local_capability_covers_core_and_open_oauth() {
     );
 }
 
+#[test]
+fn pet_capability_grants_only_pet_bridge_to_both_windows() {
+    let capability = load_capability("pet.json");
+
+    assert!(
+        !capability.local,
+        "the pet page and dashboard are loopback REMOTE origins"
+    );
+    assert!(
+        capability.remote.is_some(),
+        "pet.json must declare the loopback remote block"
+    );
+    for window in ["main", "pet"] {
+        assert!(
+            capability.windows.iter().any(|w| w == window),
+            "pet.json must apply to the \"{window}\" window"
+        );
+    }
+    assert_eq!(
+        permission_identifiers(&capability),
+        vec!["allow-pet-bridge".to_string()],
+        "the pet capability must stay scoped to pet_bridge -- never core:default"
+    );
+    assert_eq!(
+        capability.remote.as_ref().map(|r| r.urls.clone()),
+        load_capability("remote-dashboard.json")
+            .remote
+            .map(|r| r.urls),
+        "the pet bridge must be reachable from exactly the dashboard's origins"
+    );
+}
+
 /// The server prefers port 17680 but falls back to an OS-assigned port, so the
 /// remote URL pattern has to match an arbitrary port. A pattern that omits the
 /// port matches only the scheme default (port 80 for http) and would reject

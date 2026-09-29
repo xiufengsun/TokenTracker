@@ -6,6 +6,7 @@ import {
   buildPetLimitSummaries,
   buildQuipPool,
   formatPetLimitSummary,
+  petLabels,
 } from "./pet-quips.js";
 
 describe("desktop pet limit dialogue", () => {
@@ -149,5 +150,14 @@ describe("desktop pet limit dialogue", () => {
 
     expect(pool).toContain("Codex 5h · near limit · in 2h");
     expect(pool.some((line) => line.includes("1.2K"))).toBe(true);
+  });
+});
+
+describe("desktop pet bubble labels", () => {
+  it("has a localized label for usage no model is attributed to", () => {
+    for (const locale of ["en", "zh-CN", "zh-TW", "ja", "ko"]) {
+      expect(petLabels(locale).newUsage, locale).toBeTruthy();
+    }
+    expect(petLabels("en").newUsage).toBe("New usage");
   });
 });

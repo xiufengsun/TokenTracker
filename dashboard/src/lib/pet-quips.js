@@ -236,11 +236,11 @@ const SYNCING_QUIPS = {
 
 // Hover-bubble labels (the dynamic usage line is composed in pet.jsx).
 const PET_LABELS = {
-  "en": { today: "Today", noUsage: "No usage yet today", offline: "Offline · can't reach the server", syncing: "Syncing…" },
-  "zh-CN": { today: "今日", noUsage: "今天还没有用量", offline: "离线 · 连不上服务", syncing: "正在同步…" },
-  "zh-TW": { today: "今日", noUsage: "今天還沒有用量", offline: "離線 · 連不上服務", syncing: "正在同步…" },
-  "ja": { today: "今日", noUsage: "今日はまだ使用なし", offline: "オフライン · サーバーに接続できません", syncing: "同期中…" },
-  "ko": { today: "오늘", noUsage: "오늘 사용 없음", offline: "오프라인 · 서버에 연결할 수 없음", syncing: "동기화 중…" },
+  "en": { today: "Today", newUsage: "New usage", noUsage: "No usage yet today", offline: "Offline · can't reach the server", syncing: "Syncing…" },
+  "zh-CN": { today: "今日", newUsage: "新增用量", noUsage: "今天还没有用量", offline: "离线 · 连不上服务", syncing: "正在同步…" },
+  "zh-TW": { today: "今日", newUsage: "新增用量", noUsage: "今天還沒有用量", offline: "離線 · 連不上服務", syncing: "正在同步…" },
+  "ja": { today: "今日", newUsage: "新しい使用量", noUsage: "今日はまだ使用なし", offline: "オフライン · サーバーに接続できません", syncing: "同期中…" },
+  "ko": { today: "오늘", newUsage: "새 사용량", noUsage: "오늘 사용 없음", offline: "오프라인 · 서버에 연결할 수 없음", syncing: "동기화 중…" },
 };
 
 /** Localized hover-bubble labels for the given locale. */
