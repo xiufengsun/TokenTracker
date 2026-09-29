@@ -259,3 +259,40 @@ test("full scan defers the Claude ground-truth repair while a configured Claude 
     assert.ok((await readMigrations())[migrationKey], "repair ran once the root was available");
   });
 });
+
+test("full scan defers the Claude ground-truth repair while a configured root's projects/ cannot be listed", async (t) => {
+  if (process.platform === "win32" || (typeof process.getuid === "function" && process.getuid() === 0)) {
+    t.skip("permission bits are not enforced for this user/platform");
+    return;
+  }
+  await withTempSyncEnv(async (home) => {
+    const native = path.join(home, ".claude");
+    const extra = path.join(home, "agent-home", "claude");
+    await writeClaudeSession(native, "p1", "s1", { msgId: "m1", input: 100, output: 50 });
+    await writeClaudeSession(extra, "p2", "s2", { msgId: "m2", input: 10, output: 5 });
+    await writeConfig(home, { scanRoots: { claude: [extra] } });
+    const migrationKey = "claudeGroundTruthRepair_2026_05_v4";
+    const readMigrations = async () =>
+      JSON.parse(await fsp.readFile(path.join(trackerDir(home), "cursors.json"), "utf8")).migrations || {};
+
+    // Both roots readable: a scoped sync queues rows from both.
+    await cmdSync(["--auto", "--from-notify", "--source", "claude"]);
+    assert.equal(await latestTotals(home, "claude"), 165);
+
+    // The configured root stays present, but its projects/ becomes unlistable.
+    const extraProjects = path.join(extra, "projects");
+    await fsp.chmod(extraProjects, 0o000);
+    try {
+      await cmdSync([]);
+      assert.equal(await latestTotals(home, "claude"), 165, "rows from the unreadable root survive");
+      assert.equal((await readMigrations())[migrationKey], undefined, "repair must not run against an unreadable projects/");
+    } finally {
+      await fsp.chmod(extraProjects, 0o755);
+    }
+
+    // Readable again: the next full scan runs the repair.
+    await cmdSync([]);
+    assert.equal(await latestTotals(home, "claude"), 165);
+    assert.ok((await readMigrations())[migrationKey], "repair ran once projects/ was readable");
+  });
+});

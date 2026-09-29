@@ -176,6 +176,7 @@ const {
   extraScanRootPaths,
   hasAnyScanChild,
   resolveScanRoots,
+  scanRootDirState,
 } = require("../lib/scan-roots");
 const { resolveRuntimeConfig, isLegacyInsforgeBaseUrl } = require("../lib/runtime-config");
 const { extractTokenCount } = require("../lib/codex-rollout-parser");
@@ -1109,10 +1110,19 @@ async function cmdSync(argv, context = {}) {
       // it is given. A configured root that is absent or unreadable right now
       // (unmounted volume, permissions) may still hold history that an earlier
       // scoped sync queued, so rebuilding without it would erase that history.
-      // Defer: the migration key stays unset and the repair runs on a later
-      // full scan once the root is back. Ordinary scanning still proceeds.
+      // The same applies one level down: listClaudeProjectFiles turns a read
+      // error on projects/ into an empty listing, so an unreadable projects/
+      // would let the repair run against nothing and mark itself complete. An
+      // ABSENT projects/ is fine (a profile that has no sessions yet); an
+      // unreadable one defers. Defer: the migration key stays unset and the
+      // repair runs on a later full scan once the root is back. Ordinary
+      // scanning still proceeds.
       const unavailableClaudeRoots = scanRoots.claude
-        .filter((entry) => entry.origin !== "native" && !entry.exists)
+        .filter((entry) => {
+          if (entry.origin === "native") return false;
+          if (!entry.exists) return true;
+          return scanRootDirState(path.join(entry.path, "projects")).error !== null;
+        })
         .map((entry) => entry.path);
       if (unavailableClaudeRoots.length > 0) {
         if (!opts.auto) {
