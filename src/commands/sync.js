@@ -1113,15 +1113,24 @@ async function cmdSync(argv, context = {}) {
       // The same applies one level down: listClaudeProjectFiles turns a read
       // error on projects/ into an empty listing, so an unreadable projects/
       // would let the repair run against nothing and mark itself complete. An
-      // ABSENT projects/ is fine (a profile that has no sessions yet); an
-      // unreadable one defers. Defer: the migration key stays unset and the
+      // ABSENT projects/ is fine for a NEW root (a profile with no sessions
+      // yet) but not for one the cursor store shows has supplied files before:
+      // then the directory vanished and rebuilding without it would erase its
+      // history. Defer in both cases: the migration key stays unset and the
       // repair runs on a later full scan once the root is back. Ordinary
       // scanning still proceeds.
+      const cursorFilePaths = Object.keys(cursors.files || {});
+      const rootPreviouslySuppliedFiles = (rootPath) => {
+        const prefix = path.join(rootPath, "projects") + path.sep;
+        return cursorFilePaths.some((filePath) => filePath.startsWith(prefix));
+      };
       const unavailableClaudeRoots = scanRoots.claude
         .filter((entry) => {
           if (entry.origin === "native") return false;
           if (!entry.exists) return true;
-          return scanRootDirState(path.join(entry.path, "projects")).error !== null;
+          const projectsState = scanRootDirState(path.join(entry.path, "projects"));
+          if (projectsState.error !== null) return true;
+          return !projectsState.exists && rootPreviouslySuppliedFiles(entry.path);
         })
         .map((entry) => entry.path);
       if (unavailableClaudeRoots.length > 0) {

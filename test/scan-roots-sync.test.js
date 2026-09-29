@@ -260,6 +260,38 @@ test("full scan defers the Claude ground-truth repair while a configured Claude 
   });
 });
 
+test("full scan defers the Claude ground-truth repair when a previously scanned projects/ has vanished, but not for a new root without one", async () => {
+  await withTempSyncEnv(async (home) => {
+    const native = path.join(home, ".claude");
+    const extra = path.join(home, "agent-home", "claude");
+    const fresh = path.join(home, "fresh-profile"); // exists, never had projects/
+    await writeClaudeSession(native, "p1", "s1", { msgId: "m1", input: 100, output: 50 });
+    await writeClaudeSession(extra, "p2", "s2", { msgId: "m2", input: 10, output: 5 });
+    await fsp.mkdir(fresh, { recursive: true });
+    await writeConfig(home, { scanRoots: { claude: [extra, fresh] } });
+    const migrationKey = "claudeGroundTruthRepair_2026_05_v4";
+    const readMigrations = async () =>
+      JSON.parse(await fsp.readFile(path.join(trackerDir(home), "cursors.json"), "utf8")).migrations || {};
+
+    // Scoped sync records cursors for files under both roots (no repair yet).
+    await cmdSync(["--auto", "--from-notify", "--source", "claude"]);
+    assert.equal(await latestTotals(home, "claude"), 165);
+    assert.equal((await readMigrations())[migrationKey], undefined);
+
+    // The extra root's projects/ disappears while the root itself stays.
+    await fsp.rm(path.join(extra, "projects"), { recursive: true, force: true });
+    await cmdSync([]);
+    assert.equal(await latestTotals(home, "claude"), 165, "rows from the vanished projects/ survive");
+    assert.equal((await readMigrations())[migrationKey], undefined, "repair must defer: this root supplied files before");
+
+    // projects/ is back: the repair runs. The fresh root's absent projects/ never blocked it.
+    await writeClaudeSession(extra, "p2", "s2", { msgId: "m2", input: 10, output: 5 });
+    await cmdSync([]);
+    assert.equal(await latestTotals(home, "claude"), 165);
+    assert.ok((await readMigrations())[migrationKey], "repair ran once projects/ was back; fresh root with no history did not block it");
+  });
+});
+
 test("full scan defers the Claude ground-truth repair while a configured root's projects/ cannot be listed", async (t) => {
   if (process.platform === "win32" || (typeof process.getuid === "function" && process.getuid() === 0)) {
     t.skip("permission bits are not enforced for this user/platform");
