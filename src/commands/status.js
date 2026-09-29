@@ -62,6 +62,9 @@ const {
   resolveOmpAgentDir,
   resolveOmoSessionFiles,
   resolveOmoAgentDir,
+  resolveAtomCodeDataRoot,
+  resolveAtomCodeSessionFiles,
+  resolveAtomCodeLegacyFiles,
   resolveMinimaxCodeSessionFiles,
   resolveMinimaxCodeSessionsDir,
   resolvePiSessionFiles,
@@ -461,6 +464,13 @@ async function cmdStatus(argv = []) {
   const omoAgentDir = resolveOmoAgentDir(process.env);
   const omoInstalled = Boolean(omoAgentDir) && fssync.existsSync(path.join(omoAgentDir, "sessions"));
   const omoFiles = omoInstalled ? resolveOmoSessionFiles(process.env) : [];
+
+  // AtomCode — passive scan only (no hooks).
+  const atomCodeDataRoot = resolveAtomCodeDataRoot(process.env);
+  const atomCodeInstalled = Boolean(atomCodeDataRoot) && fssync.existsSync(atomCodeDataRoot);
+  const atomCodeFiles = atomCodeInstalled
+    ? resolveAtomCodeSessionFiles(process.env).length + resolveAtomCodeLegacyFiles(process.env).length
+    : [];
 
   // MiniMax Code — passive scan only (no hooks).
   const minimaxCodeSessionsDir = resolveMinimaxCodeSessionsDir(process.env);
@@ -1021,6 +1031,9 @@ async function cmdStatus(argv = []) {
           : { installed: false },
         omo: omoInstalled
           ? { installed: true, files: omoFiles.length }
+          : { installed: false },
+        atomcode: atomCodeInstalled
+          ? { installed: true, files: atomCodeFiles }
           : { installed: false },
         minimax_code: minimaxCodeInstalled
           ? { installed: true, files: minimaxCodeFiles.length }

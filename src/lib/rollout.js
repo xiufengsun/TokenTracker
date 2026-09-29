@@ -15828,6 +15828,348 @@ async function parseOmoIncremental(options = {}) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// AtomCode (AtomGit model-agent CLI) — passive datalog reader
+// (~/.atomcode/datalog/**)
+//
+// AtomCode writes one log record per LLM request under a per-project datalog
+// directory. Two on-disk generations exist and both must stay readable:
+//   - legacy: <root>/<project>-<hash>/llm/<YYYY-MM-DD_HH-MM-SS_mmm>.json —
+//     one JSON file per request ({ model, request: { estimated_tokens, ... },
+//     response: {...} }).
+//   - current: <root>/<project>-<hash>/<date>_<time>_<ms>-<session-uuid>
+//     -t<turn>-p<pid>-i<index>.jsonl — one JSON line per request ({ model,
+//     estimated_tokens, session_id, request_id, turn_id, step, ... }).
+//
+// AtomCode exposes no authoritative billing usage. `estimated_tokens` is the
+// prompt-side context estimate at send time — it grows monotonically as a
+// session advances, so every step re-counts the shared prefix. This source
+// therefore reports input estimates with output 0, and every surface that
+// shows it must keep the estimate disclosure intact — same posture as the
+// Grok Build estimate.
+//
+// Request records embed full conversation bodies and tool definitions; this
+// reader extracts only model, estimated_tokens and the filename timestamp and
+// never persists message or tool content.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ATOMCODE_UNKNOWN_MODEL = "atomcode-unknown";
+const ATOMCODE_FILENAME_TS_RE = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})_(\d{3})/;
+
+function resolveAtomCodeHome(env = process.env) {
+  if (env.TOKENTRACKER_ATOMCODE_HOME) {
+    return expandHomePath(env.TOKENTRACKER_ATOMCODE_HOME, env);
+  }
+  const home = env.HOME || require("node:os").homedir();
+  return path.join(home, ".atomcode");
+}
+
+function resolveAtomCodeDataRoot(env = process.env) {
+  const atomHome = resolveAtomCodeHome(env);
+  return atomHome ? path.join(atomHome, "datalog") : null;
+}
+
+function resolveAtomCodeSessionFiles(env = process.env) {
+  const root = resolveAtomCodeDataRoot(env);
+  if (!root || !fssync.existsSync(root)) return [];
+  const files = [];
+  const walk = (dir) => {
+    let entries;
+    try { entries = fssync.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(full);
+    }
+  };
+  try {
+    for (const proj of fssync.readdirSync(root)) {
+      const projPath = path.join(root, proj);
+      let projStat;
+      try { projStat = fssync.statSync(projPath); } catch { continue; }
+      if (projStat.isDirectory()) walk(projPath);
+    }
+  } catch {
+    // ignore — return what we have
+  }
+  return files.sort((a, b) => a.localeCompare(b));
+}
+
+function resolveAtomCodeLegacyFiles(env = process.env) {
+  const root = resolveAtomCodeDataRoot(env);
+  if (!root || !fssync.existsSync(root)) return [];
+  const files = [];
+  try {
+    for (const proj of fssync.readdirSync(root)) {
+      const llmDir = path.join(root, proj, "llm");
+      let entries;
+      try { entries = fssync.readdirSync(llmDir, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.endsWith(".json")) {
+          files.push(path.join(llmDir, entry.name));
+        }
+      }
+    }
+  } catch {
+    // ignore — return what we have
+  }
+  return files.sort((a, b) => a.localeCompare(b));
+}
+
+// Timestamps live in the filename (`YYYY-MM-DD_HH-MM-SS_mmm-...`), written in
+// local time; records carry no wall clock of their own.
+function atomCodeFilenameTimestampMs(filePath) {
+  const match = ATOMCODE_FILENAME_TS_RE.exec(path.basename(filePath));
+  if (!match) return null;
+  return new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+    Number(match[6]),
+    Number(match[7]),
+  ).getTime();
+}
+
+async function parseAtomCodeIncremental({
+  sessionFiles,
+  legacyFiles,
+  cursors,
+  queuePath,
+  env = process.env,
+  onProgress,
+} = {}) {
+  await ensureDir(path.dirname(queuePath));
+  const providerState =
+    cursors.atomcode && typeof cursors.atomcode === "object" ? { ...cursors.atomcode } : {};
+  // Pre-release cursors carried one flat seenIds array; IDs now live per file
+  // so they can be pruned together with the file's offset state.
+  delete providerState.seenIds;
+  const fileOffsets =
+    providerState.fileOffsets && typeof providerState.fileOffsets === "object"
+      ? { ...providerState.fileOffsets }
+      : {};
+  // Dedupe IDs are kept per file and retained as long as that file's offset
+  // state is active; they are pruned only together with the offset state, so
+  // a truncate/inode re-read can never re-emit an aggregated record.
+  const seenIdsByFile =
+    providerState.seenIdsByFile && typeof providerState.seenIdsByFile === "object"
+      ? Object.fromEntries(
+          Object.entries(providerState.seenIdsByFile).map(([k, v]) => [
+            k,
+            new Set(Array.isArray(v) ? v : []),
+          ]),
+        )
+      : {};
+
+  // When the caller supplies explicit files (tests), don't auto-resolve —
+  // keep the parse hermetic even when only one generation is supplied.
+  const callerSupplied = Array.isArray(sessionFiles) || Array.isArray(legacyFiles);
+  const jsonlFiles = Array.isArray(sessionFiles)
+    ? sessionFiles
+    : callerSupplied
+      ? []
+      : resolveAtomCodeSessionFiles(env);
+  const legacyJsonFiles = Array.isArray(legacyFiles)
+    ? legacyFiles
+    : callerSupplied
+      ? []
+      : resolveAtomCodeLegacyFiles(env);
+  const files = [
+    ...jsonlFiles.map((filePath) => ({ filePath, kind: "jsonl" })),
+    ...legacyJsonFiles.map((filePath) => ({ filePath, kind: "legacy-json" })),
+  ];
+
+  // A file that no longer exists takes its offset state and its dedupe IDs
+  // with it — deleting the offset state is the only time IDs may be pruned.
+  const activePaths = new Set(files.map((f) => f.filePath));
+  for (const knownPath of Object.keys(fileOffsets)) {
+    if (activePaths.has(knownPath)) continue;
+    let stillThere = true;
+    try { stillThere = fssync.existsSync(knownPath); } catch { stillThere = true; }
+    if (!stillThere) {
+      delete fileOffsets[knownPath];
+      delete seenIdsByFile[knownPath];
+    }
+  }
+
+  if (files.length === 0) {
+    cursors.atomcode = {
+      ...providerState,
+      seenIdsByFile: Object.fromEntries(
+        Object.entries(seenIdsByFile).map(([k, v]) => [k, Array.from(v)]),
+      ),
+      fileOffsets,
+      updatedAt: new Date().toISOString(),
+    };
+    return {
+      recordsProcessed: 0,
+      eventsAggregated: 0,
+      bucketsQueued: 0,
+      projectBucketsQueued: 0,
+    };
+  }
+
+  const hourlyState = normalizeHourlyState(cursors?.hourly);
+  const touchedBuckets = new Set();
+  const cb = typeof onProgress === "function" ? onProgress : null;
+  let recordsProcessed = 0;
+  let eventsAggregated = 0;
+  let filesProcessed = 0;
+
+  const emitRequest = (model, estimated, tsMs, dedupId, seenSet) => {
+    const bucketStart = toUtcHalfHourStart(new Date(tsMs).toISOString());
+    if (!bucketStart) return false;
+    const resolvedModel = normalizeModelInput(model) || ATOMCODE_UNKNOWN_MODEL;
+    const bucket = getHourlyBucket(hourlyState, "atomcode", resolvedModel, bucketStart);
+    addTotals(bucket.totals, {
+      input_tokens: estimated,
+      cached_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      output_tokens: 0,
+      reasoning_output_tokens: 0,
+      total_tokens: estimated,
+      conversation_count: 1,
+    });
+    touchedBuckets.add(bucketKey("atomcode", resolvedModel, bucketStart));
+    seenSet.add(dedupId);
+    eventsAggregated++;
+    return true;
+  };
+
+  for (const { filePath, kind } of files) {
+    let stat;
+    try { stat = fssync.statSync(filePath); } catch { continue; }
+
+    const prevEntry = fileOffsets[filePath] || {};
+    const prevSize = Number(prevEntry.size) || 0;
+    const prevIno = prevEntry.ino;
+    // Re-read from start if file shrunk (truncate/rewrite) or inode changed.
+    const inodeChanged = typeof prevIno === "number" && prevIno !== stat.ino;
+    const startOffset = stat.size < prevSize || inodeChanged ? 0 : prevSize;
+    if (stat.size <= startOffset) continue;
+    const fileSeen = seenIdsByFile[filePath] || (seenIdsByFile[filePath] = new Set());
+
+    const tsMs = atomCodeFilenameTimestampMs(filePath);
+    // Bytes actually aggregated within the pre-read snapshot; legacy files
+    // consume the whole snapshot on a successful parse.
+    let consumedOffset = stat.size;
+
+    if (kind === "legacy-json") {
+      // One request per file; the file path itself is the dedup identity.
+      const dedupId = `legacy:${filePath}`;
+      let rec;
+      try {
+        rec = JSON.parse(fssync.readFileSync(filePath, "utf8"));
+      } catch {
+        // Truncated mid-write: leave the offset state untouched so the next
+        // sync retries the file instead of skipping it forever.
+        continue;
+      }
+      recordsProcessed++;
+      if (!fileSeen.has(dedupId) && tsMs != null) {
+        const rawEstimated =
+          rec && typeof rec.request === "object" && rec.request
+            ? rec.request.estimated_tokens
+            : rec && rec.estimated_tokens;
+        const estimated = toNonNegativeInt(rawEstimated);
+        if (estimated > 0) {
+          emitRequest(rec && rec.model, estimated, tsMs, dedupId, fileSeen);
+        } else {
+          fileSeen.add(dedupId);
+        }
+      }
+    } else {
+      let stream;
+      try {
+        stream = fssync.createReadStream(filePath, { encoding: "utf8", start: startOffset });
+      } catch { continue; }
+      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+
+      // Bound consumption to the pre-read snapshot size: AtomCode appends to
+      // the file while it is being read, and a trailing line can be
+      // half-flushed with no newline yet. Only complete newline-terminated
+      // lines inside the snapshot are consumed; anything past the bound —
+      // including a partial tail — is left for the next sync to re-read.
+      // Undercounting (\r\n line endings) only re-reads a suffix that dedupe
+      // absorbs; the reverse would skip records.
+      let consumed = startOffset;
+      const endAt = stat.size;
+      for await (const line of rl) {
+        const lineBytes = Buffer.byteLength(line, "utf8") + 1;
+        if (consumed + lineBytes > endAt) break;
+        consumed += lineBytes;
+        if (!line || !line.trim()) continue;
+        let entry;
+        try { entry = JSON.parse(line); } catch { continue; }
+        if (!entry || typeof entry !== "object") continue;
+        recordsProcessed++;
+
+        const estimated = toNonNegativeInt(entry.estimated_tokens);
+        // session_id + request_id is globally unique per request; lines without
+        // a request_id cannot be deduped safely and are skipped rather than
+        // risked double-counting on a later full re-read.
+        const requestId = entry.request_id;
+        if (!Number.isFinite(Number(requestId))) continue;
+        const sessionId =
+          typeof entry.session_id === "string" && entry.session_id ? entry.session_id : filePath;
+        const dedupId = `${sessionId}:${Number(requestId)}`;
+        if (fileSeen.has(dedupId)) continue;
+
+        if (estimated <= 0 || tsMs == null) {
+          fileSeen.add(dedupId);
+          continue;
+        }
+        emitRequest(entry.model, estimated, tsMs, dedupId, fileSeen);
+      }
+      consumedOffset = consumed;
+      try { stream.close(); } catch {}
+    }
+
+    // Store the consumed offset — never a post-read stat size: a size taken
+    // after the read can sit past bytes the parser never aggregated (the file
+    // grew mid-read) and would skip them permanently.
+    fileOffsets[filePath] = {
+      size: consumedOffset,
+      mtimeMs: stat.mtimeMs,
+      ino: stat.ino,
+    };
+    filesProcessed++;
+    if (cb) {
+      cb({
+        index: filesProcessed,
+        total: files.length,
+        bucketsQueued: touchedBuckets.size,
+      });
+    }
+  }
+
+  const bucketsQueued = await enqueueTouchedBuckets({
+    queuePath,
+    hourlyState,
+    touchedBuckets,
+  });
+  const updatedAt = new Date().toISOString();
+  hourlyState.updatedAt = updatedAt;
+  cursors.hourly = hourlyState;
+  cursors.atomcode = {
+    ...providerState,
+    seenIdsByFile: Object.fromEntries(
+      Object.entries(seenIdsByFile).map(([k, v]) => [k, Array.from(v)]),
+    ),
+    fileOffsets,
+    updatedAt,
+  };
+
+  return {
+    recordsProcessed,
+    eventsAggregated,
+    bucketsQueued,
+    projectBucketsQueued: 0,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // pi (@mariozechner/pi-coding-agent) — passive JSONL reader
 // (~/.pi/agent/sessions/**/*.jsonl)
 //
@@ -23656,6 +23998,11 @@ module.exports = {
   resolveOmoSubagentFiles,
   resolveOmoDefaultModel,
   parseOmoIncremental,
+  resolveAtomCodeHome,
+  resolveAtomCodeDataRoot,
+  resolveAtomCodeSessionFiles,
+  resolveAtomCodeLegacyFiles,
+  parseAtomCodeIncremental,
   resolveKilocodeRoots,
   resolveKilocodeTaskFiles,
   normalizeKilocodeProviderToModel,

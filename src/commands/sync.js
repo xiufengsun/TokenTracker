@@ -94,6 +94,9 @@ const {
   parsePrimeAgentIncremental,
   resolveMinimaxCodeSessionFiles,
   parseMinimaxCodeIncremental,
+  resolveAtomCodeSessionFiles,
+  resolveAtomCodeLegacyFiles,
+  parseAtomCodeIncremental,
   resolveCraftSessionFiles,
   parseCraftIncremental,
   resolveReasonixTelemetryFiles,
@@ -295,6 +298,7 @@ const AUTO_SYNC_SOURCES = new Set([
   "acode",
   "antigravity",
   "anythingllm",
+  "atomcode",
   "claude",
   "claude-science",
   "cline",
@@ -2580,6 +2584,38 @@ async function cmdSync(argv, context = {}) {
       }
     }
 
+    // ── AtomCode (AtomGit model-agent CLI) — passive ~/.atomcode/datalog reader ──
+    let atomCodeResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    const atomCodeFiles = sourceAllowed("atomcode")
+      ? resolveAtomCodeSessionFiles(process.env)
+      : [];
+    const atomCodeLegacyFiles = sourceAllowed("atomcode")
+      ? resolveAtomCodeLegacyFiles(process.env)
+      : [];
+    if (atomCodeFiles.length > 0 || atomCodeLegacyFiles.length > 0) {
+      if (progress?.enabled) {
+        progress.start(`Parsing AtomCode ${renderBar(0)} | buckets 0`);
+      }
+      try {
+        atomCodeResult = await parseAtomCodeIncremental({
+          sessionFiles: atomCodeFiles,
+          legacyFiles: atomCodeLegacyFiles,
+          cursors,
+          queuePath,
+          env: process.env,
+          onProgress: (p) => {
+            if (!progress?.enabled) return;
+            const pct = p.total > 0 ? p.index / p.total : 1;
+            progress.update(
+              `Parsing AtomCode ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(p.total)} files | buckets ${formatNumber(p.bucketsQueued)}`,
+            );
+          },
+        });
+      } catch (err) {
+        warnProviderParseFailure("AtomCode", err, opts);
+      }
+    }
+
     // ── Craft Agents (passive ~/.craft-agent + workspaces session.jsonl reader) ──
     let craftResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
     const craftFiles = sourceAllowed("craft")
@@ -3078,6 +3114,7 @@ async function cmdSync(argv, context = {}) {
       workbuddyResult.recordsProcessed +
       ompResult.recordsProcessed +
       omoResult.recordsProcessed +
+      atomCodeResult.recordsProcessed +
       piResult.recordsProcessed +
       primeAgentResult.recordsProcessed +
       minimaxCodeResult.recordsProcessed +
@@ -3120,6 +3157,7 @@ async function cmdSync(argv, context = {}) {
       workbuddyResult.bucketsQueued +
       ompResult.bucketsQueued +
       omoResult.bucketsQueued +
+      atomCodeResult.bucketsQueued +
       piResult.bucketsQueued +
       primeAgentResult.bucketsQueued +
       minimaxCodeResult.bucketsQueued +

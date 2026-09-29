@@ -447,6 +447,9 @@ const PROVIDER_LOGO_MAP = {
   "VOLCANO-ARK": "/brand-logos/volcano-ark.svg",
   // Cline (CLI v3 / desktop app) — the official robot mark.
   CLINE: "/brand-logos/cline.png",
+  // AtomCode (AtomGit model-agent CLI) — the official full-color mark on a
+  // transparent background; renders natively like the Cline/Reasonix PNGs.
+  ATOMCODE: "/brand-logos/atomcode.png",
 };
 
 // AnythingLLM publishes this compact mark in white. Keep the official asset
