@@ -199,6 +199,9 @@ test("scanRootDirState: absence vs stat errors vs a file in place of a directory
   const failing = (code) => ({ statSync: () => { const e = new Error(code); e.code = code; throw e; } });
   assert.deepEqual(scanRootDirState(dir, failing("EACCES")), { exists: false, error: "EACCES" });
   assert.deepEqual(scanRootDirState(dir, failing("ELOOP")), { exists: false, error: "ELOOP" });
+  // A directory that stats fine but cannot be listed is unreadable, not present.
+  const unlistable = { opendirSync: () => { const e = new Error("EACCES"); e.code = "EACCES"; throw e; } };
+  assert.deepEqual(scanRootDirState(dir, unlistable), { exists: false, error: "EACCES" });
 
   const roots = resolveScanRoots({
     home,
@@ -214,6 +217,34 @@ test("scanRootDirState: absence vs stat errors vs a file in place of a directory
   assert.equal(describeScanRootState(entry), " (unreadable: EACCES)");
   assert.equal(describeScanRootState({ exists: false, error: null }), " (missing)");
   assert.equal(describeScanRootState({ exists: true, error: null }), "");
+});
+
+test("a stat-able directory that cannot be listed is reported unreadable, not present (real permissions)", (t) => {
+  if (process.platform === "win32" || (typeof process.getuid === "function" && process.getuid() === 0)) {
+    t.skip("permission bits are not enforced for this user/platform");
+    return;
+  }
+  const home = tmpdir(t);
+  const locked = path.join(home, "locked", "claude");
+  fs.mkdirSync(locked, { recursive: true });
+  fs.chmodSync(locked, 0o000);
+  try {
+    assert.equal(fs.statSync(locked).isDirectory(), true, "precondition: stat succeeds");
+    assert.deepEqual(scanRootDirState(locked), { exists: false, error: "EACCES" });
+    const roots = resolveScanRoots({
+      home,
+      env: {},
+      config: { scanRoots: { claude: [locked] } },
+      base: { claude: [path.join(home, ".claude")] },
+    });
+    const entry = roots.claude.find((e) => e.origin === "config");
+    assert.equal(entry.exists, false);
+    assert.equal(entry.error, "EACCES");
+    assert.deepEqual(extraScanRootPaths(roots.claude), []);
+  } finally {
+    // Restore before the tmpdir cleanup hook runs, or rmSync fails on the locked dir.
+    fs.chmodSync(locked, 0o755);
+  }
 });
 
 test("loadScanRootsConfig reads config.json under the tracker dir and tolerates its absence", async (t) => {

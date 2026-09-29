@@ -72,16 +72,22 @@ function normalizeScanRootsConfig(raw) {
   return out;
 }
 
-// { exists, error }: `exists` is true only for a readable directory. ENOENT
-// and ENOTDIR mean the root is absent (error null); any other failure
-// (EACCES, ELOOP, EIO, ...) is reported as `error` so status and doctor can
-// say "unreadable" instead of "missing" — a root that is there but cannot be
-// read must not be mistaken for one that was never configured.
+// { exists, error }: `exists` is true only for a directory that can be
+// LISTED, not merely stat'ed — a stat-able directory whose listing fails
+// (mode 000, ACL) would otherwise be admitted to the scan, yield no files,
+// read as "present" in status/doctor, and slip past the deferred-repair
+// guard in sync. ENOENT and ENOTDIR (or a regular file in a directory's
+// place) mean the root is absent (error null); any other failure (EACCES,
+// ELOOP, EIO, ...) is reported as `error` so callers can say "unreadable"
+// instead of "missing".
 function scanRootDirState(target, deps = {}) {
   const statSync = deps.statSync || fs.statSync;
+  const opendirSync = deps.opendirSync || fs.opendirSync;
   try {
-    // A regular file where a directory should be is absence, like ENOTDIR.
-    return { exists: statSync(target).isDirectory(), error: null };
+    if (!statSync(target).isDirectory()) return { exists: false, error: null };
+    // Probe listability without reading entries; large roots stay cheap.
+    opendirSync(target).closeSync();
+    return { exists: true, error: null };
   } catch (e) {
     const code = e && typeof e.code === "string" ? e.code : "EUNKNOWN";
     if (code === "ENOENT" || code === "ENOTDIR") return { exists: false, error: null };
