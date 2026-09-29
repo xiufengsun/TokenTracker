@@ -116,6 +116,7 @@ const {
 const wsl = require("../lib/wsl-probe");
 const { getWslMode, isInvalidWslMode, shouldProbeWsl, discoverWslHome } = wsl;
 const { resolveInstallPaths, resolveZcodeNativeDbPath, resolveMimoNativeDbPath } = require("../lib/install-resolver");
+const { describeScanRootOrigin, hasAnyScanChild, resolveScanRoots } = require("../lib/scan-roots");
 const { probeGrokHookState, resolveGrokHome } = require("../lib/grok-hook");
 const { probeOmpHookState } = require("../lib/omp-hook");
 
@@ -229,6 +230,27 @@ async function cmdStatus(argv = []) {
   const geminiHookCommand = buildGeminiHookCommand(notifyPath);
 
   const config = await readJson(configPath);
+  // Extra scan roots (#657): CODEX_HOME / CLAUDE_CONFIG_DIR of this process
+  // plus config.scanRoots, resolved exactly as sync does, so status lists every
+  // root sync walks — this is the output users paste when usage looks wrong.
+  const scanRoots = resolveScanRoots({
+    home,
+    env: process.env,
+    config,
+    base: { codex: [codexHome], claude: [path.join(home, ".claude")] },
+  });
+  const extraScanRootLines = [];
+  for (const provider of ["codex", "claude"]) {
+    for (const entry of scanRoots[provider]) {
+      if (entry.origin === "native") continue;
+      extraScanRootLines.push(
+        `${provider} ${describeScanRootOrigin(entry, provider)}: ${entry.path}${entry.exists ? "" : " (missing)"}`,
+      );
+    }
+  }
+  const scanRootsLine = extraScanRootLines.length > 0
+    ? `- Extra scan roots: ${extraScanRootLines.join(" | ")}`
+    : null;
   const { cursors } = await readCursorStateSummary({ trackerDir, cursorsPath });
   const codexRecordOnlyWarning = formatRecordOnlyWarning(countRecordOnlyFiles(cursors));
   const queueState = (await readJson(queueStatePath)) || { offset: 0 };
@@ -419,6 +441,10 @@ async function cmdStatus(argv = []) {
       ? wsl.discoverWslHome(".claude")
       : null;
     if (wslClaudeHomeStatus) claudeHomesStatus.push({ dir: wslClaudeHomeStatus, label: "WSL" });
+    for (const entry of scanRoots.claude) {
+      if (entry.origin === "native" || !entry.exists) continue;
+      claudeHomesStatus.push({ dir: entry.path, label: describeScanRootOrigin(entry, "claude") });
+    }
     for (const { dir, label } of claudeHomesStatus) {
       const projects = path.join(dir, "projects");
       try {
@@ -665,6 +691,11 @@ async function cmdStatus(argv = []) {
   // Both children, matching requireAnyChild above: an install holding only
   // archived_sessions/ is counted by sync and must not read as "not detected".
   const codexActive = formatResolvedPaths(codexPaths, ["sessions", "archived_sessions"]);
+  for (const entry of scanRoots.codex) {
+    if (entry.origin === "native" || !entry.exists) continue;
+    if (!hasAnyScanChild(entry.path, ["sessions", "archived_sessions"])) continue;
+    codexActive.push(`${describeScanRootOrigin(entry, "codex")}: ${entry.path}`);
+  }
   const codexInstalledStatus = codexActive.length > 0;
 
   const acodePaths = resolveInstallPaths({
@@ -1195,6 +1226,7 @@ async function cmdStatus(argv = []) {
       lastUploadError ? `- Last upload error: ${lastUploadError}` : null,
       syncSkipLine,
       autoRetryLine,
+      scanRootsLine,
       `- Codex notify: ${notifyConfigured ? JSON.stringify(codexNotify) : "unset"}`,
       `- AStudio notify: ${acodeConfigured ? JSON.stringify(acodeNotify) : "unset"}`,
       `- Every Code notify: ${everyCodeConfigured ? JSON.stringify(everyCodeNotify) : "unset"}`,

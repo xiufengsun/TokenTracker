@@ -91,6 +91,7 @@ async function withTempSyncEnv(fn) {
     // writes into the developer's real ~/.tokentracker.
     USERPROFILE: process.env.USERPROFILE,
     CODEX_HOME: process.env.CODEX_HOME,
+    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
     CODE_HOME: process.env.CODE_HOME,
     GEMINI_HOME: process.env.GEMINI_HOME,
     OPENCODE_HOME: process.env.OPENCODE_HOME,
@@ -103,6 +104,7 @@ async function withTempSyncEnv(fn) {
     process.env.HOME = home;
     process.env.USERPROFILE = home;
     process.env.CODEX_HOME = path.join(home, ".codex");
+    delete process.env.CLAUDE_CONFIG_DIR;
     process.env.CODE_HOME = path.join(home, ".code");
     process.env.GEMINI_HOME = path.join(home, ".gemini");
     process.env.OPENCODE_HOME = path.join(home, ".opencode");

@@ -33,6 +33,12 @@ const { parseCodexRolloutFile } = require("./codex-rollout-parser");
 const { computeRowCost, getModelPricing } = require("./pricing");
 const { USD_TICKS_PER_USD, normalizeGrokUsage } = require("./grok-usage");
 const wsl = require("./wsl-probe");
+const {
+  appendUniqueDirs,
+  expandHome,
+  loadScanRootsConfig,
+  normalizeScanRootsConfig,
+} = require("./scan-roots");
 
 // Bump the sidecar when derived metrics change so cached rows are rebuilt
 // instead of leaving the dashboard on the previous (over-counted) heuristic.
@@ -1095,7 +1101,21 @@ function providerRoots(home, providerDir, env, deps = {}) {
     const wslRoot = discoverWslHome(providerDir, { env });
     if (wslRoot) roots.push(wslRoot);
   }
-  return [...new Set(roots)];
+  // Extra roots (#657), mirroring src/commands/sync.js: CLAUDE_CONFIG_DIR is
+  // the spawning process's implicit Claude root (additive — ~/.claude stays
+  // scanned), and config.scanRoots.<provider> arrives as deps.extraRoots from
+  // discoverSessionFiles. Extras are realpath-deduped against the roots above
+  // so one directory listed under two spellings is walked once.
+  const extras = [];
+  const useProcessClaudeConfigDir = providerDir === ".claude"
+    && path.resolve(home) === path.resolve(homedir())
+    && typeof env?.CLAUDE_CONFIG_DIR === "string"
+    && env.CLAUDE_CONFIG_DIR.trim();
+  if (useProcessClaudeConfigDir) extras.push(path.resolve(env.CLAUDE_CONFIG_DIR.trim()));
+  for (const extra of Array.isArray(deps.extraRoots) ? deps.extraRoots : []) {
+    if (typeof extra === "string" && extra) extras.push(path.resolve(extra));
+  }
+  return appendUniqueDirs([...new Set(roots)], extras);
 }
 
 // Group one logical session discovered under more than one root. A group is
@@ -1221,8 +1241,19 @@ function groupCodexFiles(filePaths) {
 
 async function discoverSessionFiles(home, env = process.env, deps = {}) {
   const grokHome = resolveGrokHome(home);
-  const claudeRoots = providerRoots(home, ".claude", env, deps);
-  const codexRoots = providerRoots(home, ".codex", env, deps);
+  // config.scanRoots (#657): read from the tracker config unless the caller
+  // injects it (tests). A missing or malformed config yields no extras.
+  const scanRootsConfig = deps.scanRootsConfig !== undefined
+    ? normalizeScanRootsConfig(deps.scanRootsConfig)
+    : await loadScanRootsConfig({ home });
+  const extraRootsFor = (provider) => scanRootsConfig[provider]
+    .map((root) => expandHome(root, home))
+    .filter((root) => {
+      if (!root) return false;
+      try { return fs.statSync(root).isDirectory(); } catch { return false; }
+    });
+  const claudeRoots = providerRoots(home, ".claude", env, { ...deps, extraRoots: extraRootsFor("claude") });
+  const codexRoots = providerRoots(home, ".codex", env, { ...deps, extraRoots: extraRootsFor("codex") });
   const [claudeGroups, codexGroups, archivedGroups, grok] = await Promise.all([
     Promise.all(claudeRoots.map((r) => listClaudeProjectFiles(path.join(r, "projects")))),
     Promise.all(codexRoots.map((r) => listRolloutFilesDeep(path.join(r, "sessions")))),
@@ -2006,6 +2037,7 @@ module.exports = {
   resumeCommandFor,
   sessionsToCsv,
   providerRoots,
+  discoverSessionFiles,
   dedupeClaudeFilesAcrossRoots,
   analyticsEntryStatKey,
 };

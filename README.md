@@ -398,6 +398,21 @@ Supported providers for WSL auto-discovery and aggregation:
 
 ---
 
+### Extra scan roots (multiple profiles, agent harnesses)
+
+TokenTracker scans `~/.codex` and `~/.claude` (plus `CODEX_HOME` / `CLAUDE_CONFIG_DIR` when the syncing process has them set). If your sessions live somewhere else — a second profile, or an agent harness that gives Codex / Claude Code a private home — list those roots once in `~/.tokentracker/tracker/config.json` and every sync (hook-triggered, app background refresh, CLI) walks them:
+
+```json
+{
+  "scanRoots": {
+    "codex": ["~/.local/share/my-agent/codex"],
+    "claude": ["~/.local/share/my-agent/claude", "~/.claude-work"]
+  }
+}
+```
+
+Each Codex root is expected to hold `sessions/` (and optionally `archived_sessions/`), each Claude root a `projects/` directory. Roots are de-duplicated by resolved path, so a profile whose `projects/` is a symlink to another profile's is read once. `tokentracker status` and `tokentracker doctor` list the extra roots and flag any that are missing.
+
 ## 🛠️ Development
 
 ```bash

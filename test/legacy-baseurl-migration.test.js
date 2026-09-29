@@ -23,6 +23,7 @@ async function withTempHome(fn) {
     HOME: process.env.HOME,
     USERPROFILE: process.env.USERPROFILE,
     CODEX_HOME: process.env.CODEX_HOME,
+    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
     CODE_HOME: process.env.CODE_HOME,
     XDG_DATA_HOME: process.env.XDG_DATA_HOME,
     DSH_HOME: process.env.DSH_HOME,
@@ -36,6 +37,7 @@ async function withTempHome(fn) {
     process.env.HOME = home;
     process.env.USERPROFILE = home;
     process.env.CODEX_HOME = path.join(home, ".codex");
+    delete process.env.CLAUDE_CONFIG_DIR;
     process.env.CODE_HOME = path.join(home, ".code");
     process.env.XDG_DATA_HOME = path.join(home, ".local", "share");
     delete process.env.TOKENTRACKER_DEVICE_TOKEN;
