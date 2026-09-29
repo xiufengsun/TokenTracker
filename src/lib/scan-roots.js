@@ -39,15 +39,19 @@ const PROVIDERS = Object.freeze({
 });
 const PROVIDER_NAMES = Object.freeze(Object.keys(PROVIDERS));
 
+// Turn a configured root into a stable absolute path. `~` expands against
+// `home`, and a RELATIVE entry is resolved against `home` too — never against
+// process.cwd(), which differs between a hook-fired sync, the CLI and the
+// desktop app and would make producers scan different directories.
 function expandHome(value, home) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
-  if (trimmed === "~") return home;
+  if (trimmed === "~") return path.resolve(home);
   if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
-    return path.join(home, trimmed.slice(2));
+    return path.resolve(home, trimmed.slice(2));
   }
-  return trimmed;
+  return path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(home, trimmed);
 }
 
 // Accepts { codex: string | string[], claude: string | string[] }. Anything
@@ -68,13 +72,25 @@ function normalizeScanRootsConfig(raw) {
   return out;
 }
 
-function isDirectorySync(target, deps) {
+// { exists, error }: `exists` is true only for a readable directory. ENOENT
+// and ENOTDIR mean the root is absent (error null); any other failure
+// (EACCES, ELOOP, EIO, ...) is reported as `error` so status and doctor can
+// say "unreadable" instead of "missing" — a root that is there but cannot be
+// read must not be mistaken for one that was never configured.
+function scanRootDirState(target, deps = {}) {
   const statSync = deps.statSync || fs.statSync;
   try {
-    return statSync(target).isDirectory();
-  } catch {
-    return false;
+    // A regular file where a directory should be is absence, like ENOTDIR.
+    return { exists: statSync(target).isDirectory(), error: null };
+  } catch (e) {
+    const code = e && typeof e.code === "string" ? e.code : "EUNKNOWN";
+    if (code === "ENOENT" || code === "ENOTDIR") return { exists: false, error: null };
+    return { exists: false, error: code };
   }
+}
+
+function isDirectorySync(target, deps) {
+  return scanRootDirState(target, deps).exists;
 }
 
 function realpathOrSelf(target, deps) {
@@ -118,10 +134,12 @@ function dedupeDirsByRealpath(dirs, deps = {}) {
 //         covered by base.
 //   config.scanRoots.<provider>[] become origin "config".
 //
-// Every entry: { path, realPath, exists, origin }. `exists` is a directory
-// check; non-existent configured roots are kept in the list (so cursor-path
-// classification stays stable while a volume is unmounted) and callers that
-// walk directories skip them via `exists`.
+// Every entry: { path, realPath, exists, error, origin }. `exists` is a
+// readable-directory check and `error` carries a stat error code other than
+// absence (see scanRootDirState); non-existent or unreadable configured roots
+// are kept in the list (so cursor-path classification stays stable while a
+// volume is unmounted) and callers that walk directories skip them via
+// `exists`.
 function resolveScanRoots({
   home = os.homedir(),
   env = process.env,
@@ -147,14 +165,16 @@ function resolveScanRoots({
     for (const candidate of candidates) {
       const expanded = expandHome(candidate.raw, home);
       if (!expanded) continue;
-      const resolved = path.resolve(expanded);
+      const resolved = expanded;
       const key = identityKey(resolved, deps);
       if (seen.has(key)) continue;
       seen.add(key);
+      const state = scanRootDirState(resolved, deps);
       entries.push({
         path: resolved,
         realPath: realpathOrSelf(resolved, deps),
-        exists: isDirectorySync(resolved, deps),
+        exists: state.exists,
+        error: state.error,
         origin: candidate.origin,
       });
     }
@@ -207,6 +227,13 @@ function describeScanRootOrigin(entry, provider) {
   return "scanRoots";
 }
 
+// "" for a readable root, " (missing)" for an absent one, " (unreadable: CODE)"
+// for a stat failure other than absence.
+function describeScanRootState(entry) {
+  if (!entry || entry.exists) return "";
+  return entry.error ? ` (unreadable: ${entry.error})` : " (missing)";
+}
+
 // config.scanRoots as persisted in ~/.tokentracker/tracker/config.json for
 // callers that do not already hold the config (the session browser).
 async function loadScanRootsConfig({ home = os.homedir() } = {}) {
@@ -220,10 +247,12 @@ module.exports = {
   appendUniqueDirs,
   dedupeDirsByRealpath,
   describeScanRootOrigin,
+  describeScanRootState,
   expandHome,
   extraScanRootPaths,
   hasAnyScanChild,
   loadScanRootsConfig,
   normalizeScanRootsConfig,
   resolveScanRoots,
+  scanRootDirState,
 };

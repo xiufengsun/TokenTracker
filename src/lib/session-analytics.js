@@ -35,9 +35,11 @@ const { USD_TICKS_PER_USD, normalizeGrokUsage } = require("./grok-usage");
 const wsl = require("./wsl-probe");
 const {
   appendUniqueDirs,
+  dedupeDirsByRealpath,
   expandHome,
   loadScanRootsConfig,
   normalizeScanRootsConfig,
+  scanRootDirState,
 } = require("./scan-roots");
 
 // Bump the sidecar when derived metrics change so cached rows are rebuilt
@@ -1246,16 +1248,19 @@ async function discoverSessionFiles(home, env = process.env, deps = {}) {
   const scanRootsConfig = deps.scanRootsConfig !== undefined
     ? normalizeScanRootsConfig(deps.scanRootsConfig)
     : await loadScanRootsConfig({ home });
+  // expandHome resolves `~` and relative entries against `home` (never cwd);
+  // only readable directories are walked, absence and stat errors alike.
   const extraRootsFor = (provider) => scanRootsConfig[provider]
     .map((root) => expandHome(root, home))
-    .filter((root) => {
-      if (!root) return false;
-      try { return fs.statSync(root).isDirectory(); } catch { return false; }
-    });
+    .filter((root) => root && scanRootDirState(root).exists);
   const claudeRoots = providerRoots(home, ".claude", env, { ...deps, extraRoots: extraRootsFor("claude") });
   const codexRoots = providerRoots(home, ".codex", env, { ...deps, extraRoots: extraRootsFor("codex") });
+  // Two distinct roots may share one projects/ dir through a symlink; dedupe
+  // the derived projects dirs by realpath (as sync does) so the browser never
+  // lists the same transcript twice under two spellings.
+  const claudeProjectsDirs = dedupeDirsByRealpath(claudeRoots.map((r) => path.join(r, "projects")));
   const [claudeGroups, codexGroups, archivedGroups, grok] = await Promise.all([
-    Promise.all(claudeRoots.map((r) => listClaudeProjectFiles(path.join(r, "projects")))),
+    Promise.all(claudeProjectsDirs.map((dir) => listClaudeProjectFiles(dir))),
     Promise.all(codexRoots.map((r) => listRolloutFilesDeep(path.join(r, "sessions")))),
     Promise.all(codexRoots.map((r) => listRolloutFilesDeep(path.join(r, "archived_sessions")))),
     listGrokSessionFiles(path.join(grokHome, "sessions")),

@@ -116,7 +116,7 @@ const {
 const wsl = require("../lib/wsl-probe");
 const { getWslMode, isInvalidWslMode, shouldProbeWsl, discoverWslHome } = wsl;
 const { resolveInstallPaths, resolveZcodeNativeDbPath, resolveMimoNativeDbPath } = require("../lib/install-resolver");
-const { describeScanRootOrigin, hasAnyScanChild, resolveScanRoots } = require("../lib/scan-roots");
+const { describeScanRootOrigin, describeScanRootState, hasAnyScanChild, resolveScanRoots } = require("../lib/scan-roots");
 const { probeGrokHookState, resolveGrokHome } = require("../lib/grok-hook");
 const { probeOmpHookState } = require("../lib/omp-hook");
 
@@ -239,17 +239,23 @@ async function cmdStatus(argv = []) {
     config,
     base: { codex: [codexHome], claude: [path.join(home, ".claude")] },
   });
-  const extraScanRootLines = [];
+  const extraScanRoots = [];
   for (const provider of ["codex", "claude"]) {
     for (const entry of scanRoots[provider]) {
       if (entry.origin === "native") continue;
-      extraScanRootLines.push(
-        `${provider} ${describeScanRootOrigin(entry, provider)}: ${entry.path}${entry.exists ? "" : " (missing)"}`,
-      );
+      extraScanRoots.push({
+        provider,
+        origin: describeScanRootOrigin(entry, provider),
+        path: entry.path,
+        exists: entry.exists,
+        error: entry.error || null,
+      });
     }
   }
-  const scanRootsLine = extraScanRootLines.length > 0
-    ? `- Extra scan roots: ${extraScanRootLines.join(" | ")}`
+  const describeExtraScanRoot = (root) =>
+    `${root.provider} ${root.origin}: ${root.path}${describeScanRootState(root)}`;
+  const scanRootsLine = extraScanRoots.length > 0
+    ? `- Extra scan roots: ${extraScanRoots.map(describeExtraScanRoot).join(" | ")}`
     : null;
   const { cursors } = await readCursorStateSummary({ trackerDir, cursorsPath });
   const codexRecordOnlyWarning = formatRecordOnlyWarning(countRecordOnlyFiles(cursors));
@@ -1013,6 +1019,10 @@ async function cmdStatus(argv = []) {
       last_upload_error: lastUploadError || null,
       last_sync_skipped: syncSkip?.at ? syncSkip : null,
       auto_retry: autoRetry || null,
+      // Extra scan roots (#657): CODEX_HOME / CLAUDE_CONFIG_DIR of this process
+      // plus config.scanRoots; `exists` false + `error` null means absent,
+      // `error` set means present but unreadable.
+      extra_scan_roots: extraScanRoots,
       hooks: {
         codex_notify: notifyConfigured,
         acode_notify: acodeConfigured,
@@ -1555,6 +1565,11 @@ function renderLightTable(summary) {
 
   for (const [name, state] of Object.entries(summary.hooks || {})) {
     push(`Hook · ${name}`, state ? "set" : "unset");
+  }
+
+  for (const root of summary.extra_scan_roots || []) {
+    const state = root.exists ? "" : (root.error ? ` (unreadable: ${root.error})` : " (missing)");
+    push(`Scan root · ${root.provider}`, `${root.origin}: ${root.path}${state}`);
   }
 
   for (const [name, info] of Object.entries(summary.providers || {})) {

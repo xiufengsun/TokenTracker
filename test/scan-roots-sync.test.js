@@ -220,5 +220,42 @@ test("a configured root that is not on disk is ignored by sync and flagged by st
     const out = await captureStdout(() => cmdStatus([]));
     assert.match(out, /- Extra scan roots: codex scanRoots: .*gone[\\/]codex \(missing\) \| claude scanRoots: .*gone[\\/]claude \(missing\)/);
     assert.doesNotMatch(out, /scanRoots: .*gone[\\/]codex[\\/]sessions/);
+
+    // Structured output carries the same records.
+    const json = JSON.parse(await captureStdout(() => cmdStatus(["--json"])));
+    assert.deepEqual(json.extra_scan_roots, [
+      { provider: "codex", origin: "scanRoots", path: missing, exists: false, error: null },
+      { provider: "claude", origin: "scanRoots", path: path.join(home, "gone", "claude"), exists: false, error: null },
+    ]);
+    const light = await captureStdout(() => cmdStatus(["--light"]));
+    assert.match(light, /Scan root · codex.*scanRoots: .*gone[\\/]codex \(missing\)/);
+  });
+});
+
+test("full scan defers the Claude ground-truth repair while a configured Claude root is unavailable", async () => {
+  await withTempSyncEnv(async (home) => {
+    const native = path.join(home, ".claude");
+    const extra = path.join(home, "agent-home", "claude");
+    await writeClaudeSession(native, "p1", "s1", { msgId: "m1", input: 100, output: 50 });
+    await writeConfig(home, { scanRoots: { claude: [extra] } });
+    const migrationKey = "claudeGroundTruthRepair_2026_05_v4";
+    const readMigrations = async () =>
+      JSON.parse(await fsp.readFile(path.join(trackerDir(home), "cursors.json"), "utf8")).migrations || {};
+
+    // A scoped hook sync queues rows without running the (full-scan-only) repair.
+    await cmdSync(["--auto", "--from-notify", "--source", "claude"]);
+    assert.equal(await latestTotals(home, "claude"), 150);
+    assert.equal((await readMigrations())[migrationKey], undefined);
+
+    // Full scan with the configured root still absent: rows survive, repair deferred.
+    await cmdSync([]);
+    assert.equal(await latestTotals(home, "claude"), 150);
+    assert.equal((await readMigrations())[migrationKey], undefined, "repair must not run from an incomplete root list");
+
+    // Root appears: the next full scan runs the repair and counts it.
+    await writeClaudeSession(extra, "p2", "s2", { msgId: "m2", input: 10, output: 5 });
+    await cmdSync([]);
+    assert.equal(await latestTotals(home, "claude"), 165);
+    assert.ok((await readMigrations())[migrationKey], "repair ran once the root was available");
   });
 });

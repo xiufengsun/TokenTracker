@@ -1105,14 +1105,31 @@ async function cmdSync(argv, context = {}) {
     }
     if (isFullSourceScan) {
       await reincludeClaudeMemObserverFiles({ cursors, claudeFiles, queuePath, queueStatePath });
-      await repairClaudeQueueFromGroundTruth({
-        cursors,
-        queuePath,
-        queueStatePath,
-        projectQueuePath,
-        projectQueueStatePath,
-        rootDirs: claudeProjectsDirs,
-      });
+      // The ground-truth repair rebuilds every Claude queue row from the roots
+      // it is given. A configured root that is absent or unreadable right now
+      // (unmounted volume, permissions) may still hold history that an earlier
+      // scoped sync queued, so rebuilding without it would erase that history.
+      // Defer: the migration key stays unset and the repair runs on a later
+      // full scan once the root is back. Ordinary scanning still proceeds.
+      const unavailableClaudeRoots = scanRoots.claude
+        .filter((entry) => entry.origin !== "native" && !entry.exists)
+        .map((entry) => entry.path);
+      if (unavailableClaudeRoots.length > 0) {
+        if (!opts.auto) {
+          process.stderr.write(
+            `Claude ground-truth repair deferred: configured scan root(s) unavailable: ${unavailableClaudeRoots.join(", ")}\n`,
+          );
+        }
+      } else {
+        await repairClaudeQueueFromGroundTruth({
+          cursors,
+          queuePath,
+          queueStatePath,
+          projectQueuePath,
+          projectQueueStatePath,
+          rootDirs: claudeProjectsDirs,
+        });
+      }
     }
     let claudeResult = { filesProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
     if (claudeFiles.length > 0) {

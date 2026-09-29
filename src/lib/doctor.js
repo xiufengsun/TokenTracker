@@ -352,12 +352,14 @@ function buildDiagnosticsChecks(diagnostics) {
     }
     if (extras.length > 0) {
       const missing = extras.filter((entry) => !entry.exists);
-      const describe = (list) => list.map((entry) => `${entry.provider} ${entry.path}`).join(", ");
+      const describe = (list) => list
+        .map((entry) => `${entry.provider} ${entry.path}${entry.error ? ` (unreadable: ${entry.error})` : ""}`)
+        .join(", ");
       checks.push({
         id: "scan_roots.extra",
         status: missing.length > 0 ? "warn" : "ok",
         detail: missing.length > 0
-          ? `${missing.length} of ${extras.length} extra scan root(s) missing: ${describe(missing)}`
+          ? `${missing.length} of ${extras.length} extra scan root(s) unavailable: ${describe(missing)}`
           : `${extras.length} extra scan root(s) present: ${describe(extras)}`,
         critical: false,
         meta: { roots: extras },

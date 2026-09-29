@@ -105,6 +105,7 @@ async function collectTrackerDiagnostics({
     path: redactValue(entry.path, home),
     origin: entry.origin,
     exists: entry.exists,
+    error: entry.error || null,
   }));
   const cursorSummary = await readCursorStateSummary({ trackerDir, cursorsPath });
   const cursors = cursorSummary.cursors;

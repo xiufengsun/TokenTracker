@@ -76,6 +76,20 @@ test("discoverSessionFiles walks config.scanRoots for Claude and Codex", async (
   assert.deepEqual(claude, [nativeSession, extraSession].sort());
   assert.deepEqual(codex, [nativeRollout, extraRollout].sort());
 
+  // Two configured roots whose projects/ is one directory (symlink) are read once.
+  const profileB = path.join(home, "profile-b");
+  fs.mkdirSync(profileB, { recursive: true });
+  let linked = true;
+  try {
+    fs.symlinkSync(path.join(home, ".claude", "projects"), path.join(profileB, "projects"), "dir");
+  } catch (_e) {
+    linked = false;
+  }
+  if (linked) {
+    const withLink = await discoverSessionFiles(home, {}, { ...deps, scanRootsConfig: { claude: [extraClaude, profileB] } });
+    assert.deepEqual(withLink.claude.flat().sort(), [nativeSession, extraSession].sort());
+  }
+
   // Without config the extras are not walked (nothing else changed).
   const plain = await discoverSessionFiles(home, {}, { platform: "darwin", homedir: () => home, scanRootsConfig: null });
   assert.deepEqual(plain.claude.flat(), [nativeSession]);

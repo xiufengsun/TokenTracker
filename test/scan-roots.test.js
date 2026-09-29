@@ -24,9 +24,12 @@ const {
   dedupeDirsByRealpath,
   describeScanRootOrigin,
   extraScanRootPaths,
+  describeScanRootState,
+  expandHome,
   loadScanRootsConfig,
   normalizeScanRootsConfig,
   resolveScanRoots,
+  scanRootDirState,
 } = require("../src/lib/scan-roots");
 
 function tmpdir(t) {
@@ -153,6 +156,64 @@ test("dedupeDirsByRealpath / appendUniqueDirs collapse a symlinked projects dir"
     appendUniqueDirs([real, real], [path.join(profileB, "projects"), other, other]),
     [real, real, other],
   );
+});
+
+test("expandHome / resolveScanRoots resolve relative entries against home, never cwd", (t) => {
+  const home = tmpdir(t);
+  fs.mkdirSync(path.join(home, "agent", "codex"), { recursive: true });
+  assert.equal(expandHome("agent/codex", home), path.join(home, "agent", "codex"));
+  assert.equal(expandHome("~/agent/codex", home), path.join(home, "agent", "codex"));
+  assert.equal(expandHome("~", home), path.resolve(home));
+  assert.equal(expandHome("/abs/x/../y", home), path.resolve("/abs/y"));
+  assert.equal(expandHome("  ", home), null);
+
+  const cwd = process.cwd();
+  const elsewhere = tmpdir(t);
+  process.chdir(elsewhere);
+  try {
+    const roots = resolveScanRoots({
+      home,
+      env: {},
+      config: { scanRoots: { codex: ["agent/codex"] } },
+      base: { codex: [path.join(home, ".codex")] },
+    });
+    assert.deepEqual(roots.codex.map((e) => [e.path, e.origin, e.exists]), [
+      [path.join(home, ".codex"), "native", false],
+      [path.join(home, "agent", "codex"), "config", true],
+    ]);
+  } finally {
+    process.chdir(cwd);
+  }
+});
+
+test("scanRootDirState: absence vs stat errors vs a file in place of a directory", (t) => {
+  const home = tmpdir(t);
+  const dir = path.join(home, "dir");
+  fs.mkdirSync(dir);
+  const file = path.join(home, "file");
+  fs.writeFileSync(file, "");
+  assert.deepEqual(scanRootDirState(dir), { exists: true, error: null });
+  assert.deepEqual(scanRootDirState(path.join(home, "nope")), { exists: false, error: null });
+  assert.deepEqual(scanRootDirState(file), { exists: false, error: null });
+  assert.deepEqual(scanRootDirState(path.join(file, "child")), { exists: false, error: null }); // ENOTDIR
+  const failing = (code) => ({ statSync: () => { const e = new Error(code); e.code = code; throw e; } });
+  assert.deepEqual(scanRootDirState(dir, failing("EACCES")), { exists: false, error: "EACCES" });
+  assert.deepEqual(scanRootDirState(dir, failing("ELOOP")), { exists: false, error: "ELOOP" });
+
+  const roots = resolveScanRoots({
+    home,
+    env: {},
+    config: { scanRoots: { claude: [dir] } },
+    base: { claude: [path.join(home, ".claude")] },
+    deps: failing("EACCES"),
+  });
+  const entry = roots.claude.find((e) => e.origin === "config");
+  assert.equal(entry.exists, false);
+  assert.equal(entry.error, "EACCES");
+  assert.deepEqual(extraScanRootPaths(roots.claude), [], "an unreadable root is not offered for walking");
+  assert.equal(describeScanRootState(entry), " (unreadable: EACCES)");
+  assert.equal(describeScanRootState({ exists: false, error: null }), " (missing)");
+  assert.equal(describeScanRootState({ exists: true, error: null }), "");
 });
 
 test("loadScanRootsConfig reads config.json under the tracker dir and tolerates its absence", async (t) => {
