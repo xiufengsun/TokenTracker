@@ -15,7 +15,24 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { discoverSessionFiles, providerRoots } = require("../src/lib/session-analytics");
+const {
+  buildSessionAnalytics,
+  discoverSessionFiles,
+  providerRoots,
+  resolveSessionSidecarPath,
+} = require("../src/lib/session-analytics");
+
+function writeClaudeSession(root, project, sessionId) {
+  const dir = path.join(root, "projects", project);
+  fs.mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `${sessionId}.jsonl`);
+  const rows = [
+    { type: "user", sessionId, cwd: dir, timestamp: "2026-07-18T01:00:00Z", message: { content: [{ type: "text", text: "hi" }] } },
+    { type: "assistant", sessionId, cwd: dir, timestamp: "2026-07-18T01:00:01Z", message: { id: `${sessionId}-m1`, model: "claude-test", usage: { input_tokens: 10, output_tokens: 2 }, content: [{ type: "tool_use", name: "Edit", input: {} }] } },
+  ];
+  fs.writeFileSync(filePath, `${rows.map(JSON.stringify).join("\n")}\n`);
+  return filePath;
+}
 
 function tmpdir(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-sa-scan-roots-"));
@@ -72,6 +89,59 @@ test("providerRoots / discoverSessionFiles anchor a relative CODEX_HOME and CLAU
   } finally {
     process.chdir(cwd);
   }
+});
+
+test("an unreadable configured projects/ marks discovery incomplete and never caches a partial inventory", async (t) => {
+  if (process.platform === "win32" || (typeof process.getuid === "function" && process.getuid() === 0)) {
+    t.skip("permission bits are not enforced for this user/platform");
+    return;
+  }
+  const home = tmpdir(t);
+  const extra = path.join(home, "agent", "claude");
+  writeClaudeSession(path.join(home, ".claude"), "p1", "11111111-1111-4111-8111-111111111111");
+  writeClaudeSession(extra, "p2", "22222222-2222-4222-8222-222222222222");
+  const trackerDir = path.join(home, ".tokentracker", "tracker");
+  fs.mkdirSync(trackerDir, { recursive: true });
+  fs.writeFileSync(path.join(trackerDir, "config.json"), JSON.stringify({ scanRoots: { claude: [extra] } }));
+  const sidecarPath = resolveSessionSidecarPath(home);
+  const metaPath = `${sidecarPath}.meta.json`;
+
+  // Complete snapshot first.
+  const complete = await buildSessionAnalytics({ home, force: true });
+  assert.equal(complete.length, 2);
+  assert.ok(fs.existsSync(metaPath));
+  const metaBefore = fs.readFileSync(metaPath, "utf8");
+
+  const extraProjects = path.join(extra, "projects");
+  fs.chmodSync(extraProjects, 0o000);
+  try {
+    const discovered = await discoverSessionFiles(home, {}, { scanRootsConfig: { claude: [extra] } });
+    assert.deepEqual(discovered.incomplete, [{ path: extraProjects, error: "EACCES" }]);
+    assert.equal(discovered.claude.flat().length, 1, "only the readable root's session is listed");
+
+    // Not forced, complete snapshot on disk: serve it, do not touch the cache.
+    const served = await buildSessionAnalytics({ home, cacheTtlMs: 0 });
+    assert.equal(served.length, 2, "the last complete snapshot wins over a partial rebuild");
+    assert.equal(served.incompleteDirs.length, 1);
+    assert.equal(fs.readFileSync(metaPath, "utf8"), metaBefore, "meta untouched");
+
+    // Forced with no cache: build from what is readable, but persist nothing.
+    fs.rmSync(sidecarPath, { force: true });
+    fs.rmSync(metaPath, { force: true });
+    const partial = await buildSessionAnalytics({ home, force: true });
+    assert.equal(partial.length, 1);
+    assert.equal(partial.incompleteDirs.length, 1);
+    assert.equal(fs.existsSync(sidecarPath), false, "partial inventory must not be cached");
+    assert.equal(fs.existsSync(metaPath), false);
+  } finally {
+    fs.chmodSync(extraProjects, 0o755);
+  }
+
+  // Readable again: a normal build persists a complete snapshot.
+  const again = await buildSessionAnalytics({ home, force: true });
+  assert.equal(again.length, 2);
+  assert.equal(again.incompleteDirs.length, 0);
+  assert.ok(fs.existsSync(metaPath));
 });
 
 test("discoverSessionFiles walks config.scanRoots for Claude and Codex", async (t) => {

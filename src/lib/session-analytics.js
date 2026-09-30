@@ -1262,6 +1262,19 @@ async function discoverSessionFiles(home, env = process.env, deps = {}) {
   // the derived projects dirs by realpath (as sync does) so the browser never
   // lists the same transcript twice under two spellings.
   const claudeProjectsDirs = dedupeDirsByRealpath(claudeRoots.map((r) => path.join(r, "projects")));
+  // listClaudeProjectFiles / listRolloutFilesDeep turn a listing error into an
+  // empty result, so a root whose projects/ (or sessions/) exists but cannot be
+  // read would look like "no sessions" and get cached as such. Report those
+  // directories as incomplete discovery instead; the caller decides not to
+  // persist a partial inventory (sync defers its repair on the same state).
+  const incomplete = [];
+  for (const dir of [
+    ...claudeProjectsDirs,
+    ...codexRoots.map((r) => path.join(r, "sessions")),
+  ]) {
+    const state = scanRootDirState(dir);
+    if (state.error !== null) incomplete.push({ path: dir, error: state.error });
+  }
   const [claudeGroups, codexGroups, archivedGroups, grok] = await Promise.all([
     Promise.all(claudeProjectsDirs.map((dir) => listClaudeProjectFiles(dir))),
     Promise.all(codexRoots.map((r) => listRolloutFilesDeep(path.join(r, "sessions")))),
@@ -1278,7 +1291,20 @@ async function discoverSessionFiles(home, env = process.env, deps = {}) {
   const claude = allClaude.filter((filePaths) => !filePaths.some((filePath) => filePath
     .split(path.sep)
     .some((segment) => segment.endsWith(CLAUDE_MEM_OBSERVER_PROJECT_SUFFIX))));
-  return { claude, codex: groupCodexFiles([...codex, ...archived]), grok };
+  return { claude, codex: groupCodexFiles([...codex, ...archived]), grok, incomplete };
+}
+
+// Warn once per unreadable directory per process: the dashboard polls this
+// path, and a line per poll would flood the serve log.
+const warnedIncompleteDiscovery = new Set();
+function warnIncompleteDiscovery(incomplete) {
+  for (const entry of incomplete) {
+    if (warnedIncompleteDiscovery.has(entry.path)) continue;
+    warnedIncompleteDiscovery.add(entry.path);
+    if (!process.env.NODE_TEST_CONTEXT) {
+      console.warn(`[session-analytics] session directory unreadable (${entry.error}), inventory incomplete: ${entry.path}`);
+    }
+  }
 }
 
 function filesSignature(files) {
@@ -1407,6 +1433,19 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     } catch { /* first run */ }
   }
   const discovered = await discoverSessionFiles(home);
+  // Incomplete discovery (an unreadable projects/ or sessions/ dir): never let
+  // a partial inventory replace a complete snapshot. Serve the last complete
+  // sidecar when there is one; otherwise build from what is readable but do
+  // not persist it, so the next refresh tries again.
+  const incompleteDirs = Array.isArray(discovered.incomplete) ? discovered.incomplete : [];
+  if (incompleteDirs.length > 0) {
+    warnIncompleteDiscovery(incompleteDirs);
+    if (!force && previousMeta?.version === SIDECAR_VERSION) {
+      const cached = readSidecar(sidecarPath);
+      Object.defineProperty(cached, "incompleteDirs", { value: incompleteDirs, enumerable: false });
+      return cached;
+    }
+  }
   // Codex thread titles are stored separately from rollout files. Include the
   // index in the overall signature so an index-only rename reaches the
   // per-file dependency check below on the next refresh. Grok titles/metadata
@@ -1476,19 +1515,22 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     nextFiles[cacheKey] = { stat_key: statKey };
   }
   sessions.sort((a, b) => String(b.ended_at || "").localeCompare(String(a.ended_at || "")));
-  const content = sessions.map(serializeSessionRecord).join("\n") + (sessions.length ? "\n" : "");
-  await writeAtomic(sidecarPath, content);
-  const generatedAt = new Date().toISOString();
-  await writeAtomic(metaPath, `${JSON.stringify({
-    version: SIDECAR_VERSION,
-    signature,
-    generated_at: generatedAt,
-    checked_at: generatedAt,
-    files: nextFiles,
-  })}\n`);
+  if (incompleteDirs.length === 0) {
+    const content = sessions.map(serializeSessionRecord).join("\n") + (sessions.length ? "\n" : "");
+    await writeAtomic(sidecarPath, content);
+    const generatedAt = new Date().toISOString();
+    await writeAtomic(metaPath, `${JSON.stringify({
+      version: SIDECAR_VERSION,
+      signature,
+      generated_at: generatedAt,
+      checked_at: generatedAt,
+      files: nextFiles,
+    })}\n`);
+  }
   // Non-enumerable so the array still behaves exactly like a plain row list
   // for every existing caller (map/filter/JSON of the rows is unaffected).
   Object.defineProperty(sessions, "skippedFiles", { value: skippedFiles, enumerable: false });
+  Object.defineProperty(sessions, "incompleteDirs", { value: incompleteDirs, enumerable: false });
   return sessions;
 }
 
