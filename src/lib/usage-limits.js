@@ -2391,19 +2391,12 @@ function claudeCacheCrossedReset(raw, { nowMs } = {}) {
   });
 }
 
-// A 5h or 7d window that has not started yet (after a claude.com reset, or simply
-// idle) reports 0% with `resets_at: null`; the next prompt starts it. Serving that
-// snapshot for the fresh TTL after Claude was used again freezes the bar at 0% used
-// while real usage climbs, and Anthropic can keep returning null for a few minutes
-// after the first prompt — one prompt can also drive a long agent run with no
-// further prompts. So while a window is unstarted, every poll within
-// CLAUDE_UNSTARTED_WINDOW_RETRY_MS of the last prompt refetches, including after a
-// live read that is itself still unstarted; it stops once the window starts or the
-// retry period lapses. The 429 cooldown is checked before any fetch, so it still
-// applies. Claude Code (including Claude Desktop's Code sessions) appends every
-// prompt to ~/.claude/history.jsonl, so its mtime is the last-prompt signal; the
-// file's contents are never read. Model-scoped windows are excluded: they stay
-// unstarted for as long as that model goes unused.
+// An unstarted 5h/7d window (0%, `resets_at: null`) is started by the next prompt,
+// and Anthropic can lag several minutes behind it, so refetch on every poll within
+// the retry period after the last prompt, even when the live read is still empty.
+// The age is measured from the last prompt, not from the cache, because each empty
+// read rewrites the cache. history.jsonl gains a line per Claude Code prompt; only
+// its mtime is read. Model-scoped windows stay unstarted while that model is unused.
 function claudeCacheAwaitsNewWindow(raw, { home, nowMs } = {}) {
   const unstarted = [raw?.five_hour, raw?.seven_day].some((window) => (
     window && typeof window === "object" && parseTimeMs(window.resets_at) === null
@@ -2411,7 +2404,9 @@ function claudeCacheAwaitsNewWindow(raw, { home, nowMs } = {}) {
   if (!unstarted) return false;
   try {
     const historyPath = path.join(home || os.homedir(), ".claude", "history.jsonl");
-    return nowMs - fs.statSync(historyPath).mtimeMs < CLAUDE_UNSTARTED_WINDOW_RETRY_MS;
+    const ageMs = nowMs - fs.statSync(historyPath).mtimeMs;
+    // A future mtime (clock correction, copied file) would otherwise extend the retry.
+    return ageMs >= 0 && ageMs < CLAUDE_UNSTARTED_WINDOW_RETRY_MS;
   } catch (_error) {
     return false;
   }

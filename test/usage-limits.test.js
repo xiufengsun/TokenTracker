@@ -2410,6 +2410,27 @@ describe("getUsageLimits", () => {
     }
   });
 
+  it("ignores a future-dated history file instead of extending the retry period", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-unstarted-future-"));
+    try {
+      // A clock correction or a file copied from another machine can leave
+      // history.jsonl dated ahead of now; a negative age is not a recent prompt.
+      setupUnstartedClaudeWindow(tmp, { historyAgeMs: -24 * 3600 * 1000 });
+      let upstreamCalls = 0;
+      const result = await runUnstartedWindowLimits(tmp, () => {
+        upstreamCalls += 1;
+        return Promise.resolve({ ok: false, status: 500 });
+      });
+
+      assert.equal(upstreamCalls, 0, "a future-dated history file must not bypass the fresh cache");
+      assert.equal(result.claude.stale, false);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the fresh cache when only a model-scoped window is unstarted", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-unstarted-opus-"));
