@@ -2388,7 +2388,8 @@ describe("getUsageLimits", () => {
   });
 
   it("keeps the fresh cache for an unstarted 5h window while Claude sits idle", async () => {
-    for (const historyAgeMs of [30 * 60 * 1000, null]) {
+    // 16 minutes: just past the 15-minute retry period after the last prompt.
+    for (const historyAgeMs of [16 * 60 * 1000, null]) {
       resetUsageLimitsCache();
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-unstarted-idle-"));
       try {
@@ -2436,22 +2437,70 @@ describe("getUsageLimits", () => {
     }
   });
 
+  it("keeps refetching an unstarted window after a live read that is still unstarted", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-unstarted-lag-"));
+    try {
+      // One prompt a minute ago, then no more: history.jsonl is not touched again,
+      // so after poll 1 rewrites the cache, history is older than cached_at.
+      const { futureReset } = setupUnstartedClaudeWindow(tmp, { historyAgeMs: 60 * 1000 });
+      const liveFiveHourReset = new Date(Date.now() + 5 * 3600 * 1000).toISOString();
+      const upstreamReplies = [
+        { five_hour: { utilization: 0, resets_at: null }, seven_day: { utilization: 27, resets_at: futureReset } },
+        { five_hour: { utilization: 15, resets_at: liveFiveHourReset }, seven_day: { utilization: 28, resets_at: futureReset } },
+      ];
+      let upstreamCalls = 0;
+      const responder = () => {
+        const body = upstreamReplies[Math.min(upstreamCalls, upstreamReplies.length - 1)];
+        upstreamCalls += 1;
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ ...body, seven_day_opus: null }) });
+      };
+
+      const first = await runUnstartedWindowLimits(tmp, responder);
+      assert.equal(upstreamCalls, 1);
+      assert.deepEqual(first.claude.five_hour, { utilization: 0, resets_at: null });
+
+      resetUsageLimitsCache();
+      const second = await runUnstartedWindowLimits(tmp, responder);
+      assert.equal(upstreamCalls, 2, "a still-unstarted live read must not end the retry period");
+      assert.deepEqual(second.claude.five_hour, { utilization: 15, resets_at: liveFiveHourReset });
+
+      resetUsageLimitsCache();
+      const third = await runUnstartedWindowLimits(tmp, responder);
+      assert.equal(upstreamCalls, 2, "once the window has started, the fresh cache applies again");
+      assert.equal(third.claude.five_hour.utilization, 15);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("still serves the unstarted-window snapshot when the live Claude call fails", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-unstarted-429-"));
     try {
       setupUnstartedClaudeWindow(tmp, { historyAgeMs: 60 * 1000 });
-      const result = await runUnstartedWindowLimits(tmp, () => Promise.resolve({
-        ok: false,
-        status: 429,
-        headers: { get: () => "120" },
-        json: async () => ({}),
-      }));
+      let upstreamCalls = 0;
+      const responder = () => {
+        upstreamCalls += 1;
+        return Promise.resolve({
+          ok: false,
+          status: 429,
+          headers: { get: () => "120" },
+          json: async () => ({}),
+        });
+      };
+      const result = await runUnstartedWindowLimits(tmp, responder);
 
       assert.equal(result.claude.error, null);
       assert.equal(result.claude.stale, true);
       assert.equal(result.claude.five_hour.utilization, 0);
       assert.equal(result.claude.seven_day.utilization, 27);
+
+      resetUsageLimitsCache();
+      const duringCooldown = await runUnstartedWindowLimits(tmp, responder);
+      assert.equal(upstreamCalls, 1, "the retry period must not punch through the 429 cooldown");
+      assert.equal(duringCooldown.claude.stale, true);
     } finally {
       resetUsageLimitsCache();
       fs.rmSync(tmp, { recursive: true, force: true });

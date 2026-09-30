@@ -105,6 +105,9 @@ const ANTIGRAVITY_NOT_RUNNING_MESSAGE = "Antigravity IDE is not running. Launch 
 const CLAUDE_LIMITS_CACHE_FILE = "claude-usage-limits-cache.json";
 const CLAUDE_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CLAUDE_LIMITS_CACHE_FRESH_TTL_MS = 10 * 60 * 1000;
+// Longer than the fresh TTL, so a prompt made after a snapshot was written always
+// falls inside it (see claudeCacheAwaitsNewWindow).
+const CLAUDE_UNSTARTED_WINDOW_RETRY_MS = 15 * 60 * 1000;
 // Codex has no rate-limit cooldown like Claude, but its two sequential chatgpt.com requests
 // (/wham/usage + /wham/rate-limit-reset-credits) make it the provider most exposed to slow
 // networks. Persist the last successful read so a timeout serves stale bars instead of a red
@@ -2392,21 +2395,23 @@ function claudeCacheCrossedReset(raw, { nowMs } = {}) {
 // idle) reports 0% with `resets_at: null`; the next prompt starts it. Serving that
 // snapshot for the fresh TTL after Claude was used again freezes the bar at 0% used
 // while real usage climbs, and Anthropic can keep returning null for a few minutes
-// after the first prompt. So an unstarted window stays cacheable until Claude is
-// used after the snapshot was written. Claude Code (including Claude Desktop's Code
-// sessions) appends every prompt to ~/.claude/history.jsonl, so its mtime is that
-// signal; the file's contents are never read. Model-scoped windows are excluded:
-// they stay unstarted for as long as that model goes unused.
-function claudeCacheAwaitsNewWindow(raw, { home } = {}) {
+// after the first prompt — one prompt can also drive a long agent run with no
+// further prompts. So while a window is unstarted, every poll within
+// CLAUDE_UNSTARTED_WINDOW_RETRY_MS of the last prompt refetches, including after a
+// live read that is itself still unstarted; it stops once the window starts or the
+// retry period lapses. The 429 cooldown is checked before any fetch, so it still
+// applies. Claude Code (including Claude Desktop's Code sessions) appends every
+// prompt to ~/.claude/history.jsonl, so its mtime is the last-prompt signal; the
+// file's contents are never read. Model-scoped windows are excluded: they stay
+// unstarted for as long as that model goes unused.
+function claudeCacheAwaitsNewWindow(raw, { home, nowMs } = {}) {
   const unstarted = [raw?.five_hour, raw?.seven_day].some((window) => (
     window && typeof window === "object" && parseTimeMs(window.resets_at) === null
   ));
   if (!unstarted) return false;
-  const cachedAtMs = parseTimeMs(raw?.cached_at);
-  if (!Number.isFinite(cachedAtMs)) return false;
   try {
     const historyPath = path.join(home || os.homedir(), ".claude", "history.jsonl");
-    return fs.statSync(historyPath).mtimeMs > cachedAtMs;
+    return nowMs - fs.statSync(historyPath).mtimeMs < CLAUDE_UNSTARTED_WINDOW_RETRY_MS;
   } catch (_error) {
     return false;
   }
@@ -2414,7 +2419,7 @@ function claudeCacheAwaitsNewWindow(raw, { home } = {}) {
 
 function readFreshClaudeLimitsCache({ home, nowMs = Date.now() } = {}) {
   const raw = readClaudeLimitsCacheRaw({ home });
-  if (!raw || claudeCacheCrossedReset(raw, { nowMs }) || claudeCacheAwaitsNewWindow(raw, { home })) {
+  if (!raw || claudeCacheCrossedReset(raw, { nowMs }) || claudeCacheAwaitsNewWindow(raw, { home, nowMs })) {
     return null;
   }
   return normalizeClaudeCachedLimits(raw, {
