@@ -50,6 +50,30 @@ test("providerRoots appends CLAUDE_CONFIG_DIR and deps.extraRoots, deduped again
   assert.deepEqual(providerRoots(other, ".claude", { CLAUDE_CONFIG_DIR: configDir }, { platform: "darwin", homedir: () => home }), [path.join(other, ".claude")]);
 });
 
+test("providerRoots / discoverSessionFiles anchor a relative CODEX_HOME and CLAUDE_CONFIG_DIR to home, not cwd", async (t) => {
+  const home = tmpdir(t);
+  const codexRoot = path.join(home, "profiles", "codex");
+  const claudeRoot = path.join(home, "profiles", "claude");
+  fs.mkdirSync(path.join(codexRoot, "sessions", "2026", "06", "30"), { recursive: true });
+  fs.mkdirSync(path.join(claudeRoot, "projects", "p"), { recursive: true });
+  const rollout = path.join(codexRoot, "sessions", "2026", "06", "30", "rollout-2026-06-30T00-00-00-019f16bd-4444-7555-8666-777777777777.jsonl");
+  const session = path.join(claudeRoot, "projects", "p", "s.jsonl");
+  fs.writeFileSync(rollout, ""); fs.writeFileSync(session, "");
+  const env = { CODEX_HOME: "profiles/codex", CLAUDE_CONFIG_DIR: "profiles/claude" };
+  const deps = { platform: "darwin", homedir: () => home, scanRootsConfig: null };
+  const cwd = process.cwd();
+  process.chdir(tmpdir(t));
+  try {
+    assert.deepEqual(providerRoots(home, ".codex", env, deps), [codexRoot]);
+    assert.deepEqual(providerRoots(home, ".claude", env, deps), [path.join(home, ".claude"), claudeRoot]);
+    const discovered = await discoverSessionFiles(home, env, deps);
+    assert.deepEqual(discovered.codex.flat(), [rollout]);
+    assert.deepEqual(discovered.claude.flat(), [session]);
+  } finally {
+    process.chdir(cwd);
+  }
+});
+
 test("discoverSessionFiles walks config.scanRoots for Claude and Codex", async (t) => {
   const home = tmpdir(t);
   const nativeClaude = path.join(home, ".claude", "projects", "p1");

@@ -54,6 +54,20 @@ function expandHome(value, home) {
   return path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(home, trimmed);
 }
 
+// The spawning process's implicit root — CODEX_HOME / CLAUDE_CONFIG_DIR —
+// normalized ONCE, the same way configured entries are: `~` and relative
+// values are anchored to `home`, never to process.cwd(). Every producer
+// (sync discovery, the cursor store's codexRoots, status, diagnostics, the
+// session browser) must use this value, or a relative CODEX_HOME such as
+// `profiles/codex` is scanned under one directory and cursor-classified
+// under another, and the same rollout replays. Returns null when unset.
+function resolveEnvRoot(provider, { env = process.env, home = os.homedir() } = {}) {
+  const spec = PROVIDERS[provider];
+  if (!spec) return null;
+  const raw = env && typeof env[spec.envVar] === "string" ? env[spec.envVar] : "";
+  return expandHome(raw, home);
+}
+
 // Accepts { codex: string | string[], claude: string | string[] }. Anything
 // else — wrong type, empty strings, unknown providers — is ignored rather than
 // failing the sync: a malformed config must not stop collection.
@@ -160,10 +174,8 @@ function resolveScanRoots({
     for (const root of Array.isArray(base[provider]) ? base[provider] : []) {
       if (typeof root === "string" && root.trim()) candidates.push({ raw: root, origin: "native" });
     }
-    const envValue = env && typeof env[PROVIDERS[provider].envVar] === "string"
-      ? env[PROVIDERS[provider].envVar].trim()
-      : "";
-    if (envValue) candidates.push({ raw: envValue, origin: "env" });
+    const envRoot = resolveEnvRoot(provider, { env, home });
+    if (envRoot) candidates.push({ raw: envRoot, origin: "env" });
     for (const root of configured[provider]) candidates.push({ raw: root, origin: "config" });
 
     const seen = new Set();
@@ -259,6 +271,7 @@ module.exports = {
   hasAnyScanChild,
   loadScanRootsConfig,
   normalizeScanRootsConfig,
+  resolveEnvRoot,
   resolveScanRoots,
   scanRootDirState,
 };

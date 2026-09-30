@@ -175,6 +175,7 @@ const {
   appendUniqueDirs,
   extraScanRootPaths,
   hasAnyScanChild,
+  resolveEnvRoot,
   resolveScanRoots,
   scanRootDirState,
 } = require("../lib/scan-roots");
@@ -612,9 +613,11 @@ async function cmdSync(argv, context = {}) {
     // does not know is filed in core.json instead of its per-day shard, so two
     // producers with different roots never see each other's cursor and re-parse
     // the file from byte 0 on every alternation (#639). CODEX_HOME keeps its
-    // existing meaning (replaces ~/.codex for this process); config.scanRoots
-    // adds roots for every process.
-    const codexNativeValue = process.env.CODEX_HOME || path.join(home, ".codex");
+    // existing meaning (replaces ~/.codex for this process) but is normalized
+    // once by resolveEnvRoot — a relative value is anchored to home, not cwd —
+    // and that single value feeds discovery AND the cursor store below.
+    // config.scanRoots adds roots for every process.
+    const codexNativeValue = resolveEnvRoot("codex", { env: process.env, home }) || path.join(home, ".codex");
     const scanRoots = resolveScanRoots({
       home,
       env: process.env,

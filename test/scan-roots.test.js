@@ -28,6 +28,7 @@ const {
   expandHome,
   loadScanRootsConfig,
   normalizeScanRootsConfig,
+  resolveEnvRoot,
   resolveScanRoots,
   scanRootDirState,
 } = require("../src/lib/scan-roots");
@@ -181,6 +182,26 @@ test("expandHome / resolveScanRoots resolve relative entries against home, never
       [path.join(home, ".codex"), "native", false],
       [path.join(home, "agent", "codex"), "config", true],
     ]);
+  } finally {
+    process.chdir(cwd);
+  }
+});
+
+test("resolveEnvRoot normalizes CODEX_HOME / CLAUDE_CONFIG_DIR once: relative values anchor to home, never cwd", (t) => {
+  const home = tmpdir(t);
+  assert.equal(resolveEnvRoot("codex", { env: {}, home }), null);
+  assert.equal(resolveEnvRoot("codex", { env: { CODEX_HOME: "  " }, home }), null);
+  assert.equal(resolveEnvRoot("codex", { env: { CODEX_HOME: "profiles/codex" }, home }), path.join(home, "profiles", "codex"));
+  assert.equal(resolveEnvRoot("codex", { env: { CODEX_HOME: "~/profiles/codex" }, home }), path.join(home, "profiles", "codex"));
+  assert.equal(resolveEnvRoot("codex", { env: { CODEX_HOME: "/abs/codex/" }, home }), path.resolve("/abs/codex"));
+  assert.equal(resolveEnvRoot("claude", { env: { CLAUDE_CONFIG_DIR: "profiles/claude" }, home }), path.join(home, "profiles", "claude"));
+  assert.equal(resolveEnvRoot("unknown", { env: { CODEX_HOME: "x" }, home }), null);
+  // The env entry in resolveScanRoots is the same normalized value.
+  const cwd = process.cwd();
+  process.chdir(tmpdir(t));
+  try {
+    const roots = resolveScanRoots({ home, env: { CODEX_HOME: "profiles/codex" }, config: null, base: { codex: [] } });
+    assert.deepEqual(roots.codex.map((e) => [e.path, e.origin]), [[path.join(home, "profiles", "codex"), "env"]]);
   } finally {
     process.chdir(cwd);
   }

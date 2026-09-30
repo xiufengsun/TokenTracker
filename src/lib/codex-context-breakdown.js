@@ -15,6 +15,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
+const { resolveEnvRoot } = require("./scan-roots");
+
 const {
   emptyTotals,
   addInto,
@@ -396,7 +398,7 @@ async function computeCodexContextBreakdown({
     toKey = range?.to || null;
   }
 
-  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  const codexHome = resolveEnvRoot("codex", { env: process.env, home: os.homedir() }) || path.join(os.homedir(), ".codex");
   const roots = codexDir
     ? [codexDir]
     : [path.join(codexHome, "sessions"), path.join(codexHome, "archived_sessions")];

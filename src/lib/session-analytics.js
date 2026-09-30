@@ -1082,8 +1082,11 @@ function providerRoots(home, providerDir, env, deps = {}) {
       && path.resolve(home) === path.resolve(homedir())
       && typeof env?.CODEX_HOME === "string"
       && env.CODEX_HOME.trim();
+    // Same normalization as sync / the cursor store (scan-roots.expandHome):
+    // a relative CODEX_HOME is anchored to home, never to process.cwd(), so
+    // the browser walks the exact root the cursors were keyed under.
     const nativeRoot = useProcessCodexHome
-      ? path.resolve(env.CODEX_HOME.trim())
+      ? expandHome(env.CODEX_HOME, home)
       : path.join(home, providerDir);
     roots.push(nativeRoot);
   }
@@ -1113,7 +1116,7 @@ function providerRoots(home, providerDir, env, deps = {}) {
     && path.resolve(home) === path.resolve(homedir())
     && typeof env?.CLAUDE_CONFIG_DIR === "string"
     && env.CLAUDE_CONFIG_DIR.trim();
-  if (useProcessClaudeConfigDir) extras.push(path.resolve(env.CLAUDE_CONFIG_DIR.trim()));
+  if (useProcessClaudeConfigDir) extras.push(expandHome(env.CLAUDE_CONFIG_DIR, home));
   for (const extra of Array.isArray(deps.extraRoots) ? deps.extraRoots : []) {
     if (typeof extra === "string" && extra) extras.push(path.resolve(extra));
   }

@@ -116,7 +116,13 @@ const {
 const wsl = require("../lib/wsl-probe");
 const { getWslMode, isInvalidWslMode, shouldProbeWsl, discoverWslHome } = wsl;
 const { resolveInstallPaths, resolveZcodeNativeDbPath, resolveMimoNativeDbPath } = require("../lib/install-resolver");
-const { describeScanRootOrigin, describeScanRootState, hasAnyScanChild, resolveScanRoots } = require("../lib/scan-roots");
+const {
+  describeScanRootOrigin,
+  describeScanRootState,
+  hasAnyScanChild,
+  resolveEnvRoot,
+  resolveScanRoots,
+} = require("../lib/scan-roots");
 const { probeGrokHookState, resolveGrokHome } = require("../lib/grok-hook");
 const { probeOmpHookState } = require("../lib/omp-hook");
 
@@ -198,7 +204,9 @@ async function cmdStatus(argv = []) {
   const uploadThrottlePath = path.join(trackerDir, "upload.throttle.json");
   const autoRetryPath = path.join(trackerDir, "auto.retry.json");
   const syncSkipPath = path.join(trackerDir, "sync.skip.json");
-  const codexHome = process.env.CODEX_HOME || path.join(home, ".codex");
+  // Normalized like sync (a relative CODEX_HOME is anchored to home, not cwd)
+  // so status lists exactly the root sync walks.
+  const codexHome = resolveEnvRoot("codex", { env: process.env, home }) || path.join(home, ".codex");
   const codexConfigPath = path.join(codexHome, "config.toml");
   const acodeHome = process.env.TOKENTRACKER_ACODE_HOME || path.join(home, ".acode");
   const acodeConfigPath = path.join(acodeHome, "config.toml");
@@ -689,7 +697,7 @@ async function cmdStatus(argv = []) {
   // users are asked to paste when Codex usage looks wrong, so it must list
   // every root sync actually walks — and no empty shell sync would skip.
   const codexPaths = resolveInstallPaths({
-    nativeValue: process.env.CODEX_HOME || path.join(home, ".codex"),
+    nativeValue: codexHome,
     wslDir: ".codex",
     requireAnyChild: ["sessions", "archived_sessions"],
     union: true,

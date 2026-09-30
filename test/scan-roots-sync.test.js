@@ -174,6 +174,47 @@ test("configured Codex root: scanned, sharded by every producer, stable across C
   });
 });
 
+test("relative CODEX_HOME from a foreign cwd: discovery and cursor roots agree on one real root, no replay across cwd changes", async () => {
+  await withTempSyncEnv(async (home) => {
+    const realRoot = path.join(home, "profiles", "codex");
+    const rollout = await writeCodexRollout(realRoot, "2026-06-30", "019f16bd-4444-7555-8666-777777777777", 33);
+    process.env.CODEX_HOME = path.join("profiles", "codex"); // relative on purpose
+    const originalCwd = process.cwd();
+    const cwdA = await fsp.mkdtemp(path.join(os.tmpdir(), "tt-cwd-a-"));
+    const cwdB = await fsp.mkdtemp(path.join(os.tmpdir(), "tt-cwd-b-"));
+    const forceV2 = { cursorStoreOptions: { forceV2: true } };
+    try {
+      process.chdir(cwdA);
+      await cmdSync([], forceV2);
+      assert.equal(await latestTotals(home, "codex"), 33, "rollout under <home>/profiles/codex was scanned");
+      let store = await readV2Store(home);
+      const codexCursorKeys = [
+        ...Object.keys(store.core.files || {}),
+        ...Object.values(store.shards).flatMap((shard) => Object.keys(shard)),
+      ].filter((key) => key.includes(`${path.sep}profiles${path.sep}codex${path.sep}`));
+      assert.deepEqual(codexCursorKeys, [rollout], "exactly one cursor, keyed under the home-anchored root");
+      assert.ok(!(rollout in (store.core.files || {})), "must not be filed in core.json");
+      assert.ok(store.shards["2026-06-30"] && rollout in store.shards["2026-06-30"], "must be filed in the per-day shard: codexRoots and discovery agree");
+      assert.ok(!Object.keys(store.core.files || {}).concat(...Object.values(store.shards).map(Object.keys))
+        .some((key) => key.startsWith(cwdA)), "nothing was resolved under the process cwd");
+
+      // Another producer with a different cwd sees the same root: no re-parse.
+      process.chdir(cwdB);
+      await cmdSync([], forceV2);
+      assert.equal(await latestTotals(home, "codex"), 33, "no replay when cwd changes");
+      store = await readV2Store(home);
+      assert.ok(rollout in store.shards["2026-06-30"]);
+
+      const out = await captureStdout(() => cmdStatus([]));
+      assert.match(out, new RegExp(`- Codex CLI: sessions found \\(native: ${realRoot.replace(/[\\/]/g, "[\\\\/]")}[\\/]sessions\\)`));
+    } finally {
+      process.chdir(originalCwd);
+      await fsp.rm(cwdA, { recursive: true, force: true });
+      await fsp.rm(cwdB, { recursive: true, force: true });
+    }
+  });
+});
+
 test("Claude: config.scanRoots.claude and CLAUDE_CONFIG_DIR are scanned in addition to ~/.claude; symlinked projects/ read once", async (t) => {
   await withTempSyncEnv(async (home) => {
     const native = path.join(home, ".claude");
