@@ -39,7 +39,7 @@ function clearDismissed() {
  * vertically centers cleanly next to the wing number — mirroring how the real
  * island renders the status-bar icon as a white template image.
  */
-function ClawdGlyph({ className }) {
+export function ClawdGlyph({ className }) {
   return (
     <svg viewBox="0 6 15 9" fill="currentColor" aria-hidden="true" className={className}>
       {/* body (white via currentColor) */}

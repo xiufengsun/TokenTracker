@@ -192,6 +192,10 @@ dashboard.projects.detail.source_conv,ui,DataDetails,ProjectDetailModal,source_c
 dashboard.widgets.title,dashboard,DashboardPage,WidgetOnboardingCard,title,"Desktop Widgets",,active
 dashboard.widgets.hint,dashboard,DashboardPage,WidgetOnboardingCard,hint,"Right-click your desktop → Edit Widgets → search ""TokenTracker""",,active
 dashboard.widgets.dismiss_aria,dashboard,DashboardPage,WidgetOnboardingCard,dismiss_aria,"Dismiss widget intro",,active
+dashboard.linux_topbar.title,dashboard,DashboardPage,LinuxTopBarCard,title,"Track usage in your top bar",,active
+dashboard.linux_topbar.hint,dashboard,DashboardPage,LinuxTopBarCard,hint,"On GNOME, the TokenTracker extension puts today's tokens and spend next to Clawd in the top bar, with a dropdown for limits and trends.",,active
+dashboard.linux_topbar.setup,dashboard,DashboardPage,LinuxTopBarCard,setup,"Set up",,active
+dashboard.linux_topbar.dismiss_aria,dashboard,DashboardPage,LinuxTopBarCard,dismiss_aria,"Dismiss top bar tip",,active
 widgets.page.title,dashboard,WidgetsPage,WidgetsPage,title,"Menu Bar & Widgets",,active
 widgets.cta.open_gallery,dashboard,WidgetsPage,WidgetsPage,cta_open_gallery,"Open Widget Gallery",,active
 widgets.cta.download,dashboard,WidgetsPage,WidgetsPage,cta_download,"Download Mac App",,active

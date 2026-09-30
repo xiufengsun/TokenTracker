@@ -22,6 +22,7 @@ import { SortableCard } from "../components/SortableCard.jsx";
 import { FadeIn } from "../../foundation/FadeIn.jsx";
 import { MacAppBanner } from "../components/MacAppBanner.jsx";
 import { WidgetOnboardingCard } from "../components/WidgetOnboardingCard.jsx";
+import { LinuxTopBarCard } from "../components/LinuxTopBarCard.jsx";
 import { IslandOnboardingCard } from "../components/IslandOnboardingCard.jsx";
 import { QualityPerDollarCard } from "../components/QualityPerDollarCard.jsx";
 import { SessionInsightsCard } from "../components/SessionInsightsCard.jsx";
@@ -227,6 +228,7 @@ export function DashboardView(props) {
     statsPanel: true,
     islandOnboarding: isLocalMode,
     widgetOnboarding: isLocalMode,
+    linuxTopBarCard: isLocalMode,
     installCopy: shouldShowInstall,
     activityHeatmap: Boolean(activityHeatmapBlock),
     deviceUsage: Boolean(deviceUsageBlock),
@@ -279,6 +281,9 @@ export function DashboardView(props) {
       }
       case "widgetOnboarding": {
         return <WidgetOnboardingCard enterDelay={delay} />;
+      }
+      case "linuxTopBarCard": {
+        return <LinuxTopBarCard enterDelay={delay} />;
       }
       case "installCopy": {
         return (
