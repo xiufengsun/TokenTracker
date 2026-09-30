@@ -206,7 +206,8 @@ test("relative CODEX_HOME from a foreign cwd: discovery and cursor roots agree o
       assert.ok(rollout in store.shards["2026-06-30"]);
 
       const out = await captureStdout(() => cmdStatus([]));
-      assert.match(out, new RegExp(`- Codex CLI: sessions found \\(native: ${realRoot.replace(/[\\/]/g, "[\\\\/]")}[\\/]sessions\\)`));
+      // Template literal: [\\\\/] survives as [\\/] in the regex source, matching either separator.
+      assert.match(out, new RegExp(`- Codex CLI: sessions found \\(native: ${realRoot.replace(/[\\/]/g, "[\\\\/]")}[\\\\/]sessions\\)`));
     } finally {
       process.chdir(originalCwd);
       await fsp.rm(cwdA, { recursive: true, force: true });
