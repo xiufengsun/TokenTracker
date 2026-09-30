@@ -137,11 +137,15 @@ test("an unreadable configured projects/ marks discovery incomplete and never ca
     fs.chmodSync(extraProjects, 0o755);
   }
 
-  // Readable again: a normal build persists a complete snapshot.
-  const again = await buildSessionAnalytics({ home, force: true });
+  // Readable again: an ordinary (non-forced) refresh rebuilds and persists a
+  // complete snapshot with both roots' sessions.
+  const again = await buildSessionAnalytics({ home, cacheTtlMs: 0 });
   assert.equal(again.length, 2);
   assert.equal(again.incompleteDirs.length, 0);
   assert.ok(fs.existsSync(metaPath));
+  assert.equal(JSON.parse(fs.readFileSync(metaPath, "utf8")).version > 0, true);
+  const persisted = fs.readFileSync(sidecarPath, "utf8").trim().split("\n");
+  assert.equal(persisted.length, 2, "sidecar holds both sessions after recovery");
 });
 
 test("discoverSessionFiles walks config.scanRoots for Claude and Codex", async (t) => {
