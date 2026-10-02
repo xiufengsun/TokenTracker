@@ -15,10 +15,13 @@ name = "tokentracker-linux"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# 2.12 is the floor: it pulls tao >= 0.36, which fixes the Wayland bug where
+# the title-bar buttons go dead after the window is hidden to the tray and
+# shown again (tauri-apps/tao#1046, #1299).
+tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
 once_cell = "1"
 serde = { version = "1", features = ["derive"] }
