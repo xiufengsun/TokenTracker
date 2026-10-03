@@ -107,12 +107,13 @@ function buildQuotaDetail(window) {
 }
 
 /** Pace + projection for one window spec, in the active display mode. */
-function paceForSpec(spec, mode) {
+function paceForSpec(spec, mode, now) {
   return computePace({
     usedPercent: readWindowPct(spec.window, spec.pctField),
     windowSeconds: resolveWindowSeconds(spec, spec.window),
     resetMs: resetToMs(readWindowReset(spec.window, spec.resetField)),
     mode,
+    now,
   });
 }
 
@@ -148,7 +149,7 @@ function buildWindowHoverDetail(spec, pace, mode) {
 // Shared with the session browser; see ui/components/HoverTooltip.jsx.
 const Tooltip = HoverTooltip;
 
-function LimitBar({ label, pct, reset, mode = LIMIT_DISPLAY_MODES.USED, pacePercent = null, paceOver = false, title = null }) {
+function LimitBar({ label, pct, reset, mode = LIMIT_DISPLAY_MODES.USED, pacePercent = null, paceOver = false, smoothPace = false, title = null }) {
   const rawUsed = Math.max(0, Math.min(100, Number(pct) || 0));
   const displayPct = mode === LIMIT_DISPLAY_MODES.REMAINING ? 100 - rawUsed : rawUsed;
   const rounded = Math.round(displayPct);
@@ -179,11 +180,11 @@ function LimitBar({ label, pct, reset, mode = LIMIT_DISPLAY_MODES.USED, pacePerc
             {/* Notch: a slice of bare track that "cuts" the fill, so the mark reads
                 as a marker and stays visible even over a same-colored fill. */}
             <div
-              className="absolute top-0 h-full bg-oai-gray-100 dark:bg-oai-gray-700/50"
+              className={`absolute top-0 h-full bg-oai-gray-100 dark:bg-oai-gray-700/50 ${smoothPace ? "motion-safe:transition-[left] motion-safe:duration-[10000ms] motion-safe:ease-linear" : ""}`}
               style={{ left: `calc(${paceX}% - 3px)`, width: "6px" }}
             />
             <div
-              className={`absolute top-0 h-full ${paceOver ? "bg-red-500" : "bg-emerald-500"}`}
+              className={`absolute top-0 h-full ${paceOver ? "bg-red-500" : "bg-emerald-500"} ${smoothPace ? "motion-safe:transition-[left] motion-safe:duration-[10000ms] motion-safe:ease-linear" : ""}`}
               style={{ left: `calc(${paceX}% - 1px)`, width: "2px" }}
             />
           </>
@@ -493,19 +494,20 @@ function StatusLine({ children, tone = "neutral" }) {
   return <div className={`text-[11px] leading-snug ${color}`}>{children}</div>;
 }
 
-function LimitWindowSection({ rows, mode, extra = null }) {
+function LimitWindowSection({ rows, mode, smoothPace, extra = null }) {
   const showEmpty = rows.length === 0 && !extra;
   return (
     <>
       {rows.map(({ spec, pace }) => (
         <LimitBar
-          key={spec.key}
+          key={`${spec.key}:${mode}:${readWindowReset(spec.window, spec.resetField)}:${resolveWindowSeconds(spec, spec.window)}`}
           label={spec.label ?? copy(spec.labelKey)}
           pct={readWindowPct(spec.window, spec.pctField)}
           reset={formatReset(readWindowReset(spec.window, spec.resetField))}
           mode={mode}
           pacePercent={pace.pacePercent}
           paceOver={pace.paceOver}
+          smoothPace={smoothPace}
           title={buildWindowHoverDetail(spec, pace, mode)}
         />
       ))}
@@ -600,14 +602,14 @@ function renderProviderExtra(kind, data) {
   return null;
 }
 
-function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, badge = null, subscription = null, now = Date.now()) {
+function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, badge = null, subscription = null, now = Date.now(), smoothPace = false) {
   const spec = PROVIDER_LIMIT_SPECS[id];
   if (!spec) return null;
   // Pace is computed once per window here and shared by the bar + the detail.
   const rows = spec
     .windows(data)
     .filter((s) => s.window)
-    .map((s) => ({ spec: s, pace: paceForSpec(s, mode) }));
+    .map((s) => ({ spec: s, pace: paceForSpec(s, mode, now) }));
   const extra = renderProviderExtra(spec.extra, data);
   return (
     <ToolGroup
@@ -620,7 +622,7 @@ function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, bad
       badge={badge}
       rightAdornment={subscription ? <SubscriptionRightBadge subscription={subscription} /> : null}
     >
-      <LimitWindowSection mode={mode} rows={rows} extra={extra} />
+      <LimitWindowSection mode={mode} rows={rows} smoothPace={smoothPace} extra={extra} />
       {subscription ? <SubscriptionBar subscription={subscription} now={now} mode={mode} /> : null}
       {expanded ? <LimitDetail rows={rows} mode={mode} now={now} /> : null}
       {expanded && subscription ? (
@@ -657,7 +659,7 @@ function renderUnlinkedProvider(id, statusNodes, expanded, onToggle, subscriptio
   );
 }
 
-function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = null, now = Date.now()) {
+function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = null, now = Date.now(), smoothPace = false) {
   if (!PROVIDER_LIMIT_SPECS[id]) return null;
   if (!data?.configured) {
     return renderUnlinkedProvider(
@@ -776,7 +778,7 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
       tooltip={copy("limits.provenance.tooltip", { source: provenance.source, confidence: provenance.confidence })}
     />;
   }
-  return renderConfiguredProvider(id, data, title, mode, expanded, onToggle, badge, subscription, now);
+  return renderConfiguredProvider(id, data, title, mode, expanded, onToggle, badge, subscription, now, smoothPace);
 }
 
 function CopilotOtelHint({ defaultDir }) {
@@ -1175,6 +1177,7 @@ export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, gr
   const labelWidth = useWidestLabelWidth(containerRef);
   const [expandedId, setExpandedId] = useState(null);
   const [now, setNow] = useState(() => Date.now());
+  const [smoothPace, setSmoothPace] = useState(false);
   const effectiveOrder = Array.isArray(order) && order.length > 0 ? order : DEFAULT_ORDER;
   const effectiveMode = displayMode === LIMIT_DISPLAY_MODES.REMAINING
     ? LIMIT_DISPLAY_MODES.REMAINING
@@ -1183,10 +1186,25 @@ export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, gr
     ? copy("limits.settings.display_mode_remaining")
     : copy("limits.settings.display_mode_used");
 
-  // Refresh countdowns/remaining labels once a minute without re-fetching.
+  // Advance the pace mark locally; only page focus changes trigger a limits read.
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 60000);
-    return () => clearInterval(timer);
+    let timer;
+    const onVisibilityChange = () => {
+      clearInterval(timer);
+      setSmoothPace(false);
+      if (document.visibilityState !== "visible") return;
+      setNow(Date.now());
+      timer = setInterval(() => {
+        setSmoothPace(true);
+        setNow(Date.now());
+      }, 10000);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    onVisibilityChange();
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, []);
 
   // One inline row per linked provider. Prefer the soonest still-active
@@ -1231,6 +1249,7 @@ export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, gr
         () => setExpandedId((prev) => (prev === id ? null : id)),
         subscriptionByProvider.get(id) || null,
         now,
+        smoothPace,
       );
     })
     .filter(Boolean);
