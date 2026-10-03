@@ -53,6 +53,7 @@ internal sealed class DashboardWindow : Window
     private CancellationTokenSource? _oauthTimeout;
     private Task? _initializationTask;
     private bool _recoveryInFlight;
+    private bool _tiltForwardLogged;
     private nint _hwnd;
     private string _pendingPathAndQuery = "/?app=1";
 
@@ -202,6 +203,14 @@ internal sealed class DashboardWindow : Window
         base.OnSourceInitialized(e);
         _hwnd = new WindowInteropHelper(this).Handle;
 
+        // Tilt-wheel support: WPF has no horizontal-wheel routed event, and the
+        // composition-hosted WebView2 only sees WPF input — so WM_MOUSEHWHEEL
+        // (0x020E) never reaches the Chromium page. Intercept it at the window and
+        // forward it into the page (see TiltWheelScrollForwarder). The hook lives
+        // on the window, not the control, so it survives ReplaceWebViewControl()
+        // recovery rebuilds.
+        HwndSource.FromHwnd(_hwnd)?.AddHook(DashboardWndProc);
+
         // Dark window chrome so any DWM-drawn pixels stay dark (the app defaults to a
         // dark theme; a user's Settings choice still recolours the page contents).
         int dark = 1;
@@ -229,6 +238,56 @@ internal sealed class DashboardWindow : Window
     {
         if (_hwnd == 0) return;
         DwmSetWindowAttribute(_hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref type, sizeof(int));
+    }
+
+    // ── Tilt wheel (horizontal scroll) ─────────────────────────────────
+
+    /// <summary>
+    /// Forwards horizontal mouse-wheel tilts into the hosted page. Only
+    /// WM_MOUSEHWHEEL is touched: vertical wheeling (WM_MOUSEWHEEL) flows through
+    /// the WebView2 control's normal WPF event channel. While exiting or before
+    /// the WebView core is up (including the ReplaceWebViewControl recovery race)
+    /// there is no page to scroll, so the message is left fully unhandled for the
+    /// default window procedure.
+    /// </summary>
+    private nint DashboardWndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
+    {
+        if (msg != WM_MOUSEHWHEEL) return nint.Zero;
+        if (_exiting || !_coreReady) return nint.Zero;
+
+        try
+        {
+            var core = _webView.CoreWebView2;
+            if (core is null) return nint.Zero;
+
+            var delta = TiltWheelScrollForwarder.ExtractWheelDelta(wParam);
+            // lParam carries the cursor position in screen device pixels;
+            // PointFromScreen converts it to control-relative DIP, which is what
+            // the page's elementFromPoint expects (1 DIP = 1 CSS pixel on the
+            // composition control).
+            var (sx, sy) = TiltWheelScrollForwarder.ExtractScreenPoint(lParam);
+            var point = _webView.PointFromScreen(new System.Windows.Point(sx, sy));
+            var script = TiltWheelScrollForwarder.BuildScrollScript(
+                _coreReady, _exiting, delta, point.X, point.Y);
+            if (script is null) return nint.Zero;
+
+            if (!_tiltForwardLogged)
+            {
+                _tiltForwardLogged = true;
+                Log($"tilt wheel forwarded: delta={delta} point=({point.X:0.#},{point.Y:0.#})");
+            }
+            _ = core.ExecuteScriptAsync(script); // fire-and-forget, like the other injected scripts
+        }
+        catch (Exception ex)
+        {
+            // PointFromScreen / the CoreWebView2 getter can throw while the control
+            // is being rebuilt; a lost tilt tick must never reach the dispatcher.
+            Log($"tilt wheel forward failed: {ex.Message}");
+            return nint.Zero;
+        }
+
+        handled = true;
+        return new nint(1);
     }
 
     // ── WebView2 ───────────────────────────────────────────────────────
@@ -1092,6 +1151,8 @@ internal sealed class DashboardWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        try { HwndSource.FromHwnd(_hwnd)?.RemoveHook(DashboardWndProc); }
+        catch { /* the source may already be gone during teardown */ }
         _oauthTimeout?.Cancel();
         _oauthTimeout?.Dispose();
         _oauthTimeout = null;
@@ -1105,6 +1166,7 @@ internal sealed class DashboardWindow : Window
 
     private const int WM_NCLBUTTONDOWN = 0xA1;
     private const int HTCAPTION = 2;
+    private const int WM_MOUSEHWHEEL = 0x020E; // horizontal wheel tilt (no WPF routing exists for it)
 
     // DWM (Win10 2004+ / Win11)
     private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
