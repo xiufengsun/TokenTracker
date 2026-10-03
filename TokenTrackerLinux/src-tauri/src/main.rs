@@ -1,4 +1,4 @@
-use tokentracker_linux::{external, oauth, paths, server, tray};
+use tokentracker_linux::{external, oauth, paths, server, tray, ui_zoom};
 
 use std::sync::Mutex;
 
@@ -31,6 +31,98 @@ const NATIVE_OAUTH_BRIDGE: &str = r#"
   } catch (e) {}
 })();
 "#;
+
+/// Dashboard zoom bridge, injected in place of Tauri's built-in zoom hotkeys.
+///
+/// The built-in script (`zoom-hotkey.js`) is inert on this client -- its
+/// `plugin:webview|set_webview_zoom` invoke is rejected by the ACL for the
+/// loopback dashboard, and it would forget the level on every launch anyway.
+/// `ui_zoom` documents both failure modes; this script routes the same gestures
+/// through the app's own `set_ui_zoom` command, which is granted to the
+/// dashboard origin and persists what it applies.
+///
+/// The starting level comes from Rust, so a machine that configured one gets it
+/// before the user touches anything. Every change re-reads the value the command
+/// returns, which keeps the clamping in one place instead of duplicating it here.
+fn ui_zoom_bridge(initial_zoom: f64) -> String {
+    format!(
+        r#"(() => {{
+  const STEP = {step};
+  const MIN = {min};
+  const MAX = {max};
+  const BASELINE = {baseline};
+  let zoom = BASELINE;
+
+  const apply = (next) => {{
+    const candidate = Math.min(Math.max(next, MIN), MAX);
+    window.__TAURI_INTERNALS__
+      .invoke('set_ui_zoom', {{ value: candidate }})
+      .then((applied) => {{
+        if (typeof applied === 'number') zoom = applied;
+      }})
+      .catch(() => {{}});
+  }};
+
+  window.addEventListener('keydown', (event) => {{
+    if (!event.ctrlKey) return;
+    if (event.key === '-') apply(zoom - STEP);
+    else if (event.key === '=' || event.key === '+') apply(zoom + STEP);
+    // Resets to the level this launch started at rather than to 100%: on a
+    // desktop configured for 150%, dropping back to 100% is the complaint.
+    else if (event.key === '0') apply(BASELINE);
+  }});
+
+  // `passive: false` so Ctrl + wheel zooms instead of scrolling.
+  window.addEventListener('wheel', (event) => {{
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    apply(event.deltaY < 0 ? zoom + STEP : zoom - STEP);
+  }}, {{ passive: false }});
+}})();"#,
+        step = ui_zoom::ZOOM_STEP,
+        min = ui_zoom::MIN_ZOOM,
+        max = ui_zoom::MAX_ZOOM,
+        baseline = initial_zoom,
+    )
+}
+
+/// The level this launch starts at: environment, then the stored level, then
+/// 100%. See [`ui_zoom::resolve_zoom`].
+fn initial_ui_zoom() -> f64 {
+    let from_env = std::env::var(ui_zoom::ZOOM_ENV).ok();
+    let stored = ui_zoom::default_zoom_path().and_then(|path| ui_zoom::load_zoom(&path));
+    ui_zoom::resolve_zoom(from_env.as_deref(), stored)
+}
+
+/// Apply a level to the dashboard webview.
+///
+/// Reported rather than swallowed: a zoom that silently does nothing is exactly
+/// the bug this replaces.
+fn apply_ui_zoom(window: &WebviewWindow, zoom: f64) {
+    if let Err(error) = window.set_zoom(zoom) {
+        eprintln!("[TokenTracker] failed to apply UI zoom {zoom}: {error}");
+    }
+}
+
+/// Apply and remember a zoom level, then report the level that was applied.
+///
+/// Returns the clamped value (not a `Result`) so the injected bridge can resync
+/// its local copy from the authoritative one. Failures are logged rather than
+/// raised: the webview keeps rendering at the previous level either way, and a
+/// stale preference file is not worth failing the gesture over.
+#[tauri::command]
+fn set_ui_zoom(window: WebviewWindow, value: f64) -> f64 {
+    let applied = ui_zoom::clamp_zoom(value);
+    apply_ui_zoom(&window, applied);
+
+    if let Some(path) = ui_zoom::default_zoom_path() {
+        if let Err(error) = ui_zoom::store_zoom(&path, applied) {
+            eprintln!("[TokenTracker] failed to store UI zoom: {error}");
+        }
+    }
+
+    applied
+}
 
 /// WebKitGTK renders through DMA-BUF by default. On a number of otherwise
 /// supported Wayland setups — most reliably NVIDIA's proprietary driver — that
@@ -96,7 +188,7 @@ fn report_startup_failure(app: &AppHandle, window: &WebviewWindow, error: &str) 
 /// mapped and the tray menu's "Open Dashboard" would silently do nothing,
 /// because `show_main_window` looks for a "main" window that does not exist
 /// yet.
-fn start_dashboard(app: AppHandle, window: WebviewWindow) {
+fn start_dashboard(app: AppHandle, window: WebviewWindow, zoom: f64) {
     // `resource_dir()` is authoritative for bundled builds (AppImage included);
     // `paths` falls back to the Arch prefix and the dev checkout.
     let resource_dir = app.path().resource_dir().ok();
@@ -138,6 +230,11 @@ fn start_dashboard(app: AppHandle, window: WebviewWindow) {
             eprintln!("[TokenTracker] failed to open the dashboard: {error}");
             return;
         }
+        // The level belongs to the webview rather than to a document, but
+        // re-applying it after the navigation costs nothing and guarantees it is
+        // in force from the dashboard's first paint instead of only on the
+        // loading page.
+        apply_ui_zoom(&navigate_window, zoom);
         // A `tokentracker://` callback may have arrived before the server was
         // ready, in which case it was parked as a pending code.
         oauth::deliver_pending_callback(&navigate_app);
@@ -255,7 +352,7 @@ fn main() {
     tauri::Builder::default()
         .manage(PendingAuthCode::default())
         .manage(DashboardBaseUrl::default())
-        .invoke_handler(tauri::generate_handler![oauth::open_oauth])
+        .invoke_handler(tauri::generate_handler![oauth::open_oauth, set_ui_zoom])
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             for arg in argv {
                 if oauth::handle_callback(app, &arg) {
@@ -276,6 +373,10 @@ fn main() {
                 }
             }
 
+            // Resolved before the window exists so the loading page and the
+            // dashboard that replaces it both start at the same level.
+            let zoom = initial_ui_zoom();
+
             // Create the window up front so it paints `src/index.html` as a
             // loading screen and the tray menu has a "main" window to raise
             // while the server is still coming up.
@@ -285,6 +386,7 @@ fn main() {
                 tauri::WebviewUrl::App("index.html".into()),
             )
             .initialization_script(NATIVE_OAUTH_BRIDGE)
+            .initialization_script(ui_zoom_bridge(zoom))
             // `target="_blank"` links (provider status pages, leaderboard
             // profiles) belong in the system browser. WebKitGTK opens nothing
             // at all unless this handler is installed.
@@ -304,10 +406,16 @@ fn main() {
             .title("TokenTracker")
             .inner_size(1180.0, 820.0)
             .min_inner_size(960.0, 640.0)
+            // The app owns the zoom level: Tauri's built-in hotkeys cannot reach
+            // the loopback dashboard through the ACL, and they would not persist
+            // the level even if they could. See `ui_zoom`.
+            .zoom_hotkeys_enabled(false)
             .build()?;
 
+            apply_ui_zoom(&window, zoom);
+
             let handle = app.handle().clone();
-            std::thread::spawn(move || start_dashboard(handle, window));
+            std::thread::spawn(move || start_dashboard(handle, window, zoom));
 
             Ok(())
         })

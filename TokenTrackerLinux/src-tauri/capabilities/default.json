@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Baseline permissions for the local shell page (src/index.html), which is served from the tauri:// origin before the window navigates to the loopback dashboard.",
   "windows": ["main"],
-  "permissions": ["core:default", "allow-open-oauth"]
+  "permissions": ["core:default", "allow-open-oauth", "allow-set-ui-zoom"]
 }

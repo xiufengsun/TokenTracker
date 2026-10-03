@@ -1,12 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "remote-dashboard",
-  "description": "The window navigates to http://127.0.0.1:<port>, which Tauri treats as a REMOTE origin. Remote origins are ACL-gated even when the app declares no manifest, so without this capability the dashboard's open_oauth invoke is rejected and OAuth sign-in cannot start. Scoped to open_oauth only -- core:default deliberately stays on the local capability.",
+  "description": "The window navigates to http://127.0.0.1:<port>, which Tauri treats as a REMOTE origin. Remote origins are ACL-gated even when the app declares no manifest, so without this capability the dashboard's open_oauth invoke is rejected and OAuth sign-in cannot start, and its set_ui_zoom invoke is rejected so the zoom hotkeys silently do nothing. Scoped to the app's own commands only -- core:default deliberately stays on the local capability.",
   "platforms": ["linux"],
   "windows": ["main"],
   "local": false,
   "remote": {
     "urls": ["http://127.0.0.1:*", "http://localhost:*"]
   },
-  "permissions": ["allow-open-oauth"]
+  "permissions": ["allow-open-oauth", "allow-set-ui-zoom"]
 }

@@ -120,6 +120,36 @@ Until the extension is installed, closing the window hides the app with no way t
 get it back from the tray — quit it from the launcher or with `pkill
 tokentracker-linux`.
 
+### Dashboard zoom
+
+The dashboard is a web UI, so everything in it is sized in CSS pixels and does
+not vary with the desktop's own scaling. On a display running at 125% or 150% it
+reads smaller than the native windows around it.
+
+Pick a level for the machine once — either through `TOKENTRACKER_UI_ZOOM` or with
+the hotkeys, which now remember what they apply:
+
+```bash
+TOKENTRACKER_UI_ZOOM=1.5 tokentracker-linux
+```
+
+```ini
+# ~/.local/share/applications/tokentracker.desktop
+Exec=env TOKENTRACKER_UI_ZOOM=1.5 tokentracker-linux %u
+```
+
+| Gesture | Effect |
+|---|---|
+| `Ctrl` + `=` or `Ctrl` + `+` | Zoom in one step (`0.1`) |
+| `Ctrl` + `-` | Zoom out one step (`0.1`) |
+| `Ctrl` + `0` | Back to the level this launch started at |
+| `Ctrl` + wheel | Same as `+` / `-` |
+
+The level lives in `${XDG_CONFIG_HOME:-$HOME/.config}/tokentracker/ui-zoom` and
+is applied on the next launch; `TOKENTRACKER_UI_ZOOM` takes precedence over it.
+Levels are clamped to `0.5`–`3.0`, and a value that cannot be parsed is ignored
+instead of being treated as zero.
+
 ### The window is blank, or the app exits immediately
 
 WebKitGTK renders through DMA-BUF by default. On some Wayland setups — most

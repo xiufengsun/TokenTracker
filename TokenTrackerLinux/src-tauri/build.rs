@@ -1,6 +1,7 @@
 fn main() {
     // Declaring the app's own commands generates the `allow-open-oauth` /
-    // `deny-open-oauth` permissions that `capabilities/*.json` reference.
+    // `deny-open-oauth` (and `allow-set-ui-zoom` / `deny-set-ui-zoom`)
+    // permissions that `capabilities/*.json` reference.
     //
     // Without an app manifest the ACL has no permission to grant, so the
     // remote-origin capability cannot authorize `open_oauth` and the build
@@ -9,7 +10,7 @@ fn main() {
     // grants `allow-open-oauth` as well.
     tauri_build::try_build(
         tauri_build::Attributes::new()
-            .app_manifest(tauri_build::AppManifest::new().commands(&["open_oauth"])),
+            .app_manifest(tauri_build::AppManifest::new().commands(&["open_oauth", "set_ui_zoom"])),
     )
     .expect("failed to run tauri-build");
 }
