@@ -644,15 +644,25 @@ async function fetchGrokBilling(
       headers,
       deadlineMs,
     );
-    if (creditsResult.ok) return creditsResult.body;
-    creditsFailure = `HTTP ${creditsResult.status}`;
+    if (creditsResult.ok) {
+      try {
+        // A 2xx response can still use an unsupported shape. Validate before
+        // preferring it so older accounts can use the legacy endpoint too.
+        normalizeGrokBillingResponse(creditsResult.body);
+        return creditsResult.body;
+      } catch (error) {
+        creditsFailure = `unrecognized response (${error?.message || "invalid billing data"})`;
+      }
+    } else {
+      creditsFailure = `HTTP ${creditsResult.status}`;
+    }
   } catch (error) {
     if (error?.code === "GROK_AUTH_REQUIRED") throw error;
     if (error?.code === "GROK_BILLING_TIMEOUT") throw error;
   }
 
-  // Non-auth HTTP, network, or response-decoding failure → try the legacy
-  // shape once, while sharing the original request deadline.
+  // Non-auth HTTP, network, response-decoding, or shape failure → try the
+  // legacy shape once, while sharing the original request deadline.
   let legacyResult;
   try {
     legacyResult = await fetchGrokBillingAttempt(
