@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildAllModels, buildFleetData, buildTopModels } from "./model-breakdown";
+import {
+  buildAllModels,
+  buildFleetData,
+  buildTopModels,
+  hasModelTokenSplits,
+  modelTokenSplitsTotal,
+} from "./model-breakdown";
 
 describe("buildFleetData", () => {
   it("keeps two decimal places for small provider percentages", () => {
@@ -124,6 +130,19 @@ describe("buildFleetData", () => {
   });
 });
 
+describe("modelTokenSplitsTotal / hasModelTokenSplits", () => {
+  it("sums splits and reports expandability", () => {
+    expect(modelTokenSplitsTotal(undefined)).toBe(0);
+    expect(modelTokenSplitsTotal({})).toBe(0);
+    expect(
+      modelTokenSplitsTotal({ input: 10, output: 5, cached: 0, cacheCreate: 0, reasoning: 0 }),
+    ).toBe(15);
+    expect(hasModelTokenSplits({ tokens: { input: 1 } })).toBe(true);
+    expect(hasModelTokenSplits({})).toBe(false);
+    expect(hasModelTokenSplits(null)).toBe(false);
+  });
+});
+
 describe("buildAllModels", () => {
   it("combines the same model across tools and ranks every personal model", () => {
     const models = buildAllModels([
@@ -144,9 +163,105 @@ describe("buildAllModels", () => {
     ]);
 
     expect(models).toEqual([
-      { id: "gpt-5.6", name: "GPT-5.6", usage: 100, cost: 1, share: 50 },
-      { id: "claude-sonnet", name: "claude-sonnet", usage: 80, cost: null, share: 40 },
-      { id: "gpt-5.5", name: "gpt-5.5", usage: 20, cost: 0.2, share: 10 },
+      {
+        id: "gpt-5.6",
+        name: "GPT-5.6",
+        usage: 100,
+        cost: 1,
+        tokens: { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 },
+        share: 50,
+      },
+      {
+        id: "claude-sonnet",
+        name: "claude-sonnet",
+        usage: 80,
+        cost: null,
+        tokens: { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 },
+        share: 40,
+      },
+      {
+        id: "gpt-5.5",
+        name: "gpt-5.5",
+        usage: 20,
+        cost: 0.2,
+        tokens: { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 },
+        share: 10,
+      },
+    ]);
+  });
+
+  it("combines per-model token-type splits across tools", () => {
+    const models = buildAllModels([
+      {
+        label: "CODEX",
+        models: [
+          {
+            id: "gpt-5.6",
+            name: "gpt-5.6",
+            usage: 100,
+            cost: 1,
+            tokens: { input: 10, output: 5, cached: 80, cacheCreate: 4, reasoning: 1 },
+          },
+        ],
+      },
+      {
+        label: "CURSOR",
+        models: [
+          {
+            id: "gpt-5.6",
+            name: "gpt-5.6",
+            usage: 50,
+            cost: 0.5,
+            tokens: { input: 20, output: 10, cached: 15, cacheCreate: 5, reasoning: 0 },
+          },
+        ],
+      },
+    ]);
+
+    expect(models).toEqual([
+      {
+        id: "gpt-5.6",
+        name: "gpt-5.6",
+        usage: 150,
+        cost: 1.5,
+        tokens: { input: 30, output: 15, cached: 95, cacheCreate: 9, reasoning: 1 },
+        share: 100,
+      },
+    ]);
+  });
+
+  it("carries API token totals through buildFleetData provider models", () => {
+    const fleet = buildFleetData({
+      sources: [
+        {
+          source: "opencode",
+          totals: { billable_total_tokens: 300 },
+          models: [
+            {
+              model_id: "gpt-6.1-sol-fast",
+              totals: {
+                billable_total_tokens: 300,
+                input_tokens: 100,
+                output_tokens: 20,
+                cached_input_tokens: 170,
+                cache_creation_input_tokens: 5,
+                reasoning_output_tokens: 5,
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(fleet[0].models).toEqual([
+      {
+        id: "gpt-6.1-sol-fast",
+        name: "gpt-6.1-sol-fast",
+        share: 100,
+        usage: 300,
+        cost: 0,
+        tokens: { input: 100, output: 20, cached: 170, cacheCreate: 5, reasoning: 5 },
+      },
     ]);
   });
 });

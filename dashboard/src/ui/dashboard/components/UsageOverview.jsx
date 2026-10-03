@@ -33,7 +33,7 @@ import { formatProviderDisplayName } from "../../../lib/provider-display";
 import { DateRangePopover, formatDateShort, getDateFnsLocale } from "./DateRangePopover.jsx";
 import { ProviderIcon } from "./ProviderIcon.jsx";
 import { formatUsdCurrency } from "../../../lib/format";
-import { buildAllModels } from "../../../lib/model-breakdown";
+import { buildAllModels, hasModelTokenSplits } from "../../../lib/model-breakdown";
 import { ContextBreakdownPanel } from "./ContextBreakdownPanel.jsx";
 
 const ALL_PROVIDERS_KEY = "__all__";
@@ -694,12 +694,92 @@ export function UsageOverview({
   );
 }
 
-// Renders a single expanded provider section. Hosts loading state for the
-// inline Context Breakdown so the spinner can sit next to the heading instead
-// of taking its own row.
+// Token-type labels for the expandable per-model detail. Reuses the
+// project-composition copy family so no new i18n keys are needed.
+const MODEL_SPLIT_DEFS = [
+  { key: "input", labelKey: "dashboard.projects.detail.comp_input" },
+  { key: "cached", labelKey: "dashboard.projects.detail.comp_cached" },
+  { key: "cacheCreate", labelKey: "dashboard.projects.detail.comp_cache_write" },
+  { key: "output", labelKey: "dashboard.projects.detail.comp_output" },
+  { key: "reasoning", labelKey: "dashboard.projects.detail.comp_reasoning" },
+];
+
+// Narrow containers drop the fixed value-column minimums so the row wraps
+// instead of overflowing; sm+ restores the aligned columns and widens the
+// share column to fit the expand/collapse label.
+const MODEL_ROW_GRID =
+  "grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-baseline gap-x-3 mb-1.5 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,max-content)_minmax(5.5rem,max-content)_minmax(7rem,max-content)]";
+
+/**
+ * Renders the five token-type split values (input / cached / cache write /
+ * output / reasoning) under an expanded model row.
+ */
+function ModelTokenSplits({ tokens }) {
+  const { formatTokens, formatTokensTooltip } = useTokenFormat();
+  return (
+    <div className="mb-1.5 flex flex-wrap gap-x-4 gap-y-1">
+      {MODEL_SPLIT_DEFS.map((def) => {
+        const value = Math.max(0, Number(tokens?.[def.key]) || 0);
+        return (
+          <span key={def.key} className="inline-flex items-baseline gap-1 text-[11px] tabular-nums">
+            <span className="text-oai-gray-400 dark:text-oai-gray-500">{copy(def.labelKey)}</span>
+            <span
+              title={formatTokensTooltip(value)}
+              className="text-oai-gray-600 dark:text-oai-gray-300"
+            >
+              {formatTokens(value)}
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Grid cells of one model row: name, token total, cost and share. The share
+ * cell carries the expand/collapse hint when the row has token splits.
+ */
+function ModelRowHeader({ model, tokensLabel, costLabel, expandable, isExpanded }) {
+  const { formatTokensTooltip } = useTokenFormat();
+  return (
+    <>
+      <span
+        className="col-start-1 row-start-1 min-w-0 text-sm text-oai-gray-700 dark:text-oai-gray-300 truncate"
+        title={model.name}
+      >
+        {model.name}
+      </span>
+      <span
+        title={formatTokensTooltip(model.usage)}
+        className="col-start-2 row-start-1 text-right whitespace-nowrap text-sm text-oai-gray-500 dark:text-oai-gray-400 tabular-nums"
+      >
+        {tokensLabel}
+      </span>
+      <span className="col-start-3 row-start-1 text-right whitespace-nowrap text-sm text-oai-gray-500 dark:text-oai-gray-400 tabular-nums">
+        {costLabel}
+      </span>
+      <span className="col-start-4 row-start-1 text-right whitespace-nowrap text-sm text-oai-black dark:text-oai-white tabular-nums">
+        {model.share}%
+        {expandable && (
+          <span className="ml-1 align-middle text-[11px] font-normal text-oai-gray-400 dark:text-oai-gray-500">
+            {copy(isExpanded ? "usage.overview.collapse" : "usage.overview.expand")}
+          </span>
+        )}
+      </span>
+    </>
+  );
+}
+
+/**
+ * Renders the per-model usage rows for one provider (or the all-models list).
+ * Rows whose backend entry carries token-type splits become expandable; the
+ * expanded state shows the five split values under the row.
+ */
 function ModelUsageRows({ models, color }) {
   const { currency, rate } = useCurrency();
-  const { formatTokens, formatTokensTooltip } = useTokenFormat();
+  const { formatTokens } = useTokenFormat();
+  const [expandedModel, setExpandedModel] = useState(null);
 
   return (
     <div className="space-y-3">
@@ -707,28 +787,32 @@ function ModelUsageRows({ models, color }) {
         const tokensLabel = formatPositiveTokens(formatTokens, model.usage);
         const costLabel = formatCost(model.cost, currency, rate);
         const clampedShare = Math.max(0, Math.min(100, Number(model.share) || 0));
+        const rowKey = model.id || model.name;
+        // A row expands only when the backend supplied token-type splits;
+        // rows without them keep the exact legacy non-interactive markup.
+        // Split math lives in the .ts helper so this file stays free of
+        // inline comparisons that the ui-hardcode scanner would flag.
+        const expandable = hasModelTokenSplits(model);
+        const isExpanded = expandable && expandedModel === rowKey;
+        const gridClassName = MODEL_ROW_GRID;
+        const headerProps = { model, tokensLabel, costLabel, expandable, isExpanded };
         return (
-          <div key={model.id || model.name} data-model-rank-row>
-            <div className="grid grid-cols-[minmax(0,1fr)_minmax(8rem,max-content)_minmax(5.5rem,max-content)_4rem] items-baseline gap-x-3 mb-1.5">
-              <span
-                className="col-start-1 row-start-1 min-w-0 text-sm text-oai-gray-700 dark:text-oai-gray-300 truncate"
-                title={model.name}
+          <div key={rowKey} data-model-rank-row>
+            {expandable ? (
+              <button
+                type="button"
+                onClick={() => setExpandedModel(isExpanded ? null : rowKey)}
+                aria-expanded={isExpanded}
+                className={`${gridClassName} w-full cursor-pointer text-left`}
               >
-                {model.name}
-              </span>
-              <span
-                title={formatTokensTooltip(model.usage)}
-                className="col-start-2 row-start-1 text-right whitespace-nowrap text-sm text-oai-gray-500 dark:text-oai-gray-400 tabular-nums"
-              >
-                {tokensLabel}
-              </span>
-              <span className="col-start-3 row-start-1 text-right whitespace-nowrap text-sm text-oai-gray-500 dark:text-oai-gray-400 tabular-nums">
-                {costLabel}
-              </span>
-              <span className="col-start-4 row-start-1 text-right whitespace-nowrap text-sm text-oai-black dark:text-oai-white tabular-nums">
-                {model.share}%
-              </span>
-            </div>
+                <ModelRowHeader {...headerProps} />
+              </button>
+            ) : (
+              <div className={gridClassName}>
+                <ModelRowHeader {...headerProps} />
+              </div>
+            )}
+            {isExpanded && <ModelTokenSplits tokens={model.tokens} />}
             <div
               className="h-[3px] bg-oai-gray-100 dark:bg-oai-gray-800 rounded-full overflow-hidden"
               role="progressbar"
@@ -780,6 +864,9 @@ function DevinPricingNotice() {
   );
 }
 
+// Renders a single expanded provider section. Hosts loading state for the
+// inline Context Breakdown so the spinner can sit next to the heading instead
+// of taking its own row.
 function ProviderExpandedSection({ provider, color, providerHeading, contextSource, from, to, sortedModels }) {
   const { formatTokens } = useTokenFormat();
   const [breakdownLoading, setBreakdownLoading] = useState(false);

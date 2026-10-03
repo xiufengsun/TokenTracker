@@ -227,10 +227,11 @@ test("buildAllModels creates a complete cross-tool personal model ranking", asyn
     },
   ]);
 
+  const zeroSplits = { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 };
   assert.deepEqual(models, [
-    { id: "gpt-5.6", name: "GPT-5.6", usage: 100, cost: 1, share: 50 },
-    { id: "claude-sonnet", name: "claude-sonnet", usage: 80, cost: null, share: 40 },
-    { id: "gpt-5.5", name: "gpt-5.5", usage: 20, cost: 0.2, share: 10 },
+    { id: "gpt-5.6", name: "GPT-5.6", usage: 100, cost: 1, tokens: zeroSplits, share: 50 },
+    { id: "claude-sonnet", name: "claude-sonnet", usage: 80, cost: null, tokens: zeroSplits, share: 40 },
+    { id: "gpt-5.5", name: "gpt-5.5", usage: 20, cost: 0.2, tokens: zeroSplits, share: 10 },
   ]);
 });
 
@@ -253,10 +254,11 @@ test("model rankings merge provider-qualified ids only when a bare peer exists (
     },
   ];
 
+  const zeroSplits = { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 };
   assert.deepEqual(mod.buildAllModels(fleetData), [
-    { id: "glm-5.2", name: "GLM-5.2", usage: 100, cost: 1, share: 76.9 },
-    { id: "openrouter/shared", name: "openrouter/shared", usage: 20, cost: 0.2, share: 15.4 },
-    { id: "bedrock/shared", name: "bedrock/shared", usage: 10, cost: 0.1, share: 7.7 },
+    { id: "glm-5.2", name: "GLM-5.2", usage: 100, cost: 1, tokens: zeroSplits, share: 76.9 },
+    { id: "openrouter/shared", name: "openrouter/shared", usage: 20, cost: 0.2, tokens: zeroSplits, share: 15.4 },
+    { id: "bedrock/shared", name: "bedrock/shared", usage: 10, cost: 0.1, tokens: zeroSplits, share: 7.7 },
   ]);
 
   const top = mod.buildTopModels({
