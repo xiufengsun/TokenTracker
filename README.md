@@ -359,6 +359,7 @@ Most users never need this — defaults are sensible. For advanced setups:
 |---|---|---|
 | `TOKENTRACKER_DEBUG` | Enable debug output (`1` to enable) | — |
 | `TOKENTRACKER_NO_TELEMETRY` | Disable all anonymous telemetry — daily heartbeat and dashboard analytics (`1` to disable; the `DO_NOT_TRACK` standard is also respected) | — |
+| `TOKENTRACKER_DISABLED_PROVIDERS` | Skip named usage-limit providers entirely (comma-separated, case-insensitive; Antigravity accepts `antigravity` or `agy`). A disabled provider renders as not configured and issues no live quota requests on its behalf | — |
 | `TOKENTRACKER_HTTP_TIMEOUT_MS` | HTTP timeout in milliseconds | `20000` |
 | `TOKENTRACKER_DISABLE_GIT_ATTRIBUTION` | Skip Git commit attribution (`1` to disable). Attribution runs `git log` inside the working directory of each recent session. Disabling keeps TokenTracker out of your project directories entirely — the Outcomes view then shows only manually recorded outcomes | — |
 | `TOKENTRACKER_GIT_ATTRIBUTION_PROTECTED_DIRS` | Let Git attribution enter macOS TCC-protected locations (`1` to allow). By default sessions under `~/Documents`, `~/Downloads`, `~/Desktop`, `~/Library`, the media folders and `/Volumes` are skipped, because macOS raises a separate folder-access prompt for each one. Enable this only if you keep repositories there and don't mind granting access | — |

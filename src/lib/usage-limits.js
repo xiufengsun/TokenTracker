@@ -66,6 +66,14 @@ const DEFAULT_PROVIDER_TIMEOUT_MS = 15_000;
 const ANTIGRAVITY_LIMITS_CACHE_FILE = "usage-limits-cache.json";
 const ANTIGRAVITY_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const ANTIGRAVITY_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS = 12 * 60 * 60 * 1000;
+// Upstream-facing minimum refresh interval for Antigravity. Every live read — the
+// remote retrieveUserQuotaSummary attempt or the local language-server RPCs — ends
+// as an authenticated quota request attributed to the user's Google account, and
+// Google suspends accounts it flags for automated access patterns. Quota windows
+// reset on hour-scale boundaries, so polling at the 2-minute cache cadence buys no
+// visible freshness; a disk cache younger than this is served without any live call.
+// An explicit user refresh (refresh=1 → forceRefresh) still punches through.
+const ANTIGRAVITY_LIMITS_CACHE_FRESH_TTL_MS = 15 * 60 * 1000;
 // Same client id PokeTokenBar and the agy binary embed. This client requires a
 // client_secret; without it a refresh is rejected as 400 invalid_request, so
 // remote renewal is unavailable. After expiry, quota depends on a local
@@ -2272,6 +2280,17 @@ function readAntigravityLimitsCache({ home, nowMs = Date.now() } = {}) {
   }
 }
 
+// Cache young enough to skip the whole live-read chain (remote quota attempt +
+// process/port scans + language-server RPCs). Mirrors readFreshClaudeLimitsCache;
+// see ANTIGRAVITY_LIMITS_CACHE_FRESH_TTL_MS for why Antigravity paces its live reads.
+function readFreshAntigravityLimitsCache({ home, nowMs = Date.now() } = {}) {
+  const cached = readAntigravityLimitsCache({ home, nowMs });
+  if (!cached) return null;
+  const cachedAtMs = parseTimeMs(cached.cached_at);
+  if (cachedAtMs === null || nowMs - cachedAtMs > ANTIGRAVITY_LIMITS_CACHE_FRESH_TTL_MS) return null;
+  return cached;
+}
+
 function writeAntigravityLimitsCache(limits, { home, nowMs = Date.now() } = {}) {
   if (!limits?.configured || limits.error || !hasAntigravityWindow(limits)) return;
   const cachePath = resolveAntigravityLimitsCachePath({ home });
@@ -3496,8 +3515,20 @@ async function fetchAntigravityLimits({
   platform = process.platform,
   securityRunner,
   signal,
+  forceRefresh = false,
 } = {}) {
   const creds = loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
+  // Fresh disk cache → no live call at all (see ANTIGRAVITY_LIMITS_CACHE_FRESH_TTL_MS).
+  // The reauth flag matches antigravityUnavailableResult so an expired token is still
+  // surfaced instead of hidden behind young-looking bars until the next live cycle.
+  if (!forceRefresh) {
+    const fresh = readFreshAntigravityLimitsCache({ home, nowMs });
+    if (fresh) {
+      return antigravityCredentialsNeedReauth(creds, { nowMs })
+        ? { ...fresh, auth_action_required: "reauth" }
+        : fresh;
+    }
+  }
   const startedAtMs = performance.now();
   // min(this step's ceiling, budget left after reserving the fallback guard).
   // 0 means "no time left" — the caller must skip the call, not issue it.
@@ -3775,6 +3806,18 @@ async function getUsageLimits(options = {}) {
   return promise;
 }
 
+// Per-provider opt-out: TOKENTRACKER_DISABLED_PROVIDERS="antigravity,agy" (comma- or
+// space-separated, case-insensitive) makes the listed providers report
+// configured:false — the card renders as absent and no live request is issued for
+// them. Antigravity accepts both names; the list is generic so other providers can
+// join without a new mechanism.
+function isProviderDisabled(env, ...names) {
+  const raw = String(env?.TOKENTRACKER_DISABLED_PROVIDERS || "").trim().toLowerCase();
+  if (!raw) return false;
+  const disabled = new Set(raw.split(/[,\s;]+/).filter(Boolean));
+  return names.some((name) => disabled.has(name));
+}
+
 async function fetchUsageLimitsUncached({
   home,
   env,
@@ -3875,7 +3918,9 @@ async function fetchUsageLimitsUncached({
     // Antigravity's own budget keeps the serial chain inside providerTimeoutMs; this
     // outer race is the enforcing backstop every other provider already has, and the
     // signal makes a fired race actually kill the spawned scans and open sockets.
-    withAbortableProviderTimeout(
+    isProviderDisabled(env, "antigravity", "agy")
+      ? Promise.resolve({ configured: false })
+      : withAbortableProviderTimeout(
       (signal) => fetchAntigravityLimits({
         home,
         commandRunner,
@@ -3886,6 +3931,7 @@ async function fetchUsageLimitsUncached({
         securityRunner,
         providerTimeoutMs,
         signal,
+        forceRefresh,
       }),
       "Antigravity",
       providerTimeoutMs,

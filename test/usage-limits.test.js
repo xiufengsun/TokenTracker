@@ -358,7 +358,150 @@ describe("getUsageLimits antigravity cache", () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it("serves fresh disk cache without any process scan or live call (cooldown)", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-antigravity-cooldown-"));
+    try {
+      writeAntigravityDiskCache(tmp, 60_000);
+      const commandCalls = [];
+      const requestCalls = [];
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        providerTimeoutMs: 1000,
+        securityRunner() { return { status: 1, stdout: "" }; },
+        commandRunner(...args) {
+          commandCalls.push(args);
+          return { status: 1, stdout: "" };
+        },
+        requestFn(...args) {
+          requestCalls.push(args);
+          return new Promise(() => {});
+        },
+        fetchImpl() { return new Promise(() => {}); },
+      });
+
+      assert.equal(result.antigravity.configured, true);
+      assert.equal(result.antigravity.cached, true);
+      assert.equal(result.antigravity.primary_window.used_percent, 42);
+      // Other providers also shell out during the round; /bin/ps is uniquely the
+      // Antigravity process scan.
+      const psScans = commandCalls.filter((call) => call[0] === "/bin/ps");
+      assert.equal(psScans.length, 0, "expected no Antigravity process scan while the disk cache is fresh");
+      assert.equal(requestCalls.length, 0, "expected no language-server or remote port calls while the disk cache is fresh");
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("forceRefresh punches through the fresh-cache cooldown", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-antigravity-force-"));
+    try {
+      writeAntigravityDiskCache(tmp, 60_000);
+      const commandCalls = [];
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        providerTimeoutMs: 1000,
+        forceRefresh: true,
+        securityRunner() { return { status: 1, stdout: "" }; },
+        commandRunner(...args) {
+          commandCalls.push(args);
+          return { status: 1, stdout: "" };
+        },
+        fetchImpl() { return new Promise(() => {}); },
+      });
+
+      // Other providers also shell out during the round; /bin/ps is uniquely the
+      // Antigravity process scan.
+      const psScans = commandCalls.filter((call) => call[0] === "/bin/ps");
+      assert.ok(psScans.length > 0, "expected the Antigravity process scan to run past the cooldown on forceRefresh");
+      // No language server and no credentials → the unavailable fallback serves the
+      // same disk cache, but the live round clearly ran.
+      assert.equal(result.antigravity.configured, true);
+      assert.equal(result.antigravity.primary_window.used_percent, 42);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("goes live again once the fresh-cache cooldown expires", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-antigravity-expired-"));
+    try {
+      writeAntigravityDiskCache(tmp, 16 * 60 * 1000);
+      const commandCalls = [];
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        providerTimeoutMs: 1000,
+        securityRunner() { return { status: 1, stdout: "" }; },
+        commandRunner(...args) {
+          commandCalls.push(args);
+          return { status: 1, stdout: "" };
+        },
+        fetchImpl() { return new Promise(() => {}); },
+      });
+
+      const psScans = commandCalls.filter((call) => call[0] === "/bin/ps");
+      assert.ok(psScans.length > 0, "expected the Antigravity process scan to run once the cooldown expired");
+      assert.equal(result.antigravity.configured, true);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("TOKENTRACKER_DISABLED_PROVIDERS skips the provider round entirely", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-antigravity-disabled-"));
+    try {
+      for (const value of ["antigravity", "agy", "OTHER, ANTIGRAVITY"]) {
+        const commandCalls = [];
+        const result = await getUsageLimits({
+          home: tmp,
+          env: { TOKENTRACKER_DISABLED_PROVIDERS: value },
+          platform: "linux",
+          providerTimeoutMs: 1000,
+          securityRunner() { return { status: 1, stdout: "" }; },
+          commandRunner(...args) {
+            commandCalls.push(args);
+            return { status: 1, stdout: "" };
+          },
+          fetchImpl() { return new Promise(() => {}); },
+        });
+
+        assert.equal(result.antigravity.configured, false, `expected configured:false for "${value}"`);
+        // Other providers also shell out during the round; /bin/ps is uniquely the
+        // Antigravity process scan.
+        const psScans = commandCalls.filter((call) => call[0] === "/bin/ps");
+        assert.equal(psScans.length, 0, `expected no Antigravity process scan for "${value}"`);
+      }
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
+
+function writeAntigravityDiskCache(tmp, ageMs) {
+  const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+  fs.mkdirSync(trackerDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(trackerDir, "usage-limits-cache.json"),
+    JSON.stringify({
+      antigravity: {
+        primary_window: { used_percent: 42, reset_at: "2099-05-22T00:00:00.000Z" },
+        cached_at: new Date(Date.now() - ageMs).toISOString(),
+      },
+    }),
+    "utf8",
+  );
+}
 
 function makeFakeCodexJwt(planType) {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
