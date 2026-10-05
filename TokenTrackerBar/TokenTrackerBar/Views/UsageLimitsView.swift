@@ -1072,11 +1072,19 @@ private struct LimitsExplainContent: View {
     }
 
     private var hasPaceMarker: Bool {
-        specs.contains { spec in
-            spec.pct >= 5
-                && (spec.windowSeconds ?? 0) > 0
-                && spec.resetDate != nil
+        specs.contains { pace(for: $0).pacePercent != nil }
+    }
+
+    private func pace(for spec: LimitWindowSpec) -> LimitPace.Result {
+        guard let windowSeconds = spec.windowSeconds, let resetDate = spec.resetDate else {
+            return LimitPace.Result()
         }
+        return LimitPace.compute(
+            usedFraction: min(max(spec.pct, 0), 100) / 100.0,
+            windowSeconds: windowSeconds,
+            secondsUntilReset: resetDate.timeIntervalSinceNow,
+            remainingMode: remainingMode
+        )
     }
 
     /// Live pace numbers + current-rate projection for one window, via the shared
@@ -1084,15 +1092,7 @@ private struct LimitsExplainContent: View {
     private func line(for spec: LimitWindowSpec) -> String {
         let usedFraction = min(max(spec.pct, 0), 100) / 100.0
         let used = Int((usedFraction * 100).rounded())
-        var pace = LimitPace.Result()
-        if let windowSeconds = spec.windowSeconds, windowSeconds > 0, let resetDate = spec.resetDate {
-            pace = LimitPace.compute(
-                usedFraction: usedFraction,
-                windowSeconds: windowSeconds,
-                secondsUntilReset: resetDate.timeIntervalSinceNow,
-                remainingMode: remainingMode
-            )
-        }
+        let pace = pace(for: spec)
         var text = Strings.limitWindowExplainLine(
             label: spec.label, used: used, expected: pace.expectedPercent, over: pace.paceOver,
             runsOutEta: pace.runsOutEta, projectedEnd: pace.projectedEnd, remainingMode: remainingMode
