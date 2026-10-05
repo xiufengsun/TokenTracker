@@ -162,6 +162,9 @@ if (Test-Path $nm) {
     Get-ChildItem $nm -Recurse -Directory -Include `
         'test','tests','__tests__','examples','example','docs','.github' `
         -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    # Package-specific trims (unused WASM builds) shared with macOS and Linux.
+    & node (Join-Path $RepoRoot 'scripts\trim-embedded-deps.cjs') $nm
+    if ($LASTEXITCODE -ne 0) { throw "trim-embedded-deps failed with exit code $LASTEXITCODE" }
 }
 
 $total = [math]::Round((Get-ChildItem $EmbedDir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 1)

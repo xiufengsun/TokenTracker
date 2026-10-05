@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TokenTracker",
-  "version": "1.1.0",
+  "version": "1.1.11",
   "identifier": "cc.tokentracker.linux",
   "build": {
     "beforeDevCommand": "",
@@ -24,6 +24,14 @@
     ],
     "icon": [
       "icons/icon.png"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/tokentracker.desktop.hbs"
+      },
+      "rpm": {
+        "desktopTemplate": "linux/tokentracker.desktop.hbs"
+      }
+    }
   }
 }

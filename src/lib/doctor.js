@@ -337,6 +337,36 @@ function buildDiagnosticsChecks(diagnostics) {
     });
   }
 
+  // Extra scan roots (#657): surface CODEX_HOME / CLAUDE_CONFIG_DIR / config
+  // roots in the human-readable report and warn when a configured root is not
+  // on disk — a silently missing root is the difference between "no usage"
+  // and "not scanned". Installs without extras get no additional line.
+  const scanRoots = diagnostics?.scan_roots;
+  if (scanRoots && typeof scanRoots === "object") {
+    const extras = [];
+    for (const provider of ["codex", "claude"]) {
+      for (const entry of Array.isArray(scanRoots[provider]) ? scanRoots[provider] : []) {
+        if (!entry || entry.origin === "native") continue;
+        extras.push({ provider, ...entry });
+      }
+    }
+    if (extras.length > 0) {
+      const missing = extras.filter((entry) => !entry.exists);
+      const describe = (list) => list
+        .map((entry) => `${entry.provider} ${entry.path}${entry.error ? ` (unreadable: ${entry.error})` : ""}`)
+        .join(", ");
+      checks.push({
+        id: "scan_roots.extra",
+        status: missing.length > 0 ? "warn" : "ok",
+        detail: missing.length > 0
+          ? `${missing.length} of ${extras.length} extra scan root(s) unavailable: ${describe(missing)}`
+          : `${extras.length} extra scan root(s) present: ${describe(extras)}`,
+        critical: false,
+        meta: { roots: extras },
+      });
+    }
+  }
+
   return checks;
 }
 

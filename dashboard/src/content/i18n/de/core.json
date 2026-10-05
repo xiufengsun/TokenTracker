@@ -8,6 +8,7 @@
   "login.verify_email_success": "E-Mail-Adresse bestätigt. Du kannst dich jetzt anmelden.",
   "login.verify_email_pending": "Bitte schließe die E-Mail-Bestätigung vor der Anmeldung ab.",
   "login.oauth.continue": "Weiter mit {{provider}}",
+  "login.oauth.desktop_start_failed": "Die Desktop-Anmeldung konnte nicht gestartet werden. Bitte versuche es erneut.",
   "login.divider": "oder",
   "login.tab.sign_in": "Anmelden",
   "login.tab.sign_up": "Registrieren",

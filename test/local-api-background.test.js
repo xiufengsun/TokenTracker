@@ -83,6 +83,11 @@ async function runLocalSync(body, options = {}) {
   const savedUserProfile = process.env.USERPROFILE;
   process.env.HOME = tmpHome;
   process.env.USERPROFILE = tmpHome;
+  if (ownsTmpHome) {
+    const trackerDir = path.join(tmpHome, ".tokentracker", "tracker");
+    fs.mkdirSync(trackerDir, { recursive: true });
+    fs.writeFileSync(path.join(trackerDir, "cloud-sync-pref.json"), JSON.stringify({ enabled: true }));
+  }
   const { mod, restore } = loadLocalApiWithSpawn(options.spawnFactory ? options.spawnFactory(calls) : createSuccessfulSpawn(calls));
 
   try {

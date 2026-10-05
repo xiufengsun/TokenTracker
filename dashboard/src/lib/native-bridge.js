@@ -86,6 +86,21 @@ export function isNativeLinuxApp() {
   return Boolean(window.__TAURI_INTERNALS__);
 }
 
+/**
+ * The handler that opens OAuth in the system browser, or null in a normal
+ * browser. macOS and Windows expose `webkit.messageHandlers.nativeOAuth`. The
+ * Linux shell's copy of it may never attach to WebKitGTK's host object, so
+ * there the Tauri command is called directly.
+ */
+export function getNativeOAuthBridge() {
+  if (typeof window === "undefined") return null;
+  const handler = window.webkit?.messageHandlers?.nativeOAuth;
+  if (handler) return handler;
+  const invoke = window.__TAURI_INTERNALS__?.invoke;
+  if (typeof invoke !== "function") return null;
+  return { postMessage: (url) => invoke("open_oauth", { url }) };
+}
+
 function getHandler() {
   if (typeof window === "undefined") return null;
   return window.webkit?.messageHandlers?.nativeBridge ?? null;

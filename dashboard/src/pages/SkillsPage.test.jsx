@@ -61,6 +61,7 @@ vi.mock("../contexts/InsforgeAuthContext.jsx", () => ({
 beforeEach(() => {
   window.history.replaceState({}, "", "/skills");
   localStorage.removeItem("tokentracker_cloud_device_id_v1");
+  localStorage.setItem("tokentracker_cloud_sync_enabled", "1");
   vi.mocked(getInstalledSkills).mockResolvedValue({
     targets: [
       { id: "claude", label: "Claude" },

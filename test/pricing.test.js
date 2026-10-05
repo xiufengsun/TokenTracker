@@ -1208,7 +1208,7 @@ test("index: Cline free-suffixed models remain zero-cost", () => {
 
 test("index: computeRowCost ignores reported costs from non-authoritative sources", () => {
   const row = {
-    source: "command-code",
+    source: "claude",
     model: "claude-sonnet-4-6",
     input_tokens: 1_000_000,
     cached_input_tokens: 0,
@@ -1223,6 +1223,22 @@ test("index: computeRowCost ignores reported costs from non-authoritative source
     estimatedCost,
   );
 });
+
+for (const [model, expected] of [
+  ["claude-sonnet-4-6", 0.0009675],
+  ["glm-4.7-flash", 0],
+  ["zzzz-fixture-unknown-123xyz", 0],
+]) {
+  test(`index: Command Code uses model-table pricing for ${model}, not its display estimate`, () => {
+    const row = {
+      source: "command-code", model, input_tokens: 100, output_tokens: 20,
+      cached_input_tokens: 600, cache_creation_input_tokens: 50, reasoning_output_tokens: 0,
+    };
+    for (const total_cost_usd of [999, 0, undefined]) {
+      assert.equal(pricing.computeRowCost({ ...row, total_cost_usd }), expected);
+    }
+  });
+}
 
 test("index: Pi GitHub Copilot rows keep token usage but have zero estimated API cost", () => {
   pricing.resetPricingForTests();

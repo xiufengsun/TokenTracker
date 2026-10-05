@@ -22,7 +22,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>assets\trayicon.ico</ApplicationIcon>
     <!-- Keep in sync with package.json / project.yml on release. -->
-    <Version>1.1.0</Version>
+    <Version>1.1.11</Version>
     <Product>TokenTracker</Product>
     <Company>TokenTracker</Company>
     <!-- App UI strings live in TrayStrings/NativeLocalization (no .resx), so the

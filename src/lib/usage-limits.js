@@ -105,6 +105,9 @@ const ANTIGRAVITY_NOT_RUNNING_MESSAGE = "Antigravity IDE is not running. Launch 
 const CLAUDE_LIMITS_CACHE_FILE = "claude-usage-limits-cache.json";
 const CLAUDE_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CLAUDE_LIMITS_CACHE_FRESH_TTL_MS = 10 * 60 * 1000;
+// Longer than the fresh TTL, so a prompt made after a snapshot was written always
+// falls inside it (see claudeCacheAwaitsNewWindow).
+const CLAUDE_UNSTARTED_WINDOW_RETRY_MS = 15 * 60 * 1000;
 // Codex has no rate-limit cooldown like Claude, but its two sequential chatgpt.com requests
 // (/wham/usage + /wham/rate-limit-reset-credits) make it the provider most exposed to slow
 // networks. Persist the last successful read so a timeout serves stale bars instead of a red
@@ -2388,9 +2391,32 @@ function claudeCacheCrossedReset(raw, { nowMs } = {}) {
   });
 }
 
+// An unstarted 5h/7d window (0%, `resets_at: null`) is started by the next prompt,
+// and Anthropic can lag several minutes behind it, so refetch on every poll within
+// the retry period after the last prompt, even when the live read is still empty.
+// The age is measured from the last prompt, not from the cache, because each empty
+// read rewrites the cache. history.jsonl gains a line per Claude Code prompt; only
+// its mtime is read. Model-scoped windows stay unstarted while that model is unused.
+function claudeCacheAwaitsNewWindow(raw, { home, nowMs } = {}) {
+  const unstarted = [raw?.five_hour, raw?.seven_day].some((window) => (
+    window && typeof window === "object" && parseTimeMs(window.resets_at) === null
+  ));
+  if (!unstarted) return false;
+  try {
+    const historyPath = path.join(home || os.homedir(), ".claude", "history.jsonl");
+    const ageMs = nowMs - fs.statSync(historyPath).mtimeMs;
+    // A future mtime (clock correction, copied file) would otherwise extend the retry.
+    return ageMs >= 0 && ageMs < CLAUDE_UNSTARTED_WINDOW_RETRY_MS;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function readFreshClaudeLimitsCache({ home, nowMs = Date.now() } = {}) {
   const raw = readClaudeLimitsCacheRaw({ home });
-  if (!raw || claudeCacheCrossedReset(raw, { nowMs })) return null;
+  if (!raw || claudeCacheCrossedReset(raw, { nowMs }) || claudeCacheAwaitsNewWindow(raw, { home, nowMs })) {
+    return null;
+  }
   return normalizeClaudeCachedLimits(raw, {
     nowMs,
     maxAgeMs: CLAUDE_LIMITS_CACHE_FRESH_TTL_MS,

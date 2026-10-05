@@ -32,6 +32,7 @@ const LIMITS_REFRESH_SECONDS = 300;
 const ACCOUNT_CACHE_SIZE = 32;
 const BLINK_EVERY_SECONDS = 5;
 const BLINK_MS = 140;
+const PLACEHOLDER = '–';
 
 // Clawd, in clawd-static-base.svg units, mapped onto a 22x22 canvas with the
 // same constants as MenuBarAnimator.swift so both platforms draw one shape.
@@ -224,6 +225,38 @@ function localTimeZoneQuery() {
     const offset = Math.round(now.get_utc_offset() / 60_000_000);
     return {tz, offset};
 }
+
+// The server answered, just not with usable data. Only a transport failure
+// (refused, timed out) or a reply from something that isn't the app means the
+// app isn't running.
+class ServerError extends Error {}
+
+// The app answers every endpoint, always with JSON, so a 404 or a non-JSON
+// body comes from some other service holding the port.
+class ForeignServerError extends Error {}
+
+// A 200 carrying `null`, an array or a bare value would parse fine and then
+// either throw outside the callers' catch or render as zeros, so treat it like
+// any other bad response.
+function parseResponse(status, text, path) {
+    if (status === 404)
+        throw new ForeignServerError(`HTTP 404 for ${path}`);
+    if (status >= 500)
+        throw new ServerError(`HTTP ${status} for ${path}`);
+    let json;
+    try {
+        json = JSON.parse(text);
+    } catch (e) {
+        throw new ForeignServerError(`Not JSON from ${path}: ${e.message}`);
+    }
+    if (status !== 200)
+        throw new ServerError(`HTTP ${status} for ${path}`);
+    if (json === null || typeof json !== 'object' || Array.isArray(json))
+        throw new ServerError(`Unexpected response from ${path}`);
+    return json;
+}
+
+const LOAD_FAILED_MESSAGE = 'Couldn’t load the dashboard. Try Sync or open the app.';
 
 function isCancelled(error) {
     return Boolean(error?.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED));
@@ -818,7 +851,7 @@ class TokenTrackerIndicator extends PanelMenu.Button {
             style_class: 'tokentracker-column',
             y_align: Clutter.ActorAlign.CENTER,
         });
-        const value = new St.Label({style_class: 'tokentracker-value', x_align: Clutter.ActorAlign.CENTER});
+        const value = new St.Label({text: PLACEHOLDER, style_class: 'tokentracker-value', x_align: Clutter.ActorAlign.CENTER});
         const label = new St.Label({
             text: labelText,
             style_class: 'tokentracker-label',
@@ -944,9 +977,9 @@ class TokenTrackerIndicator extends PanelMenu.Button {
             message.set_request_body_from_bytes('application/json', new GLib.Bytes(new TextEncoder().encode(body)));
         const bytes = await this._session.send_and_read_async(
             message, GLib.PRIORITY_DEFAULT, this._cancellable);
-        if (message.get_status() !== Soup.Status.OK)
-            throw new Error(`HTTP ${message.get_status()} for ${url.slice(BASE_URL.length).split('?')[0]}`);
-        return {message, json: JSON.parse(new TextDecoder().decode(bytes.get_data()))};
+        const path = url.slice(BASE_URL.length).split('?')[0];
+        const json = parseResponse(message.get_status(), new TextDecoder().decode(bytes.get_data()), path);
+        return {message, json};
     }
 
     async _request(method, path, {params = {}, ...options} = {}) {
@@ -1052,12 +1085,14 @@ class TokenTrackerIndicator extends PanelMenu.Button {
         try {
             todaySummary = await this._getJson('/functions/tokentracker-usage-summary', {from: today, to: today});
         } catch (e) {
-            if (!isCancelled(e))
+            if (isCancelled(e)) return;
+            if (e instanceof ServerError)
+                this._setServerError(e);
+            else
                 this._setOffline(e);
             return;
         }
-        this._offline = false;
-        this._clawd.opacity = 255;
+        this._setOnline();
         this._tokensColumn.value.text = formatCompact(todaySummary.totals?.total_tokens);
         this._costColumn.value.text = formatCost(todaySummary.totals?.total_cost_usd);
         this._setStatsVisible(true);
@@ -1086,7 +1121,7 @@ class TokenTrackerIndicator extends PanelMenu.Button {
             console.warn(`TokenTracker: dashboard fetch failed: ${e}`);
             // Keep an already rendered dashboard; the top bar is still live.
             if (!this._data)
-                this._renderMessage('Couldn’t load the dashboard. Try Sync or open the app.');
+                this._renderMessage(LOAD_FAILED_MESSAGE);
             return;
         }
 
@@ -1110,6 +1145,22 @@ class TokenTrackerIndicator extends PanelMenu.Button {
             this._renderDashboard();
     }
 
+    _setOnline() {
+        this._offline = false;
+        this._clawd.opacity = 255;
+    }
+
+    // The app is up, so stay on the normal poll and keep whatever the top bar
+    // already shows rather than blanking it until the next read.
+    _setServerError(error) {
+        console.warn(`TokenTracker: refresh failed: ${error}`);
+        this._setOnline();
+        this._setStatsVisible(true);
+        // A closed menu refetches when opened; don't leave an error to flash.
+        if (!this._data)
+            this._renderMessage(this.menu.isOpen ? LOAD_FAILED_MESSAGE : 'Loading…');
+    }
+
     _setOffline(error) {
         if (!this._offline)
             console.warn(`TokenTracker: refresh failed: ${error}\n${error.stack ?? ''}`);
@@ -1118,6 +1169,10 @@ class TokenTrackerIndicator extends PanelMenu.Button {
         this._clawd.opacity = 128;
         this._clawd.setEyesClosed(false);
         this._setStatsVisible(false);
+        // Numbers from before the app went away shouldn't reappear next to a
+        // server error.
+        this._tokensColumn.value.text = PLACEHOLDER;
+        this._costColumn.value.text = PLACEHOLDER;
         this._renderMessage('TokenTracker isn’t running. Open the app to start tracking.');
     }
 

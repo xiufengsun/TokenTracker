@@ -135,7 +135,8 @@ jobs:
             "TokenTrackerWin/publish/TokenTracker.exe",
             "TokenTrackerWin/publish/EmbeddedServer/node.exe",
             "TokenTrackerWin/publish/EmbeddedServer/tokentracker/bin/tracker.js",
-            "TokenTrackerWin/publish/EmbeddedServer/tokentracker/dashboard/dist/index.html"
+            "TokenTrackerWin/publish/EmbeddedServer/tokentracker/dashboard/dist/index.html",
+            "TokenTrackerWin/publish/EmbeddedServer/tokentracker/dashboard/dist/quota.html"
           )
           foreach ($f in $required) {
             if (-not (Test-Path $f)) { Write-Host "::error::missing required file: $f"; exit 1 }

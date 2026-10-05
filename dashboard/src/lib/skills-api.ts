@@ -2,6 +2,7 @@ import { getLocalApiAuthHeaders } from "./local-api-auth";
 import { isValidJwtShape } from "./auth-token";
 import { getInsforgeAnonKey, getInsforgeRemoteUrl } from "./insforge-config";
 import { buildSkillInventoryMetadata } from "./skills-inventory";
+import { functionUrlFor, fetchFunctionResponse } from "./function-url";
 
 type AnyRecord = Record<string, any>;
 
@@ -136,7 +137,7 @@ async function fetchCloudSkillsJson({
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CLOUD_REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/functions/${CLOUD_SLUG}`, {
+    const response = await fetchFunctionResponse(functionUrlFor(baseUrl, CLOUD_SLUG), {
       method,
       headers,
       cache: "no-store",

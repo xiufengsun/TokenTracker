@@ -359,6 +359,11 @@ final class NativeBridge {
                 NotificationCenter.default.post(name: .nativeSettingsChanged, object: nil)
                 WidgetCenter.shared.reloadAllTimelines()
             }
+        case "tokenUnitSystem":
+            if let str = value as? String {
+                UserDefaults.standard.set(str, forKey: TokenFormatter.unitSystemDefaultsKey)
+                NotificationCenter.default.post(name: .nativeSettingsChanged, object: nil)
+            }
         case "currencySymbol":
             if let str = value as? String, !str.isEmpty {
                 UserDefaults.standard.set(str, forKey: "MenuBarCurrencySymbol")

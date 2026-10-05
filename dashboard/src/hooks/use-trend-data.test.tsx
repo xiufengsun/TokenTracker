@@ -1,9 +1,12 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getUsageDaily, getUsageHourly, getUsageMonthly } from "../lib/api";
+import { fetchCloudUsageMonthly, getUsageDaily, getUsageHourly, getUsageMonthly } from "../lib/api";
 import { useTrendData } from "./use-trend-data";
 
 vi.mock("../lib/api", () => ({
+  fetchCloudUsageDaily: vi.fn(),
+  fetchCloudUsageHourly: vi.fn(),
+  fetchCloudUsageMonthly: vi.fn(),
   getUsageDaily: vi.fn(),
   getUsageHourly: vi.fn(),
   getUsageMonthly: vi.fn(),
@@ -20,6 +23,7 @@ vi.mock("../lib/mock-data", () => ({
 
 describe("useTrendData", () => {
   beforeEach(() => {
+    vi.mocked(fetchCloudUsageMonthly).mockReset();
     vi.mocked(getUsageDaily).mockReset();
     vi.mocked(getUsageHourly).mockReset();
     vi.mocked(getUsageMonthly).mockReset();
@@ -39,6 +43,84 @@ describe("useTrendData", () => {
   } = {}) {
     return `tokentracker.trend.${cacheKey}.${scopeKey}.localhost:7680.hourly.${day}.tz:${timeZone}.${deviceScope}`;
   }
+
+  it.each(["local", "cloud"])("fills monthly gaps across years for %s responses", async (scope) => {
+    const fetcher = scope === "cloud" ? fetchCloudUsageMonthly : getUsageMonthly;
+    vi.mocked(fetcher).mockResolvedValue({
+      from: "2025-11", to: "2026-03",
+      data: [{ month: "2025-12", total_tokens: 100, models: { test: 100 } },
+        { month: "2026-02", total_tokens: 200 }],
+    });
+    const now = new Date("2026-03-01T00:00:00Z");
+    const { result } = renderHook(() => useTrendData({
+      period: "total", from: "2025-11-01", to: "2026-03-01",
+      accessToken: "test-token", timeZone: "UTC", now,
+      accountView: scope === "cloud", accountAccessToken: scope === "cloud" ? "cloud-token" : null,
+    }));
+    await waitFor(() => expect(result.current.rows).toHaveLength(5));
+    expect(result.current.rows.map((row) => row.month)).toEqual([
+      "2025-11", "2025-12", "2026-01", "2026-02", "2026-03",
+    ]);
+    for (const index of [0, 2, 4]) {
+      expect(result.current.rows[index]).toMatchObject({
+        total_tokens: 0, billable_total_tokens: 0, conversation_count: 0,
+        missing: false, future: false,
+      });
+    }
+    expect(result.current.rows[1].models).toEqual({ test: 100 });
+    expect(result.current.rows[3].total_tokens).toBe(200);
+  });
+
+  it("fills an empty monthly response with zero months and preserves future estimates", async () => {
+    vi.mocked(getUsageMonthly).mockResolvedValue({ from: "2025-12-01", to: "2026-02-28", data: [] });
+    const now = new Date("2026-01-01T00:00:00Z");
+    const { result } = renderHook(() => useTrendData({
+      period: "total", accessToken: "test-token", timeZone: "UTC", now,
+    }));
+    await waitFor(() => expect(result.current.rows).toHaveLength(3));
+    expect(result.current.rows.map((row) => row.total_tokens)).toEqual([0, 0, null]);
+    expect(result.current.rows.map((row) => row.future)).toEqual([false, false, true]);
+  });
+
+  it.each(["2025-12", ""])("fills sparse monthly cache with start %s on mount and after an offline refresh", async (cachedFrom) => {
+    const cacheKey = "cached-monthly";
+    window.localStorage.setItem(
+      `tokentracker.trend.${cacheKey}.local.localhost:7680.monthly.3.2026-02-28.tz:UTC.all`,
+      JSON.stringify({ from: cachedFrom, to: "2026-02", rows: [
+        { month: "2026-01", total_tokens: 100 },
+        { month: "2026-02", total_tokens: null, future: true },
+      ] }),
+    );
+    let rejectRequest: (error: Error) => void = () => {};
+    vi.mocked(getUsageMonthly).mockImplementation(() => new Promise((_resolve, reject) => {
+      rejectRequest = reject;
+    }));
+    const now = new Date("2026-02-15T00:00:00Z");
+    const { result } = renderHook(() => useTrendData({
+      period: "total", baseUrl: "http://localhost:7680", accessToken: "test-token",
+      to: "2026-02-28", months: 3, cacheKey, timeZone: "UTC", now,
+    }));
+    await waitFor(() => expect(getUsageMonthly).toHaveBeenCalledTimes(1));
+    expect(result.current.rows.map((row) => row.month)).toEqual(["2025-12", "2026-01", "2026-02"]);
+    expect(result.current.rows.map((row) => row.total_tokens)).toEqual([0, 100, 0]);
+    await act(async () => rejectRequest(new Error("offline")));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.source).toBe("cache");
+    expect(result.current.from).toBe(cachedFrom || "2025-12-01");
+    expect(result.current.rows.map((row) => row.total_tokens)).toEqual([0, 100, 0]);
+  });
+
+  it("derives the local monthly zoom start from to and months", async () => {
+    vi.mocked(getUsageMonthly).mockResolvedValue({ from: "", to: "2026-02-28",
+      data: [{ month: "2026-01", total_tokens: 100 }] });
+    const now = new Date("2026-02-15T00:00:00Z");
+    const { result } = renderHook(() => useTrendData({
+      period: "total", accessToken: "test-token", to: "2026-02-28", months: 3, timeZone: "UTC", now,
+    }));
+    await waitFor(() => expect(result.current.rows).toHaveLength(3));
+    expect(result.current.from).toBe("2025-12-01");
+    expect(result.current.rows.map((row) => row.month)).toEqual(["2025-12", "2026-01", "2026-02"]);
+  });
 
   it("treats elapsed hourly slots with no usage rows as real zero observations", async () => {
     vi.mocked(getUsageHourly).mockResolvedValue({

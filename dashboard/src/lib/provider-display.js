@@ -19,6 +19,8 @@ const SPECIAL_PROVIDER_COPY_KEYS = {
   omp: "provider.display.omp",
   omo: "provider.display.omo",
   minimaxcode: "provider.display.minimax_code",
+  commandcode: "provider.display.command_code",
+  trae: "provider.display.trae",
   traecn: "provider.display.trae_work_cn",
   traeworkcn: "provider.display.trae_work_cn",
 };

@@ -198,6 +198,9 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   // GPT-6 Sol Standard USD/MTok, verified 2026-09-24:
   // https://developers.openai.com/api/docs/models/gpt-6-sol
   "gpt-6-sol": { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
+  // GPT-6.1 Sol Standard pricing (issue #737), verified 2026-10-02.
+  // https://developers.openai.com/api/docs/models/gpt-6.1-sol
+  "gpt-6.1-sol": { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
   "gpt-5-mini": { input: 0.25, output: 2, cache_read: 0.025 },
   "o3": { input: 2, output: 8, cache_read: 0.5 },
   // ── Google Gemini ──
@@ -285,6 +288,8 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "hy3-preview-agent": { input: 0.167, output: 0.556, cache_read: 0.056, cache_write: 0.167 },
   "hy3-preview": { input: 0.167, output: 0.556, cache_read: 0.056, cache_write: 0.167 },
   // Hy4 preview: 6 / 0.3 (cache hit) / 18 RMB per MTok at ~7.2 RMB/USD (#633).
+  // Alibaba Model Studio Singapore reference rates; see curated-overrides.json (#715).
+  "qwen3.8-flash": { input: 0.15, output: 0.47, cache_read: 0.016, cache_write: 0.2 },
   "hy4-preview": { input: 0.833, output: 2.5, cache_read: 0.042, cache_write: 0.833 },
   "hy4-preview-agent": { input: 0.833, output: 2.5, cache_read: 0.042, cache_write: 0.833 },
   // ── Misc / Free ──
@@ -428,6 +433,7 @@ function getModelPricing(model: string, source = "") {
   if (lower.includes("sonnet")) return MODEL_PRICING["claude-sonnet-4-6"];
   if (lower.includes("gpt-6-astra")) return MODEL_PRICING["gpt-6-astra"];
   if (lower.includes("gpt-6-sol")) return MODEL_PRICING["gpt-6-sol"];
+  if (lower.includes("gpt-6.1-sol")) return MODEL_PRICING["gpt-6.1-sol"];
   // gpt-5.6 tiers: sol/terra/luna carry reasoning-effort suffixes (solhigh,
   // etc.), so match by substring. Specific tiers precede the generic gpt-5.6
   // fallback (the public gpt-5.6 alias points to the flagship sol tier).
@@ -504,6 +510,7 @@ function getModelPricing(model: string, source = "") {
   if (lower.includes("glm-5")) return MODEL_PRICING["glm-5"];
   if (lower.includes("kiro")) return MODEL_PRICING["kiro-cli-agent"];
   if (lower.includes("hy3")) return MODEL_PRICING["hy3-preview-agent"];
+  if (/(?:^|\/)qwen3[.-]8-flash(?:-\d{4}-\d{2}-\d{2})?$/.test(lower.trim())) return MODEL_PRICING["qwen3.8-flash"];
   if (lower.includes("hy4")) return MODEL_PRICING["hy4-preview"];
   if (lower.includes("composer")) return MODEL_PRICING["composer-1"];
   if (lower.includes("fugu")) return MODEL_PRICING["sakana/fugu-ultra"];
@@ -594,6 +601,46 @@ interface CompactDaily {
     number | string, number | string, number | string, number | string][];
 }
 
+interface DailyWire {
+  model_names: (string | null)[];
+  source_names: (string | null)[];
+  pricing_tiers: (string | null)[];
+  days: [string, number | string, number | string, number | string, number | string,
+    number | string, number | string, number | string, (number | string)[] | null][];
+  cost_dims: [string, number, number, number, number | string, number | string,
+    number | string, number | string, number | string][];
+}
+
+// Expand the database-only dictionary before the existing response logic.
+// Keep values untouched here; pricing/output performs the same Number() coercion
+// as it did for the original compact RPC.
+function expandModelPairs(
+  pairs: (number | string)[] | null,
+  modelNames: (string | null)[],
+): Record<string, number | string> | null {
+  if (pairs === null) return null;
+  const entries: [string, number | string][] = [];
+  for (let i = 0; i < pairs.length; i += 2) {
+    entries.push([modelNames[Number(pairs[i])] as string, pairs[i + 1]]);
+  }
+  return Object.fromEntries(entries);
+}
+
+function decodeDailyWire(data: unknown): CompactDaily {
+  const payload = (data ?? {}) as Partial<DailyWire>;
+  const modelNames = Array.isArray(payload.model_names) ? payload.model_names : [];
+  const sourceNames = Array.isArray(payload.source_names) ? payload.source_names : [];
+  const pricingTiers = Array.isArray(payload.pricing_tiers) ? payload.pricing_tiers : [];
+  return {
+    days: (Array.isArray(payload.days) ? payload.days : []).map(([day, tt, i, o, cr, cw, rs, cv, pairs]) =>
+      [day, tt, i, o, cr, cw, rs, cv, expandModelPairs(pairs, modelNames)]
+    ),
+    cost_dims: (Array.isArray(payload.cost_dims) ? payload.cost_dims : []).map(([day, source, model, tier, i, o, cr, cw, rs]) =>
+      [day, sourceNames[source], modelNames[model], pricingTiers[tier], i, o, cr, cw, rs]
+    ),
+  };
+}
+
 const COMPACT_TTL_MS = 30_000;
 const COMPACT_STALE_IF_ERROR_MS = 5 * 60_000;
 const compactCache = new Map<string, { fetchedAt: number; value: CompactDaily }>();
@@ -629,7 +676,7 @@ async function fetchCompactDaily(
 
   const pending = (async () => {
     try {
-      const { data, error } = await client.database.rpc("account_daily_compact", {
+      const { data, error } = await client.database.rpc("account_daily_wire", {
         p_user_id: userId,
         p_device_id: requestedDeviceId,
         p_from: fromIso,
@@ -640,11 +687,7 @@ async function fetchCompactDaily(
         p_range_to: rangeTo,
       });
       if (error) throw new Error(error.message);
-      const payload = (data ?? {}) as Partial<CompactDaily>;
-      const value: CompactDaily = {
-        days: Array.isArray(payload.days) ? payload.days : [],
-        cost_dims: Array.isArray(payload.cost_dims) ? payload.cost_dims : [],
-      };
+      const value = decodeDailyWire(data);
       compactCache.set(cacheKey, { fetchedAt: Date.now(), value });
       if (compactCache.size > 64) {
         const oldest = compactCache.keys().next().value;

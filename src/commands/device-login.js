@@ -7,6 +7,7 @@ const fs = require("node:fs/promises");
 const { readJson, updateJsonLocked } = require("../lib/fs");
 const { resolveTrackerPaths } = require("../lib/tracker-paths");
 const { resolveRuntimeConfig } = require("../lib/runtime-config");
+const { functionUrlFor, fetchFunctionResponse } = require("../lib/function-url");
 
 const POLL_INTERVAL_MS = 5_000;
 const ABSOLUTE_TIMEOUT_MS = 16 * 60 * 1000; // matches the 15-min server window with a small buffer
@@ -26,7 +27,7 @@ function readBaseUrl(config) {
 }
 
 async function authorize({ baseUrl, clientInfo, machineId }) {
-  const res = await fetch(`${baseUrl}/functions/tokentracker-device-flow-authorize`, {
+  const res = await fetchFunctionResponse(functionUrlFor(baseUrl, "tokentracker-device-flow-authorize"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -46,7 +47,7 @@ async function authorize({ baseUrl, clientInfo, machineId }) {
 }
 
 async function pollOnce({ baseUrl, deviceCode }) {
-  const res = await fetch(`${baseUrl}/functions/tokentracker-device-flow-poll`, {
+  const res = await fetchFunctionResponse(functionUrlFor(baseUrl, "tokentracker-device-flow-poll"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ device_code: deviceCode }),

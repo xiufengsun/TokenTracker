@@ -66,8 +66,8 @@ test("rich pet stats cannot mix authorities into one published snapshot", () => 
     "FetchTopModelsAsync must be able to signal a would-be downgrade.",
   );
   for (const guard of [
-    /FetchHeatmapAsync\([\s\S]*?string tzQuery, bool retainAccount, CancellationToken cancellationToken = default\)[\s\S]*?if \(ReadAccountSource\(resp\) == AccountSource\.LocalTransient && retainAccount\) return null;/,
-    /FetchTopModelsAsync\([\s\S]*?string today, string tzQuery, bool retainAccount, CancellationToken cancellationToken = default\)[\s\S]*?if \(ReadAccountSource\(resp\) == AccountSource\.LocalTransient && retainAccount\) return null;/,
+    /FetchHeatmapAsync\([\s\S]*?string tzQuery, bool retainAccount, string refreshQuery, CancellationToken cancellationToken = default\)[\s\S]*?if \(ReadAccountSource\(resp\) == AccountSource\.LocalTransient && retainAccount\) return null;/,
+    /FetchTopModelsAsync\([\s\S]*?string today, string tzQuery, bool retainAccount, string refreshQuery, CancellationToken cancellationToken = default\)[\s\S]*?if \(ReadAccountSource\(resp\) == AccountSource\.LocalTransient && retainAccount\) return null;/,
   ]) {
     assert.match(usagePoller, guard, "each rich sub-fetch must apply the same rule");
   }
@@ -93,8 +93,8 @@ test("the rich-stat guards read this poll's authority, not the last publish's", 
     "The retention decision must include what THIS poll is about to render as.",
   );
   for (const call of [
-    /var heatmapTask = FetchHeatmapAsync\(tzQuery, retainAccount, cancellationToken\);/,
-    /var modelsTask = FetchTopModelsAsync\(today, tzQuery, retainAccount, cancellationToken\);/,
+    /var heatmapTask = FetchHeatmapAsync\(tzQuery, retainAccount, refreshQuery, cancellationToken\);/,
+    /var modelsTask = FetchTopModelsAsync\(today, tzQuery, retainAccount, refreshQuery, cancellationToken\);/,
   ]) {
     assert.match(usagePoller, call, "both rich sub-fetches must be told the current authority");
   }

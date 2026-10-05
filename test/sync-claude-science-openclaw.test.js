@@ -33,7 +33,10 @@ test("cmdSync counts Claude Science frames and OpenClaw channel usage, idempoten
   const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "tokentracker-cs-openclaw-e2e-"));
   const restoreHome = withHome(tmp);
   const saved = {};
-  for (const key of ["CODEX_HOME", "CODE_HOME", "GEMINI_HOME", "OPENCODE_HOME"]) {
+  for (const key of [
+    "CODEX_HOME", "CODE_HOME", "GEMINI_HOME", "OPENCODE_HOME",
+    "TOKENTRACKER_TRAE_HOME", "TOKENTRACKER_TRAE_DB",
+  ]) {
     saved[key] = process.env[key];
   }
   try {
@@ -43,6 +46,8 @@ test("cmdSync counts Claude Science frames and OpenClaw channel usage, idempoten
     process.env.CODE_HOME = path.join(tmp, ".code");
     process.env.GEMINI_HOME = path.join(tmp, ".gemini");
     process.env.OPENCODE_HOME = path.join(tmp, ".opencode");
+    process.env.TOKENTRACKER_TRAE_HOME = path.join(tmp, ".trae");
+    delete process.env.TOKENTRACKER_TRAE_DB;
 
     // ── Seed Claude Science ──
     const csDir = path.join(tmp, ".claude-science");

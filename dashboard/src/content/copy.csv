@@ -8,6 +8,7 @@ login.dismiss,shared,LoginPage,LoginPage,dismiss,"Dismiss",,active
 login.verify_email_success,shared,LoginPage,LoginPage,verify_ok,"Email verified. You can sign in below.",,active
 login.verify_email_pending,shared,LoginPage,LoginPage,verify_pending,"Check your email to verify your account, then sign in.",,active
 login.oauth.continue,shared,LoginPage,LoginPage,oauth_continue,"Continue with {{provider}}",,active
+login.oauth.desktop_start_failed,shared,LoginPage,LoginPage,oauth_desktop_start_failed,"Could not start desktop sign-in. Please try again.",,active
 login.divider,shared,LoginPage,LoginPage,divider,"Or",,active
 login.tab.sign_in,shared,LoginPage,LoginPage,tab_sign_in,"Sign in",,active
 login.tab.sign_up,shared,LoginPage,LoginPage,tab_sign_up,"Create account",,active
@@ -744,6 +745,8 @@ usage.overview.antigravity_notice_title,ui,DashboardPage,UsageOverview,antigravi
 usage.overview.antigravity_notice_body,ui,DashboardPage,UsageOverview,antigravity_notice_body,"Exact token usage and prompt-cache hits are parsed from Antigravity session metadata when available. Fallback transcripts without metadata are estimated from text length (~4 chars/token).",,active
 usage.overview.devin_notice_title,ui,DashboardPage,UsageOverview,devin_notice_title,"Cost not estimated",,active
 usage.overview.devin_notice_body,ui,DashboardPage,UsageOverview,devin_notice_body,"Devin reports real local token counts, but swe-2, swe-2-high and compactor have no pricing data in this build, so they are excluded from dollar estimates. A $0 figure does not mean the usage was free.",,active
+usage.overview.trae_notice_title,ui,DashboardPage,UsageOverview,trae_notice_title,"TRAE cost is partial",,active
+usage.overview.trae_notice_body,ui,DashboardPage,UsageOverview,trae_notice_body,"In multi-step turns, TRAE splits cached input for the final step, not the earlier ones. Input without a cache split counts toward token totals but not toward cost. Costs use model prices, not billed amounts.",,active
 usage.overview.week_cross_month_hint,ui,DashboardPage,UsageOverview,week_cross_month_hint,"This week spans two calendar months, so its total is not directly comparable with a single month's usage",,active
 limits.panel.title,ui,LimitsPage,UsageLimitsPanel,title,"Usage Limits",,active
 limits.panel.mode_separator,ui,LimitsPage,UsageLimitsPanel,title_separator," · ",,active
@@ -789,7 +792,9 @@ limits.provider.zcode,ui,LimitsPage,UsageLimitsPanel,provider_zcode,"ZCode",,act
 provider.display.omp,ui,*,ProviderDisplay,omp,"oh-my-pi",,active
 provider.display.omo,ui,*,ProviderDisplay,omo,"OmO",,active
 provider.display.minimax_code,ui,*,ProviderDisplay,minimax_code,"MiniMax Code",,active
+provider.display.command_code,ui,*,ProviderDisplay,command_code,"Command Code",,active
 provider.display.deepseek_harness,ui,*,ProviderDisplay,deepseek_harness,"DeepSeek Harness",,active
+provider.display.trae,ui,*,ProviderDisplay,trae,"TRAE",,active
 provider.display.trae_work_cn,ui,*,ProviderDisplay,trae_work_cn,"TRAE Work CN",,active
 provider.display.cline,ui,*,ProviderDisplay,cline,"Cline",,active
 limits.label.zcode_glm52,ui,LimitsPage,UsageLimitsPanel,zcode_glm52,"GLM-5.2",,active
@@ -1654,3 +1659,22 @@ limits.devin.setupHint.subtitle,ui,LimitsPage,UsageLimitsPanel,devin_hint_subtit
 limits.devin.setupHint.step1,ui,LimitsPage,UsageLimitsPanel,devin_hint_step1,"Install the Devin CLI and sign in with the command below — TokenTracker picks it up with no restart.",,active
 limits.devin.setupHint.note,ui,LimitsPage,UsageLimitsPanel,devin_hint_note,"Refresh this page after signing in. TokenTracker sends the saved session token only to Devin's official quota endpoint.",,active
 limits.devin.setupHint.snippet_login,ui,LimitsPage,UsageLimitsPanel,devin_hint_snippet_login,"devin auth login",,active
+quota.title,ui,QuotaWidget,QuotaWidget,title,"Limits",,active
+quota.remaining,ui,QuotaWidget,QuotaWidget,remaining,"Remaining",,active
+quota.stale,ui,QuotaWidget,QuotaWidget,stale,"Update delayed",,active
+quota.drag,ui,QuotaWidget,QuotaWidget,drag,"Drag to move",,active
+quota.choose,ui,QuotaWidget,QuotaWidget,choose,"Choose limits",,active
+quota.collapse,ui,QuotaWidget,QuotaWidget,collapse,"Collapse",,active
+quota.expand,ui,QuotaWidget,QuotaWidget,expand,"Expand limits",,active
+quota.empty,ui,QuotaWidget,QuotaWidget,empty,"Connect a provider in the dashboard",,active
+quota.loading,ui,QuotaWidget,QuotaWidget,loading,"Loading limits…",,active
+quota.awaiting,ui,QuotaWidget,QuotaWidget,awaiting,"Waiting for updated limits",,active
+quota.resets,ui,QuotaWidget,QuotaWidget,resets,"Resets {{time}}",,active
+quota.no_reset,ui,QuotaWidget,QuotaWidget,no_reset,"Reset time unavailable",,active
+quota.unavailable,ui,QuotaWidget,QuotaWidget,unavailable,"Selected limits are unavailable",,active
+quota.dashboard,ui,QuotaWidget,QuotaWidget,dashboard,"Open dashboard",,active
+quota.pick_two,ui,QuotaWidget,QuotaWidget,pick_two,"Choose up to two windows",,active
+quota.percent,ui,QuotaWidget,QuotaWidget,percent,"%",,active
+quota.reset_in,ui,QuotaWidget,QuotaWidget,reset_in,"Resets in {{time}}",,active
+quota.close,ui,QuotaWidget,QuotaWidget,close,"Close widget",,active
+quota.close_hint,ui,QuotaWidget,QuotaWidget,close_hint,"Close widget; reopen from the tray menu",,active

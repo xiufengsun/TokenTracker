@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useInsforgeAuth } from "./InsforgeAuthContext.jsx";
+import { invalidateAccountResponseCache } from "../lib/api";
 import {
   CLOUD_USAGE_SYNCED_EVENT,
   getCloudSyncEnabled,
@@ -75,6 +76,7 @@ export function AccountViewProvider({ children }) {
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const invalidateAccountUsage = () => {
+      invalidateAccountResponseCache();
       if (cloudUsageReadyRef.current) {
         setRevision((n) => n + 1);
         return;
@@ -101,6 +103,7 @@ export function AccountViewProvider({ children }) {
   const lastResolved = React.useRef(accountView);
   useEffect(() => {
     if (lastResolved.current !== accountView) {
+      invalidateAccountResponseCache();
       lastResolved.current = accountView;
       setRevision((n) => n + 1);
     }

@@ -37,21 +37,43 @@ test("every account-* endpoint delegates guarded device scoping through the shar
     );
     assert.match(src, /const requestedDeviceId\s*=\s*rawDeviceId\s*&&\s*\/\^\[0-9a-f\]/u,
       `${name}: must reject malformed device UUIDs before the RPC`);
-    // summary/heatmap call a compact RPC that itself delegates to
-    // account_usage_grouped_cached (see the fold-account-summary-and-heatmap
-    // migration), so device scoping is still resolved atomically in Postgres.
+    // Compact aggregation and its wire wrappers still delegate device scoping
+    // to account_usage_grouped_cached, checked against their migrations below.
     assert.ok(
       src.includes('rpc("account_usage_grouped_cached"') ||
         src.includes('rpc("account_summary_compact"') ||
+        src.includes('rpc("account_summary_wire"') ||
         src.includes('rpc("account_heatmap_compact"') ||
+        src.includes('rpc("account_heatmap_wire"') ||
         src.includes('rpc("account_model_breakdown_compact"') ||
-        src.includes('rpc("account_daily_compact"'),
+        src.includes('rpc("account_model_breakdown_wire"') ||
+        src.includes('rpc("account_daily_compact"') ||
+        src.includes('rpc("account_daily_wire"'),
       `${name}: must use the cached atomic device-scoping RPC`,
     );
     assert.match(src, /p_device_id:\s*requestedDeviceId/u,
       `${name}: must pass the requested device to the RPC`);
     assert.ok(!src.includes('.from("tokentracker_devices")'),
       `${name}: must not restore the extra devices SELECT`);
+  }
+});
+
+test("account wire wrappers preserve user and device scoping through the existing compact RPCs", () => {
+  for (const [endpoint, compactMigration, wireMigrationFile] of [
+    ["heatmap", "20260918041500_fold-account-summary-and-heatmap-aggregation.sql", "20261002090000_compact-account-model-wire.sql"],
+    ["daily", "20260918050000_fold-account-daily-aggregation.sql", "20261002090000_compact-account-model-wire.sql"],
+    ["summary", "20260918041500_fold-account-summary-and-heatmap-aggregation.sql", "20261003093000_compact-account-summary-model-wire.sql"],
+    ["model_breakdown", "20260918043000_fold-account-model-breakdown-aggregation.sql", "20261003093000_compact-account-summary-model-wire.sql"],
+  ]) {
+    const wireMigration = fs.readFileSync(path.join(ROOT, "migrations", wireMigrationFile), "utf8");
+    assert.match(readEdge(`tokentracker-account-${endpoint.replaceAll("_", "-")}.ts`),
+      new RegExp(`rpc\\("account_${endpoint}_wire"`, "u"));
+    assert.match(wireMigration,
+      new RegExp(`public\\.account_${endpoint}_compact\\(p_user_id, p_device_id, p_from, p_to, p_tz, p_offset_min, p_range_from, p_range_to\\)`, "u"),
+      `${endpoint} wire RPC must pass the exact user/device request to compact aggregation`);
+    const compact = fs.readFileSync(path.join(ROOT, "migrations", compactMigration), "utf8");
+    assert.match(compact, /public\.account_usage_grouped_cached\(\s*p_user_id,\s*p_device_id,/u,
+      `${endpoint} compact RPC must preserve user/device scoping through the shared cache`);
   }
 });
 

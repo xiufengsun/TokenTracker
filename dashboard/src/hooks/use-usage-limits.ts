@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getUsageLimits } from "../lib/api";
+import { getUsageLimits, isLocalhostHost } from "../lib/api";
 import { publishUsageLimitsPreloadState } from "../lib/dashboard-preload.js";
 import { LIMIT_ALERTS_PREF_KEY } from "./use-limit-alert-prefs";
 import { sendPredictiveLimitAlerts } from "../lib/limit-alerts.js";
@@ -140,7 +140,8 @@ interface UseUsageLimitsOptions {
 }
 
 export function useUsageLimits(options?: UseUsageLimitsOptions) {
-  const hasInitialState = Boolean(options?.initialState);
+  const localEnabled = isLocalhostHost();
+  const hasInitialState = localEnabled && Boolean(options?.initialState);
   // The saved provider selection — the opt-in fact forwarded on every request.
   // Kept in state so a toggle invalidates in-flight work via the
   // latest-request guard below and re-renders with the new selection.
@@ -156,7 +157,7 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
   const [error, setError] = useState<string | null>(() => (
     hasInitialState ? options?.initialState?.error ?? null : null
   ));
-  const [isLoading, setIsLoading] = useState(!hasInitialState);
+  const [isLoading, setIsLoading] = useState(localEnabled && !hasInitialState);
   const initialRefresh = Boolean(options?.initialRefresh);
   const publishToPreloadCache = Boolean(options?.publishToPreloadCache);
   // Mount/cache reads and an explicit refresh can overlap (for example when a
@@ -166,7 +167,7 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
   // The selection is a guard dependency: flipping the Devin switch
   // invalidates every request issued under the previous selection, so a late
   // response fetched while it was enabled can never republish Devin rows.
-  const beginRequest = useLatestRequestGuard([devinSelected]);
+  const beginRequest = useLatestRequestGuard([devinSelected, localEnabled]);
 
   // Re-read the saved selection when limits preferences change. Same-window
   // toggles and native-mirror writes arrive via LIMITS_PREFS_CHANGED_EVENT;
@@ -186,26 +187,27 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
   }, []);
 
   useEffect(() => {
-    if (!data || typeof window === "undefined") return;
+    if (!localEnabled || !data || typeof window === "undefined") return;
     try {
       if (window.localStorage.getItem(LIMIT_ALERTS_PREF_KEY) === "1") {
         sendPredictiveLimitAlerts(data);
       }
     } catch { /* restricted webview */ }
-  }, [data]);
+  }, [data, localEnabled]);
 
   const publishSuccessfulState = useCallback(
     (value: UsageLimitsData | null, source: "page-load" | "manual-refresh") => {
-      if (!publishToPreloadCache || !value || typeof value !== "object") return;
+      if (!localEnabled || !publishToPreloadCache || !value || typeof value !== "object") return;
       publishUsageLimitsPreloadState(
         withoutUnselectedDevin(value, isDevinProviderSelected()),
         { source },
       );
     },
-    [publishToPreloadCache],
+    [localEnabled, publishToPreloadCache],
   );
 
   const refresh = useCallback(async () => {
+    if (!localEnabled) return;
     const isCurrent = beginRequest();
     try {
       const res = await getUsageLimits({
@@ -223,9 +225,10 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
       setError((err as Error)?.message || String(err));
       setIsLoading(false);
     }
-  }, [beginRequest, publishSuccessfulState]);
+  }, [beginRequest, localEnabled, publishSuccessfulState]);
 
   const refreshFromServerCache = useCallback(async () => {
+    if (!localEnabled) return;
     const isCurrent = beginRequest();
     try {
       // Non-forcing read: serve from the server's cache rather than hitting
@@ -245,13 +248,13 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
       setError((err as Error)?.message || String(err));
       setIsLoading(false);
     }
-  }, [beginRequest, publishSuccessfulState]);
+  }, [beginRequest, localEnabled, publishSuccessfulState]);
 
   // Auto-refresh when the dashboard regains focus / becomes visible again —
   // same throttled pattern as use-usage-data.ts, so a left-open Limits page
   // picks up new window utilization without a manual reload.
   useEffect(() => {
-    if (typeof window === "undefined" || typeof document === "undefined") return;
+    if (!localEnabled || typeof window === "undefined" || typeof document === "undefined") return;
     const MIN_GAP_MS = 15_000;
     let lastAt = Date.now(); // mount already fired the initial fetch below
     const maybeRefresh = () => {
@@ -267,7 +270,7 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
       window.removeEventListener("focus", maybeRefresh);
       document.removeEventListener("visibilitychange", maybeRefresh);
     };
-  }, [refreshFromServerCache]);
+  }, [localEnabled, refreshFromServerCache]);
 
   // A selection change invalidates in-flight work via the guard dependency,
   // drops retained Devin rows immediately when the provider was turned off,
@@ -276,13 +279,20 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
   useEffect(() => {
     if (previousDevinSelected.current === devinSelected) return;
     previousDevinSelected.current = devinSelected;
+    if (!localEnabled) return;
     if (!devinSelected) {
       setData((current) => withoutUnselectedDevin(current, false));
     }
     void refreshFromServerCache();
-  }, [devinSelected, refreshFromServerCache]);
+  }, [devinSelected, localEnabled, refreshFromServerCache]);
 
   useEffect(() => {
+    if (!localEnabled) {
+      setData(null);
+      setError(null);
+      setIsLoading(false);
+      return;
+    }
     if (hasInitialState && !initialRefresh) return;
     const isCurrent = beginRequest();
     (async () => {
@@ -305,7 +315,7 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
         if (isCurrent()) setIsLoading(false);
       }
     })();
-  }, [beginRequest, hasInitialState, initialRefresh, publishSuccessfulState]);
+  }, [beginRequest, hasInitialState, initialRefresh, localEnabled, publishSuccessfulState]);
 
   return { data, error, isLoading, refresh };
 }

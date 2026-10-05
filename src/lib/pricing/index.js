@@ -222,7 +222,7 @@ function computeRowCost(row) {
   const model = String(row?.model || "").toLowerCase();
   const usesOpenAILongContextTier =
     model === "gpt-5.6" || model.includes("gpt-5.6-sol") || model.includes("gpt-6-astra") ||
-    model.includes("gpt-6-sol");
+    model.includes("gpt-6-sol") || model.includes("gpt-6.1-sol");
   // Only models whose curated entry carries an explicit Fast/priority rate get
   // the tier premium. The other OpenAI tiers have no published priority price,
   // and inventing one is worse than reporting Standard.

@@ -198,6 +198,9 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   // GPT-6 Sol Standard USD/MTok, verified 2026-09-24:
   // https://developers.openai.com/api/docs/models/gpt-6-sol
   "gpt-6-sol": { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
+  // GPT-6.1 Sol Standard pricing (issue #737), verified 2026-10-02.
+  // https://developers.openai.com/api/docs/models/gpt-6.1-sol
+  "gpt-6.1-sol": { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
   "gpt-5-mini": { input: 0.25, output: 2, cache_read: 0.025 },
   "o3": { input: 2, output: 8, cache_read: 0.5 },
   // ── Google Gemini ──
@@ -285,6 +288,8 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "hy3-preview-agent": { input: 0.167, output: 0.556, cache_read: 0.056, cache_write: 0.167 },
   "hy3-preview": { input: 0.167, output: 0.556, cache_read: 0.056, cache_write: 0.167 },
   // Hy4 preview: 6 / 0.3 (cache hit) / 18 RMB per MTok at ~7.2 RMB/USD (#633).
+  // Alibaba Model Studio Singapore reference rates; see curated-overrides.json (#715).
+  "qwen3.8-flash": { input: 0.15, output: 0.47, cache_read: 0.016, cache_write: 0.2 },
   "hy4-preview": { input: 0.833, output: 2.5, cache_read: 0.042, cache_write: 0.833 },
   "hy4-preview-agent": { input: 0.833, output: 2.5, cache_read: 0.042, cache_write: 0.833 },
   // ── Misc / Free ──
@@ -428,6 +433,7 @@ function getModelPricing(model: string, source = "") {
   if (lower.includes("sonnet")) return MODEL_PRICING["claude-sonnet-4-6"];
   if (lower.includes("gpt-6-astra")) return MODEL_PRICING["gpt-6-astra"];
   if (lower.includes("gpt-6-sol")) return MODEL_PRICING["gpt-6-sol"];
+  if (lower.includes("gpt-6.1-sol")) return MODEL_PRICING["gpt-6.1-sol"];
   // gpt-5.6 tiers: sol/terra/luna carry reasoning-effort suffixes (solhigh,
   // etc.), so match by substring. Specific tiers precede the generic gpt-5.6
   // fallback (the public gpt-5.6 alias points to the flagship sol tier).
@@ -504,6 +510,7 @@ function getModelPricing(model: string, source = "") {
   if (lower.includes("glm-5")) return MODEL_PRICING["glm-5"];
   if (lower.includes("kiro")) return MODEL_PRICING["kiro-cli-agent"];
   if (lower.includes("hy3")) return MODEL_PRICING["hy3-preview-agent"];
+  if (/(?:^|\/)qwen3[.-]8-flash(?:-\d{4}-\d{2}-\d{2})?$/.test(lower.trim())) return MODEL_PRICING["qwen3.8-flash"];
   if (lower.includes("hy4")) return MODEL_PRICING["hy4-preview"];
   if (lower.includes("composer")) return MODEL_PRICING["composer-1"];
   if (lower.includes("fugu")) return MODEL_PRICING["sakana/fugu-ultra"];
@@ -650,7 +657,7 @@ interface HourlyRow {
   user_id: string;
   source: string;
   model: string;
-  hour_start: string;
+  hour_start?: string;
   total_tokens: number;
   input_tokens: number;
   output_tokens: number;
@@ -659,6 +666,48 @@ interface HourlyRow {
   reasoning_output_tokens: number;
   total_cost_usd?: number | null;
   pricing_tier?: string;
+}
+
+interface CompactLeaderboardUsage {
+  format: string;
+  user_ids: string[];
+  sources: string[];
+  model_names: string[];
+  pricing_tiers: (string | null)[];
+  rows: [number, number, number, number, number, number, number, number, number, number, number | null][];
+}
+
+// The database keeps every original token column and pricing dimension. Expand
+// the internal wire format before the existing aggregation and pricing loop.
+function decodeCompactLeaderboardUsage(payload: CompactLeaderboardUsage): HourlyRow[] {
+  if (payload?.format !== "leaderboard-usage-v1"
+    || !Array.isArray(payload.user_ids) || !Array.isArray(payload.sources)
+    || !Array.isArray(payload.model_names) || !Array.isArray(payload.pricing_tiers)
+    || !Array.isArray(payload.rows)) {
+    throw new Error("Invalid compact leaderboard payload");
+  }
+  const dimensions = [payload.user_ids, payload.sources, payload.model_names, payload.pricing_tiers];
+  return payload.rows.map((row) => {
+    if (!Array.isArray(row) || row.length !== 11
+      || [row[0], row[1], row[2], row[3]].some((index, dim) => !Number.isInteger(index)
+        || index < 0 || index >= dimensions[dim].length)) {
+      throw new Error("Invalid compact leaderboard row");
+    }
+    const pricingTier = payload.pricing_tiers[row[3]];
+    return {
+      user_id: payload.user_ids[row[0]],
+      source: payload.sources[row[1]],
+      model: payload.model_names[row[2]],
+      total_tokens: row[4],
+      input_tokens: row[5],
+      output_tokens: row[6],
+      cached_input_tokens: row[7],
+      cache_creation_input_tokens: row[8],
+      reasoning_output_tokens: row[9],
+      ...(pricingTier != null ? { pricing_tier: pricingTier } : {}),
+      ...(row[10] != null ? { total_cost_usd: row[10] } : {}),
+    };
+  });
 }
 
 interface UserAgg {
@@ -1061,12 +1110,12 @@ export default async function (req: Request): Promise<Response> {
       // replaced by a compact rollup. Eight disjoint UUID ranges keep every
       // response bounded while retaining model/pricing-tier rows for the one
       // canonical TypeScript pricing implementation below.
-      const totalRows: unknown[] = [];
+      const totalRows: HourlyRow[] = [];
       for (let shardIndex = 0; shardIndex < TOTAL_USER_SHARDS.length; shardIndex += 2) {
         const shardBatch = await Promise.all(
           TOTAL_USER_SHARDS.slice(shardIndex, shardIndex + 2).map(({ from, to }) =>
             client.database.rpc(
-              "leaderboard_usage_grouped_total_shard",
+              "leaderboard_usage_compact_total_shard",
               { p_to: rangeEnd, p_user_from: from, p_user_to: to },
             )
           ),
@@ -1077,17 +1126,17 @@ export default async function (req: Request): Promise<Response> {
           break;
         }
         for (const result of shardBatch) {
-          if (Array.isArray(result.data)) totalRows.push(...result.data);
+          totalRows.push(...decodeCompactLeaderboardUsage(result.data as CompactLeaderboardUsage));
         }
       }
       groupedData = rpcErr ? null : totalRows;
     } else {
       const result = await client.database.rpc(
-        "leaderboard_usage_grouped",
+        "leaderboard_usage_compact",
         { p_from: rangeStart, p_to: rangeEnd },
       );
-      groupedData = result.data;
       rpcErr = result.error;
+      groupedData = rpcErr ? null : decodeCompactLeaderboardUsage(result.data as CompactLeaderboardUsage);
     }
     const __tAfterRpc = Date.now();
     if (rpcErr) {

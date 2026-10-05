@@ -135,6 +135,9 @@ find "$TT_DIR/node_modules" -type d \( \
   -name ".github" \
 \) -exec rm -rf {} + 2>/dev/null || true
 
+# Package-specific trims (unused WASM builds) shared with macOS and Windows.
+node "$REPO_ROOT/scripts/trim-embedded-deps.cjs" "$TT_DIR/node_modules"
+
 printf 'Bundled TokenTracker Linux runtime at %s\n' "$EMBED_DIR"
 printf 'Node: %s\n' "$("$EMBED_DIR/node" -p 'process.versions.node')"
 printf 'Size: %s\n' "$(du -sh "$EMBED_DIR" | cut -f1)"

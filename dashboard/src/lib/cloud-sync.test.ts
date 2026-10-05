@@ -27,6 +27,7 @@ function okJson(data: unknown): Response {
 function installFetchMock(options: { leaderboardOk?: boolean } = {}) {
   const leaderboardOk = options.leaderboardOk ?? true;
   const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+    if (url === "/functions/tokentracker-cloud-sync-pref") return okJson({ ok: true });
     if (url === "/functions/tokentracker-machine-id") {
       return okJson({ machineId: "machine-abcdef12", deviceName: "office-win" });
     }
@@ -34,7 +35,7 @@ function installFetchMock(options: { leaderboardOk?: boolean } = {}) {
       return okJson({
         token: "device-token",
         device_id: "device-id",
-        created_at: "2026-06-13T00:00:00.000Z",
+        created_at: new Date().toISOString(),
       });
     }
     if (url === "/functions/tokentracker-local-sync") {
@@ -81,6 +82,7 @@ describe("cloud usage sync", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
     installLocalStorageMock();
+    localStorage.setItem("tokentracker_cloud_sync_enabled", "1");
     clearCloudDeviceSession();
   });
 
@@ -158,5 +160,127 @@ describe("cloud usage sync", () => {
       deviceToken: "device-token",
       insforgeBaseUrl: "https://cloud.example",
     });
+  });
+});
+
+function ownerJwt(owner: string, nonce = 1) {
+  const encode = (value: unknown) => btoa(JSON.stringify(value)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  return `${encode({ alg: "HS256" })}.${encode({ sub: owner, nonce })}.signature`;
+}
+
+describe("cloud device session ownership", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    installLocalStorageMock();
+    localStorage.setItem("tokentracker_cloud_sync_enabled", "1");
+    clearCloudDeviceSession();
+  });
+
+  it("drops delayed issuance after sign-out and issues the new owner's token", async () => {
+    let accessToken = ownerJwt("user-a");
+    let release!: (value: Response) => void;
+    let started!: () => void;
+    const issued = new Promise<void>((resolve) => { started = resolve; });
+    const pending = new Promise<Response>((resolve) => { release = resolve; });
+    const postTokens: string[] = [];
+    let issues = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/functions/tokentracker-machine-id") return okJson({ machineId: "machine-12345678" });
+      if (url.endsWith("tokentracker-device-token-issue")) {
+        issues += 1;
+        if (issues === 1) { started(); return pending; }
+        return okJson({ token: "token-b", device_id: "device-b", created_at: new Date().toISOString() });
+      }
+      if (url === "/functions/tokentracker-local-sync") {
+        postTokens.push(JSON.parse(String(init?.body)).deviceToken);
+        return okJson({ ok: true });
+      }
+      return okJson({ ok: true });
+    }));
+    const old = runCloudUsageSyncNow(async () => accessToken);
+    await issued;
+    clearCloudDeviceSession();
+    accessToken = ownerJwt("user-b");
+    release(okJson({ token: "token-a", device_id: "device-a", created_at: new Date().toISOString() }));
+    await old;
+    expect(postTokens).toEqual([]);
+    await runCloudUsageSyncNow(async () => accessToken);
+    expect(issues).toBe(2);
+    expect(postTokens).toEqual(["token-b"]);
+  });
+
+  it("shares issuance for concurrent sync requests of one owner and epoch", async () => {
+    const fetchMock = installFetchMock();
+    await Promise.all([
+      runCloudUsageSyncNow(async () => ownerJwt("user-a")),
+      runCloudUsageSyncNow(async () => ownerJwt("user-a")),
+    ]);
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith("tokentracker-device-token-issue"))).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/functions/tokentracker-local-sync")).toHaveLength(2);
+  });
+
+  it("keeps the device credential when an access token rotates for the same owner", async () => {
+    const fetchMock = installFetchMock();
+    let accessToken = ownerJwt("user-a");
+    await runCloudUsageSyncNow(async () => accessToken);
+    accessToken = ownerJwt("user-a", 2);
+    await runCloudUsageSyncNow(async () => accessToken);
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith("tokentracker-device-token-issue"))).toHaveLength(1);
+  });
+
+  it("turning cloud sync off cancels pending issuance before any upload", async () => {
+    const { setCloudSyncEnabled, getStoredDeviceSession } = await import("./cloud-sync-prefs");
+    let release!: (value: Response) => void;
+    let started!: () => void;
+    const issued = new Promise<void>((resolve) => { started = resolve; });
+    const pending = new Promise<Response>((resolve) => { release = resolve; });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "/functions/tokentracker-machine-id") return okJson({ machineId: "machine-12345678" });
+      if (url.endsWith("tokentracker-device-token-issue")) { started(); return pending; }
+      return okJson({ ok: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const old = runCloudUsageSyncNow(async () => ownerJwt("user-a"));
+    await issued;
+    setCloudSyncEnabled(false);
+    release(okJson({ token: "token-a", device_id: "device-a", created_at: new Date().toISOString() }));
+    await old;
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/functions/tokentracker-local-sync")).toHaveLength(0);
+    expect(getStoredDeviceSession()).toBeNull();
+  });
+
+  for (const code of ["CLOUD_UPLOAD_FAILED", "SYNC_BUSY", "SYNC_UPLOAD_BACKOFF", "CLOUD_UPLOAD_FORBIDDEN"]) {
+    it(`retains an existing credential on ${code}`, async () => {
+      const { setStoredDeviceSession, getStoredDeviceSession } = await import("./cloud-sync-prefs");
+      setStoredDeviceSession({ token: "previous-valid-token", deviceId: "device-a", issuedAt: new Date().toISOString(), ownerId: "user-a" });
+      const fetchMock = vi.fn(async (_url: string) => ({ ok: false, status: code === "CLOUD_UPLOAD_FORBIDDEN" ? 403 : 503, json: async () => ({ error: "temporary or policy failure", code }) }) as Response);
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(runCloudUsageSyncNow(async () => ownerJwt("user-a"))).rejects.toMatchObject({ code });
+      expect(fetchMock.mock.calls.filter(([url]) => url === "/functions/tokentracker-local-sync")).toHaveLength(1);
+      expect(getStoredDeviceSession()?.token).toBe("previous-valid-token");
+    });
+  }
+
+  it("reissues only an explicitly rejected device credential", async () => {
+    const { setStoredDeviceSession } = await import("./cloud-sync-prefs");
+    setStoredDeviceSession({ token: "revoked-token", deviceId: "device-a", issuedAt: new Date().toISOString(), ownerId: "user-a" });
+    const posted: string[] = [];
+    let issues = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/functions/tokentracker-machine-id") return okJson({ machineId: "machine-12345678" });
+      if (url.endsWith("tokentracker-device-token-issue")) {
+        issues += 1;
+        return okJson({ token: "fresh-token", device_id: "device-a", created_at: new Date().toISOString() });
+      }
+      if (url === "/functions/tokentracker-local-sync") {
+        const token = JSON.parse(String(init?.body)).deviceToken;
+        posted.push(token);
+        if (token === "revoked-token") return { ok: false, status: 401, json: async () => ({ error: "Unauthorized", code: "CLOUD_DEVICE_TOKEN_REJECTED" }) } as Response;
+      }
+      return okJson({ ok: true });
+    }));
+    await runCloudUsageSyncNow(async () => ownerJwt("user-a"));
+    expect(issues).toBe(1);
+    expect(posted).toEqual(["revoked-token", "fresh-token"]);
   });
 });

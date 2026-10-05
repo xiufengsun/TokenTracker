@@ -47,6 +47,16 @@ describe("TrendMonitor", () => {
     expect(bars[0].parentElement?.parentElement?.className).toContain("self-stretch");
   });
 
+  it("preserves proportional monthly heights for the reported growing series", () => {
+    const values = [0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.2, 6.5, 8.9].map((v) => v * 1e9);
+    const { container } = render(
+      <TrendMonitor rows={values.map((value) => ({ total_tokens: value }))} period="total" />,
+    );
+    const bars = Array.from(container.querySelectorAll('[data-trend-bar="true"]'));
+    expect(parseFloat(bars[7].parentElement.style.height)).toBeCloseTo(6.5 / 8.9 * 100);
+    expect(parseFloat(bars[8].parentElement.style.height)).toBe(100);
+  });
+
   it("renders real-zero observations as flat baseline bars, not interpolated", () => {
     // Two real values bracketing a real zero: the zero must NOT be filled in.
     const rows = [

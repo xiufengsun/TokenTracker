@@ -195,27 +195,47 @@ class DashboardViewModel: ObservableObject {
 
         var errorCount = 0
         var firstError: String?
-        let totalFetches = 10
+        let totalFetches = 9
+        var summaryRequests: [String: Task<UsageSummaryFetchResult, Error>] = [:]
+        @MainActor func fetchSummary(from: String, to: String) async throws -> UsageSummaryFetchResult {
+            let key = "\(from)|\(to)"
+            if let existing = summaryRequests[key] { return try await existing.value }
+            let request = Task { try await APIClient.shared.fetchSummaryWithSource(from: from, to: to) }
+            summaryRequests[key] = request
+            return try await request.value
+        }
 
         await withTaskGroup(of: Void.self) { group in
             // Today summary (always today for summary cards)
             group.addTask { @MainActor in
                 do {
-                    let result = try await APIClient.shared.fetchSummaryWithSource(
+                    let result = try await fetchSummary(
                         from: rollingTo,
                         to: rollingTo
                     )
-                    guard self.shouldPublish(
+                    var adoptedSummaries = MenuBarSummarySelection()
+                    if self.shouldPublish(
                         result.accountSource,
                         for: .todaySummary,
                         scope: AccountViewStateStore.Scope.day(rollingTo),
                         hasExistingValue: self.todaySummary != nil
-                    ) else { return }
-                    self.todaySummary = result.summary
+                    ) {
+                        self.todaySummary = result.summary
+                        adoptedSummaries.formUnion(.today)
+                    }
+                    if self.shouldPublish(
+                        result.accountSource,
+                        for: .rollingSummary,
+                        scope: AccountViewStateStore.Scope.rolling30,
+                        hasExistingValue: self.rollingSummary != nil
+                    ) {
+                        self.rollingSummary = result.summary
+                        adoptedSummaries.formUnion(.rolling)
+                    }
                     self.summaryPublicationState.record(
                         source: result.source,
                         completedAt: result.completedAt,
-                        for: .today
+                        for: adoptedSummaries
                     )
                 } catch {
                     errorCount += 1
@@ -225,7 +245,7 @@ class DashboardViewModel: ObservableObject {
             // Period summary (for the selected period — drives chart/models)
             group.addTask { @MainActor in
                 do {
-                    let result = try await APIClient.shared.fetchSummaryWithSource(
+                    let result = try await fetchSummary(
                         from: range.from,
                         to: range.to
                     )
@@ -242,34 +262,10 @@ class DashboardViewModel: ObservableObject {
                     if firstError == nil { firstError = error.localizedDescription }
                 }
             }
-            // Rolling summary (always 30-day for the rolling cards)
-            group.addTask { @MainActor in
-                do {
-                    let result = try await APIClient.shared.fetchSummaryWithSource(
-                        from: rollingFrom,
-                        to: rollingTo
-                    )
-                    guard self.shouldPublish(
-                        result.accountSource,
-                        for: .rollingSummary,
-                        scope: AccountViewStateStore.Scope.rolling30,
-                        hasExistingValue: self.rollingSummary != nil
-                    ) else { return }
-                    self.rollingSummary = result.summary
-                    self.summaryPublicationState.record(
-                        source: result.source,
-                        completedAt: result.completedAt,
-                        for: .rolling
-                    )
-                } catch {
-                    errorCount += 1
-                    if firstError == nil { firstError = error.localizedDescription }
-                }
-            }
             // All-time total summary (matches dashboard "Total" range)
             group.addTask { @MainActor in
                 do {
-                    let result = try await APIClient.shared.fetchSummaryWithSource(
+                    let result = try await fetchSummary(
                         from: totalRange.from,
                         to: totalRange.to
                     )

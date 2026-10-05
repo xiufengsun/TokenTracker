@@ -113,6 +113,33 @@ async function verifiedUserIdFromJwt(authHeader: string | null): Promise<string 
 // account_heatmap_compact. Positional, so the model names are the only
 // repeated strings on the wire.
 type CompactDay = [string, number | string, Record<string, number | string> | null];
+interface HeatmapWire {
+  model_names: string[];
+  days: [string, number | string, (number | string)[] | null][];
+}
+
+// Expand the database-only dictionary before the existing response logic.
+// Keep values untouched here; pricing/output performs the same Number() coercion
+// as it did for the original compact RPC.
+function expandModelPairs(
+  pairs: (number | string)[] | null,
+  modelNames: (string | null)[],
+): Record<string, number | string> | null {
+  if (pairs === null) return null;
+  const entries: [string, number | string][] = [];
+  for (let i = 0; i < pairs.length; i += 2) {
+    entries.push([modelNames[Number(pairs[i])] as string, pairs[i + 1]]);
+  }
+  return Object.fromEntries(entries);
+}
+
+function decodeHeatmapWire(data: unknown): CompactDay[] {
+  const payload = (data ?? {}) as Partial<HeatmapWire>;
+  const modelNames = Array.isArray(payload.model_names) ? payload.model_names : [];
+  return (Array.isArray(payload.days) ? payload.days : []).map(([day, total, pairs]) =>
+    [day, total, expandModelPairs(pairs, modelNames)]
+  );
+}
 
 const COMPACT_TTL_MS = 30_000;
 const COMPACT_STALE_IF_ERROR_MS = 5 * 60_000;
@@ -154,7 +181,7 @@ async function fetchHeatmapCompact(
 
   const pending = (async () => {
     try {
-      const { data, error } = await client.database.rpc("account_heatmap_compact", {
+      const { data, error } = await client.database.rpc("account_heatmap_wire", {
         p_user_id: userId,
         p_device_id: requestedDeviceId,
         p_from: fromIso,
@@ -165,7 +192,7 @@ async function fetchHeatmapCompact(
         p_range_to: rangeTo,
       });
       if (error) throw new Error(error.message);
-      const days = (Array.isArray(data) ? data : []) as CompactDay[];
+      const days = decodeHeatmapWire(data);
       compactCache.set(cacheKey, { fetchedAt: Date.now(), days });
       if (compactCache.size > 64) {
         const oldest = compactCache.keys().next().value;

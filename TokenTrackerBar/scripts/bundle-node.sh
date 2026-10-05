@@ -203,6 +203,9 @@ find "$TT_DIR/node_modules" -type d \( \
   -name ".github" \
 \) -exec rm -rf {} + 2>/dev/null || true
 
+# Package-specific trims (unused WASM builds) shared with Windows and Linux.
+node "$REPO_ROOT/scripts/trim-embedded-deps.cjs" "$TT_DIR/node_modules"
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 5. Size report
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -263,22 +263,16 @@ export function SettingsPage() {
                             aria-controls={`settings-panel-${id}`}
                             onClick={() => selectSection(id)}
                             className={cn(
-                              "relative inline-flex min-h-10 min-w-max shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-oai-brand-500 md:w-full md:min-w-0",
+                              "inline-flex min-h-10 min-w-max shrink-0 items-center gap-1.5 rounded-md px-2 py-2 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-oai-brand-500 md:w-full md:min-w-0 md:gap-2 md:px-3",
                               active
-                                ? "bg-white text-oai-black shadow-sm ring-1 ring-oai-gray-200 dark:bg-oai-gray-800 dark:text-white dark:ring-oai-gray-700"
-                                : "text-oai-gray-500 hover:bg-white/80 hover:text-oai-gray-900 dark:text-oai-gray-400 dark:hover:bg-oai-gray-800/70 dark:hover:text-oai-gray-200",
+                                ? "bg-oai-gray-100 text-oai-black dark:bg-oai-gray-800 dark:text-white"
+                                : "text-oai-gray-500 hover:bg-oai-gray-50 hover:text-oai-gray-900 dark:text-oai-gray-400 dark:hover:bg-oai-gray-900 dark:hover:text-oai-gray-200",
                             )}
                           >
-                            {active ? (
-                              <span
-                                className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-oai-brand-500"
-                                aria-hidden
-                              />
-                            ) : null}
                             <Icon
                               className={cn(
                                 "h-4 w-4 shrink-0",
-                                active ? "text-oai-brand-600 dark:text-oai-brand-400" : "text-oai-gray-400 dark:text-oai-gray-500",
+                                active ? "text-oai-black dark:text-white" : "text-oai-gray-400 dark:text-oai-gray-500",
                               )}
                               aria-hidden
                             />
