@@ -28,4 +28,61 @@ final class LimitPaceTests: XCTestCase {
         // Behind pace → never flagged.
         XCTAssertFalse(LimitPace.isOverPace(usedFraction: 0.30, expectedFraction: 0.50))
     }
+
+    func testExpiredWindowsHaveNoPaceOrProjection() {
+        for remainingMode in [false, true] {
+            for secondsUntilReset in [0.0, -1.0] {
+                let pace = LimitPace.compute(
+                    usedFraction: 0.42,
+                    windowSeconds: 5 * 3600,
+                    secondsUntilReset: secondsUntilReset,
+                    remainingMode: remainingMode
+                )
+                XCTAssertNil(pace.pacePercent)
+                XCTAssertFalse(pace.paceOver)
+                XCTAssertNil(pace.expectedPercent)
+                XCTAssertNil(pace.runsOutEta)
+                XCTAssertNil(pace.projectedEnd)
+            }
+        }
+    }
+
+    func testActiveLowUsageKeepsUsedAndRemainingMarkers() {
+        for remainingMode in [false, true] {
+            let pace = LimitPace.compute(
+                usedFraction: 0.03,
+                windowSeconds: 100,
+                secondsUntilReset: 60,
+                remainingMode: remainingMode
+            )
+            XCTAssertEqual(pace.pacePercent ?? -1, remainingMode ? 60 : 40, accuracy: 0.0001)
+            XCTAssertEqual(pace.expectedPercent, 40)
+            XCTAssertFalse(pace.paceOver)
+            XCTAssertNil(pace.runsOutEta)
+            XCTAssertNotNil(pace.projectedEnd)
+        }
+    }
+
+    func testNearlyExpiredWindowStillHasAMarker() {
+        let pace = LimitPace.compute(
+            usedFraction: 0.03,
+            windowSeconds: 100,
+            secondsUntilReset: 0.001,
+            remainingMode: false
+        )
+        XCTAssertNotNil(pace.pacePercent)
+    }
+
+    func testUnusedActiveWindowHasNoMarkerOrProjection() {
+        let pace = LimitPace.compute(
+            usedFraction: 0,
+            windowSeconds: 100,
+            secondsUntilReset: 60,
+            remainingMode: false
+        )
+        XCTAssertNil(pace.pacePercent)
+        XCTAssertNil(pace.runsOutEta)
+        XCTAssertNil(pace.projectedEnd)
+        XCTAssertEqual(pace.expectedPercent, 40)
+    }
 }

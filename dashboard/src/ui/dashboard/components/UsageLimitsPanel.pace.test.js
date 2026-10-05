@@ -1,5 +1,5 @@
 import { createElement } from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { copy } from "../../../lib/copy";
 import { UsageLimitsPanel } from "./UsageLimitsPanel.jsx";
@@ -40,11 +40,11 @@ describe("UsageLimitsPanel pace clock", () => {
     vi.useRealTimers();
   });
 
-  it("advances 5h and weekly markers without fetching usage and snaps on reset changes", () => {
+  it("advances 5h and weekly markers once a minute without fetching usage or animating left", () => {
     vi.setSystemTime(new Date("2026-09-24T12:00:00.000Z"));
     const fetchUsage = vi.fn();
     vi.stubGlobal("fetch", fetchUsage);
-    const { rerender } = render(panel({
+    render(panel({
       fiveHourReset: "2026-09-24T15:00:00.000Z",
       weeklyReset: "2026-09-28T00:00:00.000Z",
     }));
@@ -54,41 +54,37 @@ describe("UsageLimitsPanel pace clock", () => {
     expect(markerPosition(fiveHourLabel)).toBeCloseTo(40);
     expect(markerPosition(weeklyLabel)).toBeCloseTo(50);
     act(() => vi.advanceTimersByTime(10_000));
+    expect(markerPosition(fiveHourLabel)).toBeCloseTo(40);
+    expect(markerPosition(weeklyLabel)).toBeCloseTo(50);
+    act(() => vi.advanceTimersByTime(50_000));
     expect(markerPosition(fiveHourLabel)).toBeGreaterThan(40);
     expect(markerPosition(weeklyLabel)).toBeGreaterThan(50);
-    expect(marker(fiveHourLabel)).toHaveClass("motion-safe:transition-[left]");
+    expect(marker(fiveHourLabel)).not.toHaveClass("motion-safe:transition-[left]");
     expect(fetchUsage).not.toHaveBeenCalled();
-
-    const oldMarker = marker(fiveHourLabel);
-    rerender(panel({ fiveHourReset: "2026-09-24T17:00:00.000Z" }));
-    expect(marker(fiveHourLabel)).not.toBe(oldMarker);
   });
 
   it("moves remaining-mode markers backward and hides an expired window", () => {
-    vi.setSystemTime(new Date("2026-09-24T14:59:40.000Z"));
+    vi.setSystemTime(new Date("2026-09-24T14:58:00.000Z"));
     render(panel({ fiveHourReset: "2026-09-24T15:00:00.000Z", displayMode: "remaining" }));
     const label = copy("limits.label.claude_5h");
     const initial = markerPosition(label);
-    act(() => vi.advanceTimersByTime(10_000));
+    act(() => vi.advanceTimersByTime(60_000));
     expect(markerPosition(label)).toBeLessThan(initial);
-    act(() => vi.advanceTimersByTime(10_000));
+    act(() => vi.advanceTimersByTime(60_000));
     expect(markerPosition(label)).toBeNull();
   });
 
-  it("pauses while hidden and snaps to current time on return", () => {
+  it("shares the minute clock across provider refreshes without remounting rows", () => {
     vi.setSystemTime(new Date("2026-09-24T12:00:00.000Z"));
-    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    render(panel({ fiveHourReset: "2026-09-24T15:00:00.000Z" }));
+    const { rerender } = render(panel({ fiveHourReset: "2026-09-24T15:00:00.000001Z" }));
     const label = copy("limits.label.claude_5h");
+    const oldMarker = marker(label);
+    const oldTooltip = oldMarker.closest(".group").querySelector('[role="tooltip"]');
 
-    visibility.mockReturnValue("hidden");
-    act(() => fireEvent(document, new Event("visibilitychange")));
-    act(() => vi.advanceTimersByTime(60_000));
+    vi.setSystemTime(new Date("2026-09-24T12:00:30.000Z"));
+    rerender(panel({ fiveHourReset: "2026-09-24T15:00:00.000002Z" }));
+    expect(marker(label)).toBe(oldMarker);
+    expect(marker(label).closest(".group").querySelector('[role="tooltip"]')).toBe(oldTooltip);
     expect(markerPosition(label)).toBeCloseTo(40);
-
-    visibility.mockReturnValue("visible");
-    act(() => fireEvent(document, new Event("visibilitychange")));
-    expect(markerPosition(label)).toBeGreaterThan(40);
-    expect(marker(label)).not.toHaveClass("motion-safe:transition-[left]");
   });
 });

@@ -540,7 +540,7 @@ struct UsageLimitsView: View {
             let pace = LimitPace.compute(
                 usedFraction: usedFraction,
                 windowSeconds: windowSeconds,
-                secondsUntilReset: max(0, resetDate.timeIntervalSinceNow),
+                secondsUntilReset: resetDate.timeIntervalSinceNow,
                 remainingMode: settings.displayMode == .remaining
             )
             pacePercent = pace.pacePercent
@@ -1089,7 +1089,7 @@ private struct LimitsExplainContent: View {
             pace = LimitPace.compute(
                 usedFraction: usedFraction,
                 windowSeconds: windowSeconds,
-                secondsUntilReset: max(0, resetDate.timeIntervalSinceNow),
+                secondsUntilReset: resetDate.timeIntervalSinceNow,
                 remainingMode: remainingMode
             )
         }

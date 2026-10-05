@@ -40,10 +40,11 @@ enum LimitPace {
 
     /// Compute the pace mark + current-rate projection for one window.
     /// The mark is shown once usage is nonzero; an unused window has no mark.
-    /// Projection uses rate = used / elapsed.
+    /// Expired windows have no pace or projection. Projection uses rate = used / elapsed.
     static func compute(usedFraction: Double, windowSeconds: Double, secondsUntilReset: Double, remainingMode: Bool) -> Result {
         var result = Result()
         guard windowSeconds > 0,
+              secondsUntilReset > 0,
               let expected = expectedUsedFraction(windowSeconds: windowSeconds, secondsUntilReset: secondsUntilReset) else {
             return result
         }
