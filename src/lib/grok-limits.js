@@ -645,9 +645,12 @@ async function fetchGrokBilling(
       deadlineMs,
     );
     if (creditsResult.ok) {
+      // Keep the unified pool even when its fields are malformed. The caller
+      // must surface its parse error rather than substitute a legacy pool.
+      if (creditsResult.body?.config?.currentPeriod) return creditsResult.body;
       try {
-        // A 2xx response can still use an unsupported shape. Validate before
-        // preferring it so older accounts can use the legacy endpoint too.
+        // Only a response without a unified period is eligible for shape
+        // fallback; a parseable legacy response can already be used as-is.
         normalizeGrokBillingResponse(creditsResult.body);
         return creditsResult.body;
       } catch (error) {

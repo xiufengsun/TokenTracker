@@ -399,6 +399,63 @@ describe("fetchGrokLimits", () => {
     }
   });
 
+  it("does not replace malformed unified billing with a legacy monthly pool", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tt-grok-limits-malformed-period-"));
+    try {
+      const grokHome = path.join(tmp, ".grok");
+      fs.mkdirSync(grokHome, { recursive: true });
+      fs.writeFileSync(
+        path.join(grokHome, "auth.json"),
+        JSON.stringify({ "https://auth.x.ai::test": { key: "test-token" } }),
+        "utf8",
+      );
+
+      const urls = [];
+      const result = await fetchGrokLimits({
+        home: tmp,
+        env: { GROK_HOME: grokHome },
+        fetchImpl: async (url) => {
+          urls.push(String(url));
+          if (String(url).endsWith("/v1/settings")) return { ok: false, status: 503 };
+          return {
+            ok: true,
+            status: 200,
+            async json() {
+              if (String(url).includes("format=credits")) {
+                return {
+                  config: {
+                    currentPeriod: {
+                      type: "USAGE_PERIOD_TYPE_WEEKLY",
+                      start: "2026-07-22T00:00:00Z",
+                      end: "2026-07-29T00:00:00Z",
+                    },
+                    creditUsagePercent: "40%",
+                  },
+                };
+              }
+              return {
+                config: {
+                  monthlyLimit: { val: 1000 },
+                  used: { val: 10 },
+                  billingPeriodStart: "2026-07-01T00:00:00Z",
+                  billingPeriodEnd: "2026-08-01T00:00:00Z",
+                },
+              };
+            },
+          };
+        },
+      });
+
+      assert.equal(result.configured, true);
+      assert.equal(result.error, "Could not parse Grok billing: no quota windows in response");
+      assert.deepEqual(urls, ["https://cli-chat-proxy.grok.com/v1/billing?format=credits"]);
+      assert.equal(result.primary_window, undefined);
+      assert.equal(result.period_type, undefined);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to legacy /v1/billing when format=credits fails", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tt-grok-limits-fallback-"));
     try {
