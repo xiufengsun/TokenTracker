@@ -1550,6 +1550,66 @@ test("filterColdCodexRolloutFiles skips historical EOF Codex files without statt
   }
 });
 
+test("filterColdCodexRolloutFiles re-reads a recent cold rollout that grew past its cursor (#592)", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-rollout-"));
+  const realStat = fs.stat;
+  try {
+    // nowMs is 2026-07-05 local; a session created 07-02 is outside the two-day
+    // active window but well inside the growth-stat window.
+    const now = new Date(2026, 6, 5, 12, 0, 0).getTime();
+    const dayDir = path.join(tmp, ".codex", "sessions", "2026", "07", "02");
+    await fs.mkdir(dayDir, { recursive: true });
+    const grownPath = path.join(dayDir, "rollout-2026-07-02T09-00-00-019f16bd-aaaa-7222-8333-444444444444.jsonl");
+    const eofPath = path.join(dayDir, "rollout-2026-07-02T10-00-00-019f16bd-bbbb-7222-8333-444444444444.jsonl");
+    const ancientPath = path.join(
+      tmp, ".codex", "sessions", "2026", "01", "01",
+      "rollout-2026-01-01T00-00-00-019f16bd-cccc-7222-8333-444444444444.jsonl",
+    );
+    // A rollout from today keeps 07-02 out of the "newest date present" slot,
+    // which activeCodexRolloutDates always treats as active.
+    const todayPath = path.join(
+      tmp, ".codex", "sessions", "2026", "07", "05",
+      "rollout-2026-07-05T08-00-00-019f16bd-dddd-7222-8333-444444444444.jsonl",
+    );
+    await fs.writeFile(grownPath, "x".repeat(200));
+    await fs.writeFile(eofPath, "x".repeat(123));
+    let rolloutStats = 0;
+    fs.stat = async function countedStat(target, ...args) {
+      if (String(target).endsWith(".jsonl")) rolloutStats += 1;
+      return realStat.call(this, target, ...args);
+    };
+
+    const filtered = await filterColdCodexRolloutFiles({
+      rolloutFiles: [
+        { path: grownPath, source: "codex" },
+        { path: eofPath, source: "codex" },
+        { path: ancientPath, source: "codex" },
+        { path: todayPath, source: "codex" },
+      ],
+      cursors: {
+        files: {
+          [grownPath]: { offset: 123, projectOffset: 123 },
+          [eofPath]: { offset: 123, projectOffset: 123 },
+          [ancientPath]: { offset: 123, projectOffset: 123 },
+          [todayPath]: { offset: 5, projectOffset: 5 },
+        },
+      },
+      projectEnabled: false,
+      nowMs: now,
+    });
+
+    // The grown file is parsed again (from its offset) alongside today's; the
+    // file still at EOF and the ancient one are skipped. Only the two recent
+    // cold files were stat'ed — the ancient file waits for the daily audit.
+    assert.deepEqual(filtered.rolloutFiles.map((entry) => entry.path), [grownPath, todayPath]);
+    assert.equal(filtered.skipped, 2);
+    assert.equal(rolloutStats, 2);
+  } finally {
+    fs.stat = realStat;
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("filterColdCodexRolloutFiles keeps project-stale historical files parseable", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-rollout-"));
   try {

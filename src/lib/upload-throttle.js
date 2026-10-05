@@ -19,6 +19,9 @@ function normalizeState(raw) {
     backoffStep: toSafeInt(s.backoffStep),
     lastErrorAt: typeof s.lastErrorAt === "string" ? s.lastErrorAt : null,
     lastError: typeof s.lastError === "string" ? s.lastError : null,
+    lastErrorStatus: toSafeInt(s.lastErrorStatus),
+    lastErrorCode: typeof s.lastErrorCode === "string" ? s.lastErrorCode : null,
+    lastErrorAttemptId: typeof s.lastErrorAttemptId === "string" ? s.lastErrorAttemptId : null,
     updatedAt: typeof s.updatedAt === "string" ? s.updatedAt : null,
   };
 }
@@ -74,11 +77,14 @@ function recordUploadSuccess({ nowMs, state, config, randInt }) {
     backoffStep: 0,
     lastErrorAt: null,
     lastError: null,
+    lastErrorStatus: 0,
+    lastErrorCode: null,
+    lastErrorAttemptId: null,
     updatedAt: new Date(nowMs).toISOString(),
   };
 }
 
-function recordUploadFailure({ nowMs, state, error, config }) {
+function recordUploadFailure({ nowMs, state, error, config, attemptId }) {
   const cfg = { ...DEFAULTS, ...(config || {}) };
   const s = normalizeState(state);
 
@@ -103,6 +109,9 @@ function recordUploadFailure({ nowMs, state, error, config }) {
     backoffStep: Math.min(20, (s.backoffStep || 0) + 1),
     lastErrorAt: new Date(nowMs).toISOString(),
     lastError: truncate(String(error?.message || "upload failed"), 200),
+    lastErrorStatus: status,
+    lastErrorCode: typeof error?.code === "string" ? error.code : null,
+    lastErrorAttemptId: typeof attemptId === "string" && attemptId ? attemptId : null,
     updatedAt: new Date(nowMs).toISOString(),
   };
 }

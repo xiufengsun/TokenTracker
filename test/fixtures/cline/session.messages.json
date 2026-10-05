@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "sessionId": "fixture-cline-session",
+  "messages": [
+    {
+      "id": "fixture-assistant-1",
+      "role": "assistant",
+      "ts": 1789832750318,
+      "modelInfo": {
+        "id": "cline-free/deepseek-v4.1-flash",
+        "provider": "cline",
+        "family": "deepseek-flash"
+      },
+      "metrics": {
+        "inputTokens": 6506,
+        "outputTokens": 415,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0
+      }
+    },
+    {
+      "id": "fixture-assistant-2",
+      "role": "assistant",
+      "ts": 1789832764406,
+      "modelInfo": {
+        "id": "cline-free/deepseek-v4.1-flash",
+        "provider": "cline",
+        "family": "deepseek-flash"
+      },
+      "metrics": {
+        "inputTokens": 10988,
+        "outputTokens": 382,
+        "cacheReadTokens": 64,
+        "cacheWriteTokens": 0
+      }
+    },
+    {
+      "id": "fixture-assistant-3",
+      "role": "assistant",
+      "ts": 1789832774507,
+      "modelInfo": {
+        "id": "cline-free/deepseek-v4.1-flash",
+        "provider": "cline",
+        "family": "deepseek-flash"
+      },
+      "metrics": {
+        "inputTokens": 14963,
+        "outputTokens": 293,
+        "cacheReadTokens": 10858,
+        "cacheWriteTokens": 0
+      }
+    }
+  ]
+}

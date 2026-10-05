@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getCopyLocale, setCopyLocale } from "./copy";
 import { ZH_CN_LOCALE } from "./locale";
 import {
+  formatCompactTokens,
   buildPetLimitSummary,
   buildPetLimitSummaries,
   buildQuipPool,
@@ -44,6 +45,31 @@ describe("desktop pet limit dialogue", () => {
     const atLimit = formatPetLimitSummary("en", { ...reading, usedPercent: 100 });
     expect(atLimit).toContain("Codex 5h · at limit");
     expect(atLimit).not.toMatch(/\d+%/);
+  });
+
+  it("names ZCode windows by plan kind and start-plan bucket labels", () => {
+    const zcodeStart = {
+      configured: true,
+      error: null,
+      plan_kind: "start-plan",
+      primary_window: { used_percent: 40, reset_at: "2099-01-01T00:00:00Z" },
+      buckets: [
+        { label: "GLM-5.3", window: { used_percent: 40, reset_at: "2099-01-01T00:00:00Z" } },
+        { label: "GLM-5.3-Flash · ZCode Weekend Build", window: { used_percent: 20, reset_at: "2099-01-03T00:00:00Z" } },
+      ],
+    };
+    expect(buildPetLimitSummaries({ zcode: zcodeStart }).map(({ window }) => window)).toEqual([
+      "GLM-5.3",
+      "GLM-5.3-Flash · ZCode Weekend Build",
+    ]);
+
+    const zcodeCoding = {
+      configured: true,
+      error: null,
+      plan_kind: "coding-plan",
+      primary_window: { used_percent: 30, reset_at: "2099-01-01T00:00:00Z" },
+    };
+    expect(buildPetLimitSummaries({ zcode: zcodeCoding }).map(({ window }) => window)).toEqual(["5h"]);
   });
 
   it("surfaces Command Code 5h/weekly windows when they are partially used", () => {
@@ -124,5 +150,20 @@ describe("desktop pet limit dialogue", () => {
 
     expect(pool).toContain("Codex 5h · near limit · in 2h");
     expect(pool.some((line) => line.includes("1.2K"))).toBe(true);
+  });
+});
+
+describe("formatCompactTokens unit system", () => {
+  it("keeps K/M/B by default and switches to 万/亿 for the chinese unit system", () => {
+    expect(formatCompactTokens(12_345)).toBe("12.3K");
+    expect(formatCompactTokens(12_345, { unitSystem: "english" })).toBe("12.3K");
+    expect(formatCompactTokens(12_345, { unitSystem: "chinese" })).toBe("1.2万");
+    expect(formatCompactTokens(123_456_789, { unitSystem: "chinese" })).toBe("1.2亿");
+  });
+
+  it("threads the unit system into rolling-total quips", () => {
+    const pool = buildQuipPool("en", { last7dTokens: 123_456_789, unitSystem: "chinese" });
+    expect(pool.some((line) => line.includes("1.2亿"))).toBe(true);
+    expect(pool.some((line) => line.includes("123.5M"))).toBe(false);
   });
 });

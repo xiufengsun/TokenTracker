@@ -13,6 +13,8 @@ const {
   fetchAccountUsage,
   AccountAuthError,
   PAYLOAD_TTL_MS,
+  SUMMARY_PAYLOAD_TTL_MS,
+  invalidateCloudAccountPayloadCache,
   __resetCloudAccountCacheForTests,
 } = require("../src/lib/cloud-account");
 
@@ -175,6 +177,24 @@ test("mintAccessToken surfaces a rotated refresh token", async () => {
     fetchImpl: async () => jsonResponse({ accessToken: access, refreshToken: "new" }),
   });
   assert.equal(out.refreshToken, "new");
+});
+
+test("the rotated refresh token reuses its valid access token", async () => {
+  __resetCloudAccountCacheForTests();
+  const access = makeJwt({ sub: "rotated-cache-user", exp: Math.floor(Date.now() / 1000) + 3600 });
+  let refreshCalls = 0;
+  const fetchImpl = async () => {
+    refreshCalls += 1;
+    return jsonResponse({ accessToken: access, refreshToken: `rotation-${refreshCalls}` });
+  };
+  const first = await mintAccessToken({ baseUrl: "https://cloud.example", refreshToken: "initial", fetchImpl });
+  const next = await mintAccessToken({ baseUrl: "https://cloud.example", refreshToken: first.refreshToken, fetchImpl });
+  assert.equal(refreshCalls, 1);
+  assert.equal(next.accessToken, access);
+  assert.equal(next.refreshToken, null);
+  // An unrelated credential must still authenticate independently.
+  await mintAccessToken({ baseUrl: "https://cloud.example", refreshToken: "other-session", fetchImpl });
+  assert.equal(refreshCalls, 2);
 });
 
 test("mintAccessToken surfaces the csrf token paired with a rotation", async () => {
@@ -381,11 +401,8 @@ test("fetchAccountUsage throws (not returns null) when a signed-in refresh fails
 
 // --- Payload cache -----------------------------------------------------------
 //
-// The account edge functions already hold their RPC snapshot for 30 seconds, so
-// repeat reads inside that window render identical numbers — but each one still
-// shipped a full body. The Windows tray poller re-reads the 52-week heatmap
-// every ~49 seconds and one popover refresh fans out six reads at once, so the
-// repeats are the common case, not the edge case.
+// Ordinary summaries refresh after two minutes; charts after five. Manual
+// refresh and successful local uploads can invalidate the account snapshot.
 
 function makeJwtFor(sub, expSeconds) {
   return `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub, exp: expSeconds })}.sig`;
@@ -487,7 +504,8 @@ test("a different account never reads another account's cached payload", async (
 
 test("a cache hit still reports a refresh token rotated by that mint", async () => {
   __resetCloudAccountCacheForTests();
-  const access = makeJwtFor("u1", Math.floor(Date.now() / 1000) + 3600);
+  const testTime = Date.now();
+  const access = makeJwtFor("u1", Math.floor(testTime / 1000) + 30);
   let mints = 0;
   const fetchImpl = async (urlStr) => {
     if (urlStr.includes("/api/auth/refresh")) {
@@ -503,9 +521,8 @@ test("a cache hit still reports a refresh token rotated by that mint", async () 
       baseUrl: "https://cloud.example",
       refreshToken,
       fetchImpl,
-      // Past the token cache's 60s skew, so every call mints again.
-      now: () => 5_000_000,
-      skewMs: 0,
+      // Within the token cache's expiry skew, even with the current refresh token.
+      now: () => testTime,
     });
 
   await call("r0");
@@ -658,4 +675,213 @@ test("fetchAccountUsage caches the heatmap payload already expanded", async () =
   assert.equal(heatmapCalls, 1, "second read inside the TTL must not hit the cloud");
   assert.deepEqual(second.data, first.data);
   assert.equal(second.data.weeks[0].length, 7, "the cached copy is the rendered grid, not the compact rows");
+});
+
+test("real HTTP account reads obey summary/chart TTLs and explicit refresh", async (t) => {
+  __resetCloudAccountCacheForTests();
+  const http = require("node:http");
+  const counts = new Map();
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, "http://localhost");
+    res.setHeader("Content-Type", "application/json");
+    if (url.pathname === "/api/auth/refresh") {
+      res.end(JSON.stringify({ accessToken: makeJwtFor("http-user", Date.now() / 1000 + 3600) }));
+      return;
+    }
+    assert.equal(url.searchParams.has("refresh"), false, "local refresh flag does not change the edge URL");
+    const count = (counts.get(url.pathname) || 0) + 1;
+    counts.set(url.pathname, count);
+    res.end(JSON.stringify({ totals: { total_tokens: count, total_cost_usd: "1.234567" } }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }));
+  const root = `http://127.0.0.1:${server.address().port}`;
+  let clock = Date.now();
+  const read = (slug, query = "") => fetchAccountUsage({
+    usageSlug: `tokentracker-usage-${slug}`, baseUrl: root, refreshToken: "http-refresh",
+    searchParams: new URLSearchParams(`from=2026-10-01&to=2026-10-02${query}`), now: () => clock,
+  });
+  await read("summary");
+  await read("daily");
+  clock += 60_000;
+  await Promise.all([read("summary"), read("daily")]);
+  assert.equal(counts.get("/functions/tokentracker-account-summary"), 1);
+  clock += SUMMARY_PAYLOAD_TTL_MS - 60_000;
+  assert.equal((await read("summary")).data.totals.total_tokens, 2);
+  assert.equal((await read("daily")).data.totals.total_tokens, 1);
+  await read("daily", "&refresh=1");
+  assert.equal((await read("daily")).data.totals.total_tokens, 2);
+  clock += PAYLOAD_TTL_MS;
+  assert.equal((await read("daily")).data.totals.total_tokens, 3);
+});
+
+test("real HTTP account cache keys isolate escaped query values and normalize duplicate wire params", async (t) => {
+  __resetCloudAccountCacheForTests();
+  const http = require("node:http");
+  const queries = [];
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, "http://localhost");
+    res.setHeader("Content-Type", "application/json");
+    if (url.pathname === "/api/auth/refresh") {
+      res.end(JSON.stringify({ accessToken: makeJwtFor("query-user", Date.now() / 1000 + 3600) }));
+      return;
+    }
+    queries.push(url.searchParams);
+    res.end(JSON.stringify({ device: url.searchParams.get("device_id"), a: url.searchParams.get("a") }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }));
+  const read = (params) => fetchAccountUsage({
+    usageSlug: "tokentracker-usage-summary", refreshToken: "query-refresh",
+    baseUrl: `http://127.0.0.1:${server.address().port}`, searchParams: params,
+  });
+  const encoded = await read(new URLSearchParams("a=ignored&device_id=D"));
+  const literal = await read(new URLSearchParams({ a: "ignored&device_id=D" }));
+  assert.deepEqual(encoded.data, { device: "D", a: "ignored" });
+  assert.deepEqual(literal.data, { device: null, a: "ignored&device_id=D" });
+  assert.equal(queries.length, 2, "literal separators must not collide with a separate device filter");
+  const duplicates = await read(new URLSearchParams("a=ignored&device_id=D&device_id=E&device_id="));
+  assert.deepEqual(duplicates.data, { device: "E", a: "ignored" });
+  assert.deepEqual(queries[2].getAll("device_id"), ["E"], "the wire keeps the last non-empty duplicate");
+  assert.deepEqual((await read(new URLSearchParams("device_id=E&a=ignored"))).data, duplicates.data);
+  assert.equal(queries.length, 3, "equivalent normalized params reuse the existing response");
+});
+
+test("payload single flight shares HTTP work but isolates returned objects", async () => {
+  __resetCloudAccountCacheForTests();
+  let release;
+  let requests = 0;
+  const response = new Promise((resolve) => { release = resolve; });
+  const args = {
+    usageSlug: "tokentracker-usage-summary", refreshToken: "r", baseUrl: "https://cloud.example",
+    fetchImpl: async (url) => {
+      if (url.includes("/api/auth/refresh")) return jsonResponse({ accessToken: makeJwtFor("flight-user", Date.now() / 1000 + 3600) });
+      requests += 1;
+      return response;
+    },
+  };
+  const first = fetchAccountUsage(args);
+  const second = fetchAccountUsage(args);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests, 1);
+  release(jsonResponse({ totals: { total_tokens: 9 } }));
+  const [a, b] = await Promise.all([first, second]);
+  a.data.totals.total_tokens = 99;
+  assert.equal(b.data.totals.total_tokens, 9);
+});
+
+test("invalidation and forced reads prevent an older response from refilling the cache", async () => {
+  for (const invalidate of [true, false]) {
+    __resetCloudAccountCacheForTests();
+    let release;
+    let requests = 0;
+    const oldResponse = new Promise((resolve) => { release = resolve; });
+    const args = {
+      usageSlug: "tokentracker-usage-summary", refreshToken: "r", baseUrl: "https://cloud.example",
+      fetchImpl: async (url) => {
+        if (url.includes("/api/auth/refresh")) return jsonResponse({ accessToken: makeJwtFor("race-user", Date.now() / 1000 + 3600) });
+        requests += 1;
+        return requests === 1 ? oldResponse : jsonResponse({ value: requests });
+      },
+    };
+    const old = fetchAccountUsage(args);
+    await new Promise((resolve) => setImmediate(resolve));
+    if (invalidate) invalidateCloudAccountPayloadCache();
+    const newer = await fetchAccountUsage({ ...args, searchParams: new URLSearchParams(invalidate ? "" : "refresh=1") });
+    assert.equal(newer.data.value, 2);
+    release(jsonResponse({ value: 1 }));
+    await old;
+    assert.equal((await fetchAccountUsage(args)).data.value, 2);
+    assert.equal(requests, 2);
+  }
+});
+
+test("an authentication rejection evicts payloads instead of serving old data", async () => {
+  __resetCloudAccountCacheForTests();
+  let requests = 0;
+  const args = {
+    usageSlug: "tokentracker-usage-summary", refreshToken: "r", baseUrl: "https://cloud.example",
+    fetchImpl: async (url) => {
+      if (url.includes("/api/auth/refresh")) return jsonResponse({ accessToken: makeJwtFor("reject-user", Date.now() / 1000 + 3600) });
+      requests += 1;
+      return requests === 2 ? jsonResponse({}, false, 401) : jsonResponse({ value: requests });
+    },
+  };
+  await fetchAccountUsage(args);
+  await assert.rejects(fetchAccountUsage({ ...args, searchParams: new URLSearchParams("refresh=1") }), { status: 401 });
+  assert.equal((await fetchAccountUsage(args)).data.value, 3);
+});
+
+test("a session invalidated during mint cannot repopulate its payload cache", async () => {
+  __resetCloudAccountCacheForTests();
+  let release;
+  const mint = new Promise((resolve) => { release = resolve; });
+  let requests = 0;
+  let persisted = 0;
+  const pending = fetchAccountUsage({
+    usageSlug: "tokentracker-usage-summary", refreshToken: "r", baseUrl: "https://cloud.example",
+    onSessionRefreshed: () => { persisted += 1; },
+    fetchImpl: async (url) => {
+      if (url.includes("/api/auth/refresh")) return mint;
+      requests += 1;
+      return jsonResponse({ value: 1 });
+    },
+  });
+  invalidateCloudAccountPayloadCache({ sessionChanged: true });
+  release(jsonResponse({ accessToken: makeJwtFor("old-user", Date.now() / 1000 + 3600), refreshToken: "rotated-old", csrfToken: "csrf-old" }));
+  await assert.rejects(pending, { code: "auth_session_changed" });
+  assert.equal(requests, 0);
+  assert.equal(persisted, 0, "a stale mint must not persist credentials into the new session");
+});
+
+test("account reads await rotated-session persistence before starting the cloud GET", async () => {
+  __resetCloudAccountCacheForTests();
+  let release;
+  const persistence = new Promise((resolve) => { release = resolve; });
+  let started;
+  const persistenceStarted = new Promise((resolve) => { started = resolve; });
+  let session;
+  let edgeCalls = 0;
+  const pending = fetchAccountUsage({
+    usageSlug: "tokentracker-usage-summary", refreshToken: "before", baseUrl: "https://cloud.example",
+    fetchImpl: async (url) => {
+      if (url.includes("/api/auth/refresh")) {
+        return jsonResponse({ accessToken: makeJwtFor("persist-user", Date.now() / 1000 + 3600), refreshToken: "after", csrfToken: "csrf-after" });
+      }
+      edgeCalls += 1;
+      assert.deepEqual(session, { refreshToken: "after", csrfToken: "csrf-after" });
+      return jsonResponse({ value: 123 });
+    },
+    onSessionRefreshed: async (rotation) => {
+      started();
+      await persistence;
+      session = rotation;
+    },
+  });
+  await persistenceStarted;
+  assert.equal(edgeCalls, 0);
+  release();
+  assert.deepEqual((await pending).data, { value: 123 });
+  assert.equal(edgeCalls, 1);
+});
+
+test("a late response from a signed-out account returns neither data nor rotated credentials", async () => {
+  __resetCloudAccountCacheForTests();
+  let release;
+  const response = new Promise((resolve) => { release = resolve; });
+  const old = fetchAccountUsage({
+    usageSlug: "tokentracker-usage-summary", baseUrl: "https://cloud.example", refreshToken: "a",
+    fetchImpl: async (url) => url.includes("/api/auth/refresh")
+      ? jsonResponse({ accessToken: makeJwtFor("user-a", Date.now() / 1000 + 3600), refreshToken: "rotated-a" })
+      : response,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  invalidateCloudAccountPayloadCache({ sessionChanged: true });
+  const newer = await fetchAccountUsage({
+    usageSlug: "tokentracker-usage-summary", baseUrl: "https://cloud.example", refreshToken: "b",
+    fetchImpl: countingFetch(makeJwtFor("user-b", Date.now() / 1000 + 3600), { owner: "b" }, { n: 0 }),
+  });
+  assert.deepEqual(newer.data, { owner: "b" });
+  release(jsonResponse({ owner: "a" }));
+  await assert.rejects(old, { code: "auth_session_changed" });
 });

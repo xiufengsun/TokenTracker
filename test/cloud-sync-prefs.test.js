@@ -48,7 +48,7 @@ test("cloud device session stays in memory and clears legacy localStorage", asyn
     };
 
     mod.setStoredDeviceSession(session);
-    assert.deepEqual(mod.getStoredDeviceSession(), session);
+    assert.deepEqual(mod.getStoredDeviceSession(), { ...session, generation: mod.getCloudDeviceSessionGeneration() });
     assert.equal(storage.getItem(legacyKey), null);
     assert.equal(storage.getItem(deviceIdKey), "memory-device");
     assert.equal(mod.getCurrentDeviceId(), "memory-device");

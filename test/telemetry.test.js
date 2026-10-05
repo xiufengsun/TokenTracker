@@ -89,7 +89,7 @@ test("maybeSendHeartbeat sends once, records state, and throttles the same day",
   assert.equal(calls.length, 1);
 
   const { url, options } = calls[0];
-  assert.ok(url.endsWith(`/functions/${HEARTBEAT_FUNCTION_SLUG}`), url);
+  assert.ok(url.endsWith(`/${HEARTBEAT_FUNCTION_SLUG}`), url);
   assert.equal(options.method, "POST");
   assert.ok(options.headers.apikey, "apikey header present");
   const body = JSON.parse(options.body);

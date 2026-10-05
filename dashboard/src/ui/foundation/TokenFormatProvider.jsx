@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useLocale } from "../../hooks/useLocale.js";
 import { copy } from "../../lib/copy";
+import { isNativeEmbed, isNativeWindowsApp, setNativeSetting } from "../../lib/native-bridge.js";
 import {
   TOKEN_FORMAT_MODES,
   TOKEN_FORMAT_STORAGE_KEY,
@@ -42,6 +43,12 @@ export function TokenFormatProvider({ children }) {
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
+
+  // The macOS menu bar formats its own numbers; mirror the unit choice there on
+  // every change and on mount, since UserDefaults may predate the setting.
+  useEffect(() => {
+    if (isNativeEmbed() || isNativeWindowsApp()) setNativeSetting("tokenUnitSystem", unitSystem);
+  }, [unitSystem]);
 
   const setMode = useCallback((value) => {
     const next = persistTokenFormatMode(value);

@@ -24,7 +24,10 @@ struct DynamicIslandView: View {
     /// Horizontal breathing room added around the widest wing label.
     private static let wingPadding: CGFloat = 16
 
-    @State private var menuBarIcon: NSImage? = nil
+    /// Width / height of the menu-bar icon. Only changes with the icon style,
+    /// so per-frame ticks never invalidate this view. `IslandMenuBarIcon`
+    /// owns the frame image itself.
+    @State private var menuBarIconAspect: CGFloat = 1
     @State private var wingMetrics = WingSelection.default
     @State private var compactModeEnabled = false
 
@@ -46,15 +49,18 @@ struct DynamicIslandView: View {
         .environment(\.colorScheme, .dark)
         .preferredColorScheme(.dark)
         .onReceive(NotificationCenter.default.publisher(for: .menuBarIconFrameUpdated)) { note in
-            // The animator posts a frame per animation tick (up to ~12/s while
-            // a runner sprints). Only re-render for it when the panel is on
-            // screen and a wing actually displays the icon.
-            guard state.isPanelVisible, wingsShowMenuBarIcon,
-                  let image = note.object as? NSImage else { return }
-            self.menuBarIcon = image
+            // The animator posts a frame per tick (up to 24/s while the bot
+            // sprints). Writing state here on every tick re-ran this whole
+            // body, the hidden measurement copies and both preference
+            // round-trips. Only an icon-style switch changes the aspect.
+            guard let image = note.object as? NSImage else { return }
+            let aspect = Self.aspect(of: image)
+            if abs(aspect - menuBarIconAspect) > 0.01 { menuBarIconAspect = aspect }
         }
         .onAppear {
-            self.menuBarIcon = StatusBarController.currentMenuBarIcon
+            if let icon = StatusBarController.currentMenuBarIcon {
+                self.menuBarIconAspect = Self.aspect(of: icon)
+            }
             self.wingMetrics = resolveWingMetrics()
             self.compactModeEnabled = DynamicIslandCompactPolicy.isEnabled()
         }
@@ -180,9 +186,9 @@ struct DynamicIslandView: View {
                 if compactModeEnabled {
                     measured(compactRingWingView())
                 } else {
-                    measured(buildWingView(for: metrics.left))
+                    measured(buildWingView(for: metrics.left, liveIcon: false))
                 }
-                measured(buildWingView(for: metrics.right, suppressValue: compactModeEnabled))
+                measured(buildWingView(for: metrics.right, suppressValue: compactModeEnabled, liveIcon: false))
             }
             .hidden()
         )
@@ -213,23 +219,21 @@ struct DynamicIslandView: View {
         )
     }
 
-    /// Whether either wing renders the animated menu-bar icon (the
-    /// `.todayTokens` slot) — gates icon-frame notification re-renders.
-    private var wingsShowMenuBarIcon: Bool {
-        let metrics = wingMetrics
-        if compactModeEnabled {
-            return metrics.right == .todayTokens
-        }
-        return metrics.left == .todayTokens || metrics.right == .todayTokens
+    private static func aspect(of image: NSImage) -> CGFloat {
+        guard image.size.width > 0, image.size.height > 0 else { return 1 }
+        return image.size.width / image.size.height
     }
 
+    /// `liveIcon: false` is for the hidden measurement copies: they only need
+    /// the icon's footprint, not its animation frames.
     @ViewBuilder
     private func buildWingView(
         for metric: MenuBarDisplayMetric?,
-        suppressValue: Bool = false
+        suppressValue: Bool = false,
+        liveIcon: Bool = true
     ) -> some View {
         if let metric {
-            buildMetricWingView(for: metric, suppressValue: suppressValue)
+            buildMetricWingView(for: metric, suppressValue: suppressValue, liveIcon: liveIcon)
         } else {
             // Explicit "none" slot: contribute nothing to the wing (the
             // shared minWingWidth floor keeps the island shape balanced).
@@ -239,7 +243,8 @@ struct DynamicIslandView: View {
 
     private func buildMetricWingView(
         for metric: MenuBarDisplayMetric,
-        suppressValue: Bool = false
+        suppressValue: Bool = false,
+        liveIcon: Bool = true
     ) -> some View {
         let content = wingContent(for: metric)
         return HStack(spacing: 4) {
@@ -251,14 +256,15 @@ struct DynamicIslandView: View {
                     .interpolation(.high)
                     .scaledToFit()
                     .frame(width: 10.5, height: 10.5)
-            } else if metric == .todayTokens, let icon = menuBarIcon ?? StatusBarController.currentMenuBarIcon {
-                Image(nsImage: icon)
-                    .renderingMode(.template)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
-                    .frame(height: 15.5)
-                    .foregroundStyle(Color.white.opacity(0.95))
+            } else if metric == .todayTokens, StatusBarController.currentMenuBarIcon != nil {
+                Group {
+                    if liveIcon {
+                        IslandMenuBarIcon(isLive: state.isPanelVisible)
+                    } else {
+                        Color.clear
+                    }
+                }
+                .frame(width: 15.5 * menuBarIconAspect, height: 15.5)
             } else if let icon = content.icon {
                 Image(systemName: icon)
                     .font(.system(size: 9, weight: .bold))
@@ -549,6 +555,140 @@ private struct WingSelection: Equatable {
     let right: MenuBarDisplayMetric?
 
     static let `default` = WingSelection(left: .todayTokens, right: .todayCost)
+}
+
+/// The animated menu-bar icon inside a wing. Frames arrive up to 24/s; as a
+/// SwiftUI `Image` each one re-ran layout for the whole island tree. This
+/// leaf swaps a CALayer mask instead, so a tick never reaches SwiftUI.
+private struct IslandMenuBarIcon: NSViewRepresentable {
+    /// False while the panel is hidden: ticks are dropped instead of
+    /// updating an off-screen layer.
+    let isLive: Bool
+
+    func makeNSView(context: Context) -> IslandMenuBarIconView {
+        let view = IslandMenuBarIconView()
+        view.isLive = isLive
+        return view
+    }
+
+    func updateNSView(_ view: IslandMenuBarIconView, context: Context) {
+        view.isLive = isLive
+    }
+}
+
+/// Template-style rendering on Core Animation: a white fill masked by the
+/// frame's alpha. Each frame is rasterized once per size and cached, so the
+/// animator's drawing-handler images are not re-filled on every tick.
+private final class IslandMenuBarIconView: NSView {
+    var isLive = false {
+        didSet {
+            guard isLive, !oldValue, let icon = StatusBarController.currentMenuBarIcon else { return }
+            show(icon)
+        }
+    }
+
+    private let maskLayer = CALayer()
+    private var observer: NSObjectProtocol?
+    private var current: NSImage?
+    /// Weak keys: frames of a style that is switched away are released.
+    private var rasterCache = NSMapTable<NSImage, CGImage>(keyOptions: .weakMemory, valueOptions: .strongMemory)
+    private var rasterPixelSize: CGSize = .zero
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.95).cgColor
+        maskLayer.contentsGravity = .resizeAspect
+        layer?.mask = maskLayer
+        observer = NotificationCenter.default.addObserver(
+            forName: .menuBarIconFrameUpdated,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let image = note.object as? NSImage else { return }
+            MainActor.assumeIsolated {
+                guard let self, self.isLive else { return }
+                self.show(image)
+            }
+        }
+        current = StatusBarController.currentMenuBarIcon
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    /// SwiftUI sizes the view via `setFrameSize` without a layout pass, so
+    /// the mask frame follows here rather than in `layout()`.
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if let current { show(current) }
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        if let current { show(current) }
+    }
+
+    /// Display only: clicks and hover belong to the island around it.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    private func show(_ image: NSImage) {
+        current = image
+        let scale = window?.backingScaleFactor ?? 2
+        let pixelSize = CGSize(width: ceil(bounds.width * scale), height: ceil(bounds.height * scale))
+        guard pixelSize.width > 0, pixelSize.height > 0 else { return }
+        if pixelSize != rasterPixelSize {
+            rasterCache.removeAllObjects()
+            rasterPixelSize = pixelSize
+        }
+        let raster: CGImage
+        if let cached = rasterCache.object(forKey: image) {
+            raster = cached
+        } else {
+            guard let rendered = Self.rasterize(image, pixelSize: pixelSize) else { return }
+            rasterCache.setObject(rendered, forKey: image)
+            raster = rendered
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        maskLayer.frame = bounds
+        maskLayer.contentsScale = scale
+        maskLayer.contents = raster
+        CATransaction.commit()
+    }
+
+    /// Aspect-fits the image into `pixelSize`; only the alpha channel matters.
+    private static func rasterize(_ image: NSImage, pixelSize: CGSize) -> CGImage? {
+        guard image.size.width > 0, image.size.height > 0,
+              let ctx = CGContext(
+                  data: nil,
+                  width: Int(pixelSize.width),
+                  height: Int(pixelSize.height),
+                  bitsPerComponent: 8,
+                  bytesPerRow: 0,
+                  space: CGColorSpaceCreateDeviceRGB(),
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return nil }
+        let fit = min(pixelSize.width / image.size.width, pixelSize.height / image.size.height)
+        let drawn = CGSize(width: image.size.width * fit, height: image.size.height * fit)
+        let rect = CGRect(
+            x: (pixelSize.width - drawn.width) / 2,
+            y: (pixelSize.height - drawn.height) / 2,
+            width: drawn.width,
+            height: drawn.height
+        )
+        ctx.interpolationQuality = .high
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        return ctx.makeImage()
+    }
 }
 
 /// Rendered height of the island shape, reported after layout for hit-testing.

@@ -520,6 +520,23 @@ jobs:
             fi
           }
 
+          # The browser returns OAuth sign-in through tokentracker://. deb and rpm
+          # rely on their packaged desktop entry for that (the AppImage registers
+          # its own at runtime), so a package without it can never sign in.
+          verify_scheme_handler() {
+            local label="$1" desktop="$2/usr/share/applications/TokenTracker.desktop"
+            if [ ! -f "$desktop" ]; then
+              echo "::error::$label is missing usr/share/applications/TokenTracker.desktop"
+              exit 1
+            fi
+            if ! grep -Fxq 'MimeType=x-scheme-handler/tokentracker;' "$desktop" \
+              || ! grep -Fxq 'Exec=tokentracker-linux %u' "$desktop"; then
+              echo "::error::$label desktop entry does not register tokentracker://"
+              cat "$desktop"
+              exit 1
+            fi
+          }
+
           # Exactly one artifact per format, so a silent extra build is caught.
           pick_one() {
             local label="$1"; shift
@@ -549,6 +566,7 @@ jobs:
           mkdir -p "$workdir/deb"
           dpkg-deb -x "$deb" "$workdir/deb"
           verify_payload "deb" "$workdir/deb"
+          verify_scheme_handler "deb" "$workdir/deb"
           cp "$deb" "dist-linux/TokenTracker-linux-x86_64.deb"
 
           # --- rpm ------------------------------------------------------------
@@ -564,6 +582,7 @@ jobs:
             echo "::warning::RPM extraction returned a non-zero status; checking the extracted payload"
           fi
           verify_payload "rpm" "$workdir/rpm"
+          verify_scheme_handler "rpm" "$workdir/rpm"
           cp "$rpm_pkg" "dist-linux/TokenTracker-linux-x86_64.rpm"
 
           rm -rf "$workdir"

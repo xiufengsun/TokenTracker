@@ -1,0 +1,262 @@
+/* Proportions follow the macOS status item (StatusBarController.swift):
+   10pt value over a 7pt label in a 22pt bar, scaled to GNOME's taller panel. */
+.tokentracker-panel {
+  spacing: 0;
+}
+
+.tokentracker-clawd {
+  width: 22px;
+  height: 22px;
+  margin-right: 7px;
+}
+
+.tokentracker-column {
+  spacing: 0;
+}
+
+.tokentracker-value {
+  font-size: 12px;
+  font-weight: normal;
+  font-feature-settings: "tnum";
+}
+
+.tokentracker-label {
+  font-size: 8px;
+  font-weight: normal;
+}
+
+.tokentracker-separator {
+  width: 1px;
+  height: 20px;
+  margin: 0 5px;
+  background-color: rgba(255, 255, 255, 0.5);
+}
+
+/* Dropdown, modelled on the macOS popover (DashboardView.swift): 20px side
+   padding, 16px between sections. */
+.tokentracker-menu {
+  width: 472px;
+}
+
+.tokentracker-header,
+.tokentracker-header:hover,
+.tokentracker-menu-item,
+.tokentracker-menu-item:hover,
+.tokentracker-footer,
+.tokentracker-footer:hover {
+  background-color: transparent;
+}
+
+.tokentracker-header {
+  padding: 10px 20px 8px;
+}
+
+.tokentracker-header-box {
+  spacing: 10px;
+}
+
+.tokentracker-sprite {
+  width: 60px;
+  height: 44px;
+}
+
+.tokentracker-bubble {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background-color: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  max-width: 270px;
+}
+
+.tokentracker-icon-button {
+  padding: 5px;
+  border-radius: 99px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.tokentracker-icon-button:hover,
+.tokentracker-icon-button:focus {
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.tokentracker-menu-item {
+  padding: 4px 20px 12px;
+}
+
+.tokentracker-content {
+  spacing: 16px;
+}
+
+.tokentracker-message {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
+  padding: 12px 0;
+}
+
+.tokentracker-cards {
+  spacing: 6px;
+}
+
+.tokentracker-card {
+  spacing: 3px;
+  padding: 8px 9px;
+  border-radius: 9px;
+  background-color: rgba(255, 255, 255, 0.065);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.tokentracker-card-title,
+.tokentracker-card-subtitle {
+  font-size: 10px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.tokentracker-card-value {
+  font-size: 17px;
+  font-weight: bold;
+  font-feature-settings: "tnum";
+}
+
+.tokentracker-section {
+  spacing: 8px;
+}
+
+.tokentracker-trend-section {
+  spacing: 12px;
+}
+
+.tokentracker-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.tokentracker-section-trailing {
+  spacing: 6px;
+}
+
+.tokentracker-hint {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.tokentracker-hint-active {
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.tokentracker-period {
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 5px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.tokentracker-period:hover,
+.tokentracker-period:focus {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.tokentracker-period-active {
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.tokentracker-legend {
+  spacing: 4px;
+}
+
+.tokentracker-legend-label {
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.tokentracker-legend-cell {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.tokentracker-placeholder {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.35);
+  text-align: center;
+  padding: 58px 0;
+  border-radius: 8px;
+  background-color: rgba(128, 128, 128, 0.06);
+}
+
+.tokentracker-limit {
+  spacing: 4px;
+}
+
+.tokentracker-limit-name {
+  font-size: 12px;
+}
+
+.tokentracker-limit-value {
+  font-size: 12px;
+  font-feature-settings: "tnum";
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.tokentracker-limit-bar {
+  height: 6px;
+}
+
+.tokentracker-model {
+  spacing: 5px;
+  padding: 1px 0;
+}
+
+.tokentracker-model-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 3px;
+}
+
+.tokentracker-model-name {
+  font-size: 12px;
+}
+
+.tokentracker-model-tokens {
+  font-size: 12px;
+  font-family: monospace;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.tokentracker-model-percent {
+  font-size: 12px;
+  font-family: monospace;
+  color: rgba(255, 255, 255, 0.35);
+  min-width: 46px;
+  text-align: right;
+}
+
+.tokentracker-footer {
+  padding: 0 20px;
+}
+
+.tokentracker-link {
+  font-size: 12px;
+  padding: 6px 0;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.tokentracker-link:hover {
+  color: #ffffff;
+}
+
+.tokentracker-link-box {
+  spacing: 4px;
+}
+
+.tokentracker-link-accent {
+  color: #3d9bff;
+  font-weight: 500;
+}

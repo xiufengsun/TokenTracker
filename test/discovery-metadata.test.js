@@ -73,7 +73,9 @@ test("public discovery surfaces describe every supported tool", () => {
     assert.match(source, /LM Studio/, `${file} lists LM Studio`);
     assert.match(source, /Unsloth Studio/, `${file} lists Unsloth Studio`);
     assert.match(source, /Devin CLI/, `${file} lists Devin CLI`);
+    assert.match(source, /Cline/, `${file} preserves the upstream Cline integration`);
     assert.match(source, /MiniMax Code/, `${file} lists MiniMax Code`);
+    assert.match(source, /Command Code/, `${file} lists Command Code`);
     assert.match(source, limitCountPattern, `${file} rate-limit row carries the current usage-limits provider count`);
   }
 
@@ -84,6 +86,7 @@ test("public discovery surfaces describe every supported tool", () => {
   assert.match(index, /AStudio/);
   assert.doesNotMatch(index, /\bAcode\b/);
   assert.match(index, /Devin CLI/);
+  assert.match(index, /Cline/);
   assert.match(index, /Desktop pet/);
   assert.match(index, /Four desktop widgets/);
   assert.match(index, /Achievements/);
@@ -97,6 +100,7 @@ test("public discovery surfaces describe every supported tool", () => {
   assert.match(llms, /AStudio/);
   assert.doesNotMatch(llms, /\bAcode\b/);
   assert.match(llms, /Devin CLI/);
+  assert.match(llms, /Cline/);
   assert.match(llms, /desktop pet/i);
   assert.match(llms, /four desktop widgets/i);
   assert.match(llms, /achievements/i);
@@ -110,10 +114,13 @@ test("public discovery surfaces describe every supported tool", () => {
 test("marketing logo wall includes the same supported product integrations", () => {
   const source = read("dashboard/src/ui/marketing/agent-logos.js");
   const providers = [...source.matchAll(/provider:\s*"([^"]+)"/g)].map((match) => match[1]);
+  const ids = [...source.matchAll(/\bid:\s*(\d+)/g)].map((match) => Number(match[1]));
   assert.equal(providers.length, TOOL_COUNT);
   assert.equal(new Set(providers).size, TOOL_COUNT);
+  assert.equal(ids.length, TOOL_COUNT);
+  assert.equal(new Set(ids).size, TOOL_COUNT, "merged integrations keep unique carousel IDs");
 
-  for (const provider of ["every-code", "acode", "reasonix", "kilocode", "roocode", "zed", "goose", "droid", "qoder", "anythingllm", "dsh", "prime-agent", "trae-cn", "dots", "lmstudio", "unsloth", "devin", "minimax-code"]) {
+  for (const provider of ["every-code", "acode", "reasonix", "kilocode", "roocode", "zed", "goose", "droid", "qoder", "anythingllm", "dsh", "prime-agent", "trae-cn", "dots", "lmstudio", "unsloth", "devin", "cline", "minimax-code", "command-code"]) {
     assert.ok(providers.includes(provider), `logo wall includes ${provider}`);
   }
 });
@@ -135,7 +142,9 @@ test("CLI onboarding advertises the same supported integrations", () => {
   assert.ok(SUPPORTED_PROVIDERS.includes("LM Studio"));
   assert.ok(SUPPORTED_PROVIDERS.includes("Unsloth Studio"));
   assert.ok(SUPPORTED_PROVIDERS.includes("Devin CLI"));
+  assert.ok(SUPPORTED_PROVIDERS.includes("Cline"));
   assert.ok(SUPPORTED_PROVIDERS.includes("MiniMax Code"));
+  assert.ok(SUPPORTED_PROVIDERS.includes("Command Code"));
 });
 
 test("npm metadata carries the current product hook", () => {
@@ -179,8 +188,11 @@ test("dashboard JSON-LD scripts parse as valid JSON", () => {
   assert.ok(tools.itemListElement.some((item) => item.name === "LM Studio"));
   assert.ok(tools.itemListElement.some((item) => item.name === "Unsloth Studio"));
   assert.ok(tools.itemListElement.some((item) => item.name === "Devin CLI"));
+  assert.ok(tools.itemListElement.some((item) => item.name === "Cline"));
   assert.ok(tools.itemListElement.some((item) => item.name === "MiniMax Code"));
+  assert.ok(tools.itemListElement.some((item) => item.name === "Command Code"));
   assert.match(supportedClis.acceptedAnswer.text, new RegExp(`${TOOL_COUNT} AI coding tools`));
   assert.match(supportedClis.acceptedAnswer.text, /AStudio/);
   assert.match(supportedClis.acceptedAnswer.text, /Devin CLI/);
+  assert.match(supportedClis.acceptedAnswer.text, /Command Code/);
 });

@@ -1,0 +1,69 @@
+:root { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei UI",sans-serif; font-synthesis:none; color-scheme:dark; }
+* { box-sizing:border-box; }
+html,body,#quota-root { margin:0; width:100%; height:100%; background:transparent; overflow:hidden; }
+button { font:inherit; color:inherit; border:0; cursor:pointer; }
+button:focus-visible { outline:2px solid #a4d8ce; outline-offset:-3px; }
+svg { flex-shrink:0; }
+.quota {
+  --bg:#1b1d20; --fg:#f4f5f6; --secondary:#afb4bc; --track:#ffffff10;
+  --accent-start:#65b9ae; --accent-end:#c4eee3;
+  position:relative; width:100%; height:100%; color:var(--fg);
+  background:linear-gradient(130deg,#ffffff04,transparent 60%),var(--bg);
+  border:1px solid #ffffff19; border-radius:18px; overflow:hidden; user-select:none;
+  box-shadow:inset 0 1px 0 #ffffff05;
+}
+.quota.light { --bg:#f5f6f5; --fg:#242930; --secondary:#59626b; --track:#0000000c; --accent-start:#287d70; --accent-end:#68a999; color-scheme:light; border-color:#00000016; }
+.quota .low { --accent-start:#ba8852; --accent-end:#efd3ab; }
+.quota header { display:flex; align-items:center; gap:4px; }
+.quota header button,.quota footer button { width:28px; height:28px; padding:0; display:flex; align-items:center; justify-content:center; background:transparent; color:var(--secondary); border-radius:7px; }
+.quota header .drag-handle { flex:1; cursor:grab; }
+.quota header .drag-handle svg { display:none; }
+.drag-handle::after { content:""; width:22px; height:3px; border-radius:3px; background:currentColor; opacity:.5; }
+.quota:not(.expanded) header { position:absolute; height:10px; top:0; left:12px; right:12px; z-index:1; }
+.quota:not(.expanded) header>.quota-toggle { display:none; }
+.quota:not(.expanded) .drag-handle { position:absolute; left:calc(50% - 22px); width:44px; height:10px; opacity:0; transition:opacity .2s; }
+.quota:not(.expanded):hover .drag-handle,.quota:not(.expanded):focus-within .drag-handle { opacity:1; }
+.quota-status { display:none; }
+.quota-status.stale-status { display:block; color:var(--secondary); font-size:10px; }
+.quota-summary { width:100%; height:100%; display:flex; flex-direction:column; justify-content:center; gap:13px; padding:13px 18px; background:transparent; text-align:left; }
+.compact-metric { width:100%; display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-rows:19px 17px 4px; gap:3px 14px; min-width:0; }
+.compact-name { grid-column:1; grid-row:1; font-size:14px; font-weight:600; line-height:19px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.compact-reading { grid-column:2; grid-row:1 / 3; display:flex; align-items:center; }
+.compact-reading strong { font-size:29px; font-weight:500; line-height:34px; letter-spacing:-1px; font-variant-numeric:tabular-nums; }
+.compact-reading small { font-size:13px; font-weight:400; letter-spacing:0; margin-left:3px; color:var(--secondary); }
+.compact-reset { grid-column:1; grid-row:2; color:var(--secondary); font-size:12px; line-height:17px; white-space:nowrap; }
+.compact-track { grid-column:1 / -1; grid-row:3; }
+.empty-compact { font-size:13px; color:var(--secondary); }
+.quota-track { height:6px; border-radius:6px; background:var(--track); overflow:hidden; box-shadow:inset 0 1px 2px #0001; }
+.quota-track>span { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--accent-start),var(--accent-end)); transition:width 1s cubic-bezier(.22,1,.36,1); }
+.compact-track { height:4px; }
+.stale .quota-track { opacity:.55; }
+.quota.expanded { border-radius:20px; display:flex; flex-direction:column; }
+.expanded header { height:44px; flex-shrink:0; padding:0 18px; }
+.quota-title { font-size:14px; font-weight:600; white-space:nowrap; }
+.quota-content { padding:0 22px; flex:1; overflow-y:auto; scrollbar-width:thin; scrollbar-color:var(--track) transparent; animation:quota-reveal .18s ease-out; }
+.quota-content section { padding:14px 0 17px; }
+.quota-content section+section { border-top:1px solid var(--track); }
+.row-title { display:flex; justify-content:space-between; align-items:center; gap:10px; font-size:14px; }
+.window-label { font-size:12px; color:var(--secondary); }
+.row-value { display:flex; align-items:baseline; gap:7px; margin:7px 0 12px; }
+.row-value strong { font-size:34px; font-weight:500; line-height:1.1; letter-spacing:-1px; font-variant-numeric:tabular-nums; }
+.row-value strong small { font-size:13px; margin-left:3px; font-weight:400; color:var(--secondary); }
+.row-value>span,.reset { font-size:12px; color:var(--secondary); }
+.reset { margin-top:9px; }
+.quota footer { display:flex; align-items:center; justify-content:space-between; gap:8px; height:34px; flex-shrink:0; padding:0 16px 0 22px; border-top:1px solid var(--track); font-size:12px; color:var(--secondary); }
+.quota-choice { width:100%; display:flex; align-items:center; justify-content:space-between; padding:10px 0; background:transparent; font-size:14px; text-align:left; }
+.quota-choice small { display:block; font-size:12px; color:var(--secondary); margin-top:3px; }
+.quota-choice[aria-pressed=true] { color:var(--accent-end); }
+.light .quota-choice[aria-pressed=true] { color:var(--accent-start); }
+.quota-empty { font-size:13px; color:var(--secondary); line-height:1.6; padding:25px 0; }
+header button:hover,footer button:hover,.quota-choice:hover { background:var(--track); }
+@keyframes quota-reveal { from { opacity:.5; transform:translateY(-3px); } to { opacity:1; transform:translateY(0); } }
+@media(prefers-reduced-motion:reduce) { *,*::after { animation:none!important; transition:none!important; } }
+@media(forced-colors:active) { .quota { border:1px solid CanvasText; } .quota-track { forced-color-adjust:none; --track:GrayText; --accent-start:Highlight; --accent-end:Highlight; } }
+
+.quota:not(.expanded) header { height:22px; top:2px; left:8px; right:8px; }
+.quota:not(.expanded) .quota-close { margin-left:auto; width:24px; height:22px; }
+.quota:not(.expanded) .drag-handle { height:16px; }
+.quota-summary { padding-top:24px; padding-bottom:11px; }
+.quota-close:hover { color:var(--fg); }

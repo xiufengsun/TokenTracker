@@ -23,7 +23,8 @@ internal sealed record TrayStrings(
     string CharacterEmber,
     string SizeSmall,
     string SizeMedium,
-    string SizeLarge)
+    string SizeLarge,
+    string DesktopQuota)
 {
     public static TrayStrings For(string locale)
     {
@@ -52,7 +53,8 @@ internal sealed record TrayStrings(
                 "Ember",
                 "小",
                 "中",
-                "大"),
+                "大",
+                "桌面限额"),
             NativeLocalization.TraditionalChineseLocale => new(
                 "Microsoft JhengHei UI",
                 "今日",
@@ -76,7 +78,8 @@ internal sealed record TrayStrings(
                 "Ember",
                 "小",
                 "中",
-                "大"),
+                "大",
+                "桌面限額"),
             NativeLocalization.JapaneseLocale => new(
                 "Yu Gothic UI",
                 "今日",
@@ -100,7 +103,8 @@ internal sealed record TrayStrings(
                 "Ember",
                 "小",
                 "中",
-                "大"),
+                "大",
+                "デスクトップ使用枠"),
             NativeLocalization.KoreanLocale => new(
                 "Malgun Gothic",
                 "오늘",
@@ -124,7 +128,8 @@ internal sealed record TrayStrings(
                 "Ember",
                 "작게",
                 "보통",
-                "크게"),
+                "크게",
+                "데스크톱 사용 한도"),
             _ => new(
                 "Segoe UI Variable Text",
                 "Today",
@@ -148,7 +153,8 @@ internal sealed record TrayStrings(
                 "Ember",
                 "Small",
                 "Medium",
-                "Large"),
+                "Large",
+                "Desktop quota"),
         };
     }
 }

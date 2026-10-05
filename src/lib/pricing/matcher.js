@@ -256,6 +256,13 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
   // 0. CURATED source exact. Source-specific prices apply only to their source,
   // preventing collisions with public prices for same-named models from other CLIs.
   const sourceKey = typeof source === "string" ? source.toLowerCase() : "";
+  if (sourceKey === "cline" && lower.endsWith(":free")) {
+    return {
+      hit: true,
+      source: "curated:cline-free-suffix",
+      value: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+    };
+  }
   // AStudio does not disclose its routed model. Stop before generic aliases
   // and fuzzy matching can turn an unresolved router into a priced model.
   if (sourceKey === "acode" && (lower === "auto" || lower.endsWith("-auto"))) {
@@ -270,6 +277,11 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
   }
 
   // 1. CURATED exact
+  // Qwen Flash's provider-qualified and dated IDs share the reference SKU.
+  // Keep the boundary strict: Flash-Next and Max have independent prices.
+  if (/(?:^|\/)qwen3[.-]8-flash(?:-\d{4}-\d{2}-\d{2})?$/.test(lower.trim()) && curated.exact?.["qwen3.8-flash"]) {
+    return { hit: true, source: "curated:exact", value: curated.exact["qwen3.8-flash"] };
+  }
   if (curated.exact && curated.exact[lookupModel]) {
     return { hit: true, source: "curated:exact", value: curated.exact[lookupModel] };
   }

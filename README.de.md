@@ -6,7 +6,7 @@
 
 ### Sieh genau, was du für KI ausgibst – über jedes CLI hinweg
 
-Sammle automatisch Token-Zahlen von **40 KI-Coding-Tools**, aggregiere sie lokal und sieh echte Kostentrends in einem schönen Dashboard. Kein Cloud-Konto, keine API-Keys, kein Setup – nur ein Befehl.
+Sammle automatisch Token-Zahlen von **43 KI-Coding-Tools**, aggregiere sie lokal und sieh echte Kostentrends in einem schönen Dashboard. Kein Cloud-Konto, keine API-Keys, kein Setup – nur ein Befehl.
 
 [![npm version](https://img.shields.io/npm/v/tokentracker-cli.svg?color=blue)](https://www.npmjs.com/package/tokentracker-cli)
 [![npm downloads](https://img.shields.io/npm/dm/tokentracker-cli.svg?color=brightgreen)](https://www.npmjs.com/package/tokentracker-cli)
@@ -20,6 +20,10 @@ Sammle automatisch Token-Zahlen von **40 KI-Coding-Tools**, aggregiere sie lokal
 [![Author tokens](https://srctyff5.us-east.insforge.app/functions/tokentracker-badge-svg?user_id=0652839f-d19f-4f67-af85-6b7675875443&metric=tokens&compact=1&label=author%20tokens)](https://github.com/xiufengsun/TokenTracker)
 
 <br/>
+
+<video src="https://github.com/user-attachments/assets/efb89086-b7d7-4cb6-ae3c-3a6cb50188d2" controls muted playsinline poster="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/intro-film-poster.png" width="820">
+  <img src="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/intro-film-poster.png" alt="TokenTracker intro film" width="820" />
+</video>
 
 <video src="https://github.com/user-attachments/assets/3275979d-bbed-4639-83e2-8b7d83bed6af" controls muted playsinline poster="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/dashboard-dark.png" width="820">
   <img src="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/dashboard-dark.png" alt="Token Tracker Dashboard" width="820" />
@@ -88,7 +92,7 @@ Aktualisieren mit `brew upgrade --cask xiufengsun/tokentracker/tokentracker`. De
 
 ## ✨ Features
 
-- 🔌 **40 KI-Tools out of the box** — Claude Code, Codex CLI, AStudio, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, Grok Build, oh-my-pi, OmO, pi, Dots, Prime Agent, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio, Devin CLI, MiniMax Code
+- 🔌 **43 KI-Tools out of the box** — Claude Code, Codex CLI, AStudio, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, Grok Build, oh-my-pi, OmO, pi, Dots, Prime Agent, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio, Devin CLI, Cline, MiniMax Code, Command Code, TRAE
 - 🏠 **Local-First** — Läuft auf deinem Rechner. Parst Logs lokal, ohne Konto oder API-Keys.
 - 🚀 **Zero Config** — Hooks installieren sich beim ersten Start automatisch. Von null zum Dashboard in 30 Sekunden.
 - 📊 **Schönes Dashboard** — Nutzungstrends, Kostenaufschlüsselung nach Modell, GitHub-ähnliche Aktivitäts-Heatmap, Projektzuordnung
@@ -200,15 +204,18 @@ Aktualisieren mit `brew upgrade --cask xiufengsun/tokentracker/tokentracker`. De
 | **Unsloth Studio** | ✅ Auto | Passiver SQLite-Reader für `$UNSLOTH_STUDIO_HOME/studio.db` (Standard `~/.unsloth/studio/studio.db`). Liest nur skalare `contextUsage`-Metadaten und inhaltsfreie `api_usage_events`; Prompts, Antworten, Anhänge, API-Subjects, Zugangsdaten und Trainingsmetriken bleiben ausgeschlossen. Lokale Routen bleiben bei $0, bekannte kostenpflichtige Provider werden anhand des tatsächlich antwortenden Modells geschätzt. |
 | **AnythingLLM Desktop** | ✅ Auto | Passiver SQLite-Reader (`anythingllm-desktop/storage/anythingllm.db`, nur Token-Metriken pro Nachricht) |
 | **Devin CLI** (Cognition) | ✅ Auto | Passiver SQLite-Reader (`$XDG_DATA_HOME/devin/cli/sessions.db`, Standard `~/.local/share/devin/cli/sessions.db`). Liest Usage-Metriken pro Anfrage, dedupliziert nach `request_id` — Replay-/Fork-/Compaction-Kopien werden nicht doppelt gezählt — und verwendet das aufgezeichnete Generation-Modell; niemals Prompts, Antworten oder `cogs_json`. Für Devin-Modelle (`swe-2`, `swe-2-high`, `compactor`) gibt es derzeit keine Preisdaten: Token-Zahlen werden erfasst, aber nicht in Dollar-Schätzungen einbezogen — ein $0-Wert bedeutet keine kostenlose Nutzung. Kein bekanntes natives Windows-Datenverzeichnis; eine WSL-Installation wird über `\\wsl$` gelesen. |
+| **Cline** (CLI v3 / Desktop-App) | ✅ Auto | Passiver Reader (`~/.cline/data/sessions/<id>/*.messages.json`). Die `metrics` jedes Turns sind Usage-Deltas, in denen `inputTokens` bereits Cache-Lesen+Schreiben und `outputTokens` bereits Reasoning enthalten — der Cache-Präfix wird abgezogen und Reasoning nie doppelt abgerechnet; Clines eigener gemeldeter `cost` hat Vorrang. `cline-free/*`- und `cline-pass/*`-Gateway-Modelle kosten $0. Der globalStorage der VS-Code-Erweiterung wird nicht gelesen. Pfad-Overrides: `TOKENTRACKER_CLINE_SESSIONS_DIR`, `TOKENTRACKER_CLINE_DATA_DIR`, `TOKENTRACKER_CLINE_HOME`, `CLINE_SESSION_DATA_DIR`, `CLINE_DATA_DIR` oder `CLINE_DIR` |
 | **MiniMax Code** | ✅ Auto | Passiver Reader (`~/.minimax/v2/sessions/YYYY/MM/DD/<session>/messages.jsonl`). Dedupliziert nach `message_id`, erfasst das geroutete Upstream-Modell pro Nachricht und ignoriert das stets leere `usage.cost` zugunsten der normalen Preise. Verzeichnis per `TOKENTRACKER_MINIMAX_HOME` überschreibbar |
+| **Command Code** | ✅ Auto | Passiver Session-Log-Reader (`~/.commandcode/projects/<cwd-slug>/<session-id>.jsonl`; `*.checkpoints.jsonl`-Snapshots und `.prompts.`-Begleitdateien werden übersprungen). Scannt Transkripte lokal und extrahiert ausgewählte Nutzungsmetadaten wie Token-Zähler und den CLI-Anzeigeschätzwert `costUsd`. Token Tracker schätzt die Kosten stattdessen anhand seiner gemeinsamen Modellpreistabelle. Zieht Cache-Lese- und Cache-Schreib-Tokens vom cache-inklusiven Input ab, um Doppelzählungen zu vermeiden. Prompt-, Antwort- und Code-Inhalte werden von Token Tracker weder gespeichert noch hochgeladen. Verzeichnis per `TOKENTRACKER_COMMANDCODE_HOME` überschreibbar |
 | **Claude Science** | ✅ Auto | Passiver SQLite-Reader (`~/.claude-science/operon-cli.db`, nur die Token-Zähler der `frames`-Tabelle; keine Prompts, Artefakte oder Forschungsinhalte). Kein natives Windows-Build — unter Windows läuft die App in WSL und wird von dort gelesen. |
 | **DeepSeek Harness** | ✅ Auto | Passiver Session-Reader (`~/.dsh/sessions/**/session.jsonl[.zstd]`; liest Session-Header und Assistant-Ereignisse, unterstützt Zstandard mit mehreren Frames) |
+| **TRAE (international)** | ✅ Auto | Lokale SQLCipher-Nutzungsdaten aus TRAE / TRAE SOLO mit dem gemeinsamen Anwendungsschlüssel als Standard; optionaler Override über `TOKENTRACKER_TRAE_SQLCIPHER_KEY`. Keine Anbieter-API-Aufrufe. [Einrichtung und Grenzen](docs/trae.md). |
 | **TRAE Work CN** | ✅ Auto | **Erfordert eine ausdrückliche Zustimmung: `TOKENTRACKER_TRAE_CN_USAGE=1` setzen.** Das Lesen der Nutzung überträgt die lokal gespeicherte Anmeldeautorisierung an die interne API von TRAE, daher wird nichts gesendet, bevor du es aktivierst. Danach: liest bei vorhandener lokaler TRAE Work CN-Anmeldung während eines zulässigen Syncs außerhalb des Hintergrundbetriebs unter macOS die Session-Token-Nutzung der angemeldeten App; die interne API kann sich ändern |
 
 > **Muss ich Plugins oder Hooks manuell installieren?** Nein. `tokentracker` (oder `tokentracker init`) erledigt alles beim ersten Start:
 > - **Hook-basiert** (Claude Code, Codex, AStudio, Gemini, Every Code, CodeBuddy, WorkBuddy, Grok Build) — wir schreiben einen SessionEnd-Hook oder TOML-Notify-Eintrag in die Konfiguration des Tools.
 > - **Plugin-basiert** (OpenCode, OpenClaw) — das Plugin ist im npm-Paket enthalten (`~/.tokentracker/app/openclaw-plugin/`). Wir verlinken es per CLI (`openclaw plugins install --link …` + `enable`). Kein Download, kein Drag-and-Drop.
-> - **Passive Reader** (Cursor, Kiro, Hermes, Kimi Code, Copilot, Grok Build, oh-my-pi, pi, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Antigravity, Zed Agent, Goose, Droid, Mimo Code, ZCode, LM Studio, Unsloth Studio, AnythingLLM Desktop, Devin CLI, MiniMax Code, Claude Science, DeepSeek Harness) — wir installieren nichts in diesen Tools. Wir lesen nur Dateien, die sie bereits produzieren (SQLite-DB, JSONL, OTEL-Export, Session-Logs). Die Nutzung von Copilot App / CLI wird pro Anfrage aus `~/.copilot/session-store.db` gelesen; `data.db` liefert einmalig die Legacy-Migrationsbasis und bleibt nach der kanonischen Übernahme des Stores schreibgeschützt im Beobachtungsmodus, während Chat-Erweiterung und ältere CLI-Versionen weiterhin OTEL verwenden. TokenTracker koordiniert diese Quellen, damit überlappende Anfragen nur einmal gezählt werden. Gemischte App/CLI-Historie vor der Übernahme bleibt als `github-copilot-legacy`-Aggregat erhalten, statt einem geratenen Anfrage-Modell zugeordnet zu werden.
+> - **Passive Reader** (Cursor, Kiro, Hermes, Kimi Code, Copilot, Grok Build, oh-my-pi, pi, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Antigravity, Zed Agent, Goose, Droid, Mimo Code, ZCode, LM Studio, Unsloth Studio, AnythingLLM Desktop, Devin CLI, MiniMax Code, Claude Science, DeepSeek Harness, Cline) — wir installieren nichts in diesen Tools. Wir lesen nur Dateien, die sie bereits produzieren (SQLite-DB, JSONL, OTEL-Export, Session-Logs). Die Nutzung von Copilot App / CLI wird pro Anfrage aus `~/.copilot/session-store.db` gelesen; `data.db` liefert einmalig die Legacy-Migrationsbasis und bleibt nach der kanonischen Übernahme des Stores schreibgeschützt im Beobachtungsmodus, während Chat-Erweiterung und ältere CLI-Versionen weiterhin OTEL verwenden. TokenTracker koordiniert diese Quellen, damit überlappende Anfragen nur einmal gezählt werden. Gemischte App/CLI-Historie vor der Übernahme bleibt als `github-copilot-legacy`-Aggregat erhalten, statt einem geratenen Anfrage-Modell zugeordnet zu werden.
 >
 > Führe `tokentracker status` aus, um den Status jeder Integration zu prüfen. Zeigt ein Tool `skipped`, erklärt die `detail`-Spalte warum.
 >
@@ -224,7 +231,7 @@ Fehlt dein Tool? [Erstelle ein Issue](https://github.com/xiufengsun/TokenTracker
 
 | Funktion | **[TokenTracker](https://github.com/xiufengsun/TokenTracker)** | **[ccusage](https://github.com/ccusage/ccusage)** | **[Tokscale](https://github.com/junhoyeo/tokscale)** |
 |---|:---:|:---:|:---:|
-| **Unterstützte KI-Tools** | **40** | Multi-Agent | Multi-Agent |
+| **Unterstützte KI-Tools** | **43** | Multi-Agent | Multi-Agent |
 | **Primäre Benutzeroberfläche** | Native Desktop-Apps & Web-Dashboard | Terminal-CLI | Terminal-TUI & CLI |
 | **Local-First-Analyse** | ✅ | ✅ | ✅ |
 | **Native Desktop-Apps** | ✅ macOS, Windows, Linux | ❌ | ❌ |
@@ -240,7 +247,7 @@ Fehlt dein Tool? [Erstelle ein Issue](https://github.com/xiufengsun/TokenTracker
 
 ```mermaid
 flowchart LR
-    A["KI-Coding-Tools<br/>Claude · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE Work CN · LM Studio · Unsloth Studio · Devin CLI · MiniMax Code"]
+    A["KI-Coding-Tools<br/>Claude · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE · TRAE Work CN · LM Studio · Unsloth Studio · Devin CLI · MiniMax Code · Cline · Command Code"]
     A -->|Hooks lösen aus| B[Token Tracker]
     B -->|Logs parsen<br/>30-Min-UTC-Buckets| C[(Lokales SQLite)]
     C --> D[Web-Dashboard]

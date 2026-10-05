@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useInsforgeAuth } from "../contexts/InsforgeAuthContext.jsx";
 import { useLocale } from "../hooks/useLocale.js";
 import { copy } from "../lib/copy";
-import { postNativeMessage } from "../lib/native-bridge.js";
+import { getNativeOAuthBridge, postNativeMessage } from "../lib/native-bridge.js";
 
 /**
  * Unified OAuth callback page at /auth/callback.
@@ -36,9 +36,7 @@ const _capturedCode = _initialParams.get("insforge_code") || _initialParams.get(
 // poison the flag for the browser (if WebView wins) or be poisoned by the
 // browser (the cause of issue "登录未完成" — bug introduced in commit
 // 6a92ebfd, 2026-03-30, with the original native OAuth implementation).
-const _isWebViewNative =
-  typeof window !== "undefined" &&
-  Boolean(window.webkit?.messageHandlers?.nativeOAuth);
+const _isWebViewNative = Boolean(getNativeOAuthBridge());
 
 export function NativeAuthCallbackPage() {
   useLocale();

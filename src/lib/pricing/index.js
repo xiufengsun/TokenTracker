@@ -29,7 +29,7 @@ const LOCAL_INFERENCE_SOURCES = new Set(["lmstudio"]);
 // including cached tokens, never a session/day aggregate. Astra supports
 // a larger context window; only observed request subsets receive the premium.
 const OPENAI_LONG_CONTEXT_INPUT_THRESHOLD = 272_000;
-const SOURCES_WITH_AUTHORITATIVE_COST = new Set(["grok"]);
+const SOURCES_WITH_AUTHORITATIVE_COST = new Set(["grok", "cline"]);
 const SEED_SNAPSHOT_PATH = path.resolve(__dirname, "seed-snapshot.json");
 const DEEPSEEK_TIME_PRICED_MODELS = [
   "deepseek-v4-flash",
@@ -198,12 +198,15 @@ function computeRowCost(row) {
   const pricing = getRowPricing(row);
   // OmO, like Codex, reports reasoning as a subset of `output` (its own
   // usage.cost bills no separate reasoning component), so charging it again
-  // here would double-bill every reasoning token.
+  // here would double-bill every reasoning token. Cline is the same: its
+  // `outputTokens` is the AI SDK total (text + reasoning), so
+  // reasoning_output_tokens is a subset marker, never a second line item.
   const reasoningIncludedInOutput =
     row.source === "codex" ||
     row.source === "acode" ||
     row.source === "every-code" ||
-    row.source === "omo";
+    row.source === "omo" ||
+    row.source === "cline";
   const reasoningCost = reasoningIncludedInOutput
     ? 0
     : (row.reasoning_output_tokens || 0) * (pricing.output || 0);
@@ -218,7 +221,8 @@ function computeRowCost(row) {
 
   const model = String(row?.model || "").toLowerCase();
   const usesOpenAILongContextTier =
-    model === "gpt-5.6" || model.includes("gpt-5.6-sol") || model.includes("gpt-6-astra");
+    model === "gpt-5.6" || model.includes("gpt-5.6-sol") || model.includes("gpt-6-astra") ||
+    model.includes("gpt-6-sol") || model.includes("gpt-6.1-sol");
   // Only models whose curated entry carries an explicit Fast/priority rate get
   // the tier premium. The other OpenAI tiers have no published priority price,
   // and inventing one is worse than reporting Standard.

@@ -1,9 +1,12 @@
 const assert = require("node:assert/strict");
+const cp = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
+
+const CURRENT_PACKAGE_VERSION = require("../package.json").version;
 
 const {
   buildPortInUseHint,
@@ -88,6 +91,17 @@ async function canBind(port) {
   } finally {
     await closeServer(server).catch(() => {});
   }
+}
+
+async function getFreePort() {
+  const server = http.createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const port = server.address().port;
+  await closeServer(server);
+  return port;
 }
 
 test("serve respects explicit port from --port and PORT env", (t) => {
@@ -255,20 +269,253 @@ test("port scan is limited to listeners, not everything touching the port", () =
   assert.match(source, /"-sTCP:LISTEN"/);
 });
 
+function hasLsof() {
+  try {
+    cp.execFileSync("lsof", ["-v"], { stdio: "ignore", timeout: 5000 });
+    return true;
+  } catch (_e) {
+    return false;
+  }
+}
+
+function createHealthyServeFixture(root, serverVersion = CURRENT_PACKAGE_VERSION) {
+  const binDir = path.join(root, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: NPM_PACKAGE_NAME }),
+  );
+  const entry = path.join(binDir, "tracker.js");
+  fs.writeFileSync(
+    entry,
+    [
+      'const http = require("node:http");',
+      'const args = process.argv.slice(2);',
+      'const portIndex = args.indexOf("--port");',
+      'const port = portIndex >= 0 ? Number(args[portIndex + 1]) : 0;',
+      'const server = http.createServer((req, res) => {',
+      '  if (req.url === "/api/local-auth") {',
+      '    res.writeHead(200, { "Content-Type": "application/json" });',
+      `    res.end(JSON.stringify({ token: "fixture", serverVersion: ${JSON.stringify(serverVersion)} }));`,
+      '    return;',
+      '  }',
+      '  res.writeHead(404);',
+      '  res.end();',
+      '});',
+      'server.listen(port, "127.0.0.1", () => {',
+      '  process.stdout.write(String(server.address().port) + "\\n");',
+      '});',
+    ].join("\n"),
+  );
+  return entry;
+}
+
+async function spawnHealthyServeFixture(entry, port = 0) {
+  const child = cp.spawn(
+    process.execPath,
+    [entry, "serve", "--port", String(port)],
+    { stdio: ["ignore", "pipe", "ignore"] },
+  );
+  const reportedPort = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("fixture server never reported a port")), 10000);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.stdout.once("data", (chunk) => {
+      clearTimeout(timer);
+      resolve(Number(String(chunk).trim()));
+    });
+  });
+  return { child, port: reportedPort };
+}
+
+async function waitForChildExit(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("fixture server did not exit")), 10000);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+async function waitForLocalAuth(port, expectedVersion) {
+  const deadline = Date.now() + 15000;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const payload = await new Promise((resolve, reject) => {
+        const req = http.get(
+          `http://127.0.0.1:${port}/api/local-auth`,
+          { timeout: 1000 },
+          (res) => {
+            let body = "";
+            res.setEncoding("utf8");
+            res.on("data", (chunk) => { body += chunk; });
+            res.on("end", () => {
+              try {
+                resolve({ statusCode: res.statusCode, body: JSON.parse(body) });
+              } catch (error) {
+                reject(error);
+              }
+            });
+          },
+        );
+        req.on("error", reject);
+        req.on("timeout", () => req.destroy(new Error("health check timeout")));
+      });
+      if (payload.statusCode === 200 && payload.body?.serverVersion === expectedVersion) return;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`real serve process never became healthy: ${lastError?.message || "timeout"}`);
+}
+
+function collectChildOutput(child) {
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk) => { stdout += String(chunk); });
+  child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+  return {
+    get stdout() { return stdout; },
+    get stderr() { return stderr; },
+  };
+}
+
+test("real serve entry exits duplicate cleanly without replacing the first process", async (t) => {
+  if (!hasLsof()) return t.skip("requires lsof");
+
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tt-real-serve-duplicate-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+
+  const trackerDir = path.join(home, ".tokentracker", "tracker");
+  fs.mkdirSync(trackerDir, { recursive: true });
+  fs.writeFileSync(path.join(trackerDir, "cursors.json"), "{}\n");
+
+  const port = await getFreePort();
+  const entry = path.join(__dirname, "..", "bin", "tracker.js");
+  const env = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    TOKENTRACKER_SKIP_LOCAL_RUNTIME_COPY: "1",
+  };
+  const args = [entry, "serve", "--port", String(port), "--no-sync", "--no-open"];
+
+  const first = cp.spawn(process.execPath, args, {
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const firstOutput = collectChildOutput(first);
+  t.after(() => {
+    if (first.exitCode === null && first.signalCode === null) first.kill("SIGKILL");
+  });
+
+  await waitForLocalAuth(port, CURRENT_PACKAGE_VERSION);
+  assert.equal(first.exitCode, null, `first serve exited early: ${firstOutput.stderr}`);
+
+  const second = cp.spawn(process.execPath, args, {
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const secondOutput = collectChildOutput(second);
+  await waitForChildExit(second);
+
+  assert.equal(second.exitCode, 0, `duplicate serve failed: ${secondOutput.stderr}`);
+  assert.match(
+    secondOutput.stdout,
+    new RegExp(`already active and healthy on port ${port}\\. Exiting duplicate server smoothly\\.`),
+  );
+  assert.equal(first.exitCode, null, "the first real serve process must remain alive");
+  assert.equal(first.signalCode, null, "the first real serve process must not be signalled");
+  assert.equal(await canBind(port), false, "the first real serve process should still own the port");
+});
+
+test("ensurePortFree reuses a healthy server from the same installation", async (t) => {
+  if (!hasLsof()) return t.skip("requires lsof");
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tt-serve-same-install-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const entry = createHealthyServeFixture(root);
+  const { child, port } = await spawnHealthyServeFixture(entry);
+  t.after(() => child.kill("SIGKILL"));
+
+  let requestedExit = null;
+  await ensurePortFree(port, {
+    currentPackageRoot: root,
+    exitFn: (code) => { requestedExit = code; },
+  });
+
+  assert.equal(requestedExit, 0, "a same-install healthy duplicate should exit successfully");
+  assert.equal(child.exitCode, null, "the existing same-install server must remain alive");
+  assert.equal(child.signalCode, null, "the existing same-install server must not be signalled");
+  assert.equal(await canBind(port), false, "the original server should still own the port");
+});
+
+test("ensurePortFree replaces a healthy server from a stale installation", async (t) => {
+  if (!hasLsof()) return t.skip("requires lsof");
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tt-serve-stale-install-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const oldRoot = path.join(root, "old");
+  const newRoot = path.join(root, "new");
+  const oldEntry = createHealthyServeFixture(oldRoot);
+  const newEntry = createHealthyServeFixture(newRoot);
+
+  const oldServer = await spawnHealthyServeFixture(oldEntry);
+  t.after(() => oldServer.child.kill("SIGKILL"));
+
+  let requestedExit = false;
+  await ensurePortFree(oldServer.port, {
+    currentPackageRoot: newRoot,
+    exitFn: () => { requestedExit = true; },
+  });
+  await waitForChildExit(oldServer.child);
+
+  assert.equal(requestedExit, false, "a stale installation must not trigger duplicate success");
+  assert.equal(await canBind(oldServer.port), true, "cleanup should release the stale server port");
+
+  const replacement = await spawnHealthyServeFixture(newEntry, oldServer.port);
+  t.after(() => replacement.child.kill("SIGKILL"));
+  assert.equal(replacement.port, oldServer.port, "the new installation should take over the same port");
+});
+
+test("ensurePortFree replaces an old runtime after an in-place upgrade", async (t) => {
+  if (!hasLsof()) return t.skip("requires lsof");
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tt-serve-in-place-upgrade-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const entry = createHealthyServeFixture(root, "0.0.0-stale");
+  const oldServer = await spawnHealthyServeFixture(entry);
+  t.after(() => oldServer.child.kill("SIGKILL"));
+
+  let requestedExit = false;
+  await ensurePortFree(oldServer.port, {
+    currentPackageRoot: root,
+    exitFn: () => { requestedExit = true; },
+  });
+  await waitForChildExit(oldServer.child);
+
+  assert.equal(requestedExit, false, "an old runtime at the same path must be replaced");
+
+  // Simulate the package files being overwritten in place by an update.
+  createHealthyServeFixture(root, CURRENT_PACKAGE_VERSION);
+  const replacement = await spawnHealthyServeFixture(entry, oldServer.port);
+  t.after(() => replacement.child.kill("SIGKILL"));
+  assert.equal(replacement.port, oldServer.port);
+});
+
 // Proves ensurePortFree consults the identity check rather than merely owning
 // one: a unit test of isTokenTrackerServeCommand alone still passes if the
 // filter is deleted from the kill path.
 test("ensurePortFree leaves an unrelated listener running", async (t) => {
-  const cp = require("node:child_process");
-  const hasLsof = (() => {
-    try {
-      cp.execFileSync("lsof", ["-v"], { stdio: "ignore", timeout: 5000 });
-      return true;
-    } catch (_e) {
-      return false;
-    }
-  })();
-  if (!hasLsof) return t.skip("ensurePortFree is a no-op without lsof");
+  if (!hasLsof()) return t.skip("ensurePortFree is a no-op without lsof");
 
   // A separate process, because ensurePortFree skips its own pid for free.
   const child = cp.spawn(

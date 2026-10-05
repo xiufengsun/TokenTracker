@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getUsageLimits } from "../lib/api";
 import { publishUsageLimitsPreloadState } from "../lib/dashboard-preload.js";
 import { useUsageLimits } from "./use-usage-limits";
@@ -15,7 +15,8 @@ function dispatchPrefsChanged() {
   window.dispatchEvent(new Event(LIMITS_PREFS_CHANGED_EVENT));
 }
 
-vi.mock("../lib/api", () => ({
+vi.mock("../lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/api")>()),
   getUsageLimits: vi.fn(),
 }));
 
@@ -332,5 +333,41 @@ describe("useUsageLimits Devin opt-in selection", () => {
     expect(result.current.data?.devin).toEqual({ configured: false });
     const published = vi.mocked(publishUsageLimitsPreloadState).mock.calls[0]?.[0] as any;
     expect(published.devin).toEqual({ configured: false });
+  });
+});
+
+
+describe("usage limits on a public host", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("does not read local limits at mount, focus, preference changes or manual refresh", async () => {
+    const originalWindow = window;
+    vi.stubGlobal("window", new Proxy(originalWindow, {
+      get(target, key) {
+        if (key === "location") return { hostname: "www.tokentracker.cc", origin: "https://www.tokentracker.cc" };
+        if (["addEventListener", "removeEventListener", "dispatchEvent"].includes(String(key))) {
+          return (target as any)[key].bind(target);
+        }
+        return Reflect.get(target, key, target);
+      },
+    }));
+    vi.mocked(getUsageLimits).mockClear();
+    const { result } = renderHook(() => useUsageLimits({ initialRefresh: true, initialState: { data: existingLimits } }));
+    expect(result.current).toMatchObject({ data: null, error: null, isLoading: false });
+    const future = Date.now() + 60_000;
+    vi.spyOn(Date, "now").mockReturnValue(future);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      saveDevinSelection(true);
+      dispatchPrefsChanged();
+    });
+    await act(async () => { await result.current.refresh(); });
+    expect(getUsageLimits).not.toHaveBeenCalled();
+    expect(result.current).toMatchObject({ data: null, error: null, isLoading: false });
   });
 });

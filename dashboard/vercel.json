@@ -1,8 +1,38 @@
 {
-  "rewrites": [
-    { "source": "/ip-check", "destination": "/ip-check.html" },
-    { "source": "/leaderboard", "destination": "/leaderboard.html" },
-    { "source": "/share/(.*)", "destination": "/share.html" },
-    { "source": "/(.*)", "destination": "/index.html" }
+  "routes": [
+    {
+      "src": "^/assets/(.*)$",
+      "headers": {
+        "Cache-Control": "public, max-age=31536000, immutable"
+      },
+      "continue": true,
+      "caseSensitive": true
+    },
+    {
+      "src": "^/((?!assets/).*\\.(?:png|svg|webp|gif|ico|woff2|woff|ttf))$",
+      "headers": {
+        "Cache-Control": "public, max-age=3600"
+      },
+      "continue": true,
+      "caseSensitive": true
+    },
+    { "handle": "filesystem" },
+    { "src": "^/ip-check/?$", "dest": "/ip-check.html", "caseSensitive": true },
+    { "src": "^/leaderboard/?$", "dest": "/leaderboard.html", "caseSensitive": true },
+    { "src": "^/share/(.*)$", "dest": "/share.html", "caseSensitive": true },
+    {
+      "src": "^/((?!assets/|brand-logos/|clawd/|pets/|achievements/.|api/|functions/|.*\\.).*)$",
+      "dest": "/index.html",
+      "caseSensitive": true
+    },
+    {
+      "src": "^/(.*)$",
+      "status": 404,
+      "headers": {
+        "Cache-Control": "no-store",
+        "CDN-Cache-Control": "no-store",
+        "Vercel-CDN-Cache-Control": "no-store"
+      }
+    }
   ]
 }

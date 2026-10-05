@@ -237,8 +237,11 @@ export function useTrendData({
         });
       }
 
-      const nextFrom = response?.from || from || response?.day || null;
+      let nextFrom = response?.from || from || response?.day || null;
       const nextTo = response?.to || to || response?.day || null;
+      if (mode === "monthly" && !nextFrom) {
+        nextFrom = monthlyRangeStart(nextTo, months);
+      }
       let nextRows = Array.isArray(response?.data) ? response.data : [];
       if (mode === "daily") {
         nextRows = fillDailyGaps(nextRows, nextFrom || from, nextTo || to, {
@@ -258,7 +261,7 @@ export function useTrendData({
           now,
         });
       } else if (mode === "monthly") {
-        nextRows = markMonthlyFuture(nextRows, {
+        nextRows = fillMonthlyGaps(nextRows, nextFrom || from, nextTo || to, {
           timeZone,
           offsetMinutes: tzOffsetMinutes,
           now,
@@ -312,14 +315,17 @@ export function useTrendData({
               now,
             });
           } else if (mode === "monthly") {
-            filledRows = markMonthlyFuture(filledRows, {
+            filledRows = fillMonthlyGaps(filledRows, cached.from || from || monthlyRangeStart(cached.to || to, months), cached.to || to, {
               timeZone,
               offsetMinutes: tzOffsetMinutes,
               now,
             });
           }
           setRows(filledRows);
-          setRange({ from: cached.from || from, to: cached.to || to });
+          setRange({
+            from: cached.from || from || (mode === "monthly" ? monthlyRangeStart(cached.to || to, months) : from),
+            to: cached.to || to,
+          });
           setSource("cache");
           setFetchedAt(cached.fetchedAt || null);
           setError(null);
@@ -425,14 +431,17 @@ export function useTrendData({
             now,
           });
         } else if (mode === "monthly") {
-          filledRows = markMonthlyFuture(filledRows, {
+          filledRows = fillMonthlyGaps(filledRows, cached.from || from || monthlyRangeStart(cached.to || to, months), cached.to || to, {
             timeZone,
             offsetMinutes: tzOffsetMinutes,
             now,
           });
         }
         setRows(filledRows);
-        setRange({ from: cached.from || from, to: cached.to || to });
+        setRange({
+          from: cached.from || from || (mode === "monthly" ? monthlyRangeStart(cached.to || to, months) : from),
+          to: cached.to || to,
+        });
         setSource("cache");
         setFetchedAt(cached.fetchedAt || null);
         setError(null);
@@ -727,22 +736,47 @@ function markHourlyFuture(rows: any[], { timeZone, offsetMinutes, now }: any = {
   });
 }
 
-function markMonthlyFuture(rows: any[], { timeZone, offsetMinutes, now }: any = {}) {
-  if (!Array.isArray(rows)) return [];
-  const nowParts = getNowParts({ timeZone, offsetMinutes, now });
-  if (!nowParts) return rows;
+function monthlyRangeStart(to: any, months: number) {
+  const end = parseMonthLabel(String(to || "").slice(0, 7));
+  if (!end) return null;
+  return formatDateUTC(new Date(Date.UTC(end.year, end.month - months, 1)));
+}
 
-  return rows.map((row) => {
-    const label = row?.month || row?.label || "";
-    const parsed = parseMonthLabel(label);
-    if (!parsed) {
-      return { ...row, future: false };
+function fillMonthlyGaps(rows: any[], from: any, to: any, context: any = {}) {
+  const start = parseMonthLabel(String(from || "").slice(0, 7));
+  const end = parseMonthLabel(String(to || "").slice(0, 7));
+  if (!start || !end) return Array.isArray(rows) ? rows : [];
+  const startMonth = start.year * 12 + start.month - 1;
+  const endMonth = end.year * 12 + end.month - 1;
+  if (endMonth < startMonth) return Array.isArray(rows) ? rows : [];
+  const nowParts = getNowParts(context);
+  const currentMonth = nowParts.year * 12 + nowParts.month - 1;
+  const byMonth = new Map((rows || []).map((row) => [row?.month, row]));
+  const filled = [];
+  for (let cursor = startMonth; cursor <= endMonth; cursor++) {
+    const month = `${Math.floor(cursor / 12)}-${String(cursor % 12 + 1).padStart(2, "0")}`;
+    const future = cursor > currentMonth;
+    const existing = byMonth.get(month);
+    if (existing && !(existing.future && existing.total_tokens == null)) {
+      filled.push({ ...existing, missing: false, future });
+    } else {
+      const value = future ? null : 0;
+      filled.push({
+        month,
+        total_tokens: value,
+        billable_total_tokens: value,
+        input_tokens: value,
+        cached_input_tokens: value,
+        cache_creation_input_tokens: value,
+        output_tokens: value,
+        reasoning_output_tokens: value,
+        conversation_count: value,
+        missing: false,
+        future,
+      });
     }
-    const isFuture =
-      parsed.year > nowParts.year ||
-      (parsed.year === nowParts.year && parsed.month > nowParts.month);
-    return { ...row, future: isFuture };
-  });
+  }
+  return filled;
 }
 
 function getNowParts({ timeZone, offsetMinutes, now }: any = {}) {

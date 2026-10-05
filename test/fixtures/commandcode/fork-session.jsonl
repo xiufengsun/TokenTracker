@@ -1,0 +1,2 @@
+{"type":"session","version":3,"id":"fork-session","parentSession":"/home/fixture/.commandcode/projects/synthetic/parent-session.jsonl","timestamp":"2026-05-01T12:05:00.000Z","cwd":"/home/fixture/project"}
+{"type":"message","id":"abc12345","parentId":"01234567","timestamp":"2026-05-01T12:00:01.001Z","usage":{"inputTokens":1000,"outputTokens":100,"cacheReadTokens":0,"cacheWriteTokens":0,"costUsd":0.42},"model":"deepseek/deepseek-v4.1-flash","effort":"max","message":null}

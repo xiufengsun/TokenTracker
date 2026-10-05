@@ -151,6 +151,9 @@ mkdir -p "$TT_DIR/bin"
 cp "$REPO_ROOT/bin/tracker.js" "$TT_DIR/bin/"
 cp -R "$REPO_ROOT/src" "$TT_DIR/src"
 cp "$REPO_ROOT/package.json" "$TT_DIR/"
+# The lockfile pins transitive versions; without it `npm install` resolves
+# whatever is newest at build time (undici 8.11.0 shipped in 1.0.2 this way).
+cp "$REPO_ROOT/package-lock.json" "$TT_DIR/"
 
 # Dashboard build artifacts
 if [[ -d "$REPO_ROOT/dashboard/dist" ]]; then
@@ -165,7 +168,7 @@ fi
 # 3. Install production dependencies
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 echo "📥 Installing production dependencies..."
-(cd "$TT_DIR" && npm install --omit=dev --no-optional --ignore-scripts 2>&1 | tail -1)
+(cd "$TT_DIR" && npm ci --omit=dev --no-optional --ignore-scripts 2>&1 | tail -1)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 4. Clean node_modules bloat
@@ -199,6 +202,9 @@ find "$TT_DIR/node_modules" -type d \( \
   -name "docs" -o \
   -name ".github" \
 \) -exec rm -rf {} + 2>/dev/null || true
+
+# Package-specific trims (unused WASM builds) shared with Windows and Linux.
+node "$REPO_ROOT/scripts/trim-embedded-deps.cjs" "$TT_DIR/node_modules"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 5. Size report

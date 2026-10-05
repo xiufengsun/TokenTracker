@@ -321,3 +321,34 @@ test("omoAgentDirCollidesWithOmp is true only when both overrides resolve to the
     await fs.rm(other, { recursive: true, force: true });
   }
 });
+
+test("parseOmpIncremental ignores a placeholder message timestamp instead of bucketing it at 1970", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-omp-epoch-"));
+  try {
+    const withTimestamps = (line, messageTs, entryTs) => {
+      const entry = JSON.parse(line);
+      entry.message.timestamp = messageTs;
+      if (entryTs === undefined) delete entry.timestamp;
+      else entry.timestamp = entryTs;
+      return JSON.stringify(entry);
+    };
+    const base = { model: "claude-sonnet-4-5", provider: "anthropic", output: 5, totalTokens: 15, timestamp: 0 };
+    const filePath = await writeSession(tmp, [
+      sessionHeader(),
+      // Placeholder on the message, real ISO time on the entry: use the entry.
+      withTimestamps(omoAssistantLine({ ...base, id: "msg-1", input: 10 }), 1, "2026-09-15T09:40:00.000Z"),
+      // Nothing usable: skip rather than invent a bucket.
+      withTimestamps(omoAssistantLine({ ...base, id: "msg-2", input: 10 }), 1, undefined),
+    ]);
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+
+    await parseOmpIncremental({ sessionFiles: [filePath], cursors, queuePath });
+
+    const rows = await readJsonLines(queuePath);
+    assert.deepEqual(rows.map((r) => r.hour_start), ["2026-09-15T09:30:00.000Z"]);
+    assert.equal(rows[0].total_tokens, 15);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});

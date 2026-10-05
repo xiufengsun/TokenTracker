@@ -134,6 +134,10 @@ function readPetLocale() {
   return normalizePetLocale(typeof window !== "undefined" ? window.__ttPetLocale : null);
 }
 
+function readPetUnitSystem() {
+  return typeof window !== "undefined" && window.__ttPetTokenUnitSystem === "chinese" ? "chinese" : "western";
+}
+
 function readPetCharacter() {
   return normalizePetCharacter(typeof window !== "undefined" ? window.__ttPetCharacter : null);
 }
@@ -521,6 +525,7 @@ function Pet() {
   const [connected, setConnected] = useState(readPetConnected);
   const [currency, setCurrency] = useState(readPetCurrency);
   const [locale, setLocale] = useState(readPetLocale);
+  const [unitSystem, setUnitSystem] = useState(readPetUnitSystem);
   const [character, setCharacter] = useState(readPetCharacter);
   const [botColor, setBotColor] = useState(readPetBotColor);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -629,6 +634,13 @@ function Pet() {
   }, []);
   useEffect(() => {
     const update = () => setLocale(readPetLocale());
+    update();
+    window.addEventListener("pet:locale", update);
+    return () => window.removeEventListener("pet:locale", update);
+  }, []);
+  useEffect(() => {
+    // PushContext dispatches pet:locale on every push, so it also carries unit changes.
+    const update = () => setUnitSystem(readPetUnitSystem());
     update();
     window.addEventListener("pet:locale", update);
     return () => window.removeEventListener("pet:locale", update);
@@ -823,7 +835,8 @@ function Pet() {
     const pool = buildQuipPool(locale, {
       ...s,
       tokens: s.todayTokens,
-      tokensText: formatTokens(s.todayTokens),
+      tokensText: formatTokens(s.todayTokens, { unitSystem }),
+      unitSystem,
       costText: `${currency.symbol}${costValue.toFixed(2)}`,
       costValue,
       limitText: formatPetLimitSummary(locale, limitSummaries[0] || null),
@@ -836,7 +849,7 @@ function Pet() {
       setTapState(null);
       setSpeech(null);
     }, TAP_HOLD_MS);
-  }, [locale, currency.symbol, currency.rate, isSyncing, limitSummaries]);
+  }, [locale, unitSystem, currency.symbol, currency.rate, isSyncing, limitSummaries]);
 
   // Distinguish a tap (→ cycle animation) from a drag (→ native window move):
   // only hand the move to the OS once the pointer travels past a small threshold.
@@ -895,7 +908,7 @@ function Pet() {
     };
   }).filter(Boolean);
   const tokenUsageText = today.tokens > 0
-    ? `${L.today} ${formatTokens(today.tokens)} · ${currency.symbol}${(today.costUsd * currency.rate).toFixed(2)}`
+    ? `${L.today} ${formatTokens(today.tokens, { unitSystem })} · ${currency.symbol}${(today.costUsd * currency.rate).toFixed(2)}`
     : "";
   const usageText = isDisconnected
     ? L.offline
@@ -907,7 +920,7 @@ function Pet() {
   if (!bubbleText) {
     if (modelStatus) {
       const costValue = modelStatus.costDelta * currency.rate;
-      bubbleText = `${modelStatus.modelName} · +${formatTokens(modelStatus.tokensDelta)} (${currency.symbol}${costValue.toFixed(3)})`;
+      bubbleText = `${modelStatus.modelName} · +${formatTokens(modelStatus.tokensDelta, { unitSystem })} (${currency.symbol}${costValue.toFixed(3)})`;
     } else if (hovering) {
       bubbleText = usageText;
     }
@@ -918,7 +931,7 @@ function Pet() {
   const hoverUsage = hovering && !speech && !modelStatus && !isDisconnected && !isSyncing
     && (today.tokens > 0 || limitItems.length > 0)
     ? {
-      tokenText: today.tokens > 0 ? formatTokens(today.tokens) : "",
+      tokenText: today.tokens > 0 ? formatTokens(today.tokens, { unitSystem }) : "",
       costText: today.tokens > 0
         ? `${currency.symbol}${(today.costUsd * currency.rate).toFixed(2)} · ${L.today}`
         : "",

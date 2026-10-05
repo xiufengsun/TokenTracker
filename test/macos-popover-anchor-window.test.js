@@ -60,8 +60,13 @@ test("menu-bar popover restores Tahoe glass via deferred activation with a reali
   // gated on the popover still being shown, and followed by a realign guard.
   assert.match(
     togglePopover,
-    /if\s+#available\(macOS\s+26,\s*\*\)\s*\{[\s\S]*?DispatchQueue\.main\.async[\s\S]*?self\.popover\.isShown[\s\S]*?canActivateForPopoverGlass\(\)[\s\S]*?NSApp\.activate\(ignoringOtherApps:\s*true\)[\s\S]*?realignPopoverWithAnchorIfDisplaced\(\)/,
+    /DispatchQueue\.main\.async[\s\S]*?self\.popover\.isShown[\s\S]*?if\s+#available\(macOS\s+26,\s*\*\)\s*\{[\s\S]*?canActivateForPopoverGlass\(\)[\s\S]*?NSApp\.activate\(ignoringOtherApps:\s*true\)[\s\S]*?realignPopoverWithAnchorIfDisplaced\(\)/,
     "Tahoe activation must be deferred past the anchoring pass, gated on popover.isShown plus the focus-steal guard, and followed by the realign guard (#481).",
+  );
+  assert.ok(
+    togglePopover.indexOf("let popoverAdmitted") !== -1 &&
+      togglePopover.indexOf("let popoverAdmitted") < togglePopover.indexOf("#available(macOS 26"),
+    "Only the glass activation is macOS 26-only. The admission check and its activate + re-show fallback must run on every version, or macOS 15 never gets the popover onto another app's full-screen Space (#681).",
   );
   assert.match(
     source,
@@ -133,6 +138,16 @@ test("menu-bar popover restores Tahoe glass via deferred activation with a reali
     source,
     /private\s+func\s+realignPopoverWithAnchorIfDisplaced\(\)\s*\{[\s\S]*?popoverWindow\.screen\s*!==\s*anchorWindow\.screen[\s\S]*?popoverWindow\.setFrame\(frame,\s*display:\s*true\)/,
     "The realign guard must compare the popover window against the app-owned anchor and move it back when displaced (#481).",
+  );
+  assert.match(
+    togglePopover,
+    /addChildWindow[\s\S]*?DispatchQueue\.main\.async\s*\{\s*\[weak self\]\s*in\s*self\?\.realignPopoverWithAnchorIfDisplaced\(\)\s*\}\s*popoverDismissMonitor/,
+    "Every show must run a next-tick realign so an edge-clipped popover is pulled back on-screen.",
+  );
+  assert.match(
+    source,
+    /private\s+func\s+realignPopoverWithAnchorIfDisplaced\(\)\s*\{[\s\S]*?guard\s+let\s+screen\s*=\s*anchorWindow\.screen[\s\S]*?frame\.origin\.x\s*=\s*PopoverPlacementPolicy\.originX\([\s\S]*?screenFrame:\s*screen\.frame/,
+    "Realign must screen-clamp the origin against the anchor's own screen; hard-centering or clamping against a wrong screen frame pushes the panel off-screen near an edge.",
   );
   assert.match(
     togglePopover,

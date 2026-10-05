@@ -1,4 +1,5 @@
 import { createClient } from "@insforge/sdk";
+import { functionUrlFor } from "./function-url";
 
 /**
  * Production InsForge cloud — hardcoded fallback so deployments that don't
@@ -73,6 +74,7 @@ export function getOrCreateInsforgeClient(): ReturnType<typeof createClient> | n
   if (!insforgeClientSingleton) {
     insforgeClientSingleton = createClient({
       baseUrl: getInsforgeBaseUrl(),
+      functionsUrl: functionUrlFor(getInsforgeRemoteUrl(), "").replace(/\/$/, ""),
       anonKey: getInsforgeAnonKey() || undefined,
     });
   }

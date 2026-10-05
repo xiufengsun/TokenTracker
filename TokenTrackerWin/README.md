@@ -10,6 +10,25 @@ tray** application.
 
 ## What it does
 
+### Desktop quota
+
+Use the top-right **Close widget** button in either view to hide it. This disables
+the widget persistently (including after restart); reopen it from **Desktop quota**
+in the tray menu. Closing the widget does not quit the app.
+
+
+Right-click the tray icon and enable **Desktop quota**. The 320 × 144 DIP
+surface shows two remaining-quota bars and actual reset countdowns; click to expand to 360 × 340 DIP.
+Use the sliders button to choose up to two provider windows, drag the grip to
+move it, and press Escape to collapse. The widget follows the app theme and
+language, remembers its position and selection, and hides over fullscreen apps.
+Closing the dashboard does not stop its shared 60-second quota polling.
+The feature is opt-in and can be hidden from the same tray menu.
+
+Build Windows dashboard assets with `TOKENTRACKER_BUILD_PET=1`; this includes
+both `pet.html` and `quota.html`. The quota surface uses a solid layered window
+with a clipped rounded region, so it does not require Windows 11 Acrylic.
+
 1. On launch it resolves a Node runtime + the tracker CLI, picks a free loopback
    port, and starts `tracker serve --port <P> --no-sync --no-open`.
 2. The tray icon stays resident. Left-click or **Open Dashboard** shows the

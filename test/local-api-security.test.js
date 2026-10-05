@@ -3,8 +3,28 @@ const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { test } = require("node:test");
+const { beforeEach, test } = require("node:test");
 const { DEFAULT_BASE_URL } = require("../src/lib/runtime-config");
+
+beforeEach((t) => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "tt-local-api-security-"));
+  const prevHome = process.env.HOME;
+  const prevUserProfile = process.env.USERPROFILE;
+  process.env.HOME = tmpHome;
+  process.env.USERPROFILE = tmpHome;
+  // Upload security cases require an explicit opt-in and must not read the
+  // developer's saved preference. Opt-out cases use their own nested fixture.
+  const trackerDir = path.join(tmpHome, ".tokentracker", "tracker");
+  fs.mkdirSync(trackerDir, { recursive: true });
+  fs.writeFileSync(path.join(trackerDir, "cloud-sync-pref.json"), JSON.stringify({ enabled: true }));
+  t.after(() => {
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  });
+});
 
 function createRequest({ method = "GET", headers = {}, body } = {}) {
   const req = new EventEmitter();
@@ -70,6 +90,27 @@ test("local device metadata exposes the system name separately from machine iden
   const expected = os.hostname().replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 128) || null;
   assert.equal(getSystemDeviceName(), expected);
   assert.doesNotMatch(getSystemDeviceName() || "", /^Token Tracker .*#/u);
+});
+
+test("local auth reports the serve runtime version when provided", async (t) => {
+  const { createLocalApiHandler } = require("../src/lib/local-api");
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-local-auth-version-"));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const handler = createLocalApiHandler({
+    queuePath: path.join(tempDir, "queue.jsonl"),
+    serverVersion: "1.2.3-test",
+  });
+  const req = createRequest({ method: "GET" });
+  const res = createResponse();
+
+  const handled = await handler(req, res, new URL("http://127.0.0.1/api/local-auth"));
+
+  assert.equal(handled, true);
+  assert.equal(res.statusCode, 200);
+  const body = JSON.parse(res.body.toString("utf8"));
+  assert.equal(body.serverVersion, "1.2.3-test");
+  assert.equal(typeof body.token, "string");
+  assert.ok(body.token.length > 0);
 });
 
 function createSuccessfulSpawn(calls) {
@@ -841,8 +882,9 @@ test("local sync scopes relayed device token cache by InsForge base URL", async 
         json: async () => ({ accessToken: "default-access-token" }),
       };
     }
-    if (url.endsWith("/functions/tokentracker-device-token-issue")) {
-      const root = url.slice(0, -"/functions/tokentracker-device-token-issue".length);
+    if (url.endsWith("/tokentracker-device-token-issue")) {
+      const root = url.startsWith("https://srctyff5.function2.insforge.app/")
+        ? defaultRoot : url.slice(0, -"/functions/tokentracker-device-token-issue".length);
       return {
         ok: true,
         status: 200,
@@ -889,7 +931,7 @@ test("local sync scopes relayed device token cache by InsForge base URL", async 
     assert.equal(calls[1].options.env.TOKENTRACKER_DEVICE_TOKEN, "default-device-token");
     assert.equal(calls[1].options.env.TOKENTRACKER_INSFORGE_BASE_URL, defaultRoot);
     assert.equal(fetchCalls.filter((c) => c.url.endsWith("/api/auth/refresh?client_type=mobile")).length, 2);
-    assert.equal(fetchCalls.filter((c) => c.url.endsWith("/functions/tokentracker-device-token-issue")).length, 2);
+    assert.equal(fetchCalls.filter((c) => c.url.endsWith("/tokentracker-device-token-issue")).length, 2);
   } finally {
     restore();
     global.fetch = prevFetch;

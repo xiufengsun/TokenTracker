@@ -58,13 +58,21 @@ const COMPACT_ACCOUNT_RPCS = new Map([
   ["tokentracker-account-daily.ts", ["account_daily_compact", "fold-account-daily-aggregation"]],
 ]);
 
+const WIRE_ACCOUNT_RPCS = new Map([
+  ["tokentracker-account-heatmap.ts", ["account_heatmap_wire", "account_heatmap_compact", "compact-account-model-wire"]],
+  ["tokentracker-account-daily.ts", ["account_daily_wire", "account_daily_compact", "compact-account-model-wire"]],
+  ["tokentracker-account-summary.ts", ["account_summary_wire", "account_summary_compact", "compact-account-summary-model-wire"]],
+  ["tokentracker-account-model-breakdown.ts", ["account_model_breakdown_wire", "account_model_breakdown_compact", "compact-account-summary-model-wire"]],
+]);
+
 test("cloud account reads use the shared cached RPC instead of a device lookup plus aggregation", () => {
   for (const file of ACCOUNT_FUNCTIONS) {
     const source = read(`dashboard/edge-patches/${file}`);
     const compact = COMPACT_ACCOUNT_RPCS.get(file);
     if (compact) {
-      assert.match(source, new RegExp(`rpc\\("${compact[0]}"`, "u"),
-        `${file} must read through its compact RPC`);
+      const rpc = WIRE_ACCOUNT_RPCS.get(file)?.[0] || compact[0];
+      assert.match(source, new RegExp(`rpc\\("${rpc}"`, "u"),
+        `${file} must read through its compact RPC or dictionary wrapper`);
     } else {
       assert.match(source, /rpc\("account_usage_grouped_cached"/u,
         `${file} must use the cross-isolate cached RPC`);
@@ -111,6 +119,25 @@ test("compact account RPCs delegate to the shared cached RPC and stay project_ad
     );
     assert.doesNotMatch(migration, /FROM public\.tokentracker_hourly/u,
       `compact RPCs in *_${suffix}.sql must not bypass the shared cache with their own scan`);
+  }
+});
+
+test("account wire RPCs wrap the existing compact aggregation and stay project_admin-only", () => {
+  const seen = new Map();
+  for (const [wire, compact, suffix] of WIRE_ACCOUNT_RPCS.values()) {
+    const migration = readMigrationBySuffix(suffix);
+    seen.set(suffix, migration);
+    assert.match(migration, new RegExp(`CREATE OR REPLACE FUNCTION public\\.${wire}\\(`, "u"));
+    assert.equal((migration.match(new RegExp(`public\\.${compact}\\(`, "gu")) || []).length, 1,
+      `${wire} must delegate exactly once to ${compact}`);
+    assert.match(migration, new RegExp(`REVOKE EXECUTE ON FUNCTION public\\.${wire}\\([^)]*\\) FROM PUBLIC, anon, authenticated;`, "u"));
+    assert.match(migration, new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${wire}\\([^)]*\\) TO project_admin;`, "u"));
+  }
+  for (const [suffix, migration] of seen) {
+    const definedHere = [...WIRE_ACCOUNT_RPCS.values()].filter((entry) => entry[2] === suffix).length;
+    assert.equal((migration.match(/SECURITY INVOKER/gu) || []).length, definedHere);
+    assert.doesNotMatch(migration, /account_usage_grouped_cached\(|FROM public\.tokentracker_hourly/u,
+      "wire RPCs must preserve the existing compact aggregation instead of adding a new scan");
   }
 });
 
@@ -212,7 +239,7 @@ test("leaderboard refresh fetches all user metadata with one RPC", () => {
 test("total leaderboard advances the cluster-aware rollup before reading it", () => {
   const source = read("dashboard/edge-patches/tokentracker-leaderboard-refresh.ts");
   const advance = source.indexOf('rpc(\n        "leaderboard_rollup_daily_advance_v2"');
-  const aggregate = source.indexOf('"leaderboard_usage_grouped_total_shard"', advance);
+  const aggregate = source.indexOf('"leaderboard_usage_compact_total_shard"', advance);
 
   assert.ok(advance > 0, "total refresh must advance the v2 closed-day rollup");
   assert.ok(aggregate > advance, "total shards must read only after the rollup advance succeeds");
@@ -293,8 +320,8 @@ test("total leaderboard shards the model-granular response without changing pric
   );
   assert.match(edgeSource, /shardIndex \+= 2/u);
   assert.match(edgeSource, /TOTAL_USER_SHARDS\.slice\(shardIndex, shardIndex \+ 2\)\.map/u);
-  assert.match(edgeSource, /"leaderboard_usage_grouped_total_shard"/u);
-  assert.match(edgeSource, /totalRows\.push\(\.\.\.result\.data\)/u);
+  assert.match(edgeSource, /"leaderboard_usage_compact_total_shard"/u);
+  assert.match(edgeSource, /totalRows\.push\(\.\.\.decodeCompactLeaderboardUsage\(result\.data as CompactLeaderboardUsage\)\)/u);
   assert.match(
     edgeSource,
     /for \(const row of grouped\)[\s\S]*agg\.estimated_cost_usd \+= computeRowCost\(row\)/u,

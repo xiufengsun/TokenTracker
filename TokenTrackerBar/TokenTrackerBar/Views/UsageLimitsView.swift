@@ -431,12 +431,16 @@ struct UsageLimitsView: View {
         return s
     }
 
+    /// Rows for ZCode: fixed coding-plan windows, labelled start-plan buckets, or the legacy GLM labels.
     private func zcodeSpecs(_ z: ZcodeLimits) -> [LimitWindowSpec] {
         var s: [LimitWindowSpec] = []
         if z.planKind == "coding-plan" {
             if let w = z.primaryWindow { s.append(makeSpec("5h", w.usedPercent, iso: w.resetAt)) }
             if let w = z.secondaryWindow { s.append(makeSpec("Weekly", w.usedPercent, iso: w.resetAt)) }
             if let w = z.tertiaryWindow { s.append(makeSpec("Tools", w.usedPercent, iso: w.resetAt)) }
+        } else if let buckets = z.labeledBuckets {
+            // One row per balance bucket, labelled by the server (model, plus promotion name for one-time grants).
+            for b in buckets { s.append(makeSpec(b.label, b.window.usedPercent, iso: b.window.resetAt)) }
         } else {
             if let w = z.primaryWindow { s.append(makeSpec("GLM-5.2", w.usedPercent, iso: w.resetAt)) }
             if let w = z.secondaryWindow { s.append(makeSpec("GLM-5-Turbo", w.usedPercent, iso: w.resetAt)) }
@@ -528,8 +532,7 @@ struct UsageLimitsView: View {
         let fillColor = Color.limitBar(fraction: usedFraction)
 
         // Time-aware pace mark (CodexBar-style notch). Shown once the window has
-        // meaningful usage (≥5%) so a fresh window doesn't float a mark in empty
-        // track. Green when on/under pace, red when ahead (deficit). Requires a
+        // nonzero usage. Green when on/under pace, red when ahead (deficit). Requires a
         // trusted window length; monthly / billing-cycle windows show no mark.
         var pacePercent: Double?
         var paceOver = false

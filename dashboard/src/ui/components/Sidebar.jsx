@@ -26,7 +26,7 @@ import { useTheme } from "../../hooks/useTheme.js";
 import { useLocale } from "../../hooks/useLocale.js";
 import { shouldFetchGithubStars } from "../dashboard/util/should-fetch-github-stars.js";
 import { InsforgeUserHeaderControls } from "../../components/InsforgeUserHeaderControls.jsx";
-import { isNativeApp, isNativeEmbed, isNativeWindowsApp } from "../../lib/native-bridge.js";
+import { isNativeApp, isNativeEmbed, isNativeLinuxApp, isNativeWindowsApp } from "../../lib/native-bridge.js";
 
 const STORAGE_KEY = "tt.sidebarCollapsed";
 
@@ -375,8 +375,8 @@ function SidebarBody({
             <div className="flex flex-col gap-0.5">
               {group.items
                 // Widgets is a macOS-only feature (system widget gallery); hide it in
-                // the Windows tray app per the upstream author's request.
-                .filter((item) => !(item.to === "/widgets" && isNativeWindowsApp()))
+                // the Windows and Linux apps.
+                .filter((item) => !(item.to === "/widgets" && (isNativeWindowsApp() || isNativeLinuxApp())))
                 .map((item) => (
                   <NavItem
                     key={item.id}

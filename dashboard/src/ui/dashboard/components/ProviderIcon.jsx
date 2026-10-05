@@ -445,6 +445,10 @@ const PROVIDER_LOGO_MAP = {
   "QODER-CN": "/brand-logos/qoder-cn.svg",
   // Volcano Ark (火山方舟) Coding Plan — the Volcengine 3-mountain mark.
   "VOLCANO-ARK": "/brand-logos/volcano-ark.svg",
+  // Cline (CLI v3 / desktop app) — the official robot mark.
+  CLINE: "/brand-logos/cline.png",
+  // International TRAE mark from the installed app's resources/app/out/media/trae-logo.svg.
+  TRAE: "/brand-logos/trae.svg",
 };
 
 // AnythingLLM publishes this compact mark in white. Keep the official asset

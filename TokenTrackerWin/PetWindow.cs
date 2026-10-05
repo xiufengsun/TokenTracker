@@ -37,6 +37,7 @@ internal sealed class PetWindow : Window
     // (windowless hosting throws on init otherwise).
     private readonly WebView2CompositionControl _webView = new() { AllowExternalDrop = false };
     private readonly ServerManager _server;
+    private readonly WidgetWebViewEnvironment _webViewEnvironment;
     private readonly System.Windows.Threading.DispatcherTimer _saveTimer;
     private readonly System.Windows.Threading.DispatcherTimer _hoverTimer;
     private readonly System.Windows.Threading.DispatcherTimer _clickThroughTimer;
@@ -54,6 +55,7 @@ internal sealed class PetWindow : Window
     private string _curSymbol = "$";
     private decimal _curRate = 1m;
     private string _locale = "en";
+    private string _tokenUnitSystem = TokenUnits.Current;
     private bool _syncing;
     private JsonNode? _limits;
     private string _character = CurrentCharacter;
@@ -87,9 +89,10 @@ internal sealed class PetWindow : Window
     /// <summary>Raised (on the UI thread) when the user right-clicks the pet — the host shows a context menu.</summary>
     public event Action? ContextMenuRequested;
 
-    public PetWindow(ServerManager server)
+    public PetWindow(ServerManager server, WidgetWebViewEnvironment webViewEnvironment)
     {
         _server = server;
+        _webViewEnvironment = webViewEnvironment;
 
         // Seed the currency from the native cache so the very first push (on page load)
         // already carries the app's last-used unit — no USD flash before the tray's
@@ -177,6 +180,11 @@ internal sealed class PetWindow : Window
     {
         base.OnSourceInitialized(e);
         _hwnd = new WindowInteropHelper(this).Handle;
+        // Keep the pet out of Alt+Tab and Win+Tab (#680). ShowInTaskbar = false only
+        // removes the taskbar button; the task switchers list every top-level window
+        // unless it carries WS_EX_TOOLWINDOW. Set it here, before the window is first
+        // shown; SetClickThrough below only flips WS_EX_TRANSPARENT so it persists.
+        SetWindowExStyle(_hwnd, (nint)(GetWindowExStyle(_hwnd).ToInt64() | WS_EX_TOOLWINDOW));
         _clickThrough = (GetWindowExStyle(_hwnd).ToInt64() & WS_EX_TRANSPARENT) != 0;
         ClickThroughTick();
     }
@@ -247,18 +255,7 @@ internal sealed class PetWindow : Window
     {
         if (_coreReady) return;
 
-        // Own user-data folder (separate from the dashboard's) so the two WebView2
-        // environments never clash over differing creation options.
-        var userDataFolder = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "TokenTracker", "WebView2Pet");
-        Directory.CreateDirectory(userDataFolder);
-
-        // Transparent composition surface; must be set before the browser process starts.
-        // Only alpha 0 (transparent) or 255 are supported.
-        Environment.SetEnvironmentVariable("WEBVIEW2_DEFAULT_BACKGROUND_COLOR", "0");
-
-        var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder, null);
+        var env = await _webViewEnvironment.GetAsync();
         await _webView.EnsureCoreWebView2Async(env);
         _coreReady = true;
 
@@ -668,6 +665,14 @@ internal sealed class PetWindow : Window
         PushContext();
     }
 
+    /// <summary>Push the dashboard's token unit system ("chinese" = 万/亿, else K/M/B).</summary>
+    public void ApplyTokenUnitSystem(string unitSystem)
+    {
+        if (_tokenUnitSystem == unitSystem) return;
+        _tokenUnitSystem = unitSystem;
+        PushContext();
+    }
+
     /// <summary>Push whether a sync is in progress (drives the "typing" animation, like macOS).</summary>
     public void ApplySyncing(bool syncing)
     {
@@ -731,6 +736,7 @@ internal sealed class PetWindow : Window
         var sym = System.Text.Json.JsonSerializer.Serialize(_curSymbol);
         var rate = _curRate.ToString(inv);
         var loc = System.Text.Json.JsonSerializer.Serialize(_locale);
+        var unitSystem = System.Text.Json.JsonSerializer.Serialize(_tokenUnitSystem);
         var character = System.Text.Json.JsonSerializer.Serialize(_character);
         var botColor = System.Text.Json.JsonSerializer.Serialize(_botColor);
         // The pet host renders without ThemeProvider, so nothing there can resolve the
@@ -763,6 +769,7 @@ internal sealed class PetWindow : Window
             _ = _webView.CoreWebView2.ExecuteScriptAsync(
                 $"window.__ttPetCurrency={{symbol:{sym},rate:{rate}}};" +
                 $"window.__ttPetLocale={loc};" +
+                $"window.__ttPetTokenUnitSystem={unitSystem};" +
                 $"window.__ttPetCharacter={character};" +
                 $"window.__ttPetBotColor={botColor};" +
                 $"window.__ttPetDark={petDark};" +
@@ -1263,6 +1270,7 @@ internal sealed class PetWindow : Window
     private const int HTCAPTION = 2;
     private const int GWL_EXSTYLE = -20;
     private const long WS_EX_TRANSPARENT = 0x00000020L;
+    private const long WS_EX_TOOLWINDOW = 0x00000080L;
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_NOZORDER = 0x0004;

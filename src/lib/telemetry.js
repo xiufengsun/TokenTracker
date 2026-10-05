@@ -18,6 +18,7 @@ const pkg = require("../../package.json");
 const { readJson, writeJson } = require("./fs");
 const { getOrCreateMachineId } = require("./machine-id");
 const { resolveRuntimeConfig } = require("./runtime-config");
+const { functionUrlFor, fetchFunctionResponse } = require("./function-url");
 const {
   decideAutoUpload,
   recordUploadSuccess,
@@ -132,7 +133,7 @@ async function maybeSendHeartbeat({
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response;
     try {
-      response = await fetchImpl(`${runtime.baseUrl}/functions/${HEARTBEAT_FUNCTION_SLUG}`, {
+      response = await fetchFunctionResponse(functionUrlFor(runtime.baseUrl, HEARTBEAT_FUNCTION_SLUG), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -140,7 +141,7 @@ async function maybeSendHeartbeat({
         },
         body: JSON.stringify(payload),
         signal: controller.signal,
-      });
+      }, fetchImpl);
     } finally {
       clearTimeout(timer);
     }

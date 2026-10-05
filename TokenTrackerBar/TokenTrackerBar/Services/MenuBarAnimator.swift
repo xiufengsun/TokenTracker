@@ -58,6 +58,10 @@ final class MenuBarAnimator {
     /// The current icon image (for external use, e.g. stats rendering)
     var currentImage: NSImage { renderedImage }
     var onImageUpdated: ((NSImage) -> Void)?
+    /// False while the status item is hidden (island-only setup). Frames still
+    /// reach `onImageUpdated` for the island; only the invisible button's
+    /// `image` set (a status-bar layout pass per tick) is skipped.
+    var updatesButton = true
 
     private lazy var idleFrame = buildFrame(eyesClosed: false, yShift: 0)
     private lazy var blinkFrame = buildFrame(eyesClosed: true, yShift: 0)
@@ -514,7 +518,7 @@ final class MenuBarAnimator {
 
     private func setButtonImage(_ image: NSImage) {
         renderedImage = image
-        button?.image = image
+        if updatesButton { button?.image = image }
         onImageUpdated?(image)
     }
 

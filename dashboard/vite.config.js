@@ -1282,6 +1282,7 @@ export default defineConfig(({ mode }) => {
   };
   if (process.env.TOKENTRACKER_BUILD_PET === "1") {
     rollupInput.pet = path.resolve(ROOT_DIR, "pet.html");
+    rollupInput.quota = path.resolve(ROOT_DIR, "quota.html");
   }
 
   return {

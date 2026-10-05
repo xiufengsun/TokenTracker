@@ -6,7 +6,7 @@
 
 ### Track every AI token — then bring your usage to life
 
-An accurate, local-first token usage and cost dashboard for **40 AI coding tools** — plus a desktop pet, **4 native widgets**, and **15 achievement tracks**. No cloud account, no API keys, no setup.
+An accurate, local-first token usage and cost dashboard for **43 AI coding tools** — plus a desktop pet, **4 native widgets**, and **15 achievement tracks**. No cloud account, no API keys, no setup.
 
 [![npm version](https://img.shields.io/npm/v/tokentracker-cli.svg?color=blue)](https://www.npmjs.com/package/tokentracker-cli)
 [![npm downloads](https://img.shields.io/npm/dm/tokentracker-cli.svg?color=brightgreen)](https://www.npmjs.com/package/tokentracker-cli)
@@ -56,8 +56,8 @@ An accurate, local-first token usage and cost dashboard for **40 AI coding tools
 
 <br/><br/>
 
-<video src="https://github.com/user-attachments/assets/5e709422-5af8-4e4c-8109-f5bb711eb3f8" controls muted playsinline poster="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/dashboard-dark.png" width="820">
-  <img src="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/dashboard-dark.png" alt="Token Tracker Dashboard" width="820" />
+<video src="https://github.com/user-attachments/assets/efb89086-b7d7-4cb6-ae3c-3a6cb50188d2" controls muted playsinline poster="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/intro-film-poster.png" width="820">
+  <img src="https://raw.githubusercontent.com/xiufengsun/tokentracker/main/docs/screenshots/intro-film-poster.png" alt="TokenTracker intro film" width="820" />
 </video>
 
 <br/><br/>
@@ -147,7 +147,7 @@ An Arch `PKGBUILD` for a local pacman install lives in `TokenTrackerLinux/packag
 
 ## ✨ Features
 
-- 🔌 **40 AI tools out of the box** — Claude Code, Codex CLI, AStudio, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, Grok Build, oh-my-pi, OmO, pi, Dots, Prime Agent, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio, Devin CLI, MiniMax Code
+- 🔌 **43 AI tools out of the box** — Claude Code, Codex CLI, AStudio, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, Grok Build, oh-my-pi, OmO, pi, Dots, Prime Agent, Craft Agents, Reasonix, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio, Devin CLI, Cline, MiniMax Code, Command Code, TRAE
 - 🏠 **Local-first** — Runs on your machine. Parses logs locally with no account or API keys needed.
 - 🚀 **Zero config** — Hooks auto-install on first run. From zero to dashboard in 30 seconds.
 - 📊 **Beautiful dashboard** — Usage trends, cost breakdowns by model, GitHub-style activity heatmap, project attribution
@@ -272,9 +272,12 @@ An Arch `PKGBUILD` for a local pacman install lives in `TokenTrackerLinux/packag
 | **Unsloth Studio** | ✅ Auto | Passive SQLite reader for `$UNSLOTH_STUDIO_HOME/studio.db` (default `~/.unsloth/studio/studio.db`). Reads scalar `contextUsage` metadata and content-free `api_usage_events` only; prompts, replies, attachments, API subjects, credentials, and training metrics are excluded. Local routes stay zero-cost, while known paid provider routes use the model that actually answered for estimated token cost. |
 | **AnythingLLM Desktop** | ✅ Auto | Passive SQLite reader (`anythingllm-desktop/storage/anythingllm.db`; reads per-message token metrics only, never prompts or responses) |
 | **Devin CLI** (Cognition) | ✅ Auto | Passive SQLite reader (`$XDG_DATA_HOME/devin/cli/sessions.db`, default `~/.local/share/devin/cli/sessions.db`; reads per-request usage metrics deduplicated by `request_id` — replay/fork/compaction copies never double-count — using the recorded generation model, never prompts, responses, or `cogs_json`). Devin models (`swe-2`, `swe-2-high`, `compactor`) currently have no pricing data, so their token counts are reported but excluded from dollar estimates — a $0 figure does not mean free usage. No native Windows data dir is known; a WSL install is read via `\\wsl$`. |
+| **Cline** (CLI v3 / desktop app) | ✅ Auto | Passive reader (`~/.cline/data/sessions/<id>/*.messages.json`). Per-turn `metrics` are usage deltas where `inputTokens` already includes cache read+write and `outputTokens` already includes reasoning, so the cached prefix is subtracted and reasoning is never billed twice; Cline's own per-call `cost` is trusted when reported. `cline-free/*` and `cline-pass/*` gateway models are priced at $0. The VS Code extension's globalStorage layout is not read. Path overrides: `TOKENTRACKER_CLINE_SESSIONS_DIR`, `TOKENTRACKER_CLINE_DATA_DIR`, `TOKENTRACKER_CLINE_HOME`, `CLINE_SESSION_DATA_DIR`, `CLINE_DATA_DIR`, or `CLINE_DIR` |
 | **MiniMax Code** | ✅ Auto | Passive reader (`~/.minimax/v2/sessions/YYYY/MM/DD/<session>/messages.jsonl`). Dedupes on `message_id`, records the routed upstream model per message, and ignores the always-zero `usage.cost` in favor of normal pricing. Override the directory with `TOKENTRACKER_MINIMAX_HOME` |
+| **Command Code** | ✅ Auto | Passive session reader (`~/.commandcode/projects/<cwd-slug>/<session-id>.jsonl`; `*.checkpoints.jsonl` snapshots and `.prompts.` sidecars are skipped). Scans transcripts locally and extracts selected usage metadata, including token counts and the CLI's `costUsd` display estimate. Token Tracker estimates cost with its shared model price table instead. Subtracts both cache reads and writes from cache-inclusive input to avoid double counting. Token Tracker does not persist or upload prompt, reply or code bodies. Override the directory with `TOKENTRACKER_COMMANDCODE_HOME` |
 | **Claude Science** | ✅ Auto | Passive SQLite reader (`~/.claude-science/operon-cli.db`; reads the `frames` table's token counters only, never prompts, artifacts or research content). No native Windows build — on Windows the app runs inside WSL and is read from there. |
 | **DeepSeek Harness** | ✅ Auto | Passive session reader (`~/.dsh/sessions/**/session.jsonl[.zstd]`; parses session header and assistant events, handles multi-frame zstd decompression) |
+| **TRAE (international)** | ✅ Auto | Local TRAE / TRAE SOLO SQLCipher usage metadata with the shared application key by default; optional `TOKENTRACKER_TRAE_SQLCIPHER_KEY` override. No vendor API calls. See [setup and limitations](docs/trae.md). |
 | **TRAE Work CN** | ✅ Auto | **Requires an explicit opt-in: set `TOKENTRACKER_TRAE_CN_USAGE=1`.** Reading usage transmits the locally stored sign-in authorization to TRAE's internal API, so nothing is sent until you turn it on. Once opted in: during eligible non-background sync when local TRAE Work CN auth exists, reads session-token usage from the locally signed-in macOS / Windows app; its internal API may change |
 
 > **Do I need to install any plugin or hook manually?** No. `tokentracker` (or `tokentracker init`) handles everything on first run:
@@ -282,7 +285,8 @@ An Arch `PKGBUILD` for a local pacman install lives in `TokenTrackerLinux/packag
 > - **Plugin-based** tools (OpenCode, **OpenClaw**) — plugins ship inside the npm package. OpenClaw's session plugin lives at `~/.tokentracker/tracker/openclaw-plugin/openclaw-session-sync/`; we link and enable it via OpenClaw's own CLI, then set `hooks.allowConversationAccess=true` so OpenClaw permits the session-finished event that triggers sync. No download, no drag-and-drop.
 > - **oh-my-pi** — passive session scan is always the billing/token source of truth (`~/.omp/agent/sessions/**/*.jsonl`). When OMP is detected, `tokentracker init` also writes a managed notify extension to `~/.omp/agent/extensions/tokentracker-notify.ts` so turns can trigger near-real-time sync. That file is owned only when it carries TokenTracker's managed marker: a same-named user-authored extension is never overwritten or deleted. `tokentracker uninstall` removes the extension only while it is still managed.
 > - **OmO** — passive session scan only (`~/.omo/agent/sessions/**/*.jsonl`, including nested subagent transcripts). No plugin or hook is installed. Path overrides, in precedence order: `TOKENTRACKER_OMO_AGENT_DIR`, then `TOKENTRACKER_OMO_HOME` / `OMO_HOME` (appended with `/agent`). `PI_CONFIG_DIR` and `PI_CODING_AGENT_DIR` are not honored: those belong to pi/omp.
-> - **Passive readers** (Cursor, Kiro, Hermes, Kimi Code, Copilot, **Grok Build**, **OmO**, **pi**, **Craft Agents**, **Reasonix**, **Kilo CLI**, **Kilo Code**, **Roo Code**, **Antigravity**, **Zed Agent**, **Goose**, **Droid**, **Mimo Code**, **ZCode**, **Qoder**, **LM Studio**, **Unsloth Studio**, **AnythingLLM Desktop**, **Devin CLI**, **MiniMax Code**, **Claude Science**, **DeepSeek Harness**) — nothing is installed into those tools. We only read files they already produce (SQLite DB, JSONL, OTEL export, session logs). Copilot App / CLI usage is read per request from `~/.copilot/session-store.db`; `data.db` provides the one-time legacy adoption baseline and stays observe-only after the store becomes canonical, while the Chat extension and legacy CLI continue using OTEL. TokenTracker coordinates the sources so overlapping requests are counted once. Mixed App/CLI usage that predates adoption is retained as a `github-copilot-legacy` aggregate rather than assigned to a guessed request model.
+> - **Cline** — passive session scan only (`~/.cline/data/sessions/<id>/*.messages.json`, Cline CLI v3 / desktop app; the VS Code extension's globalStorage is a separate, older install and is not read). No hook is installed. Per-turn `metrics` are usage deltas where `inputTokens` already contains cache read+write, so only the non-cached remainder is billed. Path overrides, in precedence order: `TOKENTRACKER_CLINE_SESSIONS_DIR`, `TOKENTRACKER_CLINE_DATA_DIR`, `TOKENTRACKER_CLINE_HOME`, then Cline's own `CLINE_SESSION_DATA_DIR`, `CLINE_DATA_DIR`, `CLINE_DIR`.
+> - **Passive readers** (Cursor, Kiro, Hermes, Kimi Code, Copilot, **Grok Build**, **OmO**, **pi**, **Craft Agents**, **Reasonix**, **Kilo CLI**, **Kilo Code**, **Roo Code**, **Antigravity**, **Zed Agent**, **Goose**, **Droid**, **Mimo Code**, **ZCode**, **Qoder**, **LM Studio**, **Unsloth Studio**, **AnythingLLM Desktop**, **Devin CLI**, **MiniMax Code**, **Claude Science**, **DeepSeek Harness**, **Cline**) — nothing is installed into those tools. We only read files they already produce (SQLite DB, JSONL, OTEL export, session logs). Copilot App / CLI usage is read per request from `~/.copilot/session-store.db`; `data.db` provides the one-time legacy adoption baseline and stays observe-only after the store becomes canonical, while the Chat extension and legacy CLI continue using OTEL. TokenTracker coordinates the sources so overlapping requests are counted once. Mixed App/CLI usage that predates adoption is retained as a `github-copilot-legacy` aggregate rather than assigned to a guessed request model.
 > - **Grok Build estimate** — current local telemetry exposes cumulative `updates.jsonl` `totalTokens`, but not a stable prompt/output/cache split; `signals.json` remains a fallback with `contextTokensUsed` snapshots. TokenTracker estimates Grok cost until per-call usage details are available.
 >
 > Run `tokentracker status` anytime to verify every integration's state. If something shows `skipped`, the `detail` column explains why (e.g. tool CLI not on `PATH`, config unreadable).
@@ -299,7 +303,7 @@ Missing your tool? [Open an issue](https://github.com/xiufengsun/TokenTracker/is
 
 | Capability | **[TokenTracker](https://github.com/xiufengsun/TokenTracker)** | **[ccusage](https://github.com/ccusage/ccusage)** | **[Tokscale](https://github.com/junhoyeo/tokscale)** |
 |---|:---:|:---:|:---:|
-| **AI tools supported** | **40** | Multi-agent | Multi-agent |
+| **AI tools supported** | **43** | Multi-agent | Multi-agent |
 | **Primary interface** | Desktop apps & web dashboard | Terminal CLI | Terminal TUI & CLI |
 | **Local analysis** | ✅ | ✅ | ✅ |
 | **Native desktop apps** | ✅ macOS, Windows, Linux | ❌ | ❌ |
@@ -315,7 +319,7 @@ Missing your tool? [Open an issue](https://github.com/xiufengsun/TokenTracker/is
 
 ```mermaid
 flowchart LR
-    A["AI coding tools<br/>Claude Code · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi Code · CodeBuddy · WorkBuddy · Grok Build · Kilo CLI · Kilo Code<br/>Antigravity · oh-my-pi · OmO · pi · Dots · Craft · Roo · Zed · Goose · Droid · Mimo · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE Work CN · LM Studio · Unsloth Studio · Devin CLI · MiniMax Code"]
+    A["AI coding tools<br/>Claude Code · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi Code · CodeBuddy · WorkBuddy · Grok Build · Kilo CLI · Kilo Code<br/>Antigravity · oh-my-pi · OmO · pi · Dots · Craft · Roo · Zed · Goose · Droid · Mimo · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE · TRAE Work CN · LM Studio · Unsloth Studio · Devin CLI · Cline · MiniMax Code · Command Code"]
     A -->|hooks trigger| B[Token Tracker]
     B -->|parse logs<br/>30-min UTC buckets| C[(Local SQLite)]
     C --> D[Web Dashboard]
@@ -368,7 +372,8 @@ Most users never need this — defaults are sensible. For advanced setups:
 | `TOKENTRACKER_LMSTUDIO_HOME` | Override the LM Studio data directory used by the passive server-log reader | `~/.lmstudio` |
 | `TOKENTRACKER_UNSLOTH_DB` | Override the Unsloth Studio database file used by the passive usage reader | `$UNSLOTH_STUDIO_HOME/studio.db` |
 | `TOKENTRACKER_DEVIN_DB` | Override the Devin CLI database file used by the passive usage reader | `$XDG_DATA_HOME/devin/cli/sessions.db` |
-| `TOKENTRACKER_MINIMAX_HOME` | Override the MiniMax Code data directory used by the passive session reader | `~/.minimax` |
+| `TOKENTRACKER_MINIMAX_HOME` | Override the MiniMax Code data directory used by the passive usage reader | `~/.minimax` |
+| `TOKENTRACKER_COMMANDCODE_HOME` | Override the Command Code (`cmd`) data directory used by the passive session reader | `~/.commandcode` |
 
 ### 🐧 Windows Subsystem for Linux (WSL) Auto-Discovery
 
@@ -386,13 +391,28 @@ Configure this behavior using the `TOKENTRACKER_WSL_MODE` environment variable:
 
 Supported providers for WSL auto-discovery and aggregation:
 * **Dual-Install Aggregation (`both` mode):**
-  * **File-list & Active CLIs:** Every Code, Kimi (legacy & Code), Gemini CLI, Antigravity, OpenCode (JSON), Codex CLI, AStudio, CodeBuddy, WorkBuddy, oh-my-pi (omp), pi, GitHub Copilot (OTEL), Roo Code, Craft, Kilo Code, Droid.
+  * **File-list & Active CLIs:** Every Code, Kimi (legacy & Code), Gemini CLI, Antigravity, OpenCode (JSON), Codex CLI, AStudio, CodeBuddy, WorkBuddy, oh-my-pi (omp), pi, GitHub Copilot (OTEL), Roo Code, Craft, Kilo Code, Droid, Cline.
   * **SQLite-based DBs:** Hermes, Zed Agent, Goose, OpenCode (`opencode.db`), Kilo CLI, Mimo Code, ZCode, Qoder, Claude Science (`operon-cli.db`), GitHub Copilot (App DB).
 * **WSL Auto-Discovery (Preference/Isolation only, no dual aggregation):**
   * Grok Build (dynamically selects either native or WSL depending on the mode, but does not aggregate both in `both` mode).
   * Devin CLI (no native Windows data directory is known, so automatic discovery only ever finds a WSL install; `native-only` mode discovers nothing and `both` never aggregates a native copy). The `TOKENTRACKER_DEVIN_DB` override still points at an explicit database file.
 
 ---
+
+### Extra scan roots (multiple profiles, agent harnesses)
+
+TokenTracker scans `~/.codex` and `~/.claude` (plus `CODEX_HOME` / `CLAUDE_CONFIG_DIR` when the syncing process has them set). If your sessions live somewhere else — a second profile, or an agent harness that gives Codex / Claude Code a private home — list those roots once in `~/.tokentracker/tracker/config.json` and every sync (hook-triggered, app background refresh, CLI) walks them:
+
+```json
+{
+  "scanRoots": {
+    "codex": ["~/.local/share/my-agent/codex"],
+    "claude": ["~/.local/share/my-agent/claude", "~/.claude-work"]
+  }
+}
+```
+
+Each Codex root is expected to hold `sessions/` (and optionally `archived_sessions/`), each Claude root a `projects/` directory. Roots are de-duplicated by resolved path, so a profile whose `projects/` is a symlink to another profile's is read once. `tokentracker status` and `tokentracker doctor` list the extra roots and flag any that are missing.
 
 ## 🛠️ Development
 

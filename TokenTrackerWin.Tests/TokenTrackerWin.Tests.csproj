@@ -25,6 +25,7 @@
     <Compile Include="../TokenTrackerWin/ServerRecoveryPolicy.cs" Link="ServerRecoveryPolicy.cs" />
     <Compile Include="../TokenTrackerWin/DispatcherExceptionPolicy.cs" Link="DispatcherExceptionPolicy.cs" />
     <Compile Include="../TokenTrackerWin/UsagePoller.cs" Link="UsagePoller.cs" />
+    <Compile Include="../TokenTrackerWin/TokenUnits.cs" Link="TokenUnits.cs" />
     <Compile Include="../TokenTrackerWin/AutoUpdatePolicy.cs" Link="AutoUpdatePolicy.cs" />
     <Compile Include="../TokenTrackerWin/UpdateIntegrity.cs" Link="UpdateIntegrity.cs" />
   </ItemGroup>

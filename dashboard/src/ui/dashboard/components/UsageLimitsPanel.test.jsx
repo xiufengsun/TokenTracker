@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { copy, setCopyLocale } from "../../../lib/copy";
 import { DE_LOCALE, EN_LOCALE, JA_LOCALE, KO_LOCALE, ZH_CN_LOCALE, ZH_TW_LOCALE } from "../../../lib/locale";
@@ -359,6 +360,37 @@ describe("UsageLimitsPanel", () => {
     expect(group.querySelectorAll("div.absolute.top-0.h-full")).toHaveLength(2);
     fireEvent.click(group);
     expect(within(group).getByText(copy("limits.explain.body"))).toBeInTheDocument();
+  });
+
+  it("shows Grok's weekly pace marker below 5% usage in remaining mode", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-25T00:00:00.000Z"));
+    const grok = {
+      configured: true,
+      error: null,
+      period_type: "weekly",
+      primary_window: { used_percent: 3, reset_at: "2026-10-01T00:00:00.000Z" },
+    };
+    const { rerender } = render(createElement(UsageLimitsPanel, {
+      grok,
+      order: ["grok"],
+      displayMode: "remaining",
+    }));
+
+    const group = screen.getByText("Grok Build").closest("[role='button']");
+    expect(within(group).getByText("97%")).toBeInTheDocument();
+    const markers = group.querySelectorAll("div.absolute.top-0.h-full");
+    expect(markers).toHaveLength(2);
+    expect(markers[1].style.left).toContain("85.714");
+    fireEvent.click(group);
+    expect(within(group).getByText(copy("limits.explain.body_remaining"))).toBeInTheDocument();
+
+    rerender(createElement(UsageLimitsPanel, {
+      grok: { ...grok, primary_window: { ...grok.primary_window, used_percent: 0 } },
+      order: ["grok"],
+      displayMode: "remaining",
+    }));
+    expect(group.querySelectorAll("div.absolute.top-0.h-full")).toHaveLength(0);
   });
 
   it("surfaces a configured OpenCode Go error instead of rendering bars", () => {
