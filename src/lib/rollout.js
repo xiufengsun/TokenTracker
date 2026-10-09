@@ -15967,6 +15967,27 @@ function resolvePiSessionFiles(env = process.env) {
   } catch {
     // ignore — return what we have
   }
+  // Multica launches pi headless with a dedicated flat session dir:
+  //   ~/.multica/pi-sessions/<session-id>.jsonl
+  // Scan it too so orchestrated runs are counted alongside TUI sessions.
+  try {
+    const seen = new Set(files);
+    const multicaSessionsDir = path.join(
+      env.HOME || require("node:os").homedir(),
+      ".multica",
+      "pi-sessions",
+    );
+    for (const entry of fssync.readdirSync(multicaSessionsDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+      const full = path.join(multicaSessionsDir, entry.name);
+      if (!seen.has(full)) {
+        seen.add(full);
+        files.push(full);
+      }
+    }
+  } catch {
+    // ignore — no Multica install
+  }
   files.sort((a, b) => a.localeCompare(b));
   return files;
 }
