@@ -3937,25 +3937,46 @@ async function applyOpenclawTotalsFallback({
     seenAt: new Date().toISOString(),
   };
 
-  let deltaTotal = current.totalTokens;
-  let deltaInput = current.inputTokens;
-  let deltaOutput = current.outputTokens;
-  if (prev) {
-    deltaTotal = Math.max(
-      0,
-      current.totalTokens - (normalizeNonNegativeInt(prev.totalTokens) || 0),
-    );
-    deltaInput = Math.max(
-      0,
-      current.inputTokens - (normalizeNonNegativeInt(prev.inputTokens) || 0),
-    );
-    deltaOutput = Math.max(
-      0,
-      current.outputTokens - (normalizeNonNegativeInt(prev.outputTokens) || 0),
-    );
+  // First-ever baseline: the signal carries LIFETIME totals (SUM over all
+  // transcript_events for this session_id), not a per-agent_end delta. If we
+  // synthesized a message here with delta = current (because prev == null),
+  // we would count the entire session lifetime as a single fake "hour bucket"
+  // and poison every downstream aggregation. Seed the baseline and skip; the
+  // NEXT call will have a real prev and compute a correct per-event delta.
+  // See: openclaw sqlite migration (sessions.json removed) — plugin passes
+  // aggregated SQLite sums as PREV_* env vars.
+  if (!prev) {
+    sessions[sessionKey] = {
+      totalTokens: current.totalTokens,
+      inputTokens: current.inputTokens,
+      outputTokens: current.outputTokens,
+      model: current.model,
+      updatedAt: current.updatedAt,
+      seenAt: current.seenAt,
+      coveredByEvents: true,
+    };
+    state.version = 1;
+    state.sessions = sessions;
+    await writeJson(statePath, state);
+    return { filesProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
   }
 
+  const deltaTotal = Math.max(
+    0,
+    current.totalTokens - (normalizeNonNegativeInt(prev.totalTokens) || 0),
+  );
+  const deltaInput = Math.max(
+    0,
+    current.inputTokens - (normalizeNonNegativeInt(prev.inputTokens) || 0),
+  );
+  const deltaOutput = Math.max(
+    0,
+    current.outputTokens - (normalizeNonNegativeInt(prev.outputTokens) || 0),
+  );
+
   if (deltaTotal > 0 && deltaInput + deltaOutput === 0) {
+    // prev exists but lacks input/output breakdown — charge the whole
+    // delta to input so the synthetic message still reconciles.
     deltaInput = deltaTotal;
   }
 
