@@ -3,6 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../../lib/insforge-config", () => ({
   getOrCreateInsforgeClient: () => null,
   isCloudInsforgeConfigured: () => false,
+  getInsforgeConfigurationError: () => null,
+  getInsforgeConnectionHost: () => null,
+  isOfficialInsforgeInstance: () => true,
+  INSFORGE_INSTANCE_CHANGED_EVENT: "tt.insforgeInstanceChanged",
+  isCurrentInsforgeClient: () => true,
+  shouldRestoreInsforgeSession: () => true,
+  allowInsforgeSessionRestore: vi.fn(),
 }));
 
 import { resolveInsforgeClientAccessToken } from "../InsforgeAuthContext.jsx";

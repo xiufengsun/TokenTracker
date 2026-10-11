@@ -136,7 +136,7 @@ test("diagnostics reports TokenTracker-prefixed Grok home override", async () =>
 
     const data = await collectTrackerDiagnostics({ home: tmp });
 
-    assert.equal(data.paths.grok_home, "~/.grok-prefixed");
+    assert.equal(data.paths.grok_home, path.join("~", ".grok-prefixed"));
   } finally {
     if (prevTokenTrackerGrokHome === undefined) delete process.env.TOKENTRACKER_GROK_HOME;
     else process.env.TOKENTRACKER_GROK_HOME = prevTokenTrackerGrokHome;

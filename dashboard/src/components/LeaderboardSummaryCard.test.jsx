@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { LeaderboardMeChip } from "./LeaderboardSummaryCard.jsx";
 
 vi.mock("./LeaderboardAvatar.jsx", () => ({
-  LeaderboardAvatar: ({ displayName }) => <span data-testid="avatar">{displayName}</span>,
+  LeaderboardAvatar: ({ displayName, proActive }) => <span data-testid="avatar" data-pro-active={proActive === true}>{displayName}</span>,
 }));
 
 function renderChip({ rank, totalEntries }) {
@@ -33,5 +33,17 @@ describe("LeaderboardMeChip percentile badge", () => {
     renderChip({ rank: 900, totalEntries: 1000 });
     expect(screen.queryByText(/Top \d+%/)).not.toBeInTheDocument();
     expect(screen.getByText("#900")).toBeInTheDocument();
+  });
+
+  it("keeps the me chip's paid identity inside its existing profile action", () => {
+    const onOpenProfile = vi.fn();
+    const me = { rank: 2, user_id: "user-1", display_name: "Me User", pro_active: true };
+    const { rerender } = render(<LeaderboardMeChip me={me} totalEntries={100} onOpenProfile={onOpenProfile} />);
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(screen.getByRole("img", { name: "TokenTracker Cloud subscriber" })).toBeInTheDocument();
+    expect(screen.getByTestId("avatar")).toHaveAttribute("data-pro-active", "true");
+    rerender(<LeaderboardMeChip me={{ ...me, pro_active: "true" }} totalEntries={100} onOpenProfile={onOpenProfile} />);
+    expect(screen.queryByRole("img", { name: "TokenTracker Cloud subscriber" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("avatar")).toHaveAttribute("data-pro-active", "false");
   });
 });

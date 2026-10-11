@@ -46,7 +46,9 @@ const cp = require("node:child_process");
     const { cmdInit } = require("../../src/commands/init");
 
     process.stdout.write = () => true;
-    await cmdInit(["--yes", "--no-auth", "--no-open", "--base-url", "https://example.invalid"]);
+    const publicAnon = [Buffer.from('{"alg":"HS256"}').toString("base64url"),
+      Buffer.from('{"role":"anon"}').toString("base64url"), "test-signature"].join(".");
+    await cmdInit(["--yes", "--no-auth", "--no-open", "--base-url", "https://example.invalid", "--anon-key", publicAnon]);
 
     assert.ok(errorListenerAttached, "expected spawn error handler");
   } finally {

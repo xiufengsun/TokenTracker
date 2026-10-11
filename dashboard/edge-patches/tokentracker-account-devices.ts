@@ -9,6 +9,7 @@
  * gateway, so we verify the signature ourselves before returning per-user data.
  */
 import { createClient } from "npm:@insforge/sdk";
+import { cloudReadAccess, cloudFailure, cloudHistoryFailure } from "./cloud/access.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -23,7 +24,7 @@ function json(data: unknown, status = 200) {
   });
 }
 
-function b64urlToBytes(s: string): Uint8Array {
+function b64urlToBytes(s: string): Uint8Array<ArrayBuffer> {
   const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
   const pad = (4 - (b64.length % 4)) % 4;
   const raw = atob(b64 + "=".repeat(pad));
@@ -211,6 +212,14 @@ export default async function (req: Request): Promise<Response> {
 
   const userId = await verifiedUserIdFromJwt(req.headers.get("Authorization"));
   if (!userId) return json({ error: "Unauthorized" }, 401);
+
+  let cloudAccess;
+  try { cloudAccess = await cloudReadAccess(client, userId, "daily"); }
+  catch { return json({ error: "Cloud access unavailable", code: "cloud_access_unavailable" }, 503); }
+  if (!cloudAccess.ok) return cloudFailure(cloudAccess, corsHeaders);
+  const historyFailure = cloudHistoryFailure(cloudAccess, to);
+  if (historyFailure) return cloudFailure(historyFailure, corsHeaders);
+  if (cloudAccess.available_from && from < cloudAccess.available_from) from = cloudAccess.available_from;
 
   let devices: DeviceRow[];
   try {

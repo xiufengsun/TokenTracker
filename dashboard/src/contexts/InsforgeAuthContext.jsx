@@ -1,29 +1,25 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { getOrCreateInsforgeClient, isCloudInsforgeConfigured } from "../lib/insforge-config";
+import {
+  allowInsforgeSessionRestore,
+  getInsforgeConfigurationError,
+  getInsforgeConnectionHost,
+  getOrCreateInsforgeClient,
+  INSFORGE_INSTANCE_CHANGED_EVENT,
+  isCloudInsforgeConfigured,
+  isCurrentInsforgeClient,
+  isOfficialInsforgeInstance,
+  shouldRestoreInsforgeSession,
+} from "../lib/insforge-config";
 import { clearCloudDeviceSession, setCloudUsageReady } from "../lib/cloud-sync-prefs";
 import { isLikelyExpiredAccessToken } from "../lib/auth-token";
 import { getPublicVisibility, invalidateAccountResponseCache } from "../lib/api";
-import { clearLocalApiAuthToken, getLocalApiAuthHeaders } from "../lib/local-api-auth";
+import { clearLocalApiAuthToken } from "../lib/local-api-auth";
 import { copy } from "../lib/copy";
-import { getNativeOAuthBridge, isNativeLinuxApp, isNativeWindowsApp } from "../lib/native-bridge.js";
+import { getNativeOAuthBridge, isNativeApp, isNativeEmbed, isNativeLinuxApp, isNativeWindowsApp } from "../lib/native-bridge.js";
 import { restoreInsforgeUser } from "../lib/insforge-session-recovery.mjs";
+import { clearCloudPromptBackendState, cloudPromptOwnerFromToken } from "../lib/cloud-prompt-policy.js";
 
 const InsforgeAuthContext = createContext(null);
-
-// Tells the local server whether the next /auth/callback belongs to the app.
-async function putNativeAuthMarker(native) {
-  try {
-    const authHeaders = await getLocalApiAuthHeaders();
-    const response = await fetch("/api/auth-bridge/verifier", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", ...authHeaders },
-      body: JSON.stringify({ native }),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
 
 /** Pick a human-readable name from the InsForge user object (OAuth metadata). */
 function pickDisplayNameFromUser(user) {
@@ -87,6 +83,20 @@ export function InsforgeAuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const changed = () => {
+      setUser(null);
+      setClient(null);
+      setLoading(false);
+      invalidateAccountResponseCache();
+      clearCloudDeviceSession();
+      clearLocalApiAuthToken();
+      clearCloudPromptBackendState();
+    };
+    window.addEventListener(INSFORGE_INSTANCE_CHANGED_EVENT, changed);
+    return () => window.removeEventListener(INSFORGE_INSTANCE_CHANGED_EVENT, changed);
+  }, []);
+
+  useEffect(() => {
     invalidateAccountResponseCache();
   }, [user?.id]);
 
@@ -102,6 +112,11 @@ export function InsforgeAuthProvider({ children }) {
 
   useEffect(() => {
     if (!client) return;
+    if (!shouldRestoreInsforgeSession()) {
+      setUser(null);
+      setLoading(false);
+      return;
+    }
     let active = true;
     setLoading(true);
     (async () => {
@@ -125,7 +140,7 @@ export function InsforgeAuthProvider({ children }) {
   }, [client]);
 
   const refreshUser = useCallback(async () => {
-    if (!client) return;
+    if (!client || !isCurrentInsforgeClient(client)) return;
     try {
       let { data, error } = await client.auth.getCurrentUser();
       if (!error && !data?.user) {
@@ -135,56 +150,40 @@ export function InsforgeAuthProvider({ children }) {
         error = again.error;
       }
       if (error) {
-        setUser(null);
+        if (isCurrentInsforgeClient(client)) setUser(null);
         return;
       }
-      setUser(data?.user ?? null);
+      if (isCurrentInsforgeClient(client)) setUser(data?.user ?? null);
     } catch {
-      setUser(null);
+      if (isCurrentInsforgeClient(client)) setUser(null);
     }
   }, [client]);
 
   const signInWithOAuth = useCallback(
     async (provider, redirectToOverride) => {
-      if (!client) return { error: new Error("InsForge client not configured") };
+      if (!client || !isCurrentInsforgeClient(client)) return { error: new Error(copy("instance.configuration.changed")) };
       const nativeBridge = getNativeOAuthBridge();
+      if (typeof nativeBridge?.postMessage !== "function"
+        && (isNativeApp() || isNativeEmbed() || isNativeWindowsApp() || isNativeLinuxApp())) {
+        return { error: new Error(copy("login.oauth.desktop_start_failed")) };
+      }
       if (nativeBridge) {
-        // Native desktop app (macOS WKWebView / Windows WebView2 / Linux Tauri):
-        // open the system browser for OAuth. PKCE must be initialized in the same
-        // context that handles the callback. The callback MUST land on /auth/callback
-        // — only that page relays the code back into the app via tokentracker://.
-        //
-        // A caller can compute its redirect before the Windows nativeOAuth shim
-        // appears, which sends the browser to "/" and the login never completes.
-        // Pin /auth/callback for Windows and Linux and ignore redirectToOverride.
-        // macOS already passes /auth/callback, so its override is left intact.
-        const redirectTo = isNativeWindowsApp() || isNativeLinuxApp()
-          ? `${window.location.origin}/auth/callback`
-          : typeof redirectToOverride === "string" && redirectToOverride.trim()
-            ? redirectToOverride.trim()
-            : `${window.location.origin}/auth/callback`;
+        // The native receiver returns the code to this WebView's current local
+        // origin. PKCE stays here; self-hosted codes never visit a hosted relay.
         const result = await client.auth.signInWithOAuth({
           provider,
-          redirectTo,
+          redirectTo: "tokentracker://auth/callback",
           // @ts-expect-error - skipBrowserRedirect is supported but not in types
           skipBrowserRedirect: true,
         });
+        if (!isCurrentInsforgeClient(client)) {
+          return { error: new Error(copy("instance.configuration.changed")) };
+        }
         if (result.data?.url) {
-          // Tell the local server that the next /auth/callback is a native app flow.
-          // The callback page (in system browser) checks this flag to relay code back to app.
-          // Without the marker the callback page tries to exchange the code in the
-          // browser, which has no PKCE verifier, so the sign-in can never finish.
-          // Linux stops here; macOS/Windows keep their best-effort behavior.
-          const markerStored = await putNativeAuthMarker(true);
-          if (!markerStored && isNativeLinuxApp()) {
-            return { error: new Error(copy("login.oauth.desktop_start_failed")) };
-          }
           try {
             // Linux's Tauri command rejects when the system browser can't be opened.
             await nativeBridge.postMessage(result.data.url);
           } catch (err) {
-            // Don't leave the marker to pull an unrelated browser sign-in into the app.
-            await putNativeAuthMarker(false);
             return { error: err instanceof Error ? err : new Error(String(err)) };
           }
         }
@@ -207,9 +206,10 @@ export function InsforgeAuthProvider({ children }) {
 
   const signInWithPassword = useCallback(
     async (request) => {
-      if (!client) return { data: null, error: new Error("InsForge client not configured") };
+      if (!client || !isCurrentInsforgeClient(client)) return { data: null, error: new Error(copy("instance.configuration.changed")) };
       const { data, error } = await client.auth.signInWithPassword(request);
-      if (data?.user) setUser(data.user);
+      if (!isCurrentInsforgeClient(client)) return { data: null, error: new Error(copy("instance.configuration.changed")) };
+      if (data?.user) { allowInsforgeSessionRestore(); setUser(data.user); }
       return { data, error };
     },
     [client],
@@ -217,9 +217,10 @@ export function InsforgeAuthProvider({ children }) {
 
   const signUp = useCallback(
     async (request) => {
-      if (!client) return { data: null, error: new Error("InsForge client not configured") };
+      if (!client || !isCurrentInsforgeClient(client)) return { data: null, error: new Error(copy("instance.configuration.changed")) };
       const { data, error } = await client.auth.signUp(request);
-      if (data?.user && data?.accessToken) setUser(data.user);
+      if (!isCurrentInsforgeClient(client)) return { data: null, error: new Error(copy("instance.configuration.changed")) };
+      if (data?.user && data?.accessToken) { allowInsforgeSessionRestore(); setUser(data.user); }
       return { data, error };
     },
     [client],
@@ -227,7 +228,7 @@ export function InsforgeAuthProvider({ children }) {
 
   const sendResetPasswordEmail = useCallback(
     async (request) => {
-      if (!client) return { data: null, error: new Error("InsForge client not configured") };
+      if (!client || !isCurrentInsforgeClient(client)) return { data: null, error: new Error(copy("instance.configuration.changed")) };
       return client.auth.sendResetPasswordEmail(request);
     },
     [client],
@@ -235,7 +236,7 @@ export function InsforgeAuthProvider({ children }) {
 
   const exchangeResetPasswordToken = useCallback(
     async (request) => {
-      if (!client) return { data: null, error: new Error("InsForge client not configured") };
+      if (!client || !isCurrentInsforgeClient(client)) return { data: null, error: new Error(copy("instance.configuration.changed")) };
       return client.auth.exchangeResetPasswordToken(request);
     },
     [client],
@@ -243,14 +244,14 @@ export function InsforgeAuthProvider({ children }) {
 
   const resetPassword = useCallback(
     async (request) => {
-      if (!client) return { data: null, error: new Error("InsForge client not configured") };
+      if (!client || !isCurrentInsforgeClient(client)) return { data: null, error: new Error(copy("instance.configuration.changed")) };
       return client.auth.resetPassword(request);
     },
     [client],
   );
 
   const getPublicAuthConfig = useCallback(async () => {
-    if (!client) return { data: null, error: new Error("InsForge client not configured") };
+    if (!client || !isCurrentInsforgeClient(client)) return { data: null, error: new Error(copy("instance.configuration.changed")) };
     return client.auth.getPublicAuthConfig();
   }, [client]);
 
@@ -270,8 +271,12 @@ export function InsforgeAuthProvider({ children }) {
   }, [client]);
 
   const getAccessToken = useCallback(async () => {
-    return resolveInsforgeClientAccessToken(client);
-  }, [client]);
+    if (!client || !isCurrentInsforgeClient(client)) return null;
+    const token = await resolveInsforgeClientAccessToken(client);
+    if (!isCurrentInsforgeClient(client)) return null;
+    if (user?.id && cloudPromptOwnerFromToken(token) !== user.id) return null;
+    return token;
+  }, [client, user?.id]);
 
   // Unified display name: cloud custom name > OAuth provider name.
   // Fetched once when user signs in; updated via refreshDisplayName().
@@ -280,7 +285,7 @@ export function InsforgeAuthProvider({ children }) {
   const authDisplayName = useMemo(() => pickDisplayNameFromUser(user), [user]);
 
   useEffect(() => {
-    if (!user || !client) {
+    if (!user || !client || !isOfficialInsforgeInstance()) {
       setCloudDisplayName(null);
       setDisplayNameResolved(false);
       return;
@@ -317,10 +322,12 @@ export function InsforgeAuthProvider({ children }) {
     if (!isCloudInsforgeConfigured() || !client) {
       return {
         enabled: false,
+        configurationError: getInsforgeConfigurationError(),
+        connectionHost: getInsforgeConnectionHost(),
         client: null,
         user: null,
         signedIn: false,
-        loading: false,
+        loading: isCloudInsforgeConfigured() && loading,
         displayName: "",
         refreshUser: async () => {},
         refreshDisplayName: async () => {},
@@ -337,6 +344,8 @@ export function InsforgeAuthProvider({ children }) {
     }
     return {
       enabled: true,
+      configurationError: null,
+      connectionHost: getInsforgeConnectionHost(),
       client,
       user,
       signedIn: Boolean(user),

@@ -13,10 +13,11 @@ import {
   isMockEnabled,
 } from "./mock-data";
 import { getInsforgeRemoteUrl, getInsforgeAnonKey } from "./insforge-config";
-import { isValidJwtShape } from "./auth-token";
+import { isValidJwtShape, resolveAuthAccessToken, type AuthTokenProvider } from "./auth-token";
 import { getLocalApiAuthHeaders } from "./local-api-auth";
 import { expandHeatmapCompact } from "./heatmap-compact";
 import { functionUrlFor, fetchFunctionResponse } from "./function-url";
+import { clearCloudPromptFailure, recordCloudPromptFailure } from "./cloud-prompt-policy.js";
 
 type AnyRecord = Record<string, any>;
 
@@ -33,6 +34,10 @@ const SESSION_INSIGHTS_RESPONSE_TTL_MS = 5 * 60_000;
 const SESSION_INSIGHTS_RESPONSE_STALE_IF_ERROR_MS = 15 * 60_000;
 const verifiedAccountTokens = new Set<string>();
 let accountCacheGeneration = 0;
+function assertBackendInstance(baseUrl: string, anonKey: string) {
+  if (baseUrl === getInsforgeRemoteUrl() && anonKey === getInsforgeAnonKey()) return;
+  throw Object.assign(new Error("instance_changed"), { code: "instance_changed", status: 409 });
+}
 
 function accountIdentity(accessToken: string) {
   try {
@@ -70,22 +75,28 @@ function coalesceJsonGet(key: string, request: () => Promise<any>) {
 function cachedAccountJsonGet(url: URL, accessToken: string, request: () => Promise<any>) {
   const params = new URLSearchParams(url.searchParams);
   params.sort();
-  const key = `${url.origin}${url.pathname}?${params}\0${accountIdentity(accessToken)}`;
+  const anonEpoch = getInsforgeAnonKey();
+  const instanceBase = getInsforgeRemoteUrl();
+  const key = `${url.origin}${url.pathname}?${params}\0${accountIdentity(accessToken)}\0${anonEpoch}`;
   const generation = accountCacheGeneration;
   const now = Date.now();
   const cached = accountResponseCache.get(key);
   const ttl = url.pathname.endsWith("tokentracker-account-summary")
     ? ACCOUNT_SUMMARY_RESPONSE_TTL_MS : ACCOUNT_RESPONSE_TTL_MS;
-  const tokenKey = `${url.origin}\0${accessToken}`;
+  const tokenKey = `${url.origin}\0${accessToken}\0${anonEpoch}`;
   const authenticated = verifiedAccountTokens.has(tokenKey);
   if (authenticated && cached && now - cached.fetchedAt < ttl) {
-    return Promise.resolve(structuredClone(cached.value));
+    return Promise.resolve(structuredClone(cached.value)).then((value) => {
+      assertBackendInstance(instanceBase, anonEpoch);
+      return value;
+    });
   }
 
   // An unseen JWT must reach the server before it can reuse data for its sub.
   return coalesceJsonGet(`${key}\0${generation}\0${authenticated ? "verified" : accessToken}`, async () => {
     try {
       const value = await request();
+      assertBackendInstance(instanceBase, anonEpoch);
       if (generation !== accountCacheGeneration) return value;
       verifiedAccountTokens.add(tokenKey);
       if (verifiedAccountTokens.size > 128) verifiedAccountTokens.delete(verifiedAccountTokens.values().next().value!);
@@ -98,6 +109,7 @@ function cachedAccountJsonGet(url: URL, accessToken: string, request: () => Prom
       }
       return value;
     } catch (error) {
+      assertBackendInstance(instanceBase, anonEpoch);
       const status = Number((error as any)?.status) || 0;
       if (status === 401 || status === 403) {
         invalidateAccountResponseCache();
@@ -357,12 +369,15 @@ async function fetchInsforgeFunction(slug: string, options: {
     cache: options.cache,
     ...(options.body != null ? { body: JSON.stringify(options.body) } : {}),
   });
+  assertBackendInstance(baseUrl, anonKey);
   if (!res.ok) {
     const err: any = new Error(`Request failed with HTTP ${res.status}`);
     err.status = res.status;
     throw err;
   }
-  return res.json();
+  const data = await res.json();
+  assertBackendInstance(baseUrl, anonKey);
+  return data;
 }
 
 export async function getLeaderboard({
@@ -838,14 +853,20 @@ const ACCOUNT_PATHS = {
 async function fetchAccountFunction(
   slug: string,
   params: AnyRecord | undefined,
-  accessToken: string,
+  auth: AuthTokenProvider,
 ) {
+  const baseUrl = getInsforgeRemoteUrl();
+  const anonKey = getInsforgeAnonKey();
+  const assertInstance = () => {
+    assertBackendInstance(baseUrl, anonKey);
+  };
+  const accessToken = typeof auth === "string" ? auth.trim() : await resolveAuthAccessToken(auth);
+  assertInstance();
   if (!accessToken || !isValidJwtShape(accessToken)) {
     const err: any = new Error("Account view requires a signed-in user");
     err.status = 401;
     throw err;
   }
-  const baseUrl = getInsforgeRemoteUrl();
   if (!baseUrl) {
     const err: any = new Error("InsForge base URL not configured");
     err.status = 0;
@@ -863,22 +884,34 @@ async function fetchAccountFunction(
     Accept: "application/json",
     Authorization: `Bearer ${accessToken}`,
   };
-  const anonKey = getInsforgeAnonKey();
   if (anonKey) headers.apikey = anonKey;
-  return cachedAccountJsonGet(url, accessToken, async () => {
+  const result = await cachedAccountJsonGet(url, accessToken, async () => {
+    assertInstance();
     const response = await fetchFunctionResponse(url.toString(), {
       method: "GET",
       headers,
       cache: "no-store",
     });
+    assertInstance();
     if (!response.ok) {
       const err: any = new Error(`Request failed with HTTP ${response.status}`);
       err.status = response.status;
+      const denied = await response.json().catch(() => null);
+      assertInstance();
+      if (typeof denied?.code === "string") {
+        err.code = denied.code;
+        if (baseUrl === getInsforgeRemoteUrl())
+          recordCloudPromptFailure(accountIdentity(accessToken), denied.code, denied.membership, slug);
+      }
       throw err;
     }
     const data = await response.json();
+    assertInstance();
+    if (baseUrl === getInsforgeRemoteUrl()) clearCloudPromptFailure(accountIdentity(accessToken), slug);
     return slug === ACCOUNT_PATHS.heatmap ? expandHeatmapCompact(data) : data;
   });
+  assertInstance();
+  return result;
 }
 
 export async function fetchCloudUsageSummary({

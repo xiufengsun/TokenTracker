@@ -151,6 +151,83 @@ export function postNativeMessage(message) {
   return post(message);
 }
 
+const CLOUD_EXPORT_EVENT = "tokentracker:cloud-export-result";
+const CLOUD_EXPORT_MAX_BYTES = 5 * 1024 * 1024;
+const CLOUD_EXPORT_NAME = /^tokentracker-cloud-[A-Za-z0-9][A-Za-z0-9_-]{0,150}\.(csv|json)$/;
+
+function cloudExportError(code) {
+  const error = new Error(code);
+  error.code = code;
+  return error;
+}
+
+/** Native saves acknowledge the actual write. Browser callers use their Blob fallback. */
+export function saveCloudUsageExport({ filename, content, format, signal }) {
+  const native = typeof window !== "undefined" && (
+    isNativeEmbed() || isNativeWindowsApp() || isNativeLinuxApp() || isNativeApp()
+  );
+  if (!native) return Promise.resolve(null);
+  if (signal?.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+  if ((format !== "csv" && format !== "json") || typeof filename !== "string"
+    || !CLOUD_EXPORT_NAME.test(filename) || !filename.endsWith(`.${format}`)
+    || typeof content !== "string" || !content || content.includes("\0")
+    || new TextEncoder().encode(content).byteLength > CLOUD_EXPORT_MAX_BYTES) {
+    return Promise.reject(cloudExportError("invalid_export"));
+  }
+
+  const mac = window.webkit?.messageHandlers?.nativeBridge;
+  const win = window.chrome?.webview;
+  const invoke = window.__TAURI_INTERNALS__?.invoke;
+  if (window.__TOKENTRACKER_CLOUD_EXPORT__ !== true
+    || !(typeof mac?.postMessage === "function" || typeof win?.postMessage === "function"
+      || typeof invoke === "function")) {
+    return Promise.reject(cloudExportError("unsupported"));
+  }
+  const requestId = crypto.randomUUID();
+  const stem = filename.slice(0, -(format.length + 1));
+  const payload = { type: "saveCloudUsageExport", requestId, filename, content, format };
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer;
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      window.removeEventListener(CLOUD_EXPORT_EVENT, receive);
+      signal?.removeEventListener("abort", abort);
+      if (error) reject(error);
+      else resolve(result);
+    };
+    const abort = () => finish(new DOMException("Aborted", "AbortError"));
+    const acknowledge = (detail) => {
+      if (!detail || detail.requestId !== requestId) return;
+      const savedName = detail.filename;
+      const collisionName = typeof savedName === "string" && savedName.startsWith(`${stem}-`)
+        && /^-[1-9]\d{0,2}\.(csv|json)$/.test(savedName.slice(stem.length)) && savedName.endsWith(`.${format}`);
+      if (detail.saved === true && (savedName === filename || collisionName)) {
+        finish(null, { saved: true, filename: detail.filename });
+      } else {
+        const code = ["invalid_export", "forbidden_source", "save_failed", "unsupported"]
+          .includes(detail.errorCode) ? detail.errorCode : "save_failed";
+        finish(cloudExportError(code));
+      }
+    };
+    const receive = (event) => acknowledge(event.detail);
+    window.addEventListener(CLOUD_EXPORT_EVENT, receive);
+    signal?.addEventListener("abort", abort, { once: true });
+    timer = setTimeout(() => finish(cloudExportError("save_timeout")), 15000);
+    if (signal?.aborted) { abort(); return; }
+    try {
+      if (typeof mac?.postMessage === "function") mac.postMessage(payload);
+      else if (typeof win?.postMessage === "function") win.postMessage(JSON.stringify(payload));
+      else Promise.resolve(invoke("save_cloud_usage_export", { message: payload }))
+        .then(acknowledge, () => finish(cloudExportError("save_failed")));
+    } catch {
+      finish(cloudExportError("save_failed"));
+    }
+  });
+}
+
 export function notifyNative({ title, body, id }) {
   return postNativeMessage({ type: "notify", title, body, id });
 }

@@ -19,6 +19,7 @@
  * MUST be mirrored to refresh.ts and src/lib/local-api.js.
  */
 import { createClient } from "npm:@insforge/sdk";
+import { readProBadges } from "./cloud/pro.ts";
 
 const SOURCES_WITH_AUTHORITATIVE_COST = new Set(["grok", "cline"]);
 
@@ -774,7 +775,7 @@ export default async function (req: Request): Promise<Response> {
       p_user_id: userId,
       p_include_unearned: true,
     });
-    if (error) return json({ error: error.message || "badge lookup failed" }, 500);
+    if (error) return json({ error: "Failed to fetch badges" }, 500);
     return json({
       badges: Array.isArray(data) ? data : [],
       badges_include_unearned: true,
@@ -803,7 +804,7 @@ export default async function (req: Request): Promise<Response> {
   // anonymous/github flags + url from settings. Badges ride along in the same
   // round-trip: unearned (tier-0 progress) rows are included ONLY for the
   // verified owner. Fail-soft — a badges hiccup must not 500 the profile.
-  const [settingsRes, profileRes, badgesRes] = await Promise.all([
+  const [settingsRes, profileRes, badgesRes, proBadges] = await Promise.all([
     client.database
       .from("tokentracker_user_settings")
       .select("leaderboard_anonymous, github_url, show_github_url")
@@ -820,6 +821,7 @@ export default async function (req: Request): Promise<Response> {
         (res: { data?: unknown; error?: unknown }) => res,
         () => ({ data: null, error: true }),
       ),
+    readProBadges(client, [userId]),
   ]);
   const badges = Array.isArray((badgesRes as { data?: unknown }).data)
     ? ((badgesRes as { data?: unknown }).data as Array<Record<string, unknown>>)
@@ -892,8 +894,8 @@ export default async function (req: Request): Promise<Response> {
       timeZone,
       timeZoneOffsetMinutes,
     );
-  } catch (e) {
-    return json({ error: (e as Error).message || "scan failed" }, 500);
+  } catch {
+    return json({ error: "Failed to fetch profile" }, 500);
   }
 
   // ── Aggregate into the modal's shape. Two parallel passes:
@@ -1017,6 +1019,7 @@ export default async function (req: Request): Promise<Response> {
       avatar_url: avatarUrl,
       github_url: githubUrl,
       is_anonymous: isAnonymous,
+      pro_active: !isAnonymous && proBadges[userId] === true,
       rank: snap?.rank ?? null,
     },
     period: {

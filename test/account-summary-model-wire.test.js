@@ -64,6 +64,12 @@ const fixture = {
 function loadEdge(endpoint, data, { legacy = false, mutation } = {}) {
   let source = fs.readFileSync(path.join(edgeDir, `tokentracker-account-${endpoint}.ts`), "utf8");
   source = source.replace('import { createClient } from "npm:@insforge/sdk";', "const createClient = __createClient;");
+  // Keep the real guard helper in this VM; the transport fixture represents
+  // preview membership. Entitlement behavior is tested with PostgreSQL and
+  // signed JWTs in cloud-access-database/edges.
+  const access = fs.readFileSync(path.join(edgeDir, "cloud/access.ts"), "utf8")
+    .replace(/^import type .*;$/m, "").replaceAll("export ", "");
+  source = source.replace('import { cloudReadAccess, cloudFailure, cloudHistoryFailure } from "./cloud/access.ts";', access);
   const rpc = endpoint.replaceAll("-", "_");
   const decoder = endpoint === "summary" ? "decodeSummaryWire" : "decodeModelBreakdownWire";
   if (legacy) {
@@ -80,7 +86,9 @@ function loadEdge(endpoint, data, { legacy = false, mutation } = {}) {
     module: { exports: {} }, exports: {}, Request, Response, URL, Headers, Date: FixedDate,
     TextEncoder, TextDecoder, Uint8Array, atob, crypto: webcrypto,
     Deno: { env: { get: (name) => ({ INSFORGE_BASE_URL: "https://test.invalid", INSFORGE_SERVICE_ROLE_KEY: "test-service-role", JWT_SECRET: "test-jwt-secret" })[name] } },
-    __createClient: () => ({ database: { rpc: async (name, args) => { calls.push({ name, args }); return { data, error: null }; } } }),
+    __createClient: () => ({ database: { rpc: async (name, args) => {
+      if (name === "cloud_account_access") return { data: { ok: true, available_from: null }, error: null };
+      calls.push({ name, args }); return { data, error: null }; } } }),
   };
   context.exports = context.module.exports;
   vm.runInNewContext(code, context);

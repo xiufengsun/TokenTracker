@@ -12,9 +12,9 @@ test("resolveRuntimeConfig prefers CLI flags over config and env", () => {
   });
 
   assert.equal(result.baseUrl, "https://cli.example");
-  assert.equal(result.deviceToken, "cfg");
+  assert.equal(result.deviceToken, null, "an override must not reuse another instance's device token");
   assert.equal(result.sources.baseUrl, "cli");
-  assert.equal(result.sources.deviceToken, "config");
+  assert.equal(result.sources.deviceToken, "default");
 });
 
 test("resolveRuntimeConfig ignores non-TOKENTRACKER env inputs", () => {

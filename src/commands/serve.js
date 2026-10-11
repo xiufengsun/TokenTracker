@@ -159,7 +159,7 @@ async function cmdServe(argv) {
       const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
       // CORS preflight
-      if (req.method === "OPTIONS") {
+      if (req.method === "OPTIONS" && !url.pathname.startsWith("/api/auth/")) {
         res.writeHead(204, {
           "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type, Authorization",
@@ -179,12 +179,12 @@ async function cmdServe(argv) {
       }
 
       // Static files
-      const served = await serveStaticFile(dashboardDir, url.pathname, res);
+      const served = await serveStaticFile(dashboardDir, url.pathname, res, { localRuntimeConfig: true });
       if (served) return;
 
       // SPA fallback
       if (shouldServeSpaFallback(req, url)) {
-        await serveStaticFile(dashboardDir, "/index.html", res);
+        await serveStaticFile(dashboardDir, "/index.html", res, { localRuntimeConfig: true });
         return;
       }
 

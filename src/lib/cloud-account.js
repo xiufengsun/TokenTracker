@@ -383,6 +383,9 @@ async function fetchAccountFunction({
     if (!res || !res.ok) {
       const err = new Error(`Account fetch failed with HTTP ${res ? res.status : "?"}`);
       err.status = res ? res.status : 0;
+      const failure = res?.json ? await res.json().catch(() => ({})) : {};
+      if (typeof failure?.code === "string") err.code = failure.code;
+      if (typeof failure?.recovery_url === "string") err.recoveryUrl = failure.recovery_url;
       throw err;
     }
   const data = await res.json();
@@ -495,7 +498,7 @@ async function fetchAccountUsage({
         }
         return JSON.stringify(data);
       } catch (error) {
-        if ((error.status === 401 || error.status === 403) && sessionAtStart === sessionGeneration) {
+        if (error.status === 401 && sessionAtStart === sessionGeneration) {
           invalidateCloudAccountPayloadCache({ sessionChanged: true });
           error.invalidatedSessionGeneration = sessionGeneration;
         }

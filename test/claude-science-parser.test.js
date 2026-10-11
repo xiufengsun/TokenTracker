@@ -95,7 +95,7 @@ test("resolveClaudeScienceDbPath honors overrides and defaults to ~/.claude-scie
   );
   assert.equal(
     resolveClaudeScienceDbPath({ home: "/home/u", env: { CLAUDE_SCIENCE_HOME: "/data/cs" } }),
-    path.join("/data/cs", "operon-cli.db"),
+    path.resolve("/data/cs", "operon-cli.db"),
   );
   assert.equal(
     resolveClaudeScienceDbPath({ home: "/home/u", env: { CLAUDE_SCIENCE_DB_PATH: "/x/y.db" } }),
@@ -427,7 +427,9 @@ test("readClaudeScienceFrames snapshots a WAL DB reached over a WSL UNC path", a
   assert.equal(direct.result.length, 1);
   assert.equal(direct.created.length, 0, "local path must not be snapshotted");
 
-  const uncPath = `/${dbPath}`; // leading extra slash → isUncPath() sees "//…"
+  // Both aliases hit isUncPath's prefix branch while remaining readable on
+  // the host; this fixture does not establish live WSL mount behavior.
+  const uncPath = process.platform === "win32" ? path.toNamespacedPath(dbPath) : `/${dbPath}`;
   const unc = await countSnapshots(t, () => readClaudeScienceFrames(uncPath));
   assert.equal(unc.result.length, 1, "UNC/WAL DB must be snapshotted and read, not skipped");
   assert.equal(unc.created.length, 1, "UNC path must be snapshotted, not read in place");

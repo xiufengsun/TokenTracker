@@ -53,7 +53,9 @@ import { useAccountDevices } from "../hooks/use-account-devices.js";
 import { DeviceUsageCard } from "../ui/dashboard/components/DeviceUsageCard.jsx";
 import { formatDeviceLabel } from "../lib/device-label.js";
 import { CLOUD_USAGE_SYNCED_EVENT, getCurrentDeviceId } from "../lib/cloud-sync-prefs";
+import { recordCloudPromptIntent } from "../lib/cloud-prompt-policy.js";
 import { ShareModal } from "../ui/share/ShareModal";
+import { CloudUsageExport } from "../components/cloud/CloudUsageExport.jsx";
 import { useShareCardData } from "../ui/share/use-share-card-data";
 import { runSingleFlight } from "../lib/single-flight";
 import {
@@ -855,6 +857,7 @@ export function DashboardPage({
 
   const [prevPeriod, setPrevPeriod] = useState("month");
   const handlePeriodChange = useCallback((p) => {
+    if (accountView && !publicMode) recordCloudPromptIntent(auth?.userId, "history");
     if (p === "custom") {
       setPrevPeriod((prev) => (prev === "custom" ? "month" : prev));
       setSelectedPeriod((cur) => {
@@ -868,14 +871,15 @@ export function DashboardPage({
       setPrevPeriod(p);
       setCustomRangeOpen(false);
     }
-  }, [customFrom, customTo]);
+  }, [customFrom, customTo, accountView, publicMode, auth?.userId]);
 
   const handleCustomRangeApply = useCallback((fromDate, toDate) => {
+    if (accountView && !publicMode) recordCloudPromptIntent(auth?.userId, "history");
     setCustomFrom(fromDate);
     setCustomTo(toDate);
     setSelectedPeriod("custom");
     setCustomRangeOpen(false);
-  }, []);
+  }, [accountView, publicMode, auth?.userId]);
 
   const handleCustomRangeOpenChange = useCallback((open) => {
     setCustomRangeOpen(open);
@@ -1381,6 +1385,9 @@ export function DashboardPage({
 
   return (
     <>
+    {accountView && !publicMode ? <div className="mb-3 flex justify-end">
+      <CloudUsageExport from={from} to={to} deviceId={selectedDevice} />
+    </div> : null}
     <DashboardView
       copy={copy}
       onOpenShare={openShareModal}
@@ -1481,7 +1488,10 @@ export function DashboardPage({
       closeCostModal={closeCostModal}
       deviceOptions={deviceOptions}
       selectedDevice={selectedDevice || ""}
-      onDeviceChange={(v) => setSelectedDevice(v || null)}
+      onDeviceChange={(v) => {
+        if (accountView && !publicMode) recordCloudPromptIntent(auth?.userId, "view");
+        setSelectedDevice(v || null);
+      }}
       deviceUsageBlock={deviceUsageBlock}
       leftCardOrder={dashboardCardOrder.left.order}
       onLeftReorder={dashboardCardOrder.left.reorder}

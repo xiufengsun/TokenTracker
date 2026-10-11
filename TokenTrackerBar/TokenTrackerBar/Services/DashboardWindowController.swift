@@ -48,6 +48,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
 
     /// Shared process pool — ensures cookies are consistent across webView recreations
     private static let sharedProcessPool = WKProcessPool()
+    private static let qaDataStore = WKWebsiteDataStore.nonPersistent()
 
     private override init() {
         super.init()
@@ -92,11 +93,16 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
 
         // Create WKWebView with persistent data store and shared process pool
         let contentController = WKUserContentController()
+        if let profile = NativeQAProfile.current {
+            guard let script = try? profile.transportScript() else { fatalError("Native QA transport unavailable") }
+            contentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         contentController.add(self, name: "nativeOAuth")
         contentController.add(self, name: "nativeBridge")
         // Earliest paint: transparent root so NSVisualEffectView is visible (index.html also sets native-app via nativeBridge).
         let transparencyBootstrap = """
         (function(){
+          window.__TOKENTRACKER_CLOUD_EXPORT__ = true;
           document.documentElement.classList.add('native-app');
           var s=document.createElement('style');
           s.textContent='html,html.dark{background:transparent!important}body{background:transparent!important}';
@@ -112,7 +118,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         let webConfig = WKWebViewConfiguration()
         webConfig.userContentController = contentController
         webConfig.processPool = Self.sharedProcessPool
-        webConfig.websiteDataStore = WKWebsiteDataStore.default()
+        webConfig.websiteDataStore = NativeQAProfile.current == nil ? WKWebsiteDataStore.default() : Self.qaDataStore
         let webView = WKWebView(frame: .zero, configuration: webConfig)
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -166,7 +172,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
             defer: false
         )
         window.minSize = NSSize(width: 800, height: 600)
-        window.title = "TokenTracker"
+        window.title = NativeQAProfile.current == nil ? "TokenTracker" : "TokenTracker QA"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         let toolbar = NSToolbar(identifier: "DashboardToolbar")
@@ -186,7 +192,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         self.window = window
 
         // Wire bridge so SettingsPage can read/write menu-bar prefs
-        NativeBridge.shared.webView = webView
+        if NativeQAProfile.current == nil { NativeBridge.shared.webView = webView }
 
         // Always observe NSApp.effectiveAppearance so the frontend module-level cache stays current,
         // avoiding an async round trip to know the current system light/dark value when switching light -> system.
@@ -225,7 +231,11 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
             return
         }
         pendingDashboardURL = nil
-        webView?.load(URLRequest(url: url))
+        var request = URLRequest(url: url)
+        if let profile = NativeQAProfile.current {
+            request.setValue(profile.serverChallenge, forHTTPHeaderField: "X-TokenTracker-QA-Challenge")
+        }
+        webView?.load(request)
     }
 
     /// Match dashboard light/dark so native glass / `NSVisualEffectView` + window chrome follow the web theme.
@@ -484,7 +494,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
             webView.configuration.userContentController.removeScriptMessageHandler(forName: "nativeBridge")
             webView.removeFromSuperview()
         }
-        NativeBridge.shared.webView = nil
+        if NativeQAProfile.current == nil { NativeBridge.shared.webView = nil }
         closingWindow.delegate = nil
         closingWindow.contentView = nil
         loadingOverlay = nil
@@ -535,12 +545,39 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
     ) {
         let name = message.name
         let body = message.body
+        let sourceURL = message.frameInfo.request.url
+        let mainFrame = message.frameInfo.isMainFrame
+        let sender = message.webView
         Task { @MainActor [weak self] in
-            self?.handleScriptMessage(name: name, body: body)
+            self?.handleScriptMessage(name: name, body: body, sourceURL: sourceURL, mainFrame: mainFrame, sender: sender)
         }
     }
 
-    private func handleScriptMessage(name: String, body: Any) {
+    private func handleScriptMessage(name: String, body: Any, sourceURL: URL?, mainFrame: Bool, sender: WKWebView?) {
+        if name == "nativeBridge", let message = body as? [String: Any],
+           message["type"] as? String == "saveCloudUsageExport", let sender {
+            let expected = NativeQAProfile.current?.baseURL ?? URL(string: Constants.serverBaseURL)!
+            let permitted = CloudUsageExport.permitsSource(sourceURL, current: webView?.url, expected: expected,
+                                                          mainFrame: mainFrame, ownWebView: sender === webView)
+            NativeBridge.shared.saveCloudUsageExport(message: message, source: sender, permitted: permitted)
+            return
+        }
+        if let profile = NativeQAProfile.current {
+            guard name == "nativeBridge", mainFrame, let sourceURL, isLocalDashboardURL(sourceURL),
+                  let message = body as? [String: Any], profile.permitsNativeMessage(message) else {
+                let rejected = body as? [String: Any]
+                let rawType = rejected?["type"] as? String ?? ""
+                let rawKey = rejected?["key"] as? String ?? ""
+                let safeType = ["getSettings", "getSystemAppearance", "getPetSettings", "getNotificationStatus", "setChromeAppearance", "setSetting", "action"].contains(rawType) ? rawType : "unknown"
+                let safeKey = ["locale", "currency", "currencySymbol", "exchangeRate", "tokenUnitSystem"].contains(rawKey) ? rawKey : "unknown"
+                NSLog("Native QA guard rejected channelOK=%d mainFrame=%d sourcePresent=%d localOrigin=%d type=%@ key=%@", name == "nativeBridge", mainFrame, sourceURL != nil,
+                      sourceURL.map { isLocalDashboardURL($0) } ?? false, safeType, safeKey)
+                fatalError("Native QA script message rejected")
+            }
+            NativeBridge.shared.webView = webView
+            NativeBridge.shared.handle(message: message)
+            return
+        }
         if name == "nativeBridge" {
             if let message = body as? [String: Any],
                let messageType = message["type"] as? String,
@@ -588,6 +625,30 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         }
     }
 
+    func handleNativeQABillingReturn(order: String) {
+        guard let profile = NativeQAProfile.current, profile.ownedOrderIDs.contains(order) else {
+            fatalError("Native QA billing return rejected")
+        }
+        handleBillingReturn(order: order)
+    }
+
+    func handleBillingReturn(order: String) {
+        guard NativeBillingReturn.canonicalOrderID(order) == order else { return }
+        DashboardPresentationCoordinator.shared.showDashboard()
+        var components = URLComponents(string: Constants.serverBaseURL + "/billing/checkout")!
+        components.queryItems = [URLQueryItem(name: "order", value: order), URLQueryItem(name: "app", value: "1")]
+        loadDashboard(components.url!)
+    }
+
+    private func openExternalURL(_ url: URL) {
+        if let profile = NativeQAProfile.current {
+            Task { @MainActor in
+                guard await profile.approveExternalURL(url) else { fatalError("Native QA external URL rejected") }
+                NSWorkspace.shared.open(url)
+            }
+        } else { NSWorkspace.shared.open(url) }
+    }
+
     // MARK: - WKUIDelegate
 
     func webView(
@@ -597,7 +658,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
         if let url = navigationAction.request.url {
-            NSWorkspace.shared.open(url)
+            openExternalURL(url)
         }
         return nil
     }
@@ -610,6 +671,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         initiatedByFrame frame: WKFrameInfo,
         completionHandler: @escaping ([URL]?) -> Void
     ) {
+        guard NativeQAProfile.current == nil else { completionHandler(nil); return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = parameters.allowsDirectories
@@ -627,7 +689,11 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
     // MARK: - WKNavigationDelegate
 
     private func isLocalDashboardURL(_ url: URL) -> Bool {
-        url.host == "localhost" || url.host == "127.0.0.1"
+        if let profile = NativeQAProfile.current {
+            return url.scheme == "http" && url.host == "127.0.0.1" && url.port == profile.baseURL.port &&
+                url.user == nil && url.password == nil
+        }
+        return url.host == "localhost" || url.host == "127.0.0.1"
     }
 
     func webView(
@@ -644,6 +710,13 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
             decisionHandler(.allow)
             return
         }
+        if let profile = NativeQAProfile.current {
+            if url.absoluteString == "about:blank" { decisionHandler(.allow); return }
+            guard profile.permitsExternalURL(url) else { fatalError("Native QA navigation rejected") }
+            openExternalURL(url)
+            decisionHandler(.cancel)
+            return
+        }
 
         let isMainFrameNavigation = navigationAction.targetFrame?.isMainFrame ?? true
         // Only promote top-level user clicks to the system browser. Subframe
@@ -652,7 +725,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         if (url.scheme == "http" || url.scheme == "https"),
            navigationAction.navigationType == .linkActivated,
            isMainFrameNavigation {
-            NSWorkspace.shared.open(url)
+            openExternalURL(url)
             decisionHandler(.cancel)
             return
         }

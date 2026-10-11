@@ -771,7 +771,14 @@ function managedSkillPath(directory) {
 function copyDir(source, dest) {
   assertNotNested(source, dest);
   removePath(dest);
-  fs.cpSync(source, dest, { recursive: true, force: true });
+  // Node22's native recursive copy can terminate the process on Windows
+  // Unicode paths (nodejs/node#59636). A filter preserves every entry while
+  // selecting Node's JS directory walker; keep the synchronous safety guards.
+  fs.cpSync(source, dest, {
+    recursive: true,
+    force: true,
+    ...(process.platform === "win32" ? { filter: () => true } : {}),
+  });
 }
 
 function removeEmptyAncestors(startDir, stopDir) {

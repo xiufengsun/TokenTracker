@@ -435,7 +435,7 @@ internal sealed class DashboardWindow : Window
         // Top-level navigations away from the local server go to the system browser.
         core.NavigationStarting += (_, e) =>
         {
-            Log($"nav starting uri={e.Uri}");
+            Log($"nav starting uriPresent={!string.IsNullOrEmpty(e.Uri)} uriLen={e.Uri?.Length ?? 0}");
             if (Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri)
                 && uri.Scheme is "http" or "https"
                 && uri.Host is not ("127.0.0.1" or "localhost"))
@@ -449,7 +449,7 @@ internal sealed class DashboardWindow : Window
         {
             try
             {
-                Log($"nav completed uri={_webView.CoreWebView2.Source}");
+                Log($"nav completed uriPresent={!string.IsNullOrEmpty(_webView.CoreWebView2.Source)} uriLen={_webView.CoreWebView2.Source?.Length ?? 0}");
                 if (_oauthInFlight
                     && Uri.TryCreate(_webView.CoreWebView2.Source, UriKind.Absolute, out var completedUri)
                     && completedUri.AbsolutePath is "/" or "/dashboard")
@@ -470,12 +470,12 @@ internal sealed class DashboardWindow : Window
         // does, so we can observe the callback page's client-side redirect to /dashboard.
         core.HistoryChanged += (_, _) =>
         {
-            try { Log($"history changed uri={_webView.CoreWebView2.Source}"); } catch { }
+            try { Log($"history changed uriPresent={!string.IsNullOrEmpty(_webView.CoreWebView2.Source)} uriLen={_webView.CoreWebView2.Source?.Length ?? 0}"); } catch { }
         };
 
         // The injected script posts setting changes, and the injected title bar
         // (ApplyNativeChromeAsync) posts "win:*" for the window controls + drag.
-        core.WebMessageReceived += (_, e) =>
+        core.WebMessageReceived += async (sender, e) =>
         {
             string msg;
             try { msg = e.TryGetWebMessageAsString(); }
@@ -493,10 +493,29 @@ internal sealed class DashboardWindow : Window
                 {
                     using var doc = JsonDocument.Parse(msg);
                     if (!doc.RootElement.TryGetProperty("type", out var t)) return;
-                    if (t.GetString() == "oauth"
+                    if (t.GetString() == "saveCloudUsageExport")
+                    {
+                        // Core.WebMessageReceived is emitted by the top-level document;
+                        // iframe messages use the separate CoreWebView2Frame event.
+                        var requestId = doc.RootElement.TryGetProperty("requestId", out var id)
+                            && id.ValueKind == JsonValueKind.String ? id.GetString() ?? "" : "";
+                        if (!Guid.TryParseExact(requestId, "D", out _)) return;
+                        CloudUsageExportResult result;
+                        if (!ReferenceEquals(sender, core) || !ReferenceEquals(core, _webView.CoreWebView2)
+                            || !CloudUsageExport.PermitsSource(e.Source, core.Source, _server.BaseUrl))
+                            result = new(requestId, false, ErrorCode: "forbidden_source");
+                        else
+                        {
+                            try { result = CloudUsageExport.Save(doc.RootElement, CloudUsageExport.GetDownloadsDirectory()); }
+                            catch { result = new(requestId, false, ErrorCode: "save_failed"); }
+                        }
+                        var json = JsonSerializer.Serialize(result);
+                        await core.ExecuteScriptAsync("window.dispatchEvent(new CustomEvent('tokentracker:cloud-export-result',{detail:" + json + "}));");
+                    }
+                    else if (t.GetString() == "oauth"
                         && doc.RootElement.TryGetProperty("url", out var u) && u.GetString() is { } url)
                     {
-                        Log($"oauth open url={url}");
+                        Log($"oauth open urlPresent={!string.IsNullOrEmpty(url)} urlLen={url.Length}");
                         BeginNativeOAuth();
                         OpenInBrowser(url);
                     }
@@ -519,7 +538,17 @@ internal sealed class DashboardWindow : Window
                              && doc.RootElement.TryGetProperty("name", out var actionName)
                              && actionName.GetString() is { } name)
                     {
-                        NativeActionRequested?.Invoke(name);
+                        if (name == "openURL")
+                        {
+                            if (doc.RootElement.TryGetProperty("value", out var externalValue)
+                                && externalValue.GetString() is { } externalUrl
+                                && Uri.TryCreate(externalUrl, UriKind.Absolute, out var externalUri)
+                                && string.IsNullOrEmpty(externalUri.UserInfo)
+                                && (externalUri.Scheme == Uri.UriSchemeHttps
+                                    || (externalUri.Scheme == Uri.UriSchemeHttp && externalUri.IsLoopback)))
+                                OpenInBrowser(externalUri.AbsoluteUri);
+                        }
+                        else NativeActionRequested?.Invoke(name);
                     }
                     else if (t.GetString() == "nativeSetting"
                              && doc.RootElement.TryGetProperty("key", out var k)
@@ -596,6 +625,7 @@ internal sealed class DashboardWindow : Window
         //     rules apply — letting the acrylic backdrop show through.
         //  3. Wrap localStorage.setItem to notify native when tray-facing settings change.
         await core.AddScriptToExecuteOnDocumentCreatedAsync(
+            "window.__TOKENTRACKER_CLOUD_EXPORT__=true;" +
             "try{if(!localStorage.getItem('tokentracker-theme')){" +
             "localStorage.setItem('tokentracker-theme','dark');" +
             "document.documentElement.classList.add('dark');}" +
@@ -1032,11 +1062,18 @@ internal sealed class DashboardWindow : Window
             try
             {
                 var path = await _webView.CoreWebView2.ExecuteScriptAsync("location.pathname");
-                Log($"post-callback path={path} → reloading /?app=1");
+                Log($"post-callback pathPresent={!string.IsNullOrEmpty(path)} pathLen={path?.Length ?? 0}; reloading dashboard");
             }
             catch { /* window closed / page navigating */ }
             NavigateWhenServerReady("/?app=1");
         });
+    }
+
+    public void HandleBillingReturn(Guid order)
+    {
+        Log("HandleBillingReturn type=billing");
+        ShowDashboard();
+        NavigateWhenServerReady(NativeReturnUri.CheckoutPath(order));
     }
 
     /// <summary>Diagnostics → %LOCALAPPDATA%\TokenTracker\windows-host.log (shared with ServerManager).</summary>

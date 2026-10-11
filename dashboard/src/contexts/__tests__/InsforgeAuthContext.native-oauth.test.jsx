@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const AUTH_URL = "https://auth.example/authorize";
+const currentClient = vi.fn(() => true);
 const client = {
   auth: {
     signInWithOAuth: vi.fn(async () => ({ data: { url: AUTH_URL }, error: null })),
@@ -12,13 +13,19 @@ const client = {
 vi.mock("../../lib/insforge-config", () => ({
   getOrCreateInsforgeClient: () => client,
   isCloudInsforgeConfigured: () => true,
+  getInsforgeConfigurationError: () => null,
+  getInsforgeConnectionHost: () => null,
+  isOfficialInsforgeInstance: () => true,
+  INSFORGE_INSTANCE_CHANGED_EVENT: "tt.insforgeInstanceChanged",
+  isCurrentInsforgeClient: (...args) => currentClient(...args),
+  shouldRestoreInsforgeSession: () => true,
+  allowInsforgeSessionRestore: vi.fn(),
 }));
 vi.mock("../../lib/insforge-session-recovery.mjs", () => ({
   restoreInsforgeUser: async () => ({ data: { user: null }, error: null }),
 }));
 vi.mock("../../lib/local-api-auth", () => ({
   clearLocalApiAuthToken: vi.fn(),
-  getLocalApiAuthHeaders: async () => ({ "x-tokentracker-local-auth": "t" }),
 }));
 
 import { InsforgeAuthProvider, useInsforgeAuth } from "../InsforgeAuthContext.jsx";
@@ -42,6 +49,9 @@ describe("native OAuth sign-in", () => {
   let fetchMock;
 
   beforeEach(() => {
+    window.localStorage.clear();
+    currentClient.mockReturnValue(true);
+    client.auth.signInWithOAuth.mockReset().mockResolvedValue({ data: { url: AUTH_URL }, error: null });
     fetchMock = vi.fn(async () => ({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -50,58 +60,63 @@ describe("native OAuth sign-in", () => {
     vi.unstubAllGlobals();
     delete window.webkit;
     delete window.__TAURI_INTERNALS__;
+    window.localStorage.clear();
   });
 
-  it("opens the system browser on Linux once the app's marker is stored", async () => {
+  it("uses the exact scheme and keeps PKCE in the Linux WebView without a local marker", async () => {
     const invoke = vi.fn(async () => undefined);
     window.__TAURI_INTERNALS__ = { invoke };
-    const result = await renderAuth();
-
-    const outcome = await signIn(result);
-
+    const outcome = await signIn(await renderAuth());
     expect(outcome.error).toBeFalsy();
-    expect(fetchMock).toHaveBeenCalledWith("/api/auth-bridge/verifier", expect.objectContaining({ method: "PUT" }));
+    expect(client.auth.signInWithOAuth).toHaveBeenCalledWith({
+      provider: "github", redirectTo: "tokentracker://auth/callback", skipBrowserRedirect: true,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(invoke).toHaveBeenCalledWith("open_oauth", { url: AUTH_URL });
   });
 
-  it("does not open the browser on Linux when the marker is rejected", async () => {
-    fetchMock.mockResolvedValue({ ok: false });
-    const invoke = vi.fn(async () => undefined);
-    window.__TAURI_INTERNALS__ = { invoke };
-    const result = await renderAuth();
-
-    const outcome = await signIn(result);
-
-    expect(outcome.error.message).toBe("Could not start desktop sign-in. Please try again.");
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("reports a system browser that could not be opened and clears the marker", async () => {
-    window.__TAURI_INTERNALS__ = {
-      invoke: vi.fn(async () => {
-        throw "failed to open the system browser: xdg-open not found";
-      }),
-    };
-    const result = await renderAuth();
-
-    const outcome = await signIn(result);
-
-    expect(outcome.error.message).toMatch(/failed to open the system browser/);
-    const markerBodies = fetchMock.mock.calls
-      .filter(([path]) => path === "/api/auth-bridge/verifier")
-      .map(([, init]) => JSON.parse(init.body));
-    expect(markerBodies).toEqual([{ native: true }, { native: false }]);
-  });
-
-  it("keeps macOS/Windows best effort when the marker is rejected", async () => {
-    fetchMock.mockResolvedValue({ ok: false });
+  it("uses the same native scheme on macOS and Windows regardless of redirect override", async () => {
     const postMessage = vi.fn();
     window.webkit = { messageHandlers: { nativeOAuth: { postMessage } } };
     const result = await renderAuth();
-
-    const outcome = await signIn(result);
-
-    expect(outcome.error).toBeFalsy();
+    await act(async () => { await result.current.signInWithOAuth("github", "https://selfhost.example/auth/callback"); });
+    expect(client.auth.signInWithOAuth).toHaveBeenCalledWith({
+      provider: "github", redirectTo: "tokentracker://auth/callback", skipBrowserRedirect: true,
+    });
     expect(postMessage).toHaveBeenCalledWith(AUTH_URL);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing native opener without starting OAuth", async () => {
+    window.__TAURI_INTERNALS__ = {};
+    const outcome = await signIn(await renderAuth());
+    expect(outcome.error.message).toBe("Could not start desktop sign-in. Please try again.");
+    expect(client.auth.signInWithOAuth).not.toHaveBeenCalled();
+  });
+
+  it("reports a system browser failure without leaving a native marker", async () => {
+    window.__TAURI_INTERNALS__ = { invoke: vi.fn(async () => { throw new Error("browser unavailable"); }) };
+    const outcome = await signIn(await renderAuth());
+    expect(outcome.error.message).toBe("browser unavailable");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not open a URL if the selected backend changed while OAuth start awaited", async () => {
+    const postMessage = vi.fn();
+    window.webkit = { messageHandlers: { nativeOAuth: { postMessage } } };
+    const result = await renderAuth();
+    client.auth.signInWithOAuth.mockImplementationOnce(async () => {
+      currentClient.mockReturnValue(false);
+      return { data: { url: AUTH_URL }, error: null };
+    });
+    expect((await signIn(result)).error).toBeTruthy();
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps browser redirects on the current browser origin", async () => {
+    await signIn(await renderAuth());
+    expect(client.auth.signInWithOAuth).toHaveBeenCalledWith({
+      provider: "github", redirectTo: `${window.location.origin}/dashboard`,
+    });
   });
 });

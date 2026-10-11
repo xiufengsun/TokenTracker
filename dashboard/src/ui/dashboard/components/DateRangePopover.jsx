@@ -38,7 +38,7 @@ export function formatDateShort(dateStr, locale) {
  * Calendar-based date range picker content.
  * Renders two months side-by-side with range selection.
  */
-export function DateRangePopover({ from, to, onApply, onCancel }) {
+export function DateRangePopover({ from, to, onApply, onCancel, numberOfMonths = 2 }) {
   const initialRange = useMemo(() => {
     const result = { from: undefined, to: undefined };
     if (from) {
@@ -72,7 +72,8 @@ export function DateRangePopover({ from, to, onApply, onCancel }) {
         locale={dateLocale}
         selected={range}
         onSelect={setRange}
-        numberOfMonths={2}
+        numberOfMonths={numberOfMonths}
+        defaultMonth={initialRange.from}
         showOutsideDays={false}
         classNames={{
           root: "rdp-oai",

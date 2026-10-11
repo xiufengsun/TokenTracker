@@ -1,7 +1,7 @@
-import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Calendar, ChevronRight, Copy, Info, Loader2, RefreshCw, Search, X as XIcon } from "lucide-react";
 import { Input, Select } from "../ui/components";
-import { Popover } from "@base-ui/react/popover";
+import { Tooltip } from "@base-ui/react/tooltip";
 import { SearchableSelect } from "../ui/components/SearchableSelect.jsx";
 import { ProviderIcon } from "../ui/dashboard/components/ProviderIcon.jsx";
 import { HoverTooltip } from "../ui/components/HoverTooltip.jsx";
@@ -103,6 +103,28 @@ async function copyToClipboard(text) {
   return ok;
 }
 
+function SessionSummaryHelp() {
+  const [open, setOpen] = useState(false);
+  const descriptionId = useId();
+  return (
+    <Tooltip.Root open={open} onOpenChange={setOpen}>
+      <Tooltip.Trigger delay={150} closeDelay={100} closeOnClick={false}
+        onClick={() => setOpen(true)} aria-label={copy("sessions.summary.scope_help")}
+        aria-describedby={open ? descriptionId : undefined}
+        className="sessions-summary-help relative inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-oai-gray-500 hover:text-oai-black dark:text-oai-gray-400 dark:hover:text-white before:absolute before:-inset-2 before:content-['']">
+        <Info className="h-3.5 w-3.5" aria-hidden />
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Positioner side="bottom" align="end" sideOffset={12} className="z-[60]">
+          <Tooltip.Popup id={descriptionId} role="tooltip" className="max-w-xs rounded-lg border border-oai-gray-200 bg-white p-4 text-sm leading-6 text-oai-gray-700 outline-none dark:border-oai-gray-700 dark:bg-oai-gray-900 dark:text-oai-gray-200">
+            {copy("sessions.summary.scope")}
+          </Tooltip.Popup>
+        </Tooltip.Positioner>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  );
+}
+
 const SessionRow = React.memo(function SessionRow({
   session,
   locale,
@@ -181,21 +203,21 @@ const SessionRow = React.memo(function SessionRow({
 
   return (
     <li className={cn("sessions-row sessions-row-grid py-3", nested && "sessions-row-nested")}>
-      <div className="sessions-row-identity flex min-w-0 items-start gap-3">
-        <span className="shrink-0 pt-2 text-oai-gray-600 dark:text-oai-gray-300 md:pt-0.5">
+      <div className="sessions-row-identity min-w-0">
+        <span className="sessions-row-provider inline-flex items-center justify-center text-oai-gray-600 dark:text-oai-gray-300" aria-hidden="true">
           <ProviderIcon provider={provider} size={nested ? 16 : 18} />
         </span>
-        <div className="min-w-0 flex-1">
+        <div className="contents">
           <button
             type="button"
             onClick={() => onDetail(session)}
             aria-label={copy("sessions.detail.open_aria", { title })}
             title={title}
-            className="min-h-9 max-w-full truncate rounded text-left text-sm font-medium text-oai-black underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500 dark:text-white md:min-h-0"
+            className="sessions-row-title block min-h-9 min-w-0 max-w-full truncate rounded text-left text-sm font-medium text-oai-black underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500 dark:text-white md:min-h-5"
           >
             {title}
           </button>
-          <div className="sessions-row-meta mt-0.5 flex min-w-0 flex-wrap items-center gap-y-1 text-xs text-oai-gray-500 dark:text-oai-gray-400">
+          <div className="sessions-row-meta flex min-w-0 flex-wrap items-center gap-y-1 text-xs text-oai-gray-500 dark:text-oai-gray-400">
             <span className="sessions-meta-item min-w-0 max-w-full">{session.project_ref ? projectLabelNode("min-h-6 inline-flex items-center md:min-h-0") : <span className="truncate">{projectLabel}</span>}</span>
             <span className="sessions-meta-item min-w-0 max-w-full truncate" title={modelUsageLabel(session)}>{modelUsageLabel(session)}</span>
             <span className="sessions-meta-item tabular-nums">{formatWhen(session.started_at, locale, { timeOnly: timeOnly && startsOnGroupDay(session) })}</span>
@@ -617,16 +639,14 @@ export function SessionsPage() {
                 <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.summary.count")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{formatCompactNumber(summary.count)}</dd></div>
                 <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.col.tokens")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{formatCompactNumber(summary.tokens)}</dd></div>
                 <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.col.cost")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{summary.costIsPartial ? "≥" : ""}{formatUsdCurrency(summary.cost, { currency, rate })}</dd></div>
-                <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.summary.speed")}</dt><dd className="mt-1 text-lg font-medium tabular-nums"><SessionPerformance performance={summary.performance} />{summary.performance.estimated_tokens_per_second == null ? "—" : null}</dd></div>
+                <div>
+                  <dt className="flex items-center gap-1.5 text-xs text-oai-gray-500 dark:text-oai-gray-400">
+                    <span>{copy("sessions.summary.speed")}</span>
+                    <SessionSummaryHelp />
+                  </dt>
+                  <dd className="mt-1 text-lg font-medium tabular-nums"><SessionPerformance performance={summary.performance} />{summary.performance.estimated_tokens_per_second == null ? "—" : null}</dd>
+                </div>
               </dl>
-              <Popover.Root>
-                <Popover.Trigger aria-label={copy("sessions.summary.scope_help")} className="-mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-oai-gray-500 hover:bg-oai-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500 dark:text-oai-gray-400 dark:hover:bg-oai-gray-800 sm:h-8 sm:w-8"><Info className="h-4 w-4" aria-hidden /></Popover.Trigger>
-                <Popover.Portal>
-                  <Popover.Positioner side="bottom" align="end" sideOffset={8} className="z-[60]">
-                    <Popover.Popup className="max-w-xs rounded-lg border border-oai-gray-200 bg-white p-4 text-sm leading-6 text-oai-gray-700 outline-none dark:border-oai-gray-700 dark:bg-oai-gray-900 dark:text-oai-gray-200">{copy("sessions.summary.scope")}</Popover.Popup>
-                  </Popover.Positioner>
-                </Popover.Portal>
-              </Popover.Root>
             </section>
           ) : null}
 

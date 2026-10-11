@@ -5,7 +5,19 @@ const { loadDashboardModule } = require("./helpers/load-dashboard-module");
 let mod;
 
 test.before(async () => {
-  mod = await loadDashboardModule("dashboard/src/ui/share/build-share-card-data.ts");
+  // These fixtures assert English copy. Node's navigator follows the Windows
+  // system language, so pin the simulated browser language during module init.
+  const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { language: "en-US", languages: ["en-US"] },
+  });
+  try {
+    mod = await loadDashboardModule("dashboard/src/ui/share/build-share-card-data.ts");
+  } finally {
+    if (navigatorDescriptor) Object.defineProperty(globalThis, "navigator", navigatorDescriptor);
+    else delete globalThis.navigator;
+  }
 });
 
 test("buildShareCardData with full data", () => {

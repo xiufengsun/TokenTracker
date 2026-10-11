@@ -7,6 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { test } = require("node:test");
+const { publicAnonFor, bindPublicInstance } = require("./helpers/public-instance-fixture");
 
 async function setup(t) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "tt-auto-upload-policy-"));
@@ -28,16 +29,18 @@ async function setup(t) {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); await fs.rm(home, { recursive: true, force: true }); });
-  await fs.writeFile(path.join(tracker, "config.json"), JSON.stringify({ baseUrl: `http://127.0.0.1:${server.address().port}`, deviceToken: "fixture-token" }));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  await bindPublicInstance(tracker, baseUrl, publicAnonFor("auto-policy"), { deviceToken: "fixture-token", deviceTokenBaseUrl: baseUrl });
   const queue = path.join(tracker, "queue.jsonl");
   const row = (tokens) => ({ source: "fixture", model: "fixture-model", hour_start: "2026-10-01T00:00:00.000Z", input_tokens: tokens, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_tokens: tokens, billable_total_tokens: tokens, total_cost_usd: 0, conversation_count: 1 });
   const append = async (record) => fs.appendFile(queue, `${JSON.stringify(record)}\n`);
   const readState = async () => JSON.parse(await fs.readFile(path.join(tracker, "queue.state.json"), "utf8"));
   const run = (args) => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(__dirname, "../bin/tracker.js"), "sync", ...args], {
+    const script = `require(${JSON.stringify(path.join(__dirname, "../src/commands/sync.js"))}).cmdSync(process.argv.slice(1), ${JSON.stringify({ trackerDataDir: tracker, home, scanSources: [] })}).catch(e => { console.error(e.message); process.exitCode = 1; })`;
+    const child = spawn(process.execPath, ["-e", script, "--", ...args], {
       env: {
         PATH: path.dirname(process.execPath), SystemRoot: process.env.SystemRoot || "",
-        HOME: home, USERPROFILE: home, CODEX_HOME: path.join(home, ".codex"),
+        CODEX_HOME: path.join(home, ".codex"),
         APPDATA: path.join(home, "AppData", "Roaming"), LOCALAPPDATA: path.join(home, "AppData", "Local"),
         XDG_DATA_HOME: path.join(home, ".local", "share"),
         TOKENTRACKER_AUTO_RETRY_NO_SPAWN: "1", TOKENTRACKER_WSL_MODE: "native-only",
@@ -64,8 +67,8 @@ test("ordinary auto hooks throttle uploads but a manual drain preserves a downwa
   assert.equal(x.requests[1].hourly[0].total_tokens, 40);
   assert.equal((await x.readState()).offset, (await fs.stat(x.queue)).size);
   const throttle = JSON.parse(await fs.readFile(path.join(x.tracker, "upload.throttle.json"), "utf8"));
-  assert.ok(throttle.nextAllowedAtMs - throttle.lastSuccessMs >= 300_000);
-  assert.ok(throttle.nextAllowedAtMs - throttle.lastSuccessMs <= 360_000);
+  assert.ok(throttle.nextAllowedAtMs - throttle.lastSuccessMs >= 900_000);
+  assert.ok(throttle.nextAllowedAtMs - throttle.lastSuccessMs <= 960_000);
 });
 
 test("429 backoff blocks ordinary and native automatic retries, including an automatic drain", async (t) => {
@@ -85,22 +88,31 @@ test("429 backoff blocks ordinary and native automatic retries, including an aut
   assert.equal(x.requests.length, 2);
 });
 
-test("native publication owns its cadence while automatic drains retain state-only and repair replay", async (t) => {
+test("native publication and automatic drains preserve pending corrections until the upload deadline", async (t) => {
   const x = await setup(t);
   await x.append(x.row(100));
   assert.equal((await x.run(["--auto"])).code, 0);
   await x.append(x.row(40));
   assert.equal((await x.run(["--auto", "--background", "--publish-account"])).code, 0);
-  assert.equal(x.requests.length, 2);
+  assert.equal(x.requests.length, 1);
+  const filename = path.join(x.tracker, "upload.throttle.json");
+  const expireDeadline = async () => {
+    const prior = JSON.parse(await fs.readFile(filename, "utf8"));
+    prior.lastSuccessMs = Date.now() - 17 * 60_000; prior.nextAllowedAtMs = prior.lastSuccessMs + 15 * 60_000;
+    await fs.writeFile(filename, JSON.stringify(prior));
+  };
   const stateRecord = { kind: "account_session_state", source: "trae-cn", session_id: "fixture-session", model: "fixture-model", bucket_start: "2026-10-01T00:00:00Z", snapshot_verified_at: "2026-10-02T00:00:00Z", input_tokens: 20, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_tokens: 20 };
   await x.append(stateRecord);
+  assert.equal((await x.run(["--auto", "--drain"])).code, 1);
+  await expireDeadline();
   assert.equal((await x.run(["--auto", "--drain"])).code, 0);
-  assert.equal(x.requests[2].hourly.length, 0);
-  assert.equal(x.requests[2].account_session_states.length, 1);
+  assert.equal(x.requests[1].hourly[0].total_tokens, 40);
+  assert.equal(x.requests[1].account_session_states.length, 1);
   await fs.writeFile(path.join(x.tracker, "queue.state.json"), JSON.stringify({ offset: 0, note: "fixture-repair" }));
+  await expireDeadline();
   assert.equal((await x.run(["--auto", "--drain"])).code, 0);
-  assert.equal(x.requests[3].hourly[0].total_tokens, 40);
-  assert.equal(x.requests[3].account_session_states.length, 1);
+  assert.equal(x.requests[2].hourly[0].total_tokens, 40);
+  assert.equal(x.requests[2].account_session_states.length, 1);
   assert.equal((await x.readState()).offset, (await fs.stat(x.queue)).size);
 });
 
@@ -111,7 +123,7 @@ test("upgrade caps an old thirty-minute success deadline without discarding pend
   await x.append(x.row(40));
   const filename = path.join(x.tracker, "upload.throttle.json");
   const prior = JSON.parse(await fs.readFile(filename, "utf8"));
-  prior.lastSuccessMs = Date.now() - 7 * 60_000;
+  prior.lastSuccessMs = Date.now() - 17 * 60_000;
   prior.nextAllowedAtMs = prior.lastSuccessMs + 30 * 60_000;
   await fs.writeFile(filename, JSON.stringify(prior));
   assert.equal((await x.run(["--auto"])).code, 0);

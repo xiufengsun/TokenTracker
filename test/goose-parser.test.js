@@ -69,7 +69,7 @@ test("resolveGooseDbPath honors TOKENTRACKER_GOOSE_DB and GOOSE_PATH_ROOT", () =
     "/x/y/z.db",
   );
   const p = resolveGooseDbPath({ GOOSE_PATH_ROOT: "/opt/goose" });
-  assert.match(p, /\/opt\/goose\/data\/sessions\/sessions\.db$/);
+  assert.equal(p, path.join("/opt/goose", "data", "sessions", "sessions.db"));
 });
 
 test("parseGooseModelName extracts model from JSON", () => {

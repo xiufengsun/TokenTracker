@@ -48,10 +48,10 @@ function userLine(ts) {
   });
 }
 
-// A leading extra slash makes the path register as UNC for isUncPath()
-// ("//" prefix) while remaining readable on POSIX — stand-in for \\wsl$.
+// Exercise the UNC-prefix branch with a readable alias on each host. Windows
+// uses its extended local-path syntax; neither fixture is a live WSL mount.
 function uncAlias(p) {
-  return `/${p}`;
+  return process.platform === "win32" ? path.toNamespacedPath(p) : `/${p}`;
 }
 
 // queue.jsonl is append-only and buckets carry cumulative absolutes; readers
@@ -199,6 +199,7 @@ test("claude subagent detection is separator-agnostic", async (t) => {
   // shape of a Windows UNC path (…\subagents\…) hitting the regex.
   const subagentStyle = path.join(dir, "p", "sess\\subagents\\agent-a.jsonl");
   const mainStyle = path.join(dir, "p", "main.jsonl");
+  fs.mkdirSync(path.dirname(subagentStyle), { recursive: true });
   fs.writeFileSync(subagentStyle, userLine("2026-01-01T10:15:00.000Z") + "\n");
   fs.writeFileSync(mainStyle, userLine("2026-01-01T10:15:00.000Z") + "\n");
 

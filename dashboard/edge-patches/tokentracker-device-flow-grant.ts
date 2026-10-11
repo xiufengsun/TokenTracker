@@ -16,6 +16,7 @@
  * profile endpoint documents.
  */
 import { createClient } from "npm:@insforge/sdk";
+import { cloudRpc, cloudFailure } from "./cloud/access.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -30,7 +31,7 @@ function json(data: unknown, status = 200) {
   });
 }
 
-function b64urlToBytes(s: string): Uint8Array {
+function b64urlToBytes(s: string): Uint8Array<ArrayBuffer> {
   const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
   const pad = (4 - (b64.length % 4)) % 4;
   const raw = atob(b64 + "=".repeat(pad));
@@ -103,31 +104,13 @@ export default async function (req: Request): Promise<Response> {
     ...(anonKey ? { headers: { apikey: anonKey } } : {}),
   });
 
-  const { data, error: lookupErr } = await client.database
-    .from("tokentracker_device_codes")
-    .select("device_code, status, expires_at, client_info")
-    .eq("user_code", userCode)
-    .maybeSingle();
-  if (lookupErr) return json({ error: "db error", detail: String(lookupErr?.message ?? lookupErr) }, 502);
-  if (!data) return json({ error: "user_code not found" }, 404);
-
-  const row = data as { device_code: string; status: string; expires_at: string; client_info: string | null };
-  if (Date.now() > new Date(row.expires_at).getTime()) {
-    return json({ error: "user_code expired", expired_at: row.expires_at }, 410);
+  try {
+    const result = await cloudRpc(client, "cloud_grant_device_code", {
+      p_user_id: callerUserId, p_user_code: userCode,
+    });
+    if (!result.ok) return cloudFailure(result, corsHeaders);
+    return json(result);
+  } catch {
+    return json({ error: "Cloud access unavailable", code: "cloud_access_unavailable" }, 503);
   }
-  if (row.status === "approved") {
-    return json({ status: "already_approved", client_info: row.client_info });
-  }
-
-  const { error: updateErr } = await client.database
-    .from("tokentracker_device_codes")
-    .update({
-      status: "approved",
-      user_id: callerUserId,
-      approved_at: new Date().toISOString(),
-    })
-    .eq("device_code", row.device_code);
-  if (updateErr) return json({ error: "db error", detail: String(updateErr?.message ?? updateErr) }, 502);
-
-  return json({ status: "approved", client_info: row.client_info });
 }

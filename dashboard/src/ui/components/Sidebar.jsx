@@ -19,6 +19,7 @@ import {
   Sun,
   Moon,
   Monitor,
+  Cloud,
 } from "lucide-react";
 import { copy } from "../../lib/copy";
 import { cn } from "../../lib/cn";
@@ -60,6 +61,7 @@ export function getNavGroups() {
       id: "account",
       label: copy("nav.group.account"),
       items: [
+        { id: "cloud", to: "/cloud", icon: Cloud, label: copy("cloud.nav") },
         { id: "settings", to: "/settings", icon: SettingsIcon, label: copy("nav.settings") },
       ],
     },
@@ -206,13 +208,14 @@ function StarPill({ repo = "xiufengsun/TokenTracker", glassChrome = false }) {
       target="_blank"
       rel="noopener noreferrer"
       aria-label={stars !== null ? `Star on GitHub (${stars})` : "Star on GitHub"}
-      className={cn(
-        "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500",
+      className="tt-sidebar-star inline-flex shrink-0 items-center rounded-full no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500"
+    >
+      <span className={cn(
+        "tt-sidebar-pill inline-flex items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors",
         glassChrome
           ? "border border-gray-500/20 dark:border-gray-500/30 bg-gray-500/[0.04] dark:bg-gray-500/[0.06] backdrop-blur-[2px] text-oai-gray-700 dark:text-oai-gray-300 hover:bg-gray-500/10 dark:hover:bg-gray-500/12 hover:border-gray-500/30 dark:hover:border-gray-500/40 hover:text-oai-black dark:hover:text-white"
           : "border border-oai-gray-200 dark:border-oai-gray-700 text-oai-gray-600 dark:text-oai-gray-400 hover:bg-oai-gray-200/60 dark:hover:bg-oai-gray-800 hover:text-oai-black dark:hover:text-white hover:border-oai-gray-300 dark:hover:border-oai-gray-600",
-      )}
-    >
+      )}>
       <svg height="12" viewBox="0 0 16 16" width="12" className="shrink-0 fill-current">
         <path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z" />
       </svg>
@@ -222,24 +225,24 @@ function StarPill({ repo = "xiufengsun/TokenTracker", glassChrome = false }) {
           {stars}
         </span>
       )}
+      </span>
     </a>
   );
 }
 
 /**
- * Compact theme pill — opens a popover with Light / Dark / System options.
- * Matches StarPill's h-7 height; popover opens upward (bottom-left anchored).
+ * Compact theme control with a larger, transparent pointer target.
+ * The popover opens upward from the sidebar footer.
  */
-const THEME_OPTIONS = [
-  { value: "light", label: "Light", Icon: Sun },
-  { value: "dark", label: "Dark", Icon: Moon },
-  { value: "system", label: "System", Icon: Monitor },
-];
-
 function ThemePill({ theme, resolvedTheme, onSetTheme, glassChrome = false }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
   const ActiveIcon = resolvedTheme === "dark" ? Moon : Sun;
+  const themeOptions = [
+    { value: "light", label: copy("settings.appearance.theme.light"), Icon: Sun },
+    { value: "dark", label: copy("settings.appearance.theme.dark"), Icon: Moon },
+    { value: "system", label: copy("settings.appearance.theme.system"), Icon: Monitor },
+  ];
 
   useEffect(() => {
     if (!open) return;
@@ -259,26 +262,28 @@ function ThemePill({ theme, resolvedTheme, onSetTheme, glassChrome = false }) {
     <div ref={wrapRef} className="relative">
       <button
         type="button"
-        aria-label="Theme"
+        aria-label={copy("settings.appearance.theme.label")}
         aria-expanded={open}
         aria-haspopup="menu"
-        title="Theme"
+        title={copy("settings.appearance.theme.label")}
         onClick={() => setOpen((o) => !o)}
-        className={cn(
-          "inline-flex h-7 w-7 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500",
+        className="tt-sidebar-theme inline-flex items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500"
+      >
+        <span className={cn(
+          "tt-sidebar-pill tt-sidebar-theme-face inline-flex items-center justify-center rounded-full transition-colors",
           glassChrome
             ? "border border-gray-500/20 dark:border-gray-500/30 bg-gray-500/[0.04] dark:bg-gray-500/[0.06] backdrop-blur-[2px] text-oai-gray-700 dark:text-oai-gray-300 hover:bg-gray-500/10 dark:hover:bg-gray-500/12 hover:border-gray-500/30 dark:hover:border-gray-500/40 hover:text-oai-black dark:hover:text-white"
             : "border border-oai-gray-200 dark:border-oai-gray-700 text-oai-gray-600 dark:text-oai-gray-400 hover:bg-oai-gray-200/60 dark:hover:bg-oai-gray-800 hover:text-oai-black dark:hover:text-white hover:border-oai-gray-300 dark:hover:border-oai-gray-600",
-        )}
-      >
+        )}>
         <ActiveIcon className="h-3.5 w-3.5" aria-hidden />
+        </span>
       </button>
       {open && (
         <div
           role="menu"
           className="absolute bottom-full left-0 mb-2 z-50 min-w-[140px] py-1 rounded-lg border border-oai-gray-200 dark:border-oai-gray-800 bg-white dark:bg-oai-gray-900 shadow-lg"
         >
-          {THEME_OPTIONS.map(({ value, label, Icon }) => {
+          {themeOptions.map(({ value, label, Icon }) => {
             const active = theme === value;
             return (
               <button
@@ -333,34 +338,42 @@ function SidebarBody({
 
   return (
     <>
-      {/* Top: identity only — full-width, aligned with nav items (px-2) */}
-      <div className={cn("px-2 pt-2 pb-2", collapsed && "flex justify-center")}>
+      {/* Keep navigation sizing beside the identity instead of mixing it with utility links. */}
+      <div className={cn("tt-sidebar-header flex px-2 pt-2 pb-2", collapsed ? "flex-col items-center" : "items-center gap-1")}>
+        <div className={cn("min-w-0", !collapsed && "flex-1")}>
+          <InsforgeUserHeaderControls
+            variant="sidebar"
+            collapsed={collapsed}
+            onAfterAction={onItemClick}
+          />
+        </div>
         {showCloseButton ? (
-          <div className="flex items-center gap-2">
-            <div className="flex-1 min-w-0">
-              <InsforgeUserHeaderControls
-                variant="sidebar"
-                collapsed={collapsed}
-                onAfterAction={onItemClick}
-              />
-            </div>
             <button
               ref={closeButtonRef}
               type="button"
               onClick={onClose}
               aria-label={copy("nav.close_menu")}
               title={copy("nav.close_menu")}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-oai-gray-500 dark:text-oai-gray-500 hover:bg-oai-gray-200/60 dark:hover:bg-oai-gray-800 hover:text-oai-gray-900 dark:hover:text-oai-gray-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500"
+              className="tt-sidebar-toggle flex shrink-0 items-center justify-center rounded-lg text-oai-gray-500 dark:text-oai-gray-500 hover:bg-oai-gray-200/60 dark:hover:bg-oai-gray-800 hover:text-oai-gray-900 dark:hover:text-oai-gray-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500"
             >
               <X className="h-4 w-4" strokeWidth={1.75} aria-hidden />
             </button>
-          </div>
         ) : (
-          <InsforgeUserHeaderControls
-            variant="sidebar"
-            collapsed={collapsed}
-            onAfterAction={onItemClick}
-          />
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            aria-label={collapsed ? copy("nav.expand") : copy("nav.collapse")}
+            title={collapsed ? copy("nav.expand") : copy("nav.collapse")}
+            aria-expanded={!collapsed}
+            aria-controls="app-sidebar"
+            className="tt-sidebar-toggle flex shrink-0 items-center justify-center rounded-lg text-oai-gray-500 dark:text-oai-gray-500 hover:bg-oai-gray-200/60 dark:hover:bg-oai-gray-800 hover:text-oai-gray-900 dark:hover:text-oai-gray-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500"
+          >
+            {collapsed ? (
+              <ChevronRight className="h-4 w-4" strokeWidth={1.5} aria-hidden />
+            ) : (
+              <ChevronLeft className="h-4 w-4" strokeWidth={1.5} aria-hidden />
+            )}
+          </button>
         )}
       </div>
 
@@ -391,34 +404,15 @@ function SidebarBody({
         ))}
       </nav>
 
-      {/* Bottom: tiny utility row — theme (left) + star & collapse (right), aligned with nav px-2 */}
+      {/* Bottom: theme and GitHub utilities share a compact visual height. */}
       <div
         className={cn(
-          "flex items-center px-2 py-3",
+          "tt-sidebar-utilities flex items-center px-2 py-2",
           collapsed ? "flex-col justify-center gap-2" : "justify-between gap-2",
         )}
       >
         <ThemePill theme={theme} resolvedTheme={resolvedTheme} onSetTheme={setTheme} glassChrome={glassChrome} />
-        <div className="flex items-center gap-1.5">
-          {!collapsed && <StarPill glassChrome={glassChrome} />}
-          {!showCloseButton && (
-            <button
-              type="button"
-              onClick={onToggleCollapsed}
-              aria-label={collapsed ? copy("nav.expand") : copy("nav.collapse")}
-              title={collapsed ? copy("nav.expand") : copy("nav.collapse")}
-              aria-expanded={!collapsed}
-              aria-controls="app-sidebar"
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-oai-gray-500 dark:text-oai-gray-500 hover:bg-oai-gray-200/60 dark:hover:bg-oai-gray-800 hover:text-oai-gray-900 dark:hover:text-oai-gray-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500"
-            >
-              {collapsed ? (
-                <ChevronRight className="h-4 w-4" strokeWidth={1.75} aria-hidden />
-              ) : (
-                <ChevronLeft className="h-4 w-4" strokeWidth={1.75} aria-hidden />
-              )}
-            </button>
-          )}
-        </div>
+        {!collapsed && <StarPill glassChrome={glassChrome} />}
       </div>
     </>
   );

@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const binaryProbe = process.platform === "win32" ? "where" : "which";
 
 const {
   cacheExpiresAtMs,
@@ -68,7 +69,7 @@ describe("extractGeminiOauthClientCredentials", () => {
 
       const result = await extractGeminiOauthClientCredentials({
         commandRunner(command, args) {
-          assert.equal(command, "which");
+          assert.equal(command, binaryProbe);
           assert.deepEqual(args, ["gemini"]);
           return { status: 0, stdout: `${geminiPath}\n` };
         },
@@ -83,7 +84,7 @@ describe("extractGeminiOauthClientCredentials", () => {
     }
   });
 
-  it("falls back to nvm-installed Gemini when launchd PATH cannot find gemini", async () => {
+  it("falls back to nvm-installed Gemini when launchd PATH cannot find gemini", { skip: process.platform === "win32" && "Unix nvm layout and file symlinks" }, async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-gemini-nvm-"));
     try {
       const home = path.join(tmp, "home");
@@ -3340,7 +3341,7 @@ Estimated Usage | resets on 2026-08-01 | KIRO PRO
       );
       const commandRunner = (command, args) => {
         calls.push({ command, args });
-        if (command === "which") {
+        if (command === binaryProbe) {
           return { status: 0, stdout: "/opt/kiro-cli\n", stderr: "" };
         }
         if (command === "/opt/kiro-cli" && args[0] === "--version") {
@@ -3399,7 +3400,7 @@ Estimated Usage | resets on 2026-08-01 | KIRO PRO
     const calls = [];
     const commandRunner = (command, args) => {
       calls.push({ command, args });
-      if (command === "which") {
+      if (command === binaryProbe) {
         return { status: 0, stdout: "/opt/kiro-cli\n", stderr: "" };
       }
       if (command === "/opt/kiro-cli" && args[0] === "--version") {
@@ -3463,7 +3464,7 @@ Estimated Usage | resets on 2026-08-01 | KIRO PRO
       const result = await fetchKiroLimits({
         home: tmp,
         commandRunner(command, args) {
-          assert.equal(command, "which");
+          assert.equal(command, binaryProbe);
           assert.deepEqual(args, ["kiro-cli"]);
           return { status: 1, stdout: "", stderr: "" };
         },
@@ -3921,7 +3922,7 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
       status: 0,
     });
 
-    const result = await detectAntigravityProcess({ commandRunner });
+    const result = await detectAntigravityProcess({ commandRunner, platform: "linux" });
 
     assert.equal(result.configured, true);
     assert.equal(result.pid, 123);
@@ -3937,7 +3938,7 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
       status: 0,
     });
 
-    const result = await detectAntigravityProcess({ commandRunner });
+    const result = await detectAntigravityProcess({ commandRunner, platform: "linux" });
 
     assert.equal(result.configured, true);
     assert.equal(result.pid, 456);
@@ -3953,7 +3954,7 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
       status: 0,
     });
 
-    const result = await detectAntigravityProcess({ commandRunner });
+    const result = await detectAntigravityProcess({ commandRunner, platform: "linux" });
 
     assert.equal(result.configured, true);
     assert.equal(result.pid, 789);
@@ -3968,7 +3969,7 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
       status: 0,
     });
 
-    const result = await detectAntigravityProcess({ commandRunner });
+    const result = await detectAntigravityProcess({ commandRunner, platform: "linux" });
 
     assert.equal(result.configured, true);
     assert.equal(result.pid, 101);
@@ -3985,7 +3986,7 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
       status: 0,
     });
 
-    const result = await detectAntigravityProcess({ commandRunner });
+    const result = await detectAntigravityProcess({ commandRunner, platform: "linux" });
 
     assert.equal(result.configured, false);
   });
@@ -3998,7 +3999,7 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
       status: 0,
     });
 
-    const result = await detectAntigravityProcess({ commandRunner });
+    const result = await detectAntigravityProcess({ commandRunner, platform: "linux" });
 
     assert.equal(result.configured, true);
     assert.equal(result.pid, 555);
@@ -4012,7 +4013,7 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
       status: 0,
     });
 
-    const result = await detectAntigravityProcess({ commandRunner });
+    const result = await detectAntigravityProcess({ commandRunner, platform: "linux" });
 
     assert.equal(result.configured, false);
   });
@@ -4025,7 +4026,7 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
       status: 0,
     });
 
-    const result = await detectAntigravityProcess({ commandRunner });
+    const result = await detectAntigravityProcess({ commandRunner, platform: "linux" });
 
     assert.equal(result.configured, false);
   });
@@ -4046,14 +4047,14 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
       return { status: 1, stdout: "", stderr: "" };
     };
 
-    const result = await detectAntigravityProcess({ commandRunner });
+    const result = await detectAntigravityProcess({ commandRunner, platform: "linux" });
     assert.equal(calls[0].command, "/bin/ps");
     assert.equal(calls[1].command, "ps");
     assert.equal(result.configured, true);
     assert.equal(result.pid, 456);
   });
 
-  it("discovers listening ports via Linux procfs", () => {
+  it("discovers listening ports via Linux procfs", { skip: process.platform === "win32" && "Unix procfs socket symlinks" }, () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-procfs-test-"));
     try {
       const pidDir = path.join(tmp, "456", "fd");
@@ -4087,7 +4088,7 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
       return { status: null, stdout: "", stderr: "", error: timeoutError };
     };
 
-    const result = await detectAntigravityProcess({ commandRunner });
+    const result = await detectAntigravityProcess({ commandRunner, platform: "linux" });
     assert.equal(calls.length, 1);
     assert.equal(calls[0].command, "/bin/ps");
     assert.equal(result.configured, false);
@@ -4111,7 +4112,7 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
       const calls = [];
       const commandRunner = (command, args) => {
         calls.push({ command, args });
-        if (command === "which") {
+        if (command === binaryProbe) {
           if (args[0] === "lsof") return { status: 1, stdout: "", stderr: "" };
           if (args[0] === "ss") return { status: 0, stdout: "/usr/bin/ss\n", stderr: "" };
         }
@@ -4136,8 +4137,8 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
       });
 
       assert.deepEqual(ports, [32919, 35345]);
-      assert.ok(calls.some((c) => (c.command === "which" && c.args?.[0] === "lsof") || String(c.command).endsWith("lsof")));
-      assert.ok(calls.some((c) => c.command === "which" && c.args?.[0] === "ss"));
+      assert.ok(calls.some((c) => (c.command === binaryProbe && c.args?.[0] === "lsof") || String(c.command).endsWith("lsof")));
+      assert.ok(calls.some((c) => c.command === binaryProbe && c.args?.[0] === "ss"));
       assert.ok(calls.some((c) => c.command === "/usr/bin/ss" || c.command === "ss"));
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -4157,7 +4158,7 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
             status: 0,
           };
         }
-        if (command === "which") {
+        if (command === binaryProbe) {
           return { stdout: "/usr/bin/lsof\n", status: 0 };
         }
         if (String(command).endsWith("lsof")) {
@@ -4277,7 +4278,7 @@ lang 123 me 22u IPv4 0x123 0t0 TCP 127.0.0.1:51234 (LISTEN)
             status: 0,
           };
         }
-        if (command === "which") {
+        if (command === binaryProbe) {
           return { stdout: "/usr/bin/lsof\n", status: 0 };
         }
         if (String(command).endsWith("lsof")) {
@@ -4489,7 +4490,7 @@ describe("fetchAntigravityLimits remote OAuth", () => {
             status: 0,
           };
         }
-        if (command === "which") {
+        if (command === binaryProbe) {
           return { stdout: "/usr/bin/lsof\n", status: 0 };
         }
         if (String(command).endsWith("lsof")) {
@@ -4813,7 +4814,7 @@ describe("fetchAntigravityLimits provider budget", () => {
           stdout: "123 /Applications/Antigravity.app/Contents/MacOS/language_server_macos --app_data_dir antigravity --csrf_token abc123\n",
         };
       }
-      if (command === "which") return { status: 0, stdout: "/usr/bin/lsof\n" };
+      if (command === binaryProbe) return { status: 0, stdout: "/usr/bin/lsof\n" };
       if (String(command).endsWith("lsof")) return { status: 0, stdout: `${portLines}\n` };
       return { status: 1, stdout: "", stderr: "" };
     };
@@ -5208,7 +5209,7 @@ describe("getUsageLimits Ark timeout fallback", () => {
         },
         commandRunner(command, args) {
           calls.push({ command, args });
-          if (command === "where") {
+          if (command === "where" && args?.[0] === "arkcli") {
             return { status: 0, stdout: "C:\\Program Files\\arkcli.exe\n", stderr: "" };
           }
           // The provider spawns the resolved absolute path, never a bare
@@ -5221,7 +5222,7 @@ describe("getUsageLimits Ark timeout fallback", () => {
         },
       });
 
-      assert.deepEqual(calls.find(({ command }) => command === "where")?.args, ["arkcli"]);
+      assert.deepEqual(calls.find(({ command, args }) => command === "where" && args?.[0] === "arkcli")?.args, ["arkcli"]);
       assert.equal(result.codingPlan.configured, true);
       assert.equal(result.codingPlan.stale, undefined);
       assert.match(result.codingPlan.error, /timed out/i);

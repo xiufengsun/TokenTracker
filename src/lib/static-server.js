@@ -1,4 +1,3 @@
-const fs = require("node:fs");
 const fsPromises = require("node:fs/promises");
 const path = require("node:path");
 
@@ -27,20 +26,31 @@ const MIME_TYPES = {
  * Serve a static file from baseDir. Returns true if served, false otherwise.
  * For SPA: caller should fall back to index.html when this returns false.
  */
-async function serveStaticFile(baseDir, pathname, res) {
+async function serveStaticFile(baseDir, pathname, res, { localRuntimeConfig = false } = {}) {
   const safePath = path.normalize(pathname).replace(/^(\.\.[/\\])+/, "");
   const filePath = path.join(baseDir, safePath);
 
   // prevent directory traversal
   if (!filePath.startsWith(baseDir)) return false;
 
+  let handle;
   try {
-    const stat = await fsPromises.stat(filePath);
+    handle = await fsPromises.open(filePath, "r");
+    const stat = await handle.stat();
     if (!stat.isFile()) return false;
 
     const ext = path.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || "application/octet-stream";
     const isHtml = ext === ".html";
+
+    if (isHtml && localRuntimeConfig && path.basename(filePath) === "index.html") {
+      const source = await handle.readFile("utf8");
+      const content = source.replace(/<head(?:\s[^>]*)?>/i,
+        "$&\n<script>window.__TOKENTRACKER_RUNTIME_CONFIG__={configurationError:\"runtime_config_unavailable\"};</script>\n<script src=\"/api/runtime-config.js\"></script>");
+      res.writeHead(200, { "Content-Type": contentType, "Content-Length": Buffer.byteLength(content), "Cache-Control": "no-store" });
+      res.end(content);
+      return true;
+    }
 
     res.writeHead(200, {
       "Content-Type": contentType,
@@ -48,11 +58,16 @@ async function serveStaticFile(baseDir, pathname, res) {
       "Cache-Control": isHtml ? "no-cache" : "public, max-age=31536000, immutable",
     });
 
-    const stream = fs.createReadStream(filePath);
+    const stream = handle.createReadStream();
+    handle = null; // The stream owns and closes this descriptor.
+    stream.on("error", (error) => res.destroy(error));
+    res.on("close", () => stream.destroy());
     stream.pipe(res);
     return true;
   } catch (_e) {
     return false;
+  } finally {
+    if (handle) await handle.close();
   }
 }
 

@@ -92,7 +92,8 @@ function runRetroValidation({ root = ROOT } = {}) {
     for (const fileName of listRetrosForRepo(repoDirPath)) {
       const fullPath = path.join(repoDirPath, fileName);
       const relPath = path.join("docs", "retrospective", repo, fileName);
-      const relPathFromRetro = path.join(repo, fileName);
+      // Markdown references always use URL separators, including on Windows.
+      const relPathFromRetro = path.posix.join(repo, fileName);
       const text = readText(fullPath);
       const fm = parseFrontmatter(text);
 

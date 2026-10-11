@@ -4,6 +4,7 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 const cp = require("node:child_process");
 const { test } = require("node:test");
+const { publicAnonFor } = require("./helpers/public-instance-fixture");
 
 async function runNotify(notifyPath, env) {
   await new Promise((resolve, reject) => {
@@ -21,7 +22,7 @@ async function runInit(env) {
   await new Promise((resolve, reject) => {
     cp.execFile(
       process.execPath,
-      [entry, "init", "--yes", "--no-auth", "--no-open", "--base-url", "https://example.invalid"],
+      [entry, "init", "--yes", "--no-auth", "--no-open", "--base-url", "https://example.invalid", "--anon-key", publicAnonFor("notify")],
       { env },
       (err) => {
         if (err) return reject(err);

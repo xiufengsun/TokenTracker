@@ -12,6 +12,7 @@ const {
   installOpenclawSessionPlugin,
   removeOpenclawSessionPluginConfig,
 } = require("../src/lib/openclaw-session-plugin");
+const { installOpenclawHook, OPENCLAW_HOOK_NAME } = require("../src/lib/openclaw-hook");
 
 test("probeOpenclawSessionPluginState rejects linked + enabled plugin without conversation access", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-openclaw-plugin-"));
@@ -144,8 +145,8 @@ test("installOpenclawSessionPlugin returns skipped when openclaw CLI is missing"
 test("installOpenclawSessionPlugin grants OpenClaw conversation hook access", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-openclaw-plugin-"));
   const home = path.join(tmp, "home");
-  const trackerDir = path.join(home, ".tokentracker", "tracker");
-  const fakeBinDir = path.join(tmp, "bin");
+  const trackerDir = path.join(home, ".tokentracker", "tracker & %TT_EXPAND% (中文)");
+  const fakeBinDir = path.join(tmp, "bin & %TT_EXPAND% (中文)");
   await fs.mkdir(trackerDir, { recursive: true });
   await fs.mkdir(fakeBinDir, { recursive: true });
 
@@ -157,9 +158,8 @@ test("installOpenclawSessionPlugin grants OpenClaw conversation hook access", as
   await fs.mkdir(path.dirname(openclawConfigPath), { recursive: true });
   await fs.writeFile(openclawConfigPath, JSON.stringify({ plugins: {} }, null, 2) + "\n");
 
-  // The fake launcher body, sans shebang. On Unix it runs via a `#!/usr/bin/env
-  // node` script named `openclaw`; on Windows, where shebangs aren't executable,
-  // it lives in a sidecar `openclaw.js` invoked by an `openclaw.cmd` shim.
+  // Model npm's actual Windows prefix/node_modules layout. The command
+  // runner must start the declared JS entry without executing a cmd shell.
   const launcherJs = `const fs = require('node:fs');
 const path = require('node:path');
 const args = process.argv.slice(2);
@@ -180,6 +180,8 @@ if (args[0] === 'plugins' && args[1] === 'install' && args[2] === '--link') {
   const id = args[2];
   cfg.plugins.entries[id] ||= {};
   cfg.plugins.entries[id].enabled = true;
+} else if (args[0] === 'hooks' && args[1] === 'install' && args[2] === '--link') {
+  cfg.hooks = { internal: { entries: { 'tokentracker-openclaw-sync': { enabled: true } }, load: { extraDirs: [args[3]] } } };
 } else {
   process.exit(2);
 }
@@ -187,10 +189,15 @@ fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\\n');
 `;
 
   if (process.platform === "win32") {
-    await fs.writeFile(path.join(fakeBinDir, "openclaw.js"), launcherJs, "utf8");
+    const packageDir = path.join(fakeBinDir, "node_modules", "openclaw");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "package.json"), JSON.stringify({
+      name: "openclaw", bin: { openclaw: "openclaw.cjs" },
+    }), "utf8");
+    await fs.writeFile(path.join(packageDir, "openclaw.cjs"), launcherJs, "utf8");
     await fs.writeFile(
       path.join(fakeBinDir, "openclaw.cmd"),
-      `@echo off\r\nnode "%~dp0openclaw.js" %*\r\n`,
+      `@echo off\r\nnode "%~dp0node_modules\\openclaw\\openclaw.cjs" %*\r\n`,
       "utf8",
     );
   } else {
@@ -210,11 +217,25 @@ fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\\n');
   });
 
   const cfg = JSON.parse(await fs.readFile(openclawConfigPath, "utf8"));
-  assert.equal(result.configured, true);
+  assert.equal(result.configured, true, JSON.stringify(result));
   assert.equal(
     cfg.plugins.entries[OPENCLAW_SESSION_PLUGIN_ID].hooks.allowConversationAccess,
     true,
   );
+
+  const hook = await installOpenclawHook({
+    home,
+    trackerDir,
+    env: {
+      PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH || ""}`,
+      OPENCLAW_CONFIG_PATH: openclawConfigPath,
+    },
+  });
+  assert.equal(hook.configured, true, JSON.stringify(hook));
+  const withHook = JSON.parse(await fs.readFile(openclawConfigPath, "utf8"));
+  assert.equal(withHook.hooks.internal.entries[OPENCLAW_HOOK_NAME].enabled, true);
+  assert.deepEqual(withHook.hooks.internal.load.extraDirs, [hook.hookDir]);
+  assert.equal(withHook.plugins.entries[OPENCLAW_SESSION_PLUGIN_ID].hooks.allowConversationAccess, true);
 
   await fs.rm(tmp, { recursive: true, force: true });
 });

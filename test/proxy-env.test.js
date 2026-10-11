@@ -378,6 +378,33 @@ test("runProxyConnectivityTest uses a temporary dispatcher and never sets the gl
   assert.equal(closed, 1);
 });
 
+test("proxy diagnostics do not stringify unknown exceptions or expose multiline traces", async () => {
+  let stringified = false;
+  const unknown = { toString() { stringified = true; return "private stack detail"; } };
+  const parts = {
+    ProxyAgent: function () { this.close = async () => {}; },
+    Agent: function () {},
+    setGlobalDispatcher: () => {},
+  };
+  const options = { ...parts, proxyUrl: "http://127.0.0.1:7890", targetUrl: "https://example.test" };
+  const failed = await runProxyConnectivityTest({ ...options, fetchImpl: async () => { throw unknown; } });
+  assert.equal(failed.error, "Proxy request failed");
+  const multiline = await runProxyConnectivityTest({ ...options, fetchImpl: async () => {
+    throw new Error("connection failed\n    at private-file.js:1\nprivate stack detail");
+  } });
+  assert.equal(multiline.error, "connection failed");
+  for (const setup of [{ ProxyAgent: function () { throw unknown; } },
+    { setGlobalDispatcher: () => { throw unknown; } }]) {
+    resetProxyApplyStateForTests();
+    const result = applyUndiciProxyIfNeeded({ ...parts, ...setup, env: {}, warn: () => {},
+      proxyConfig: { mode: "manual", protocol: "http", host: "127.0.0.1", port: 7890 } });
+    assert.equal(result.ok, false);
+    assert.ok(!result.error.includes("private stack detail"));
+  }
+  assert.equal(stringified, false);
+  resetProxyApplyStateForTests();
+});
+
 test("resolveSystemProxyEnv honors manual and off before env/scutil", () => {
   assert.deepEqual(
     resolveSystemProxyEnv({

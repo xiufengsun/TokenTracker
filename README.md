@@ -336,6 +336,8 @@ flowchart LR
 
 ---
 
+Local features remain free and open source. Optional official Cloud hosts cross-device analytics and is in development; see the [proposed plans and transition rules](docs/cloud-guide.md). The Waffo test pricing draft uses the same worldwide USD base price for recurring and fixed-term access, USD 4.99/month or USD 39.99/year before checkout tax. Self-hosted software is free with infrastructure and maintenance handled by its owner; the complete installation is currently a [technical preview](docs/self-hosting.md).
+
 ## 🛡️ Privacy
 
 > 📄 **[Full Privacy Policy](docs/PRIVACY.md)** — every network request the app can make, what each one sends, and how to switch it off.

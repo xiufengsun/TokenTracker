@@ -2,7 +2,7 @@ const os = require("node:os");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const fssync = require("node:fs");
-const cp = require("node:child_process");
+const { runOpenclawCli } = require("./openclaw-cli");
 
 const OPENCLAW_HOOK_NAME = "tokentracker-openclaw-sync";
 const OPENCLAW_HOOK_DIRNAME = "openclaw-hook";
@@ -221,51 +221,6 @@ async function removeOpenclawHookConfig({
   await fs.rm(hookDir, { recursive: true, force: true }).catch(() => {});
 
   return { removed: changed, ...paths };
-}
-
-function runOpenclawCli(args, env = process.env) {
-  let res;
-  try {
-    res = cp.spawnSync("openclaw", args, {
-      env,
-      encoding: "utf8",
-      timeout: 30_000,
-    });
-  } catch (err) {
-    return {
-      code: 1,
-      skippedReason: err?.code === "ENOENT" ? "openclaw-cli-missing" : "openclaw-cli-error",
-      error: err?.message || String(err),
-      stdout: "",
-      stderr: "",
-    };
-  }
-
-  if (res.error?.code === "ENOENT") {
-    return {
-      code: 1,
-      skippedReason: "openclaw-cli-missing",
-      error: res.error.message,
-      stdout: res.stdout || "",
-      stderr: res.stderr || "",
-    };
-  }
-
-  if ((res.status || 0) !== 0) {
-    return {
-      code: Number(res.status || 1),
-      skippedReason: "openclaw-hooks-install-failed",
-      error: (res.stderr || res.stdout || "").trim() || "openclaw hooks install failed",
-      stdout: res.stdout || "",
-      stderr: res.stderr || "",
-    };
-  }
-
-  return {
-    code: 0,
-    stdout: res.stdout || "",
-    stderr: res.stderr || "",
-  };
 }
 
 function buildHookMarkdown() {

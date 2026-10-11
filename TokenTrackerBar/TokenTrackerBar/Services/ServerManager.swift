@@ -24,6 +24,7 @@ final class ServerManager: ObservableObject {
     /// wake, retry): when our own child process is alive and the server answers
     /// health checks, this is a no-op — it never tears down a healthy server.
     func ensureServerRunning() async {
+        guard !NativeQAProfile.isQABuild else { fatalError("Native QA cannot launch or replace a server") }
         if let process = serverProcess, process.isRunning,
            await APIClient.shared.checkServerHealth() {
             status = .running

@@ -659,6 +659,57 @@ html.native-windows-app .tt-native-glass-shell aside[data-native-sidebar] {
   background: transparent;
 }
 
+/* Paid profile identity has its own restrained hue; rank medals stay separate. */
+.leaderboard-pro-avatar {
+  outline: 2px solid #78629e;
+  outline-offset: 1px;
+}
+:root.dark .leaderboard-pro-avatar {
+  outline-color: #b3a2cf;
+}
+.leaderboard-pro-badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  padding: 0 0.3rem;
+  border: 1px solid #d5cbed;
+  border-radius: 4px;
+  background: #f3f0f8;
+  color: #65528a;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1rem;
+  white-space: nowrap;
+  cursor: help;
+}
+:root.dark .leaderboard-pro-badge {
+  border-color: #716486;
+  background: #302a40;
+  color: #d7cdec;
+}
+.leaderboard-pro-badge:focus-visible {
+  outline: 2px solid currentColor !important;
+  outline-offset: 2px;
+}
+.leaderboard-pro-tooltip-layer {
+  z-index: 110;
+}
+.leaderboard-pro-tooltip {
+  max-width: min(16rem, calc(100vw - 2rem));
+  padding: 0.5rem 0.625rem;
+  border: 1px solid #d5cbed;
+  border-radius: 6px;
+  background: #faf8ff;
+  color: #3f3357;
+  font-size: 12px;
+  line-height: 1.5;
+}
+:root.dark .leaderboard-pro-tooltip {
+  border-color: #716486;
+  background: #27232f;
+  color: #e8e2f2;
+}
+
 /* Leaderboard: GitHub avatar frame. Machined-graphite conic ring (GitHub
    Primer grays) echoing the achievement coins' metal finish; the element's
    own padding is the visible ring, the inner gap layer knocks out a 1px
@@ -965,4 +1016,404 @@ html.native-windows-app .tt-native-glass-shell aside[data-native-sidebar] {
   :root.dark .oai-card--accent {
     background: linear-gradient(180deg, oklch(28% 0.004 145) 0%, oklch(24% 0.003 145) 100%);
   }
+}
+
+/* Cloud purchase and membership surfaces use a neutral palette. The rest of
+   the dashboard keeps its existing brand and provider colors. */
+.tt-cloud-theme {
+  --tt-cloud-ink: #171717;
+  --tt-cloud-muted: #525252;
+  --tt-cloud-hover: #f5f5f5;
+  --tt-cloud-focus: rgb(23 23 23 / 0.35);
+  --oai-blue: #404040;
+  --oai-blue-dark: #262626;
+  --oai-blue-light: #525252;
+  --brand-primary: #404040;
+}
+
+/* Cloud settings: compact type scale and a single system font across platforms. */
+.tt-cloud-settings {
+  --tt-cloud-type-caption: 0.8125rem;
+  --tt-cloud-type-body: 0.875rem;
+  --tt-cloud-type-label: 1rem;
+  --tt-cloud-type-section: 1.125rem;
+  --tt-cloud-type-heading: 1.5rem;
+  font-family: var(--oai-font-sans);
+  font-size: var(--tt-cloud-type-body);
+  line-height: 1.6;
+}
+
+.tt-cloud-settings :is(button, input, select, textarea),
+.tt-cloud-settings [class~="font-mono"] {
+  font-family: var(--oai-font-sans);
+}
+
+.tt-cloud-settings h1 {
+  font-size: var(--tt-cloud-type-heading);
+  line-height: 1.35;
+  letter-spacing: -0.025em;
+}
+
+.tt-cloud-settings h2 {
+  font-size: var(--tt-cloud-type-heading);
+  line-height: 1.4;
+  letter-spacing: -0.02em;
+}
+
+.tt-cloud-settings .tt-cloud-theme :is(h2, h3) {
+  font-size: var(--tt-cloud-type-section);
+  line-height: 1.5;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.tt-cloud-settings .tt-cloud-theme details > summary h3 {
+  font-size: var(--tt-cloud-type-body);
+  line-height: 1.6;
+  font-weight: 500;
+  letter-spacing: normal;
+}
+
+.tt-cloud-settings .text-xs {
+  font-size: var(--tt-cloud-type-caption);
+  line-height: 1.65;
+}
+
+.tt-cloud-settings .text-sm {
+  font-size: var(--tt-cloud-type-body);
+  line-height: 1.6;
+}
+
+.tt-cloud-settings [data-settings-panel="cloud"] {
+  container: cloud-settings / inline-size;
+}
+
+.tt-cloud-action-backdrop {
+  opacity: 1;
+  transition: opacity 200ms ease-out;
+}
+
+.tt-cloud-action-popup {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transform-origin: center;
+  transition: opacity 200ms ease-out, transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tt-cloud-action-backdrop:is([data-starting-style], [data-ending-style]) {
+  opacity: 0;
+}
+
+.tt-cloud-action-popup:is([data-starting-style], [data-ending-style]) {
+  opacity: 0;
+  transform: translateY(8px) scale(0.98);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tt-cloud-action-backdrop,
+  .tt-cloud-action-popup {
+    transition: none;
+  }
+
+  .tt-cloud-action-popup:is([data-starting-style], [data-ending-style]) {
+    transform: none;
+  }
+}
+
+/* Decorative line figure, placed behind the plan cards. */
+.tt-cloud-layout {
+  container: cloud-page / inline-size;
+}
+
+.tt-cloud-art {
+  position: absolute;
+  top: -48px;
+  right: 0;
+  display: none;
+  width: 400px;
+  height: 320px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+@container cloud-page (min-width: 840px) {
+  .tt-cloud-art {
+    display: block;
+  }
+}
+
+.tt-cloud-figure {
+  --hairline-plate: #fafafa;
+  --hairline-hi: #404040;
+  --hairline-edge: #737373;
+  --hairline-mid: #a3a3a3;
+  --hairline-lo: #d4d4d4;
+  --hairline-stroke: 0.85;
+}
+
+.dark .tt-cloud-figure {
+  --hairline-plate: #171717;
+  --hairline-hi: #e5e5e5;
+  --hairline-edge: #d4d4d4;
+  --hairline-mid: #a3a3a3;
+  --hairline-lo: #404040;
+}
+
+.tt-sidebar-account-control {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* Fixed visual sizes stay compact even inside pages with 44px control targets. */
+.tt-sidebar-theme,
+.tt-sidebar-star,
+.tt-sidebar-toggle {
+  box-sizing: border-box;
+  min-height: 44px;
+  height: 44px;
+  padding-block: 0;
+}
+
+.tt-sidebar-theme,
+.tt-sidebar-toggle {
+  width: 44px;
+  min-width: 44px;
+  flex-shrink: 0;
+}
+
+.tt-sidebar-pill {
+  box-sizing: border-box;
+  height: 32px;
+  min-height: 32px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.tt-sidebar-theme-face {
+  width: 32px;
+  min-width: 32px;
+  aspect-ratio: 1;
+}
+
+.tt-sidebar-theme:focus-visible,
+.tt-sidebar-star:focus-visible,
+.tt-sidebar-toggle:focus-visible,
+.tt-sidebar-utilities [role="menuitem"]:focus-visible {
+  outline: 2px solid var(--tt-cloud-ink, currentColor) !important;
+  outline-offset: 2px;
+}
+
+.tt-sidebar-account-control:focus-visible {
+  outline: 2px solid #404040 !important;
+  outline-offset: 2px;
+}
+
+.dark .tt-sidebar-account-control:focus-visible {
+  outline-color: #d4d4d4 !important;
+}
+
+.tt-sidebar-pro-fallback {
+  background-color: #78629e;
+  --tw-ring-color: #78629e;
+}
+
+.dark .tt-sidebar-pro-fallback {
+  background-color: #716486;
+  --tw-ring-color: #716486;
+}
+
+.dark .tt-cloud-theme {
+  --tt-cloud-ink: #f5f5f5;
+  --tt-cloud-muted: #d4d4d4;
+  --tt-cloud-hover: #262626;
+  --tt-cloud-focus: rgb(245 245 245 / 0.5);
+  --oai-blue: #d4d4d4;
+  --oai-blue-dark: #e5e5e5;
+  --oai-blue-light: #a3a3a3;
+  --brand-primary: #d4d4d4;
+}
+
+.tt-cloud-theme [class~="text-oai-brand"],
+.tt-cloud-theme [class~="hover:text-oai-brand"]:hover {
+  color: var(--tt-cloud-ink);
+}
+
+.tt-cloud-theme [class~="hover:border-oai-brand"]:hover,
+.tt-cloud-theme [class~="active:border-oai-brand-dark"]:active,
+.tt-cloud-theme [class~="focus:border-oai-brand"]:focus {
+  border-color: var(--tt-cloud-muted);
+}
+
+.tt-cloud-theme [class~="hover:bg-oai-brand-50/50"]:hover,
+.tt-cloud-theme [class~="active:bg-oai-brand-50"]:active,
+.dark .tt-cloud-theme [class~="dark:hover:bg-oai-brand-950/30"]:hover,
+.dark .tt-cloud-theme [class~="dark:active:bg-oai-brand-900/50"]:active {
+  background-color: var(--tt-cloud-hover);
+}
+
+.tt-cloud-theme [class~="bg-oai-brand-600"],
+.tt-cloud-theme [class~="bg-oai-brand-600/30"] {
+  background-color: #525252;
+  --tw-ring-color: #737373;
+}
+
+.tt-cloud-theme :focus-visible {
+  --tw-ring-color: var(--tt-cloud-focus);
+  outline: 2px solid var(--tt-cloud-ink) !important;
+  outline-offset: 3px;
+}
+
+.tt-cloud-theme button,
+.tt-cloud-theme a.inline-flex {
+  min-height: 44px;
+}
+
+.tt-pro-period-control {
+  --tt-period-track: var(--tt-cloud-hover);
+  --tt-period-selected: #fafafa;
+}
+
+/* Share content rows so plan prices, features and primary actions stay aligned. */
+.tt-plan-grid {
+  display: grid;
+  gap: 24px;
+}
+
+.tt-plan-card {
+  position: relative;
+  isolation: isolate;
+  --tt-plan-glow: 82 82 82;
+  padding: 24px;
+}
+
+.dark .tt-plan-card {
+  --tt-plan-glow: 245 245 245;
+}
+
+/* Mask the pointer spotlight down to a one-pixel rim. It never covers controls. */
+.tt-plan-card::before,
+.tt-plan-card::after {
+  position: absolute;
+  z-index: 2;
+  inset: -1px;
+  padding: 1px;
+  border-radius: inherit;
+  background: radial-gradient(
+    400px circle at var(--tt-plan-pointer-x, 50%) var(--tt-plan-pointer-y, 50%),
+    rgb(var(--tt-plan-glow) / 0.85),
+    rgb(var(--tt-plan-glow) / 0.2) 45%,
+    transparent 75%
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 220ms ease;
+  pointer-events: none;
+  content: "";
+}
+
+.tt-plan-card::after {
+  z-index: 1;
+  filter: blur(5px);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .tt-plan-card:hover::before,
+  .tt-plan-card:hover::after {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tt-plan-card::before,
+  .tt-plan-card::after {
+    transition: none;
+  }
+}
+
+.tt-plan-body {
+  display: contents;
+}
+
+@container cloud-page (min-width: 800px) {
+  .tt-plan-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(6, auto);
+    column-gap: 24px;
+    row-gap: 0;
+  }
+
+  .tt-plan-card {
+    display: grid;
+    grid-row: span 6;
+    grid-template-rows: subgrid;
+    padding: 28px;
+  }
+}
+
+.dark .tt-pro-period-control {
+  --tt-period-selected: #404040;
+}
+
+.tt-pro-period-control > div,
+.dark .tt-pro-period-control > div {
+  position: relative;
+  isolation: isolate;
+  gap: 0;
+  border: 0;
+  padding: 0 4px;
+  background: transparent;
+}
+
+.tt-pro-period-control > div::before {
+  position: absolute;
+  z-index: -1;
+  inset: 6px 0;
+  border-radius: 999px;
+  background: var(--tt-period-track);
+  content: "";
+}
+
+.tt-pro-period-control button,
+.dark .tt-pro-period-control button {
+  position: relative;
+  isolation: isolate;
+  min-width: 44px;
+  border-radius: 999px;
+  padding: 0 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--tt-cloud-muted);
+  font-size: 13px;
+}
+
+.tt-pro-period-control button[aria-pressed="true"] {
+  color: var(--tt-cloud-ink);
+}
+
+.tt-pro-period-control button[aria-pressed="true"]::after {
+  position: absolute;
+  z-index: -1;
+  inset: 9px 0;
+  border-radius: 999px;
+  background: var(--tt-period-selected);
+  content: "";
+}
+
+.tt-cloud-theme input:focus-visible {
+  outline-offset: 0;
+}
+
+.tt-cloud-sync-control [role="switch"][aria-checked="true"] .tt-toggle-track {
+  background-color: var(--tt-cloud-ink);
+}
+
+.tt-cloud-sync-control [role="switch"][aria-checked="true"] .tt-toggle-thumb {
+  background-color: var(--tt-cloud-hover);
+}
+
+.tt-cloud-sync-control [role="switch"]:focus-visible {
+  --tw-ring-color: var(--tt-cloud-focus);
 }

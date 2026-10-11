@@ -23,163 +23,18 @@ const readMigrationBySuffix = (suffix) => {
   return read(`migrations/${file}`);
 };
 
-async function loadDeviceFlowIssuer() {
-  const source = read("dashboard/edge-patches/tokentracker-device-flow-poll.ts")
-    .replace(
-      'import { createClient } from "npm:@insforge/sdk";',
-      "const createClient = () => globalThis.__unusedEdgeTestClient;",
-    )
-    .concat("\nexport { issueDeviceToken as testIssueDeviceToken };\n");
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.ESNext,
-      target: ts.ScriptTarget.ES2022,
-    },
-  }).outputText;
-  const url = `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`;
-  return import(url);
-}
-
-async function loadDashboardTokenIssueHandler() {
-  const source = read("dashboard/edge-patches/tokentracker-device-token-issue.ts")
-    .replace(
-      'import { createClient } from "npm:@insforge/sdk";',
-      "const createClient = () => globalThis.__edgeTestClient;",
-    );
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.ESNext,
-      target: ts.ScriptTarget.ES2022,
-    },
-  }).outputText;
-  const url = `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`;
-  return import(url);
-}
-
-function createEdgeDatabaseMock() {
-  const devices = [];
-  const tokens = [];
-
-  function from(table) {
-    let operation = "select";
-    let values = null;
-    let filters = [];
-    let maxRows = Infinity;
-
-    const query = {
-      select() {
-        return query;
-      },
-      upsert(rows) {
-        operation = "upsert";
-        values = rows;
-        return query;
-      },
-      update(nextValues) {
-        operation = "update";
-        values = nextValues;
-        return query;
-      },
-      insert(rows) {
-        operation = "insert";
-        values = rows;
-        return query;
-      },
-      eq(column, value) {
-        filters.push((row) => row[column] === value);
-        return query;
-      },
-      is(column, value) {
-        filters.push((row) => (row[column] ?? null) === value);
-        return query;
-      },
-      in(column, candidates) {
-        filters.push((row) => candidates.includes(row[column]));
-        return query;
-      },
-      order() {
-        return query;
-      },
-      limit(value) {
-        maxRows = value;
-        return query;
-      },
-      maybeSingle() {
-        const result = execute();
-        return Promise.resolve({ data: result.data[0] || null, error: result.error });
-      },
-      then(resolve, reject) {
-        return Promise.resolve(execute()).then(resolve, reject);
-      },
-    };
-
-    const matches = (row) => filters.every((filter) => filter(row));
-    function execute() {
-      const rows = table === "tokentracker_devices" ? devices : tokens;
-      if (operation === "select") {
-        return { data: rows.filter(matches).slice(0, maxRows), error: null };
-      }
-      if (operation === "upsert") {
-        const inserted = [];
-        for (const value of values) {
-          const conflict = devices.some((row) =>
-            row.revoked_at == null
-              && row.user_id === value.user_id
-              && (
-                (row.platform === value.platform && row.device_name === value.device_name)
-                || (value.machine_id && row.machine_id === value.machine_id)
-              ));
-          if (!conflict) {
-            const row = { revoked_at: null, ...value };
-            devices.push(row);
-            inserted.push(row);
-          }
-        }
-        return { data: inserted, error: null };
-      }
-      if (operation === "update") {
-        const targetRows = rows.filter(matches);
-        if (table === "tokentracker_devices") {
-          // Model the active-name unique index: renaming an active row onto a
-          // name another active row of the same (user, platform) owns fails.
-          for (const row of targetRows) {
-            const nextName = Object.prototype.hasOwnProperty.call(values, "device_name")
-              ? values.device_name
-              : row.device_name;
-            const conflict = devices.some((other) =>
-              other !== row
-                && other.revoked_at == null
-                && other.user_id === row.user_id
-                && other.platform === row.platform
-                && other.device_name === nextName);
-            if (conflict) {
-              return { data: null, error: { message: 'duplicate key value violates unique constraint "tokentracker_devices_active_name_key"' } };
-            }
-          }
-        }
-        for (const row of targetRows) Object.assign(row, values);
-        return { data: targetRows, error: null };
-      }
-      if (operation === "insert") {
-        const inserted = values.map((value) => ({ revoked_at: null, ...value }));
-        rows.push(...inserted);
-        return { data: inserted, error: null };
-      }
-      throw new Error(`unsupported mock operation: ${operation}`);
-    }
-
-    return query;
-  }
-
-  return {
-    client: {
-      database: {
-        from,
-        rpc: async () => ({ data: true, error: null }),
-      },
-    },
-    devices,
-  };
+async function loadIssuer(file, exported = "") {
+  const access = read("dashboard/edge-patches/cloud/access.ts")
+    .replace(/^import type .*;$/m, "").replaceAll("export ", "");
+  const source = read(`dashboard/edge-patches/${file}.ts`)
+    .replace('import { createClient } from "npm:@insforge/sdk";',
+      "const createClient = () => globalThis.__edgeTestClient;")
+    .replace('import { cloudRpc, cloudFailure } from "./cloud/access.ts";', access)
+    .concat(exported);
+  const compiled = ts.transpileModule(source, { compilerOptions: {
+    module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022,
+  } }).outputText;
+  return import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
 }
 
 test("migration adds the name_customized column and backfills renamed rows", () => {
@@ -229,35 +84,15 @@ test("rename endpoint survives being deployed before the migration", () => {
   );
 });
 
-test("token issuance refreshes device identity through the conflict-safe RPC", () => {
-  const tokenIssue = read("dashboard/edge-patches/tokentracker-device-token-issue.ts");
-  assert.match(
-    tokenIssue,
-    /\.rpc\(\s*"refresh_tokentracker_device_identity"/u,
-    "token-issue must delegate refresh and legacy convergence to one transaction",
-  );
-  assert.doesNotMatch(
-    tokenIssue,
-    /\.update\(row\.name_customized \? \{ platform \} : \{ device_name: deviceName, platform \}\)/u,
-    "token-issue must not issue a racy direct keep-fresh UPDATE",
-  );
-
-  const flowPoll = read("dashboard/edge-patches/tokentracker-device-flow-poll.ts");
-  assert.match(
-    flowPoll,
-    /\.rpc\(\s*"refresh_tokentracker_device_identity"/u,
-    "device-flow-poll must delegate refresh and legacy convergence to one transaction",
-  );
-  assert.doesNotMatch(
-    flowPoll,
-    /\.update\(row\.name_customized \? \{ platform \} : \{ device_name: deviceName, platform \}\)/u,
-    "device-flow-poll must not issue a racy direct keep-fresh UPDATE",
-  );
-  assert.match(
-    flowPoll,
-    /name_customized[\s\S]{0,120}\{ machine_id: machineId \}[\s\S]{0,120}\{ machine_id: machineId, device_name: deviceName \}/u,
-    "legacy adoption must not rename a row the user customized",
-  );
+test("both issuance edges delegate identity refresh and admission to the atomic quota RPC", () => {
+  for (const file of ["tokentracker-device-token-issue", "tokentracker-device-flow-poll"]) {
+    const source = read(`dashboard/edge-patches/${file}.ts`);
+    assert.match(source, /cloudRpc\([\s\S]*?"cloud_issue_device_token"/u);
+    assert.doesNotMatch(source, /\.from\("tokentracker_devices"\)/u);
+  }
+  const source = read("migrations/20261004120000_cloud-machine-access.sql");
+  assert.match(source, /PERFORM public\.refresh_tokentracker_device_identity\(p_user_id,v_device\.id,p_device_name,p_platform\)/u);
+  assert.match(source, /device_name=CASE WHEN name_customized THEN device_name ELSE p_device_name END/u);
 });
 
 test("device identity refresh merges a matching legacy row without losing usage or custom names", () => {
@@ -313,261 +148,47 @@ test("device identity refresh merges a matching legacy row without losing usage 
   assert.match(source, /REVOKE ALL ON FUNCTION public\.refresh_tokentracker_device_identity/u);
 });
 
-test("renamed machine_id-less rows stay adoptable via their preserved default name", () => {
-  // A rename removes the row from the client-default name space, so adoption
-  // by device_name can no longer find it — without a fallback the next
-  // client-upgrade login would mint a fresh device and split the history
-  // (issue #187 class). Both adoption paths must retry the match against
-  // default_device_name, which the rename endpoint captured.
-  const tokenIssue = read("dashboard/edge-patches/tokentracker-device-token-issue.ts");
-  assert.match(
-    tokenIssue,
-    /\.in\("default_device_name", legacyNames\)/u,
-    "token-issue adoption must fall back to the preserved pre-rename default name",
-  );
-
-  const flowPoll = read("dashboard/edge-patches/tokentracker-device-flow-poll.ts");
-  assert.match(
-    flowPoll,
-    /\.in\("default_device_name", legacyNames\)/u,
-    "device-flow-poll adoption must fall back to the preserved pre-rename default name",
-  );
+test("shared SQL adoption retains renamed defaults and stable same-hostname suffixes", () => {
+  const source = read("migrations/20261004120000_cloud-machine-access.sql");
+  assert.match(source, /device_name=ANY\(p_legacy_names\) OR default_device_name=ANY\(p_legacy_names\)/u);
+  assert.match(source, /left\(p_device_name,116\) \|\| ' #' \|\| left\(coalesce\(p_machine_id,p_token_id::text\),8\)/u);
+  assert.match(source, /EXCEPTION WHEN unique_violation THEN[\s\S]*?SET machine_id=p_machine_id WHERE id=v_device\.id/u);
 });
 
-test("device uploads keep machine identity separate from readable system names", () => {
-  const tokenIssue = read("dashboard/edge-patches/tokentracker-device-token-issue.ts");
-  assert.match(
-    tokenIssue,
-    /`Token Tracker \(dashboard\) #\$\{machineId\.slice\(0, 8\)\}`/u,
-    "hostname rollout must still adopt the previous dashboard hash label",
-  );
-  assert.match(
-    tokenIssue,
-    /legacyNameCustomized[\s\S]{0,180}\{ machine_id: machineId, device_name: deviceName \}/u,
-    "legacy adoption must refresh generated labels without overwriting custom names",
-  );
-
-  const flowPoll = read("dashboard/edge-patches/tokentracker-device-flow-poll.ts");
-  assert.ok(
-    flowPoll.includes("const hostnameMatch = clientInfo?.match(/^\\S+\\s+(.+)$/);"),
-    "CLI device flow must only extract a hostname when client_info has the expected separator",
-  );
-  assert.match(
-    flowPoll,
-    /generatedLegacyName[\s\S]*?\.in\("device_name", legacyNames\)/u,
-    "CLI hostname rollout must continue adopting generated legacy names",
-  );
-});
-
-test("two machines with the same hostname register as distinct devices", async () => {
-  const { testIssueDeviceToken } = await loadDeviceFlowIssuer();
-  const { client, devices } = createEdgeDatabaseMock();
-  const hostname = "MacBook-Pro.local";
-  const firstMachineId = "a".repeat(64);
-  const secondMachineId = "b".repeat(64);
-
-  const first = await testIssueDeviceToken(
-    client,
-    "same-user",
-    `darwin-arm64 ${hostname}`,
-    firstMachineId,
-  );
-  const second = await testIssueDeviceToken(
-    client,
-    "same-user",
-    `darwin-arm64 ${hostname}`,
-    secondMachineId,
-  );
-
-  assert.notEqual(first.deviceId, second.deviceId);
-  assert.deepEqual(
-    devices.map((device) => ({
-      name: device.device_name,
-      machineId: device.machine_id,
-    })),
-    [
-      { name: hostname, machineId: firstMachineId },
-      { name: `${hostname} #bbbbbbbb`, machineId: secondMachineId },
-    ],
-  );
-
-  const { default: issueDashboardToken } = await loadDashboardTokenIssueHandler();
-  const dashboardDb = createEdgeDatabaseMock();
-  const previousDeno = globalThis.Deno;
-  const previousEdgeTestClient = globalThis.__edgeTestClient;
-  globalThis.__edgeTestClient = dashboardDb.client;
-  globalThis.Deno = {
-    env: {
-      get(name) {
-        return {
-          INSFORGE_BASE_URL: "https://cloud.example",
-          INSFORGE_SERVICE_ROLE_KEY: "test-service-role",
-          INSFORGE_ANON_KEY: "test-anon-key",
-        }[name];
-      },
-    },
-  };
+test("CLI flow forwards current hostname and every generated legacy name to the shared transaction", async () => {
+  const { testIssueDeviceToken } = await loadIssuer("tokentracker-device-flow-poll", "\nexport { issueDeviceToken as testIssueDeviceToken };\n");
+  const calls = [];
+  const client = { database: { rpc: async (name,args) => {
+    calls.push({name,args}); return {data:{ok:true,device_id:"device-1"},error:null};
+  } } };
+  const previousDeno=globalThis.Deno;
+  globalThis.Deno={env:{get:()=>undefined}};
   try {
-    for (const machineId of [firstMachineId, secondMachineId]) {
-      const response = await issueDashboardToken(new Request("https://cloud.example/functions/device-token", {
-        method: "POST",
-        headers: {
-          Authorization: "Bearer test-service-role",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          user_id: "same-user",
-          device_name: hostname,
-          platform: "desktop",
-          machine_id: machineId,
-        }),
-      }));
-      assert.equal(response.status, 200, await response.text());
-    }
-  } finally {
-    globalThis.Deno = previousDeno;
-    globalThis.__edgeTestClient = previousEdgeTestClient;
-  }
-  assert.deepEqual(
-    dashboardDb.devices.map((device) => device.device_name),
-    [hostname, `${hostname} #bbbbbbbb`],
-  );
-
-  for (const relativePath of [
-    "dashboard/edge-patches/tokentracker-device-token-issue.ts",
-    "dashboard/edge-patches/tokentracker-device-flow-poll.ts",
-  ]) {
-    const source = read(relativePath);
-    assert.match(
-      source,
-      /const fallbackDeviceName = disambiguateDeviceName\(deviceName, machineId\)/u,
-      `${relativePath} must retry same-hostname registration with a stable suffix`,
-    );
-  }
+    await testIssueDeviceToken(client,"user-1","darwin-arm64 MacBook-Pro.local","a".repeat(64),"code-1");
+    await testIssueDeviceToken(client,"user-1","darwin-arm64","c".repeat(64),"code-2");
+  } finally { globalThis.Deno=previousDeno; }
+  assert.equal(calls[0].name,"cloud_issue_device_token");
+  assert.equal(calls[0].args.p_device_name,"MacBook-Pro.local");
+  assert.deepEqual(calls[0].args.p_legacy_names,["MacBook-Pro.local","TokenTracker CLI (darwin-arm64 MacBook-Pro.local) #aaaaaaaa","TokenTracker CLI (darwin-arm64 MacBook-Pro.local)"]);
+  assert.equal(calls[0].args.p_device_code,"code-1");
+  assert.equal(calls[0].args.p_environment,"live");
+  assert.equal(calls[1].args.p_device_name,"TokenTracker CLI (darwin-arm64) #cccccccc");
 });
 
-test("legacy CLI client info without a hostname keeps the generated label", async () => {
-  const { testIssueDeviceToken } = await loadDeviceFlowIssuer();
-  const { client, devices } = createEdgeDatabaseMock();
-
-  await testIssueDeviceToken(
-    client,
-    "legacy-user",
-    "darwin-arm64",
-    "c".repeat(64),
-  );
-
-  assert.equal(devices[0].device_name, "TokenTracker CLI (darwin-arm64) #cccccccc");
-});
-
-test("CLI adoption keeps the legacy label when another machine owns the hostname", async () => {
-  const { testIssueDeviceToken } = await loadDeviceFlowIssuer();
-  const { client, devices } = createEdgeDatabaseMock();
-  const hostname = "MacBook-Pro.local";
-  const machineA = "a".repeat(64);
-  const machineB = "b".repeat(64);
-  devices.push(
-    {
-      id: "machine-a-device",
-      user_id: "same-user",
-      device_name: hostname,
-      platform: "cli-device-flow",
-      machine_id: machineA,
-      revoked_at: null,
-      name_customized: false,
-      created_at: "2026-01-01T00:00:00.000Z",
-    },
-    {
-      id: "orphan-b",
-      user_id: "same-user",
-      device_name: `TokenTracker CLI (darwin-arm64 ${hostname}) #bbbbbbbb`,
-      default_device_name: `TokenTracker CLI (darwin-arm64 ${hostname}) #bbbbbbbb`,
-      platform: "cli-device-flow",
-      machine_id: null,
-      revoked_at: null,
-      name_customized: false,
-      created_at: "2026-01-02T00:00:00.000Z",
-    },
-  );
-
-  const result = await testIssueDeviceToken(
-    client,
-    "same-user",
-    `darwin-arm64 ${hostname}`,
-    machineB,
-  );
-
-  // Renaming the orphan onto the taken hostname collides with the active-name
-  // unique index; adoption must fall back to machine_id-only so the historical
-  // row is claimed instead of orphaned.
-  assert.equal(result.deviceId, "orphan-b");
-  const adopted = devices.find((device) => device.id === "orphan-b");
-  assert.equal(adopted.machine_id, machineB);
-  assert.equal(adopted.device_name, `TokenTracker CLI (darwin-arm64 ${hostname}) #bbbbbbbb`);
-});
-
-test("dashboard token issue keeps the legacy label when another machine owns the hostname", async () => {
-  const { default: issueDashboardToken } = await loadDashboardTokenIssueHandler();
-  const dashboardDb = createEdgeDatabaseMock();
-  const hostname = "office-win";
-  const machineA = "a".repeat(64);
-  const machineB = "b".repeat(64);
-  dashboardDb.devices.push(
-    {
-      id: "machine-a-device",
-      user_id: "same-user",
-      device_name: hostname,
-      platform: "desktop",
-      machine_id: machineA,
-      revoked_at: null,
-      name_customized: false,
-    },
-    {
-      id: "orphan-b",
-      user_id: "same-user",
-      device_name: "Token Tracker (dashboard) #bbbbbbbb",
-      platform: "desktop",
-      machine_id: null,
-      revoked_at: null,
-      name_customized: false,
-    },
-  );
-  const previousDeno = globalThis.Deno;
-  const previousEdgeTestClient = globalThis.__edgeTestClient;
-  globalThis.__edgeTestClient = dashboardDb.client;
-  globalThis.Deno = {
-    env: {
-      get(name) {
-        return {
-          INSFORGE_BASE_URL: "https://cloud.example",
-          INSFORGE_SERVICE_ROLE_KEY: "test-service-role",
-          INSFORGE_ANON_KEY: "test-anon-key",
-        }[name];
-      },
-    },
-  };
+test("dashboard issuance forwards its legacy labels and preserves structured admission denials",async()=>{
+  const {default:handler}=await loadIssuer("tokentracker-device-token-issue");
+  let args;
+  const previousDeno=globalThis.Deno,previousClient=globalThis.__edgeTestClient;
+  globalThis.Deno={env:{get:name=>({INSFORGE_BASE_URL:"https://cloud.example",INSFORGE_SERVICE_ROLE_KEY:"admin",INSFORGE_ANON_KEY:"anon"})[name]}};
+  globalThis.__edgeTestClient={database:{rpc:async(_,values)=>{
+    args=values;return {data:{ok:false,code:"cloud_machine_paused",status:403,recovery_url:"https://www.tokentracker.cc/cloud"},error:null};
+  }}};
   try {
-    const response = await issueDashboardToken(new Request("https://cloud.example/functions/device-token", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer test-service-role",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        user_id: "same-user",
-        device_name: hostname,
-        platform: "desktop",
-        machine_id: machineB,
-      }),
-    }));
-    assert.equal(response.status, 200, await response.text());
-  } finally {
-    globalThis.Deno = previousDeno;
-    globalThis.__edgeTestClient = previousEdgeTestClient;
-  }
-  const adopted = dashboardDb.devices.find((device) => device.id === "orphan-b");
-  assert.equal(adopted.machine_id, machineB);
-  assert.equal(adopted.device_name, "Token Tracker (dashboard) #bbbbbbbb");
+    const response=await handler(new Request("https://cloud.example/functions/issue",{method:"POST",headers:{Authorization:"Bearer admin"},
+      body:JSON.stringify({user_id:"user-1",device_name:"Office desktop",platform:"desktop",machine_id:"b".repeat(64)})}));
+    assert.equal(response.status,403);assert.equal((await response.json()).code,"cloud_machine_paused");
+    assert.deepEqual(args.p_legacy_names,["Office desktop","Token Tracker (dashboard) #bbbbbbbb","Token Tracker (dashboard)","Token Tracker"]);
+  } finally {globalThis.Deno=previousDeno;globalThis.__edgeTestClient=previousClient;}
 });
 
 test("current-device labels react to the first completed cloud sync", () => {

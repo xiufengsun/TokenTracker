@@ -1,7 +1,8 @@
 import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from "react";
-import { Navigate, useLocation } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
 import { useLocale } from "./hooks/useLocale.js";
+import { copy } from "./lib/copy";
 import { ThemeProvider } from "./ui/foundation/ThemeProvider.jsx";
 import { useInsforgeAuth } from "./contexts/InsforgeAuthContext.jsx";
 import { LoginModalProvider } from "./contexts/LoginModalContext.jsx";
@@ -9,6 +10,9 @@ import { getBackendBaseUrl, getLeaderboardBaseUrl } from "./lib/config";
 import { isMockEnabled } from "./lib/mock-mode";
 import { isScreenshotModeEnabled } from "./lib/screenshot-mode";
 import { useCloudUsageSync } from "./hooks/use-cloud-usage-sync";
+import { CloudContextualPrompt } from "./components/cloud/CloudContextualPrompt.jsx";
+import { clearCloudPromptIntent } from "./lib/cloud-prompt-policy.js";
+import { setCloudSyncEnabled } from "./lib/cloud-sync-prefs";
 import { AppLayout } from "./ui/components/Sidebar.jsx";
 import { LegalLinks } from "./ui/components/LegalLinks.jsx";
 import { ToastProvider } from "./ui/components/Toast.jsx";
@@ -87,6 +91,15 @@ const WrappedPage = lazy(() => import("./pages/WrappedPage.jsx"));
 const SettingsPage = lazy(() =>
   import("./pages/SettingsPage.jsx").then((m) => ({ default: m.SettingsPage })),
 );
+const CloudPage = lazy(() =>
+  import("./pages/CloudPage.jsx").then((m) => ({ default: m.CloudPage })),
+);
+const CloudCheckoutPage = lazy(() =>
+  import("./pages/CloudCheckoutPage.jsx").then((m) => ({ default: m.CloudCheckoutPage })),
+);
+const SelfHostPage = lazy(() =>
+  import("./pages/SelfHostPage.jsx").then((m) => ({ default: m.SelfHostPage })),
+);
 const SkillsPage = lazy(() =>
   import("./pages/SkillsPage.jsx").then((m) => ({ default: m.SkillsPage })),
 );
@@ -106,8 +119,17 @@ export default function App() {
   // across the tree — without unmounting lazy-loaded pages.
   const { resolvedLocale } = useLocale();
   const location = useLocation();
+  const navigate = useNavigate();
   const insforge = useInsforgeAuth();
   useCloudUsageSync();
+  const lastPromptOwnerRef = useRef(null);
+  useEffect(() => {
+    const owner = insforge.enabled && insforge.signedIn ? insforge.user?.id : null;
+    if (lastPromptOwnerRef.current === owner) return;
+    if (lastPromptOwnerRef.current) clearCloudPromptIntent(lastPromptOwnerRef.current);
+    if (owner) clearCloudPromptIntent(owner);
+    lastPromptOwnerRef.current = owner;
+  }, [insforge.enabled, insforge.signedIn, insforge.user?.id]);
   const dashboardMainContentVisibleRef = useRef(false);
   const dashboardResourcePreloadStartedRef = useRef(false);
   const leaderboardStatePreloadContextKeysRef = useRef(new Set());
@@ -133,6 +155,15 @@ export default function App() {
     (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 
   const normalizedPath = pathname.replace(/\/+$/, "") || "/";
+  useEffect(() => {
+    if (!insforge.signedIn || insforge.loading || !["/", "/dashboard"].includes(normalizedPath)) return;
+    try {
+      const next = window.sessionStorage.getItem("tt.cloud.return");
+      if (!/^\/(cloud|billing\/checkout)(\?|$)/.test(next || "")) return;
+      window.sessionStorage.removeItem("tt.cloud.return");
+      navigate(next, { replace: true });
+    } catch { /* Account settings retains server-side order recovery. */ }
+  }, [insforge.signedIn, insforge.loading, normalizedPath, navigate]);
   const isDashboardDefaultPath = normalizedPath === "/" || normalizedPath === "/dashboard";
   const isLeaderboardPath = normalizedPath === "/leaderboard";
   // Standalone shareable profile page: /u/:userId (public, anonymous-visible).
@@ -216,6 +247,9 @@ export default function App() {
 
   const isLimitsPath = normalizedPath === "/limits";
   const isSettingsPath = normalizedPath === "/settings";
+  const isCloudPath = normalizedPath === "/cloud";
+  const isCheckoutPath = normalizedPath === "/billing/checkout";
+  const isSelfHostPath = normalizedPath === "/self-host";
   const isSkillsPath = normalizedPath === "/skills";
   const isSessionsPath = normalizedPath === "/sessions";
   const isWidgetsPath = normalizedPath === "/widgets";
@@ -223,7 +257,7 @@ export default function App() {
   const isIpCheckPath = normalizedPath === "/ip-check";
   const isServiceStatusPath = normalizedPath === "/service-status";
   const isAchievementsPath = normalizedPath === "/achievements";
-  if (isLimitsPath || isSettingsPath || isSkillsPath || isSessionsPath || isWidgetsPath || isPetPath || isIpCheckPath || isServiceStatusPath || isAchievementsPath) gate = "dashboard";
+  if (isLimitsPath || isSettingsPath || isCloudPath || isCheckoutPath || isSelfHostPath || isSkillsPath || isSessionsPath || isWidgetsPath || isPetPath || isIpCheckPath || isServiceStatusPath || isAchievementsPath) gate = "dashboard";
 
   let PageComponent = DashboardPage;
   if (profileUserId) {
@@ -234,6 +268,12 @@ export default function App() {
     PageComponent = LimitsPage;
   } else if (isSettingsPath) {
     PageComponent = SettingsPage;
+  } else if (isCloudPath) {
+    PageComponent = CloudPage;
+  } else if (isCheckoutPath) {
+    PageComponent = CloudCheckoutPage;
+  } else if (isSelfHostPath) {
+    PageComponent = SelfHostPage;
   } else if (isSkillsPath) {
     PageComponent = SkillsPage;
   } else if (isSessionsPath) {
@@ -252,12 +292,15 @@ export default function App() {
 
   const showSidebar =
     !publicMode &&
-    !isAuthGateTriggered &&
+    (!isAuthGateTriggered || isCloudPath || isCheckoutPath || isSelfHostPath) &&
     (normalizedPath === "/dashboard" ||
       normalizedPath === "/" ||
       isLeaderboardPath ||
       isLimitsPath ||
       isSettingsPath ||
+      isCloudPath ||
+      isCheckoutPath ||
+      isSelfHostPath ||
       isSkillsPath ||
       isSessionsPath ||
       isWidgetsPath ||
@@ -281,6 +324,9 @@ export default function App() {
     // (see api.ts getLeaderboard + LeaderboardProfilePage). Without these
     // exclusions the gate would bounce anonymous share-link traffic to /login.
     !isLeaderboardPath &&
+    !isCloudPath &&
+    !isCheckoutPath &&
+    !isSelfHostPath &&
     !profileUserId &&
     normalizedPath !== "/login" &&
     normalizedPath !== "/reset-password" &&
@@ -288,7 +334,11 @@ export default function App() {
     normalizedPath !== "/auth/callback" &&
     normalizedPath !== "/auth/native-callback";
   if (publicHostNeedsLogin) {
-    return <Navigate to="/login" replace />;
+    const params = new URLSearchParams(location.search);
+    for (const key of ["insforge_code", "code", "state", "access_token", "refresh_token"]) params.delete(key);
+    const query = params.toString();
+    const next = encodeURIComponent(location.pathname + (query ? `?${query}` : ""));
+    return <Navigate to={`/login?next=${next}`} replace />;
   }
 
   let content = null;
@@ -312,7 +362,19 @@ export default function App() {
     content = <LandingPage signInUrl="/login" signUpUrl="/login" />;
     hasLandingFooter = true;
   } else {
-    const pageNode = (
+    const pageNode = (<>
+      {insforge.configurationError ? (
+        <p role="alert" className="mx-auto w-full max-w-7xl px-4 py-4 text-sm leading-6 text-oai-gray-700 dark:text-oai-gray-300 sm:px-6">
+          {copy("instance.configuration.invalid")}
+        </p>
+      ) : null}
+      {isDashboardDefaultPath && !publicMode && cloudAuthSignedIn ? (
+          <CloudContextualPrompt userId={insforge.user?.id} localHost={isLocalMode} className="mx-auto w-full max-w-7xl px-4 pt-4 sm:px-6"
+            onContinueLocal={() => {
+              clearCloudPromptIntent(insforge.user?.id);
+              setCloudSyncEnabled(false);
+            }} />
+      ) : null}
       <PageComponent
         key={resolvedLocale}
         baseUrl={baseUrl}
@@ -327,7 +389,7 @@ export default function App() {
         signUpUrl="/login"
         onMainContentVisible={handleDashboardMainContentVisible}
       />
-    );
+    </>);
     if (showSidebar) {
       content = (
         <AppLayout>
@@ -337,6 +399,9 @@ export default function App() {
       );
     } else {
       content = pageNode;
+    }
+    if (isCloudPath || isCheckoutPath || isSelfHostPath) {
+      content = <div className="tt-cloud-theme">{content}</div>;
     }
   }
 

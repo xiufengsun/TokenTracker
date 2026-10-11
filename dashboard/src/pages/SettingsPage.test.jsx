@@ -1,7 +1,7 @@
 import React from "react";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "./SettingsPage.jsx";
 
@@ -18,6 +18,10 @@ const nativeSettingsMock = vi.hoisted(() => ({
 const proxySettingsMock = vi.hoisted(() => ({
   available: false,
 }));
+const profileSettingsMock = vi.hoisted(() => ({
+  settings: { enabled: false, signedIn: false, userId: "shared-settings-user" },
+  hook: vi.fn(), accountReceived: null, cloudReceived: null, cloudActive: null, navigate: null,
+}));
 
 const LABELS = {
   "settings.page.title": "Settings",
@@ -30,7 +34,9 @@ const LABELS = {
   "settings.section.menubar": "App & Updates",
   "settings.section.menubar.description": "Background sync and updates",
   "settings.section.account": "Account",
-  "settings.section.account.description": "Cloud sync and profile",
+  "settings.section.account.description": "Public profile and account details",
+  "settings.section.cloud": "Cloud",
+  "settings.section.cloud.description": "Cloud membership, billing and sync",
   "settings.section.limits": "Usage & Limits",
   "settings.section.limits.description": "Usage display and providers",
   "settings.section.labs": "Labs",
@@ -91,7 +97,13 @@ vi.mock("../components/settings/MenuBarSection.jsx", () => ({
 }));
 
 vi.mock("../components/settings/AccountSection.jsx", () => ({
-  AccountSection: () => <div data-testid="account-content" />,
+  AccountSection: ({ settings }) => { profileSettingsMock.accountReceived = settings; return <div data-testid="account-content" />; },
+}));
+vi.mock("../components/settings/CloudSection.jsx", () => ({
+  CloudSection: ({ settings, active }) => { profileSettingsMock.cloudReceived = settings; profileSettingsMock.cloudActive = active; return <div data-testid="cloud-content" />; },
+}));
+vi.mock("../components/settings/useAccountProfileSettings.js", () => ({
+  useAccountProfileSettings: () => { profileSettingsMock.hook(); return profileSettingsMock.settings; },
 }));
 
 vi.mock("../components/settings/LabsSection.jsx", () => ({
@@ -131,10 +143,16 @@ vi.mock("../components/settings/Controls.jsx", () => ({
   ),
 }));
 
+function Location() {
+  const location = useLocation();
+  profileSettingsMock.navigate = useNavigate();
+  return <output data-testid="location">{location.pathname + location.search}</output>;
+}
 function renderSettings(initialPath = "/settings") {
   return render(
-    <MemoryRouter initialEntries={[initialPath]}>
+    <MemoryRouter initialEntries={Array.isArray(initialPath) ? initialPath : [initialPath]}>
       <SettingsPage />
+      <Location />
     </MemoryRouter>,
   );
 }
@@ -149,6 +167,10 @@ describe("SettingsPage category navigation", () => {
     };
     nativeSettingsMock.setSetting.mockReset();
     proxySettingsMock.available = false;
+    profileSettingsMock.hook.mockReset();
+    profileSettingsMock.accountReceived = null;
+    profileSettingsMock.cloudReceived = null;
+    profileSettingsMock.cloudActive = null;
   });
 
   it("hides macOS reset controls on Windows before native settings arrive", () => {
@@ -191,6 +213,49 @@ describe("SettingsPage category navigation", () => {
     expect(appearanceButton).not.toHaveAttribute("aria-current");
     expect(appearancePanel).toHaveAttribute("hidden");
     expect(accountPanel).not.toHaveAttribute("hidden");
+  });
+
+  it("opens the dedicated Personal Cloud panel from its deep link with one shared account state", async () => {
+    const { container } = renderSettings("/settings?section=cloud&source=trial");
+    const cloudButton = screen.getByRole("button", { name: "Cloud", exact: true });
+    const accountButton = screen.getByRole("button", { name: "Account", exact: true });
+    const cloudPanel = container.querySelector('[data-settings-panel="cloud"]');
+    const accountPanel = container.querySelector('[data-settings-panel="account"]');
+    expect(profileSettingsMock.hook).toHaveBeenCalledTimes(1);
+    expect(profileSettingsMock.accountReceived).toBe(profileSettingsMock.settings);
+    expect(profileSettingsMock.cloudReceived).toBe(profileSettingsMock.settings);
+    expect(cloudButton).toHaveAttribute("aria-current", "page");
+    expect(cloudButton).toHaveAttribute("aria-controls", "settings-panel-cloud");
+    expect(cloudPanel).toHaveAttribute("aria-labelledby", "settings-nav-cloud");
+    expect(cloudPanel).not.toHaveAttribute("hidden");
+    expect(container.firstChild).toHaveClass("tt-cloud-settings");
+    expect(screen.queryByText("Cloud membership, billing and sync")).not.toBeInTheDocument();
+    expect(accountPanel).toHaveAttribute("hidden");
+    expect(cloudButton.closest("nav").textContent).toContain("Personal");
+    await act(async () => { await userEvent.click(accountButton); });
+    expect(screen.getByTestId("location")).toHaveTextContent("/settings?section=account&source=trial");
+    expect(accountButton).toHaveFocus();
+    expect(accountPanel).not.toHaveAttribute("hidden");
+    expect(cloudPanel).toHaveAttribute("hidden");
+    expect(container.firstChild).not.toHaveClass("tt-cloud-settings");
+    await act(async () => { await userEvent.click(cloudButton); });
+    expect(cloudButton).toHaveFocus();
+    expect(container.firstChild).toHaveClass("tt-cloud-settings");
+    expect(screen.getByTestId("location")).toHaveTextContent("/settings?section=cloud&source=trial");
+    expect(screen.getByTestId("account-content")).toBeInTheDocument();
+    expect(screen.getByTestId("cloud-content")).toBeInTheDocument();
+  });
+
+  it("deactivates Cloud portals on browser Back while retaining the shared account section state", async () => {
+    renderSettings(["/settings?section=account", "/settings?section=cloud"]);
+    expect(profileSettingsMock.cloudActive).toBe(true);
+    await act(async () => { profileSettingsMock.navigate(-1); });
+    expect(screen.getByTestId("location")).toHaveTextContent("/settings?section=account");
+    expect(profileSettingsMock.cloudActive).toBe(false);
+    expect(screen.getByTestId("cloud-content")).toBeInTheDocument();
+    expect(profileSettingsMock.cloudReceived).toBe(profileSettingsMock.settings);
+    await act(async () => { profileSettingsMock.navigate(1); });
+    expect(profileSettingsMock.cloudActive).toBe(true);
   });
 
   it("omits the network category when the local proxy API is unavailable", () => {

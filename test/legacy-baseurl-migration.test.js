@@ -259,6 +259,15 @@ test("sync preserves the legacy device token and replays the queue to the curren
       "utf8",
     );
     await cmdSync(["--auto", "--publish-account"]);
+    const held = await readJsonFile(path.join(trackerDir, "queue.state.json"));
+    assert.equal(held.offset, Buffer.byteLength(queue), "a native automatic tick honors the new fifteen-minute interval");
+    assert.equal(ingestCalls.length, 1);
+    const throttlePath = path.join(trackerDir, "upload.throttle.json");
+    const deadline = await readJsonFile(throttlePath);
+    deadline.lastSuccessMs = Date.now() - 17 * 60_000;
+    deadline.nextAllowedAtMs = deadline.lastSuccessMs + 15 * 60_000;
+    await fs.writeFile(throttlePath, JSON.stringify(deadline), "utf8");
+    await cmdSync(["--auto", "--publish-account"]);
     const after = await readJsonFile(path.join(trackerDir, "queue.state.json"));
     assert.equal(after.offset, Buffer.byteLength(queue) + Buffer.byteLength(pendingLine));
     assert.equal(after.note, "manual");
@@ -391,6 +400,13 @@ test("sync removes an unchanged legacy anon key after a concurrent login updates
     await fs.appendFile(path.join(trackerDir, "queue.jsonl"), pendingLine, "utf8");
     await cmdSync(["--auto", "--publish-account"]);
 
+    assert.equal(ingestCalls.length, 1, "new pending rows stay queued through the automatic cooldown");
+    const throttlePath = path.join(trackerDir, "upload.throttle.json");
+    const deadline = await readJsonFile(throttlePath);
+    deadline.lastSuccessMs = Date.now() - 17 * 60_000;
+    deadline.nextAllowedAtMs = deadline.lastSuccessMs + 15 * 60_000;
+    await fs.writeFile(throttlePath, JSON.stringify(deadline), "utf8");
+    await cmdSync(["--auto", "--publish-account"]);
     assert.equal(ingestCalls.length, 2);
     assert.equal(ingestCalls[1].headers.apikey, DEFAULT_ANON_KEY);
     assert.equal(ingestCalls[1].headers.Authorization, "Bearer current-login-token");
@@ -658,7 +674,9 @@ test("a partial non-auth upload failure resumes after the committed offset", asy
 test("sync does not persist an unverified replacement when the replay queue is empty", async () => {
   await withTempHome(async (home) => {
     const trackerDir = await writeTrackerState(home, {});
-    await cmdSync(["--auto"]);
+    // Restrict parsing to the isolated Codex root; other Windows providers may
+    // discover real history under AppData even when the fixture home is empty.
+    await cmdSync(["--auto", "--from-notify", "--source", "codex"]);
 
     await writeTrackerState(home, {
       config: {
@@ -674,7 +692,7 @@ test("sync does not persist an unverified replacement when the replay queue is e
     global.fetch = successfulFetch(() => {
       ingestCalls += 1;
     });
-    await cmdSync(["--auto"]);
+    await cmdSync(["--auto", "--from-notify", "--source", "codex"]);
 
     const config = await readJsonFile(path.join(trackerDir, "config.json"));
     assert.equal(config.baseUrl, LEGACY_BASE_URL);

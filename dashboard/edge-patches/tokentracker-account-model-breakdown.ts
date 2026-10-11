@@ -3,6 +3,7 @@
  * Mirrors local-api.js `tokentracker-usage-model-breakdown` response schema.
  */
 import { createClient } from "npm:@insforge/sdk";
+import { cloudReadAccess, cloudFailure, cloudHistoryFailure } from "./cloud/access.ts";
 
 const SOURCES_WITH_AUTHORITATIVE_COST = new Set(["grok", "cline"]);
 
@@ -13,25 +14,68 @@ const corsHeaders = {
 };
 
 /**
- * Kept deliberately plain: do NOT add Content-Encoding here.
- *
- * This endpoint carried a gzip branch for a while (body over 1 KB and a caller
- * advertising gzip got a compressed stream). It never reached a client. The
- * InsForge gateway decompresses an encoded edge response and forwards it as
- * identity: `Vary: Accept-Encoding` is passed through, `Content-Encoding` is
- * stripped, and both `Content-Length` and the ETag are computed over the plain
- * body. Verified end to end on 2026-09-20 against the public leaderboard
- * endpoint with cache-busted requests: 77529 bytes on the wire either way, and
- * a body starting with `{"en` rather than the gzip magic 1f 8b.
- *
- * So compressing here only burns CPU twice. The way to shrink these responses
- * is fewer bytes (the *_compact RPCs) or fewer requests (client-side caches).
+ * The legacy /functions gateway decompresses encoded edge responses and sends
+ * identity to clients. On 2026-09-20 its public leaderboard response stayed
+ * 77529 bytes with or without gzip; encoding was stripped and length/ETag were
+ * recomputed over the plain body. The verified direct function2 route now
+ * preserves gzip. The response wrapper negotiates that transfer encoding after
+ * the existing handler; legacy clients still receive the original JSON body.
  */
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+function acceptsGzip(value: string | null): boolean {
+  let gzip: number | null = null;
+  let wildcard = 0;
+  let identity: number | null = null;
+  for (const entry of (value || "").split(",")) {
+    const [coding, ...parameters] = entry.trim().toLowerCase().split(";");
+    const name = coding.trim();
+    const weight = parameters.find((part) => /^\s*q\s*=/.test(part));
+    const parsed = weight === undefined ? 1 : Number(weight.split("=")[1].trim());
+    const quality = Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : 0;
+    if (name === "gzip") gzip = gzip === null ? quality : Math.min(gzip, quality);
+    if (name === "*") wildcard = quality;
+    if (name === "identity") identity = quality;
+  }
+  const quality = gzip ?? wildcard;
+  return quality > 0 && (identity === null || quality >= identity);
+}
+
+async function encodeJsonResponse(req: Request, response: Response): Promise<Response> {
+  if (req.method !== "GET" || response.status !== 200 ||
+      !response.headers.get("Content-Type")?.toLowerCase().startsWith("application/json") ||
+      response.headers.has("Content-Encoding") || response.headers.has("Content-Range") ||
+      /\bno-transform\b/i.test(response.headers.get("Cache-Control") || "")) return response;
+  const headers = new Headers(response.headers);
+  if (!(headers.get("Vary") || "").split(",").some((part) => part.trim().toLowerCase() === "accept-encoding")) {
+    headers.append("Vary", "Accept-Encoding");
+  }
+  const identity = () => new Response(response.body, {
+    status: response.status, statusText: response.statusText, headers,
+  });
+  if (!acceptsGzip(req.headers.get("Accept-Encoding")) || typeof CompressionStream === "undefined") return identity();
+  try {
+    const bytes = new Uint8Array(await response.clone().arrayBuffer());
+    if (bytes.byteLength < 1024) return identity();
+    const compressed = new Uint8Array(await new Response(
+      new Response(bytes).body!.pipeThrough(new CompressionStream("gzip")),
+    ).arrayBuffer());
+    if (compressed.byteLength >= bytes.byteLength) return identity();
+    const encodedHeaders = new Headers(headers);
+    encodedHeaders.set("Content-Encoding", "gzip");
+    encodedHeaders.set("Content-Length", String(compressed.byteLength));
+    encodedHeaders.delete("ETag");
+    return new Response(compressed, {
+      status: response.status, statusText: response.statusText, headers: encodedHeaders,
+    });
+  } catch {
+    return identity();
+  }
 }
 
 /**
@@ -692,7 +736,7 @@ function getUsageModelPricing(model: string, source: string) {
   };
 }
 
-export default async function (req: Request): Promise<Response> {
+async function handleAccountRequest(req: Request): Promise<Response> {
   if (req.method === "OPTIONS")
     return new Response(null, { status: 204, headers: corsHeaders });
   if (req.method !== "GET") return json({ error: "Method not allowed" }, 405);
@@ -733,6 +777,14 @@ export default async function (req: Request): Promise<Response> {
   const userId = await verifiedUserIdFromJwt(req.headers.get("Authorization"));
   if (!userId) return json({ error: "Unauthorized" }, 401);
 
+  let cloudAccess;
+  try { cloudAccess = await cloudReadAccess(client, userId, "daily"); }
+  catch { return json({ error: "Cloud access unavailable", code: "cloud_access_unavailable" }, 503); }
+  if (!cloudAccess.ok) return cloudFailure(cloudAccess, corsHeaders);
+  const historyFailure = cloudHistoryFailure(cloudAccess, to);
+  if (historyFailure) return cloudFailure(historyFailure, corsHeaders);
+  if (cloudAccess.available_from && from < cloudAccess.available_from) from = cloudAccess.available_from;
+
   const rawDeviceId = url.searchParams.get("device_id");
   const requestedDeviceId = rawDeviceId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(rawDeviceId)
     ? rawDeviceId
@@ -752,8 +804,8 @@ export default async function (req: Request): Promise<Response> {
   let dims: CompactDim[];
   try {
     dims = await fetchCompactDims(client, userId, requestedDeviceId, rangeStart, rangeEnd, from, to, tz, tzOffsetMinutes);
-  } catch (e) {
-    return json({ error: (e as Error).message }, 500);
+  } catch {
+    return json({ error: "Failed to fetch model breakdown" }, 500);
   }
 
   // The RPC bucketed each row to its local day (honoring tz / tz_offset_minutes)
@@ -887,4 +939,8 @@ export default async function (req: Request): Promise<Response> {
       effective_from: new Date().toISOString().slice(0, 10),
     },
   });
+}
+
+export default async function (req: Request): Promise<Response> {
+  return encodeJsonResponse(req, await handleAccountRequest(req));
 }

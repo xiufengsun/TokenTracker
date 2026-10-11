@@ -91,7 +91,7 @@ function mockRunner({
   usageError = null,
 } = {}) {
   return (command, args) => {
-    if (command === "which") {
+    if (command === "which" || command === "where") {
       return which
         ? { status: 0, stdout: "/usr/local/bin/arkcli\n", stderr: "" }
         : { status: 1, stdout: "", stderr: "" };
@@ -519,7 +519,7 @@ test("fetchArkCodingPlanLimits refuses a cache from another profile", async (t) 
     primary_window: { used_percent: 42, reset_at: new Date(nowMs + 3600_000).toISOString(), unit: "calls" },
   }, { home, nowMs });
   const runner = (command, args) => {
-    if (command === "which") return { status: 0, stdout: "/usr/local/bin/arkcli\n", stderr: "" };
+    if (command === "which" || command === "where") return { status: 0, stdout: "/usr/local/bin/arkcli\n", stderr: "" };
     if (isArkCommand(command) && args[0] === "profile") {
       return { status: 0, stdout: JSON.stringify({ profile: "profile-b", user_id: "user-b" }), stderr: "" };
     }
@@ -588,7 +588,7 @@ test("fetchArkCodingPlanLimits shrinks later CLI timeouts as the provider budget
     seen.push({ command, args, options });
     // Binary discovery burns real wall-clock budget, as it would against
     // a PATH full of slow directories.
-    if (command === "which") {
+    if (command === "which" || command === "where") {
       await new Promise((resolve) => setTimeout(resolve, 300));
       return { status: 0, stdout: "/usr/local/bin/arkcli\n", stderr: "" };
     }
@@ -628,7 +628,7 @@ test("fetchArkCodingPlanLimits still serves the disk cache after a hung usage pl
   const result = await fetchArkCodingPlanLimits({
     commandRunner: async (command, args, options) => {
       seen.push({ command, args, options });
-      if (command === "which") {
+      if (command === "which" || command === "where") {
         return { status: 0, stdout: "/usr/local/bin/arkcli\n", stderr: "" };
       }
       if (args[0] === "usage") {
@@ -699,7 +699,7 @@ test("fetchArkCodingPlanLimits drops the cache once the plan is unsubscribed", a
   // A later transient CLI failure must not resurrect the retired plan.
   const hung = await fetchArkCodingPlanLimits({
     commandRunner: (command, args) => {
-      if (command === "which") return { status: 0, stdout: "/usr/local/bin/arkcli\n", stderr: "" };
+      if (command === "which" || command === "where") return { status: 0, stdout: "/usr/local/bin/arkcli\n", stderr: "" };
       if (isArkCommand(command)) {
         return { status: null, stdout: "", stderr: "", error: new Error("ETIMEDOUT") };
       }

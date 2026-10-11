@@ -9254,7 +9254,10 @@ test("parseKiroCliIncremental parses Kiro CLI 2.13 event sessions with per-turn 
     assert.equal(firstCredits.session_count, 1);
     assert.equal(firstCredits.file_count, 1);
     assert.equal(firstCredits.latest_at, "2026-07-22T03:25:03.000Z");
-    assert.equal((await fs.stat(creditsPath)).mode & 0o777, 0o600);
+    // POSIX mode bits do not describe Windows NTFS access permissions.
+    if (process.platform !== "win32") {
+      assert.equal((await fs.stat(creditsPath)).mode & 0o777, 0o600);
+    }
 
     const second = await rolloutModule.parseKiroCliIncremental({
       cursors,

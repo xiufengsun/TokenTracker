@@ -145,6 +145,7 @@ test("the store file is private from creation even without the chmod fallback", 
 
 test("a write refuses to touch a store it cannot read", async () => {
   const trackerDir = await makeTrackerDir("tt-subscription-manager-unreadable-");
+  const realReadFile = fs.readFile;
   try {
     const storePath = resolveSubscriptionsPath(trackerDir);
     const original = JSON.stringify({
@@ -152,15 +153,30 @@ test("a write refuses to touch a store it cannot read", async () => {
       items: [{ ...structuredClone(VALID_FIELDS), id: "kept", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }],
     });
     await fs.writeFile(storePath, original, "utf8");
-    await fs.chmod(storePath, 0o000);
+    if (process.platform === "win32") {
+      // Windows chmod only controls the read-only bit, not read access. Inject
+      // the read failure without turning this into a different write failure.
+      fs.readFile = async (filePath, ...args) => {
+        if (filePath === storePath) {
+          const error = new Error("read access denied");
+          error.code = "EACCES";
+          throw error;
+        }
+        return realReadFile(filePath, ...args);
+      };
+    } else {
+      await fs.chmod(storePath, 0o000);
+    }
 
     await assert.rejects(createSubscription({ trackerDir, fields: VALID_FIELDS }), /Cannot read subscription store/);
-    await fs.chmod(storePath, 0o600);
+    fs.readFile = realReadFile;
+    if (process.platform !== "win32") await fs.chmod(storePath, 0o600);
     // The failed write left the original bytes untouched.
     assert.equal(await fs.readFile(storePath, "utf8"), original);
     const files = await fs.readdir(trackerDir);
     assert.ok(!files.some((name) => name.includes(".corrupt-")));
   } finally {
+    fs.readFile = realReadFile;
     await fs.rm(trackerDir, { recursive: true, force: true });
   }
 });

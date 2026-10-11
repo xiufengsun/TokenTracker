@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useInsforgeAuth } from "../contexts/InsforgeAuthContext";
-import { getCloudSyncEnabled, isLocalDashboardHost } from "../lib/cloud-sync-prefs";
+import { getCloudSyncEnabled, getLastCloudSyncTs, isLocalDashboardHost } from "../lib/cloud-sync-prefs";
 import { runCloudUsageSyncIfDue } from "../lib/cloud-sync";
 
 function isSharePath(pathname: string): boolean {
@@ -22,35 +22,53 @@ function isCloudSyncRoute(pathname: string): boolean {
 export function useCloudUsageSync(): void {
   const location = useLocation();
   const insforge = useInsforgeAuth();
-  const runRef = useRef(false);
+  const runRef = useRef<symbol | null>(null);
+  const [syncEnabled, setSyncEnabled] = useState(getCloudSyncEnabled);
+  useEffect(() => {
+    const update = () => setSyncEnabled(getCloudSyncEnabled());
+    window.addEventListener("tt.cloudSyncChanged", update);
+    window.addEventListener("storage", update);
+    return () => { window.removeEventListener("tt.cloudSyncChanged", update); window.removeEventListener("storage", update); };
+  }, []);
 
   useEffect(() => {
     if (!isLocalDashboardHost()) return;
     if (!isCloudSyncRoute(location.pathname || "/")) return;
     if (!insforge.enabled || !insforge.signedIn || insforge.loading) return;
-    if (!getCloudSyncEnabled()) return;
+    if (!syncEnabled) return;
 
     let cancelled = false;
-    const t = window.setTimeout(() => {
-      (async () => {
-        if (cancelled || runRef.current) return;
-        runRef.current = true;
-        try {
-          await runCloudUsageSyncIfDue(() => insforge.getAccessToken());
-        } catch (e) {
-          console.warn("[tokentracker] cloud usage sync:", e);
-        } finally {
-          runRef.current = false;
+    let timer: number;
+    const run = async () => {
+      if (cancelled || runRef.current || document.visibilityState === "hidden" || !getCloudSyncEnabled()) return;
+      window.clearTimeout(timer);
+      const task = Symbol("cloud-sync");
+      runRef.current = task;
+      try {
+        await runCloudUsageSyncIfDue(() => insforge.getAccessToken());
+      } catch (e) {
+        console.warn("[tokentracker] cloud usage sync:", e);
+      } finally {
+        if (runRef.current === task) runRef.current = null;
+        if (!cancelled) {
+          const remaining = getLastCloudSyncTs() + 15 * 60 * 1000 - Date.now();
+          const delay = remaining > 0 ? remaining + 1000 : 15 * 60 * 1000;
+          timer = window.setTimeout(() => void run(), delay);
         }
-      })();
-    }, 2500);
-
+      }
+    };
+    timer = window.setTimeout(() => void run(), 2500);
+    const onVisible = () => { if (document.visibilityState === "visible") void run(); };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
-      window.clearTimeout(t);
+      runRef.current = null;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [
     location.pathname,
+    syncEnabled,
     insforge.enabled,
     insforge.signedIn,
     insforge.loading,

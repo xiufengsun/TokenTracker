@@ -885,3 +885,20 @@ test("a late response from a signed-out account returns neither data nor rotated
   release(jsonResponse({ owner: "a" }));
   await assert.rejects(old, { code: "auth_session_changed" });
 });
+
+
+test("Cloud membership denials preserve login and forward the recovery address", async () => {
+  __resetCloudAccountCacheForTests();
+  let refreshCount=0;
+  const access=makeJwt({expSeconds:Math.floor(Date.now()/1000)+3600});
+  const fetchImpl=async url=>{
+    if(url.includes('/api/auth/refresh')) {refreshCount++;return jsonResponse({accessToken:access});}
+    return jsonResponse({code:"cloud_read_only_expired",recovery_url:"https://www.tokentracker.cc/cloud"},false,403);
+  };
+  const args={baseUrl:"https://cloud.example",refreshToken:"membership-refresh",usageSlug:"tokentracker-usage-summary",fetchImpl};
+  for(let i=0;i<2;i++) await assert.rejects(fetchAccountUsage(args),error=>{
+    assert.equal(error.code,"cloud_read_only_expired");assert.equal(error.recoveryUrl,"https://www.tokentracker.cc/cloud");
+    assert.equal(error.invalidatedSessionGeneration,undefined);return true;
+  });
+  assert.equal(refreshCount,1,"membership status must not invalidate the valid access-token cache");
+});

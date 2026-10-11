@@ -67,6 +67,7 @@ export function prependMeRowToPage({ entries, me, meLabel }) {
     user_id: me?.user_id ?? null,
     display_name: meLabel,
     avatar_url: me?.avatar_url ?? null,
+    pro_active: me?.pro_active === true,
     github_url: null,
     is_public: false,
     gpt_tokens: me?.gpt_tokens ?? "0",

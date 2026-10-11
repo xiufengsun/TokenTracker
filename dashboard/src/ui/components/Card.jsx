@@ -10,9 +10,10 @@ export function Card({
   subtitle,
   className = "",
   bodyClassName = "",
+  ...props
 }) {
   return (
-    <div className={cn("rounded-xl border border-oai-gray-200 dark:border-oai-gray-800 bg-white dark:bg-oai-gray-900 transition-colors duration-200", className)}>
+    <div {...props} className={cn("rounded-xl border border-oai-gray-200 dark:border-oai-gray-800 bg-white dark:bg-oai-gray-900 transition-colors duration-200", className)}>
       {(title || subtitle) && (
         <div className="px-5 py-4 border-b border-oai-gray-200 dark:border-oai-gray-800 transition-colors duration-200">
           {title && (

@@ -107,6 +107,7 @@ class DashboardViewModel: ObservableObject {
     private var lastDevinSelection: Bool
 
     init() {
+        guard !NativeQAProfile.isQABuild else { fatalError("Native QA cannot construct the personal-data model") }
         let selected = LimitsSettingsStore.shared.isVisible("devin")
         lastDevinSelection = selected
         // A cache written while Devin was enabled must not reappear once the

@@ -51,6 +51,7 @@ import {
 } from "../lib/cloud-sync-prefs";
 import { runCloudUsageSyncNow } from "../lib/cloud-sync";
 import { LeaderboardAvatar } from "../components/LeaderboardAvatar.jsx";
+import { LeaderboardProBadge } from "../components/LeaderboardProBadge.jsx";
 import { LeaderboardProviderColumnHeader } from "../components/LeaderboardProviderColumnHeader.jsx";
 import { BadgeMini } from "../ui/achievements/BadgeMini.jsx";
 
@@ -135,12 +136,12 @@ function CommunityStatsChip({ communityStats, onClick }) {
     <button 
       type="button"
       onClick={onClick}
-      className="inline-flex min-w-0 max-w-full flex-1 items-center gap-1.5 whitespace-nowrap rounded-xl border border-oai-gray-200 bg-oai-gray-50/50 px-2.5 py-2 text-xs text-oai-gray-500 backdrop-blur-md transition-all duration-300 hover:border-oai-brand-400 hover:bg-oai-brand-50/40 active:scale-[0.97] dark:border-oai-gray-800 dark:bg-white/[0.02] dark:text-oai-gray-400 dark:hover:border-oai-brand-500/80 dark:hover:bg-oai-brand-950/20 sm:h-9 sm:flex-none sm:gap-2.5 sm:rounded-full sm:px-3.5 sm:py-0"
+      className="inline-flex min-w-0 max-w-full flex-1 items-center gap-1.5 whitespace-nowrap rounded-xl border border-oai-gray-200 bg-oai-gray-50/50 px-2.5 py-2 text-xs text-oai-gray-500 backdrop-blur-md transition-all duration-300 hover:border-oai-gray-400 hover:bg-oai-gray-100/40 active:scale-[0.97] dark:border-oai-gray-800 dark:bg-white/[0.02] dark:text-oai-gray-400 dark:hover:border-oai-gray-500/80 dark:hover:bg-oai-gray-900/20 sm:h-9 sm:flex-none sm:gap-2.5 sm:rounded-full sm:px-3.5 sm:py-0"
       title={copy("leaderboard.community.view_stats")}
     >
       <span className="relative flex h-1.5 w-1.5 shrink-0" aria-hidden="true">
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/80 opacity-75 duration-1000" />
-        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-oai-gray-400/80 opacity-75 duration-1000" />
+        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-oai-gray-400 dark:bg-oai-gray-500" />
       </span>
       
       <span className="flex items-center gap-1">
@@ -175,7 +176,7 @@ function LeaderboardTokenCells({ entry, isMe, orderedColumns }) {
     ? "text-oai-gray-700 dark:text-oai-gray-300"
     : "text-oai-gray-500 dark:text-oai-gray-400";
   const cellBg = isMe
-    ? "bg-oai-brand-50 dark:bg-oai-brand-900/10"
+    ? "bg-oai-gray-50 dark:bg-oai-gray-900"
     : "bg-white dark:bg-oai-gray-950 group-hover:bg-oai-gray-50 dark:group-hover:bg-oai-gray-900";
   return orderedColumns.map((col) => (
     <td
@@ -325,11 +326,11 @@ function MobileLeaderboardRow({
       className={cn(
         "relative mx-0 my-1 rounded-xl px-3.5 py-3 transition-all duration-200 border shadow-sm select-none",
         isMe
-          ? "bg-gradient-to-br from-oai-brand-50/70 via-oai-brand-50/20 to-transparent dark:from-oai-brand-950/20 dark:via-oai-brand-950/5 dark:to-transparent border-oai-brand-200/60 dark:border-oai-brand-500/25"
+          ? "bg-oai-gray-50 dark:bg-oai-gray-900 border-oai-gray-300/60 dark:border-oai-gray-500/25"
           : isAnon
             ? "bg-white/90 dark:bg-oai-gray-950/90 border-oai-gray-100/70 dark:border-oai-gray-800/40"
             : "bg-white dark:bg-oai-gray-950 border-oai-gray-100 dark:border-oai-gray-800/60",
-        rowClickable && "cursor-pointer hover:border-oai-gray-200 dark:hover:border-oai-gray-700/80 active:scale-[0.985] active:bg-oai-gray-50/60 dark:active:bg-oai-gray-900/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-oai-brand-500/60",
+        rowClickable && "cursor-pointer hover:border-oai-gray-200 dark:hover:border-oai-gray-700/80 active:scale-[0.985] active:bg-oai-gray-50/60 dark:active:bg-oai-gray-900/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-oai-gray-500/60",
       )}
     >
       <div className="flex min-w-0 items-center gap-3">
@@ -340,7 +341,7 @@ function MobileLeaderboardRow({
           <span
             className={cn(
               "inline-flex rounded-full p-0.5 transition-all duration-300",
-              RANK_MEDAL_GLOW[entry?.rank] || "ring-1 ring-oai-gray-200 dark:ring-oai-gray-800/80",
+              entry?.pro_active !== true && (RANK_MEDAL_GLOW[entry?.rank] || "ring-1 ring-oai-gray-200 dark:ring-oai-gray-800/80"),
               isAnon && "opacity-60 grayscale-[15%]"
             )}
           >
@@ -349,6 +350,7 @@ function MobileLeaderboardRow({
               avatarUrl={entry?.avatar_url}
               displayName={rowName}
               seed={leaderboardAvatarSeed(entry, rowName)}
+              proActive={entry?.pro_active === true}
             />
           </span>
           {entry?.github_url && <MobileGithubBadge githubUrl={entry.github_url} />}
@@ -361,6 +363,7 @@ function MobileLeaderboardRow({
             )}>
               {rowName}
             </span>
+            <LeaderboardProBadge proActive={entry?.pro_active === true} />
             <BadgeMini badges={entry?.badges} className="shrink-0 scale-95" />
           </div>
           <div className="mt-1 text-[11px] text-oai-gray-400 dark:text-oai-gray-500">
@@ -873,18 +876,18 @@ export function LeaderboardPage({
                     key={`row-${entry?.rank}-${name}${isPinned ? "-pin" : ""}`}
                     {...rowInteractiveProps}
                     className={cn(
-                      "bg-oai-brand-50 dark:bg-oai-brand-900/10 transition-colors",
+                      "bg-oai-gray-50 dark:bg-oai-gray-900 transition-colors",
                       isPinned
-                        ? "border-t border-b border-oai-brand-300/40 dark:border-oai-brand-500/20"
-                        : "border-y border-oai-brand-300/40 dark:border-oai-brand-500/30",
-                      rowClickable && "cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500/60",
+                        ? "border-t border-b border-oai-gray-300/40 dark:border-oai-gray-500/20"
+                        : "border-y border-oai-gray-300/40 dark:border-oai-gray-500/30",
+                      rowClickable && "cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-oai-gray-500/60",
                     )}
                   >
                     <td
                       className={cn(
                         lbStickyTdRank(true),
-                        "font-semibold text-oai-brand-600 dark:text-oai-brand-400",
-                        isPinned && "before:absolute before:left-0 before:top-[15%] before:h-[70%] before:w-[3px] before:rounded-r before:bg-oai-brand-500 dark:before:bg-oai-brand-400"
+                        "font-semibold text-oai-gray-700 dark:text-oai-gray-300",
+                        isPinned && "before:absolute before:left-0 before:top-[15%] before:h-[70%] before:w-[3px] before:rounded-r before:bg-oai-gray-500 dark:before:bg-oai-gray-400"
                       )}
                     >
                       <RankCell rank={entry?.rank} placeholder={placeholder} />
@@ -894,31 +897,33 @@ export function LeaderboardPage({
                         <span
                           className={cn(
                             "relative inline-flex shrink-0 rounded-full p-[2px]",
-                            entry?.github_url && "gh-avatar-frame",
+                            entry?.github_url && entry?.pro_active !== true && "gh-avatar-frame",
                           )}
                         >
                           <span
                             className={cn(
                               "inline-flex rounded-full p-px",
-                              entry?.github_url && "bg-white dark:bg-oai-gray-950",
+                              entry?.github_url && entry?.pro_active !== true && "bg-white dark:bg-oai-gray-950",
                             )}
                           >
                             <LeaderboardAvatar
                               avatarUrl={entry?.avatar_url}
                               displayName={name}
                               seed={leaderboardAvatarSeed(entry, name)}
+                              proActive={entry?.pro_active === true}
                             />
                           </span>
                           {entry?.github_url && <GithubLinkWithTooltip githubUrl={entry.github_url} />}
                         </span>
                         <span className="truncate font-semibold text-oai-black dark:text-oai-white">{name}</span>
+                        <LeaderboardProBadge proActive={entry?.pro_active === true} />
                         <BadgeMini badges={entry?.badges} className="hidden sm:inline-flex" />
                       </div>
                     </td>
-                    <td className="px-3 sm:px-4 py-4 font-medium text-oai-black dark:text-oai-white whitespace-nowrap text-right tabular-nums bg-oai-brand-50 dark:bg-oai-brand-900/10">
+                    <td className="px-3 sm:px-4 py-4 font-medium text-oai-black dark:text-oai-white whitespace-nowrap text-right tabular-nums bg-oai-gray-50 dark:bg-oai-gray-900">
                       <TotalTokens value={entry?.total_tokens} />
                     </td>
-                    <td className="hidden sm:table-cell px-3 sm:px-4 py-4 font-medium text-oai-brand-600 dark:text-oai-brand-400 whitespace-nowrap text-right tabular-nums bg-oai-brand-50 dark:bg-oai-brand-900/10" title="Based on estimated API pricing, not actual billing">
+                    <td className="hidden sm:table-cell px-3 sm:px-4 py-4 font-medium text-oai-gray-700 dark:text-oai-gray-300 whitespace-nowrap text-right tabular-nums bg-oai-gray-50 dark:bg-oai-gray-900" title="Based on estimated API pricing, not actual billing">
                       {formatCost(entry?.estimated_cost_usd, currency, rate)}
                     </td>
                     <LeaderboardTokenCells entry={entry} isMe orderedColumns={orderedColumns} />
@@ -932,7 +937,7 @@ export function LeaderboardPage({
                   {...rowInteractiveProps}
                   className={cn(
                     "group transition-colors",
-                    rowClickable && "cursor-pointer hover:bg-oai-gray-50 dark:hover:bg-oai-gray-900/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500/60",
+                    rowClickable && "cursor-pointer hover:bg-oai-gray-50 dark:hover:bg-oai-gray-900/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-oai-gray-500/60",
                   )}
                 >
                   <td className={cn(lbStickyTdRank(false), "font-medium text-oai-gray-500 dark:text-oai-gray-400")}>
@@ -943,24 +948,26 @@ export function LeaderboardPage({
                       <span
                         className={cn(
                           "relative inline-flex shrink-0 rounded-full p-[2px]",
-                          entry?.github_url && "gh-avatar-frame",
+                          entry?.github_url && entry?.pro_active !== true && "gh-avatar-frame",
                         )}
                       >
                         <span
                           className={cn(
                             "inline-flex rounded-full p-px",
-                            entry?.github_url && "bg-white dark:bg-oai-gray-950",
+                            entry?.github_url && entry?.pro_active !== true && "bg-white dark:bg-oai-gray-950",
                           )}
                         >
                           <LeaderboardAvatar
                             avatarUrl={entry?.avatar_url}
                             displayName={name}
                             seed={leaderboardAvatarSeed(entry, name)}
+                            proActive={entry?.pro_active === true}
                           />
                         </span>
                         {entry?.github_url && <GithubLinkWithTooltip githubUrl={entry.github_url} />}
                       </span>
                       <span className="truncate font-medium text-oai-gray-800 dark:text-oai-gray-200">{name}</span>
+                      <LeaderboardProBadge proActive={entry?.pro_active === true} />
                       <BadgeMini badges={entry?.badges} className="hidden sm:inline-flex" />
                     </div>
                   </td>

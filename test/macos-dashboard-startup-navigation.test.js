@@ -31,8 +31,11 @@ test("macOS defers every initial dashboard navigation until the bundled server s
 
   assert.ok(launchHandler, "AppDelegate should define its launch sequence");
 
-  const ensureIndex = launchHandler.indexOf("await serverManager.ensureServerRunning()");
-  const allowIndex = launchHandler.indexOf(
+  const ordinaryStart = launchHandler.indexOf("removeLegacyAppBundleIfNeeded()");
+  assert.notEqual(ordinaryStart, -1, "ordinary startup should retain its original service initialization");
+  const ordinaryLaunch = launchHandler.slice(ordinaryStart);
+  const ensureIndex = ordinaryLaunch.indexOf("await serverManager.ensureServerRunning()");
+  const allowIndex = ordinaryLaunch.indexOf(
     "DashboardWindowController.shared.allowDashboardNavigation()",
   );
   assert.notEqual(ensureIndex, -1, "launch should await the bundled server startup");
@@ -41,17 +44,22 @@ test("macOS defers every initial dashboard navigation until the bundled server s
     allowIndex > ensureIndex,
     "the navigation gate must remain closed until the old listener has been replaced",
   );
+  const qaLaunch = launchHandler.slice(0, ordinaryStart);
+  assert.match(qaLaunch, /guard await profile\.verifyServer\(\) else/);
+  assert.ok(qaLaunch.indexOf("allowDashboardNavigation()") > qaLaunch.indexOf("verifyServer()"),
+    "QA navigation must wait for its owned-server challenge");
+  assert.doesNotMatch(qaLaunch, /ensureServerRunning\(|syncThenLoad\(|startAutoRefresh\(/);
 
   assert.match(controller, /private var dashboardNavigationAllowed = false/);
   assert.match(controller, /private var pendingDashboardURL: URL\?/);
   assert.match(controller, /func allowDashboardNavigation\(\)/);
   assert.match(
     controller,
-    /private func loadDashboard\(_ url: URL\)[\s\S]*guard dashboardNavigationAllowed else \{[\s\S]*pendingDashboardURL = url[\s\S]*return[\s\S]*webView\?\.load\(URLRequest\(url: url\)\)/,
+    /private func loadDashboard\(_ url: URL\)[\s\S]*guard dashboardNavigationAllowed else \{[\s\S]*pendingDashboardURL = url[\s\S]*return[\s\S]*var request = URLRequest\(url: url\)[\s\S]*webView\?\.load\(request\)/,
     "all local dashboard loads should pass through one readiness gate",
   );
 
-  const directLoads = controller.match(/webView\?*\.load\(URLRequest\(url: url\)\)/g) || [];
+  const directLoads = controller.match(/webView\?*\.load\(/g) || [];
   assert.equal(
     directLoads.length,
     1,

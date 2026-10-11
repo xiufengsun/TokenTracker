@@ -11,11 +11,11 @@ internal static class Program
         InstallExceptionGuards();
 
         // Windows launches us with the full tokentracker://… URL as an argument when a
-        // deep link fires (OAuth callback). Extract it if present.
-        var deepLink = FindDeepLink(args);
+        // deep link fires (OAuth or billing return). Extract it if present.
+        var deepLink = NativeReturnUri.FindArgument(args);
         var launchedAtStartup = args.Any(a =>
             string.Equals(a, LaunchAtStartup.StartupArgument, StringComparison.OrdinalIgnoreCase));
-        Diag.Log("program", $"Main argc={args.Length} deepLink={(deepLink ?? "<none>")} startup={launchedAtStartup}");
+        Diag.Log("program", $"Main argc={args.Length} deepLinkPresent={deepLink is not null} deepLinkLen={deepLink?.Length ?? 0} startup={launchedAtStartup}");
 
         using var mutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isNew);
         Diag.Log("program", $"mutex isNew={isNew}");
@@ -106,13 +106,4 @@ internal static class Program
             Diag.Log("program", $"WinForms UI exception: {e}");
     }
 
-    private static string? FindDeepLink(string[] args)
-    {
-        foreach (var a in args)
-        {
-            if (a.StartsWith(UrlProtocol.Scheme + "://", StringComparison.OrdinalIgnoreCase))
-                return a;
-        }
-        return null;
-    }
 }

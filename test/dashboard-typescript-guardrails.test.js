@@ -1,7 +1,6 @@
 const assert = require("node:assert/strict");
 const { execFile } = require("node:child_process");
 const fs = require("node:fs/promises");
-const fsSync = require("node:fs");
 const path = require("node:path");
 const { test } = require("node:test");
 const { promisify } = require("node:util");
@@ -18,41 +17,17 @@ async function read(pathname) {
   return fs.readFile(pathname, "utf8");
 }
 
-function getTypescriptSpecifier() {
-  try {
-    const lock = JSON.parse(fsSync.readFileSync(lockPath, "utf8"));
-    const lockedVersion = lock.packages?.["node_modules/typescript"]?.version;
-    if (lockedVersion) {
-      return `typescript@${lockedVersion}`;
-    }
-  } catch (error) {
-    // Fall back to package.json spec if lockfile is unavailable.
-  }
-
-  try {
-    const pkg = JSON.parse(fsSync.readFileSync(pkgPath, "utf8"));
-    const version = pkg.devDependencies?.typescript ?? pkg.dependencies?.typescript;
-    if (version) {
-      return `typescript@${version}`;
-    }
-  } catch (error) {
-    // Fall back to bare package spec if package.json can't be read.
-  }
-
-  return "typescript";
-}
-
 function getTscCommand() {
-  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-  const typescriptSpecifier = getTypescriptSpecifier();
+  // Run the compiler installed by dashboard's npm ci using this test's Node.
+  // execFile cannot launch npm.cmd on Windows without a shell; resolving the
+  // local compiler also avoids a network/package-manager fallback in tests.
+  const compiler = require.resolve("typescript/bin/tsc", {
+    paths: [path.join(repoRoot, "dashboard")],
+  });
   return {
-    cmd: npmCmd,
+    cmd: process.execPath,
     args: [
-      "exec",
-      "--package",
-      typescriptSpecifier,
-      "tsc",
-      "--",
+      compiler,
       "--noEmit",
       "--pretty",
       "false",
@@ -115,29 +90,16 @@ test("lib layer is fully migrated to TS", async () => {
   }
 });
 
-test("tsc command uses npm exec", async () => {
+test("tsc command uses the installed locked compiler with the current Node", async () => {
   const { cmd, args } = getTscCommand();
-  let lockedVersion;
-  try {
-    const lock = JSON.parse(await read(lockPath));
-    lockedVersion = lock.packages?.["node_modules/typescript"]?.version;
-  } catch (error) {
-    if (error?.code !== "ENOENT") {
-      throw error;
-    }
-    lockedVersion = undefined;
-  }
-  assert.ok(cmd.includes("npm"), "expected npm command");
-  assert.ok(args.includes("exec"), "expected npm exec usage");
-  assert.ok(args.includes("--package"), "expected npm exec package usage");
-  assert.ok(
-    args.some((arg) => arg.startsWith("typescript")),
-    "expected typescript package specifier",
-  );
-  if (lockedVersion) {
-    assert.ok(args.includes(`typescript@${lockedVersion}`), "expected locked typescript version");
-  }
-  assert.ok(args.includes("tsc"), "expected tsc in args");
+  const lock = JSON.parse(await read(lockPath));
+  const installedPackage = require.resolve("typescript/package.json", {
+    paths: [path.join(repoRoot, "dashboard")],
+  });
+  const installedVersion = JSON.parse(await read(installedPackage)).version;
+  assert.equal(installedVersion, lock.packages["node_modules/typescript"].version);
+  assert.equal(cmd, process.execPath);
+  assert.equal(args[0], path.join(path.dirname(installedPackage), "bin", "tsc"));
 });
 
 test("tsc validates migrated TS files", async () => {

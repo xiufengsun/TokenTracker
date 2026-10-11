@@ -3,6 +3,7 @@
  * Mirrors local-api.js `tokentracker-usage-hourly`. Honors `tz` / `tz_offset_minutes`.
  */
 import { createClient } from "npm:@insforge/sdk";
+import { cloudReadAccess, cloudFailure, cloudHistoryFailure } from "./cloud/access.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -249,6 +250,13 @@ export default async function (req: Request): Promise<Response> {
 
   const userId = await verifiedUserIdFromJwt(req.headers.get("Authorization"));
   if (!userId) return json({ error: "Unauthorized" }, 401);
+
+  let cloudAccess;
+  try { cloudAccess = await cloudReadAccess(client, userId, "hourly"); }
+  catch { return json({ error: "Cloud access unavailable", code: "cloud_access_unavailable" }, 503); }
+  if (!cloudAccess.ok) return cloudFailure(cloudAccess, corsHeaders);
+  const historyFailure = cloudHistoryFailure(cloudAccess, day);
+  if (historyFailure) return cloudFailure(historyFailure, corsHeaders);
 
   const rawDeviceId = url.searchParams.get("device_id");
   const requestedDeviceId = rawDeviceId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(rawDeviceId)

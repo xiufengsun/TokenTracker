@@ -15,6 +15,7 @@ const { mkdtemp, rm } = require("node:fs/promises");
 
 const { createLocalApiHandler } = require("../src/lib/local-api.js");
 const { withHome } = require("./helpers/with-home");
+const { publicAnonFor, bindPublicInstance } = require("./helpers/public-instance-fixture");
 
 function listen(server, host = "127.0.0.1") {
   return new Promise((resolve, reject) => {
@@ -101,6 +102,7 @@ test("POST /api/auth/* strips Content-Length before forwarding to fetch", async 
     restoreHome = withHome(tempHome);
     const upAddr = await listen(upstream);
     process.env.TOKENTRACKER_INSFORGE_BASE_URL = `http://127.0.0.1:${upAddr.port}`;
+    await bindPublicInstance(tempHome, process.env.TOKENTRACKER_INSFORGE_BASE_URL, publicAnonFor("auth-relay"));
     const localAddr = await listen(local);
 
     const body = JSON.stringify({ refresh_token: "dummy" });

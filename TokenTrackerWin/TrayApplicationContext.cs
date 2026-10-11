@@ -824,33 +824,29 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     /// <summary>
     /// Handle a <c>tokentracker://</c> deep link (forwarded from a second launch, or a
-    /// cold start argument). Currently only the OAuth callback
-    /// <c>tokentracker://auth/callback?insforge_code=…</c> is used; the code is routed
-    /// into the dashboard WebView to finish the InsForge session exchange. Mirrors the
-    /// macOS <c>application(_:open:)</c> → <c>handleAuthCallback</c> path.
+    /// cold start argument). OAuth codes return to their callback page; billing
+    /// returns only open the order page, whose server request checks the current account.
     /// </summary>
     public void HandleDeepLink(string url)
     {
-        DiagLog($"HandleDeepLink url={url}");
-        string? code = null;
-        try
+        DiagLog($"HandleDeepLink present={!string.IsNullOrEmpty(url)} len={url?.Length ?? 0}");
+        if (NativeReturnUri.TryGetBillingOrder(url, out var order))
         {
-            var uri = new Uri(url);
-            if (!uri.Host.Equals("auth", StringComparison.OrdinalIgnoreCase)) return;
-            foreach (var pair in uri.Query.TrimStart('?').Split('&'))
+            DiagLog("HandleDeepLink type=billing");
+            PostToUi(() =>
             {
-                var i = pair.IndexOf('=');
-                if (i <= 0 || pair[..i] != "insforge_code") continue;
-                var raw = pair[(i + 1)..];
-                if (raw.Length > 0) code = Uri.UnescapeDataString(raw);
-                break;
-            }
+                EnsureDashboard();
+                _dashboard!.HandleBillingReturn(order);
+            });
+            return;
         }
-        catch { return; }
-
-        if (string.IsNullOrEmpty(code)) { DiagLog("HandleDeepLink no insforge_code in query"); return; }
+        if (!NativeReturnUri.TryGetAuthCode(url, out var code))
+        {
+            DiagLog("HandleDeepLink type=unsupported");
+            return;
+        }
         var resolved = code;
-        DiagLog($"HandleDeepLink resolved code.len={resolved.Length}");
+        DiagLog($"HandleDeepLink type=oauth code.len={resolved.Length}");
         PostToUi(() =>
         {
             EnsureDashboard();

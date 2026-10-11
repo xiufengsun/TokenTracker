@@ -3,6 +3,8 @@ const os = require("node:os");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const { test } = require("node:test");
+const publicAnon = [Buffer.from('{"alg":"HS256"}').toString("base64url"),
+  Buffer.from('{"role":"anon"}').toString("base64url"), "test-signature"].join(".");
 
 const { cmdInit } = require("../src/commands/init");
 const { resolveOpencodePluginDir, DEFAULT_PLUGIN_NAME } = require("../src/lib/opencode-config");
@@ -38,6 +40,7 @@ test("dry-run preview reports opencode install when config is missing", async ()
       "--no-open",
       "--base-url",
       "https://example.invalid",
+      "--anon-key", publicAnon,
     ]);
 
     const clean = stripAnsi(output);

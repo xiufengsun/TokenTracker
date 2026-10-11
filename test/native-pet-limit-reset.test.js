@@ -24,6 +24,11 @@ test("native pet reset strings interpolate the supplied reset value", (t) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-pet-reset-"));
   const harnessPath = path.join(tempDir, "main.swift");
   const binaryPath = path.join(tempDir, "pet-reset");
+  const widgetFixture = path.join(tempDir, "WidgetSnapshot.swift");
+  const suiteName = "tokentracker.test." + path.basename(tempDir);
+  const widgetSource = fs.readFileSync(repoPath("TokenTrackerBar/Shared/WidgetSnapshot.swift"), "utf8");
+  assert.ok(widgetSource.includes('"group.com.tokentracker.bar"'));
+  fs.writeFileSync(widgetFixture, widgetSource.replace('"group.com.tokentracker.bar"', JSON.stringify(suiteName)));
   const value = "8/12 05:09";
 
   fs.writeFileSync(
@@ -55,6 +60,7 @@ func restorePreferences() {
         sharedDefaults?.removeObject(forKey: NativeLocalization.preferenceKey)
     }
 }
+defer { UserDefaults.standard.removePersistentDomain(forName: WidgetSharedConstants.appGroupIdentifier) }
 defer { restorePreferences() }
 let cases = [
     (NativeLocalization.englishLocale, "in \\(value)", "\\(cost) today"),
@@ -83,8 +89,9 @@ if !failures.isEmpty {
       "xcrun",
       [
         "swiftc",
-        repoPath("TokenTrackerBar/Shared/WidgetSnapshot.swift"),
+        widgetFixture,
         repoPath("TokenTrackerBar/Shared/NativeLocalization.swift"),
+        repoPath("TokenTrackerBar/Shared/NativeQAProfile.swift"),
         repoPath("TokenTrackerBar/TokenTrackerBar/Models/MenuBarDisplayPreferences.swift"),
         repoPath("TokenTrackerBar/TokenTrackerBar/Models/UsageLimits.swift"),
         repoPath("TokenTrackerBar/TokenTrackerBar/Utilities/Strings.swift"),

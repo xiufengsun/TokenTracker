@@ -7,6 +7,8 @@ export interface InsforgeAuthUser {
 
 export interface InsforgeAuthValue {
   enabled: boolean;
+  configurationError?: string | null;
+  connectionHost?: string | null;
   client: any;
   user: InsforgeAuthUser | null;
   signedIn: boolean;

@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const path = require("node:path");
+const path = require("node:path").posix;
 const { loadGraphConfig } = require("../scripts/graph/lib/config.cjs");
 
 test("loadGraphConfig collects tsconfig paths and defaults", () => {

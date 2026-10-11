@@ -66,7 +66,7 @@ test("resolveDroidSessionsDir env precedence", () => {
   );
   assert.equal(
     resolveDroidSessionsDir({ FACTORY_DIR: "/opt/factory" }),
-    "/opt/factory/sessions",
+    path.join("/opt/factory", "sessions"),
   );
   // Comma-separated → first wins for resolveDroidSessionsDir.
   assert.deepEqual(
@@ -74,8 +74,15 @@ test("resolveDroidSessionsDir env precedence", () => {
     ["/a", "/b", "/c"],
   );
   // Default falls under ~/.factory/sessions
-  const def = resolveDroidSessionsDir({ HOME: "/Users/me" });
-  assert.equal(def, "/Users/me/.factory/sessions");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "droid-default-home-"));
+  const expected = path.join(home, ".factory", "sessions");
+  try {
+    fs.mkdirSync(expected, { recursive: true });
+    const def = resolveDroidSessionsDir({ HOME: home, TOKENTRACKER_WSL: "native-only" });
+    assert.equal(def, expected);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("normalizeDroidModelName strips wrapper + brackets, lowercases, dash-normalizes", () => {

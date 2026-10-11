@@ -1,8 +1,10 @@
 import React from "react";
-import { FlaskConical, Gauge, Globe, Monitor, Palette, Settings, UserRound } from "lucide-react";
+import { Cloud, FlaskConical, Gauge, Globe, Monitor, Palette, Settings, UserRound } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { LimitsSettingsPanel } from "../components/LimitsSettingsPanel.jsx";
 import { AccountSection } from "../components/settings/AccountSection.jsx";
+import { CloudSection } from "../components/settings/CloudSection.jsx";
+import { useAccountProfileSettings } from "../components/settings/useAccountProfileSettings.js";
 import { AppearanceSection } from "../components/settings/AppearanceSection.jsx";
 import { LabsSection } from "../components/settings/LabsSection.jsx";
 import {
@@ -25,6 +27,7 @@ const SETTINGS_SECTION_IDS = {
   NATIVE_APP: "native-app",
   NETWORK: "network",
   ACCOUNT: "account",
+  CLOUD: "cloud",
   LIMITS: "limits",
   LABS: "labs",
 };
@@ -49,6 +52,7 @@ function LimitsDisplayModeControl({ prefs }) {
 }
 
 export function SettingsPage() {
+  const accountSettings = useAccountProfileSettings();
   const limitsPrefs = useLimitsDisplayPrefs();
   const {
     available: nativeSettingsAvailable,
@@ -117,7 +121,15 @@ export function SettingsPage() {
       description: copy("settings.section.account.description"),
       group: SETTINGS_GROUP_IDS.PERSONAL,
       Icon: UserRound,
-      content: <AccountSection />,
+      content: <AccountSection settings={accountSettings} />,
+    },
+    {
+      id: SETTINGS_SECTION_IDS.CLOUD,
+      label: copy("settings.section.cloud"),
+      description: copy("settings.section.cloud.description"),
+      group: SETTINGS_GROUP_IDS.PERSONAL,
+      Icon: Cloud,
+      content: <CloudSection settings={accountSettings} active={activeSection === SETTINGS_SECTION_IDS.CLOUD} />,
     },
     {
       id: SETTINGS_SECTION_IDS.LIMITS,
@@ -228,7 +240,7 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="flex flex-1 flex-col font-oai text-oai-black antialiased dark:text-oai-white">
+    <div className={cn("flex flex-1 flex-col font-oai text-oai-black antialiased dark:text-oai-white", activeSection === SETTINGS_SECTION_IDS.CLOUD && "tt-cloud-settings")}>
       <main className="flex-1 pb-12 pt-8 sm:pb-16 sm:pt-10">
         <div className="mx-auto w-full max-w-5xl px-4 sm:px-6">
           <div className="mb-7 max-w-2xl">
@@ -240,7 +252,7 @@ export function SettingsPage() {
             </p>
           </div>
 
-          <div className="grid min-w-0 gap-6 md:grid-cols-[14rem_minmax(0,1fr)] md:gap-8 lg:grid-cols-[15rem_minmax(0,1fr)]">
+          <div className="tt-settings-sections grid min-w-0 gap-6 md:grid-cols-[11rem_minmax(0,1fr)] md:gap-8">
             <aside className="min-w-0 rounded-xl border border-oai-gray-200 bg-oai-gray-50/70 p-2 dark:border-oai-gray-800 dark:bg-oai-gray-900/60 md:border-0 md:bg-transparent md:p-0 md:dark:bg-transparent">
               <nav
                 aria-label={copy("settings.page.title")}
@@ -287,14 +299,14 @@ export function SettingsPage() {
             </aside>
 
             <div className="min-w-0">
-              <div className="mb-4 border-b border-oai-gray-200 pb-4 dark:border-oai-gray-800">
+              {activeSection !== SETTINGS_SECTION_IDS.CLOUD ? <div className="mb-4 border-b border-oai-gray-200 pb-4 dark:border-oai-gray-800">
                 <h2 className="text-xl font-semibold tracking-tight text-oai-black dark:text-white">
                   {activeSectionMeta.label}
                 </h2>
                 <p className="mt-1 text-sm leading-5 text-oai-gray-500 dark:text-oai-gray-400">
                   {activeSectionMeta.description}
                 </p>
-              </div>
+              </div> : null}
               {sections.map(({ id, label, content }) => (
                 <section
                   key={id}

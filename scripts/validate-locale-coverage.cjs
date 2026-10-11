@@ -39,6 +39,8 @@ const SOURCE_IDENTICAL_KEY_ALLOWLIST = [
   /^ipcheck[.]props[.]asn$/,
   /^ipcheck[.]security[.](?:vpn|tor)$/,
   /^shared[.]app_name$/,
+  /^leaderboard[.]pro[.]badge$/,
+  /^cloud[.](?:nav|page[.]eyebrow|(?:plan|membership)[.]title)$/,
   /^pet[.]character[.](?:clawd|bot|sprout|byte|ember)$/,
 ];
 

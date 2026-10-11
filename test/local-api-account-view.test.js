@@ -39,7 +39,7 @@ function freshHandler(queuePath) {
   // resolved at construction reflect the temp HOME.
   delete require.cache[require.resolve("../src/lib/local-api")];
   const { createLocalApiHandler } = require("../src/lib/local-api");
-  return createLocalApiHandler({ queuePath });
+  return createLocalApiHandler({ queuePath, trackerDataDir: path.join(tmpHome, ".tokentracker", "tracker") });
 }
 
 function makeReq({ method = "GET", urlObj, headers = {}, body } = {}) {
@@ -1369,4 +1369,18 @@ test("a late real HTTP account GET cannot replace a newer same-account RT and CS
   assert.deepEqual(readCookies(), afterSecond, "the first GET must not restore rotated-1/fresh-csrf-1");
   assert.equal(refreshCalls, 2);
   assert.equal(edgeCalls, 2);
+});
+
+
+test("a Cloud membership denial serves intact local statistics with its recovery reason and keeps login",async t=>{
+  const {root,realFetch,readCookies}=await startAccountHttpFixture(t);
+  const token=`e30.${Buffer.from(JSON.stringify({sub:"membership-owner",exp:Date.now()/1000+3600})).toString("base64url")}.sig`;
+  await startAccountUpstreamFixture(t,async(req,res,url)=>{
+    if(url.pathname==="/api/auth/refresh") {res.end(JSON.stringify({accessToken:token,refreshToken:"membership-rotated"}));return;}
+    res.statusCode=403;res.end(JSON.stringify({code:"cloud_read_only_expired",recovery_url:"https://www.tokentracker.cc/cloud"}));
+  });
+  const response=await realFetch(root+"/functions/tokentracker-usage-summary?account=1&from=2026-10-01&to=2026-10-01");
+  assert.equal(response.status,200);assert.equal(response.headers.get("x-tokentracker-account-fallback"),"cloud-read-only-expired");
+  assert.equal(response.headers.get("x-tokentracker-account-view"),"0");
+  assert.ok(readCookies().insforge_refresh_token.includes("membership-rotated"));
 });

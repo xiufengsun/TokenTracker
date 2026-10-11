@@ -814,8 +814,8 @@ async function anomalyQueueSummary(
 ): Promise<Response> {
   try {
     return json(await anomalyQueueSummaryData(client));
-  } catch (error) {
-    return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+  } catch {
+    return json({ error: "Failed to fetch anomaly queue summary" }, 500);
   }
 }
 
@@ -891,8 +891,8 @@ async function quarantineAudit(
 ): Promise<Response> {
   try {
     return json(await quarantineAuditData(client));
-  } catch (error) {
-    return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+  } catch {
+    return json({ error: "Failed to fetch quarantine audit" }, 500);
   }
 }
 
@@ -1005,8 +1005,8 @@ export default async function (req: Request): Promise<Response> {
         breaker_tripped: scanRow.breaker_tripped === true,
         queue: await anomalyQueueSummaryData(client),
       };
-    } catch (error) {
-      return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+    } catch {
+      return json({ error: "Failed to summarize anomaly scan" }, 500);
     }
     logRefreshEvent({ event: "anomaly_scan_completed", ...anomalyScan });
   }

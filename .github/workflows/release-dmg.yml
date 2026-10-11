@@ -12,6 +12,11 @@ on:
         required: false
         type: boolean
         default: false
+      publish:
+        description: "Publish after verification (false keeps the complete release as a draft)"
+        required: false
+        type: boolean
+        default: true
 
 concurrency:
   group: release-dmg
@@ -713,6 +718,7 @@ jobs:
           gh release edit "$tag" --notes-file "$notes" --repo "$GITHUB_REPOSITORY"
 
       - name: Flip the draft live
+        if: ${{ inputs.publish == true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ inputs.version }}
@@ -722,6 +728,7 @@ jobs:
           gh release edit "$tag" --draft=false --latest --repo "$GITHUB_REPOSITORY"
 
       - name: Dispatch homebrew tap update
+        if: ${{ inputs.publish == true }}
         env:
           HOMEBREW_DISPATCH_TOKEN: ${{ secrets.HOMEBREW_DISPATCH_TOKEN }}
           VERSION: ${{ inputs.version }}

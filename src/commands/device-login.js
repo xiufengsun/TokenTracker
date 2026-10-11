@@ -6,30 +6,17 @@ const fs = require("node:fs/promises");
 
 const { readJson, updateJsonLocked } = require("../lib/fs");
 const { resolveTrackerPaths } = require("../lib/tracker-paths");
-const { resolveRuntimeConfig } = require("../lib/runtime-config");
+const { resolveRuntimeConfig, assertInsforgeRuntime, normalizeInstanceBaseUrl, clearDeviceIdentity, resetInstanceState } = require("../lib/runtime-config");
 const { functionUrlFor, fetchFunctionResponse } = require("../lib/function-url");
 
 const POLL_INTERVAL_MS = 5_000;
 const ABSOLUTE_TIMEOUT_MS = 16 * 60 * 1000; // matches the 15-min server window with a small buffer
 
-function readBaseUrl(config) {
-  return resolveRuntimeConfig({
-    // Preserve device-login's explicit legacy override names and precedence,
-    // while routing persisted config through the shared retired-host filter.
-    cli: {
-      baseUrl:
-        process.env.TOKENTRACKER_BASE_URL ||
-        process.env.TOKENTRACKER_API_URL,
-    },
-    config: config || {},
-    env: {},
-  }).baseUrl;
-}
-
-async function authorize({ baseUrl, clientInfo, machineId }) {
+async function authorize({ baseUrl, clientInfo, machineId, anonKey, timeoutMs = 20_000 }) {
   const res = await fetchFunctionResponse(functionUrlFor(baseUrl, "tokentracker-device-flow-authorize"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(anonKey ? { apikey: anonKey } : {}) },
+    ...(timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     body: JSON.stringify({
       client_info: clientInfo,
       // Machine-stable identity: the server anchors the issued device to this
@@ -46,10 +33,11 @@ async function authorize({ baseUrl, clientInfo, machineId }) {
   return res.json();
 }
 
-async function pollOnce({ baseUrl, deviceCode }) {
+async function pollOnce({ baseUrl, deviceCode, anonKey, timeoutMs = 20_000 }) {
   const res = await fetchFunctionResponse(functionUrlFor(baseUrl, "tokentracker-device-flow-poll"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(anonKey ? { apikey: anonKey } : {}) },
+    ...(timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     body: JSON.stringify({ device_code: deviceCode }),
   });
   const data = await res.json().catch(() => ({}));
@@ -80,7 +68,12 @@ async function cmdDeviceLogin(argv = [], options = {}) {
   const { trackerDir } = await resolveTrackerPaths({ home });
   const configPath = path.join(trackerDir, "config.json");
   const config = (await readJson(configPath)) || {};
-  const baseUrl = opts.baseUrl || readBaseUrl(config);
+  if (opts.anonKeyFile) opts.anonKey = (await fs.readFile(opts.anonKeyFile, "utf8")).trim();
+  const runtime = assertInsforgeRuntime(resolveRuntimeConfig({
+    cli: { baseUrl: opts.baseUrl || process.env.TOKENTRACKER_BASE_URL || process.env.TOKENTRACKER_API_URL,
+      anonKey: opts.anonKey, dashboardUrl: opts.dashboardUrl }, config, env: process.env,
+  }));
+  const baseUrl = runtime.baseUrl;
 
   const clientInfo = `${os.platform()}-${os.arch()} ${os.hostname()}`;
   // Same machineId the local API serves to the dashboard — both login paths
@@ -88,7 +81,30 @@ async function cmdDeviceLogin(argv = [], options = {}) {
   const { getOrCreateMachineId } = require("../lib/local-api");
   const machineId = getOrCreateMachineId(path.join(trackerDir, "queue.jsonl"));
   process.stdout.write(`Requesting device code from ${baseUrl}...\n`);
-  const authResp = await authorize({ baseUrl, clientInfo, machineId });
+  const authResp = await authorize({ baseUrl, clientInfo, machineId, anonKey: runtime.anonKey, timeoutMs: runtime.httpTimeoutMs });
+  if (typeof authResp.verification_uri !== "string" || !authResp.verification_uri || !authResp.device_code) {
+    throw new Error("Device authorization returned an incomplete response");
+  }
+  const dashboard = new URL(runtime.dashboardUrl);
+  const expectedPath = dashboard.pathname.replace(/\/$/, "") + "/device";
+  for (const value of [authResp.verification_uri, authResp.verification_uri_complete].filter(Boolean)) {
+    const returned = new URL(value);
+    if (returned.origin !== dashboard.origin || returned.pathname !== expectedPath || returned.username || returned.password) {
+      throw new Error("Device authorization returned a different dashboard. Configure --dashboard-url for this instance.");
+    }
+  }
+  await updateJsonLocked(configPath, async current => {
+    const previous = resolveRuntimeConfig({ config, env: {} });
+    const latest = resolveRuntimeConfig({ config: current, env: {} });
+    if ((latest.baseUrl !== previous.baseUrl || latest.anonKey !== previous.anonKey) &&
+        (latest.baseUrl !== baseUrl || latest.anonKey !== runtime.anonKey)) {
+      throw new Error("Backend instance changed during device login");
+    }
+    const changedInstance = previous.baseUrl !== baseUrl || previous.anonKey !== runtime.anonKey;
+    if (changedInstance) resetInstanceState(trackerDir);
+    return { ...(changedInstance ? clearDeviceIdentity(current) : current), baseUrl,
+      anonKey: runtime.anonKey, dashboardUrl: runtime.dashboardUrl };
+  });
 
   if (opts.json) {
     process.stdout.write(JSON.stringify(authResp, null, 2) + "\n");
@@ -129,7 +145,7 @@ async function cmdDeviceLogin(argv = [], options = {}) {
     await sleepFn(wait);
     let result;
     try {
-      result = await pollOnce({ baseUrl, deviceCode: authResp.device_code });
+      result = await pollOnce({ baseUrl, deviceCode: authResp.device_code, anonKey: runtime.anonKey, timeoutMs: runtime.httpTimeoutMs });
       consecutiveErrors = 0;
     } catch (e) {
       consecutiveErrors++;
@@ -140,16 +156,21 @@ async function cmdDeviceLogin(argv = [], options = {}) {
       if (!result.deviceToken) {
         throw new Error("device login approved but server did not return a device token");
       }
-      await updateJsonLocked(configPath, async (current) => ({
-        ...current,
-        ...(machineId ? { machineId } : {}),
-        baseUrl,
-        user_id: result.user_id,
-        deviceToken: result.deviceToken,
-        deviceId: result.deviceId || current.deviceId || config.deviceId,
-        device_login_at: new Date().toISOString(),
-      }));
-      process.stdout.write(`\n✓ Approved. device token written to ${configPath}\n`);
+      await updateJsonLocked(configPath, async (current) => {
+        if (normalizeInstanceBaseUrl(current.baseUrl) !== baseUrl || current.anonKey !== runtime.anonKey) {
+          throw new Error("Backend instance changed during device login");
+        }
+        return { ...current,
+          ...(machineId ? { machineId } : {}),
+          baseUrl,
+          user_id: result.user_id,
+          deviceToken: result.deviceToken,
+          deviceTokenBaseUrl: baseUrl,
+          deviceId: result.deviceId || current.deviceId || config.deviceId,
+          device_login_at: new Date().toISOString(),
+        };
+      });
+      process.stdout.write(`\nApproved. device token written to ${configPath}\n`);
       return;
     }
     if (result.status === "expired") {
@@ -164,12 +185,18 @@ async function cmdDeviceLogin(argv = [], options = {}) {
 }
 
 function parseArgs(argv) {
-  const out = { json: false, baseUrl: null };
+  const out = { json: false, baseUrl: null, anonKey: null, anonKeyFile: null, dashboardUrl: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--json") out.json = true;
     else if (a === "--base-url") {
       out.baseUrl = argv[++i] || null;
+    } else if (a === "--anon-key") {
+      out.anonKey = argv[++i] || null;
+    } else if (a === "--anon-key-file") {
+      out.anonKeyFile = argv[++i] || null;
+    } else if (a === "--dashboard-url") {
+      out.dashboardUrl = argv[++i] || null;
     } else throw new Error(`Unknown option: ${a}`);
   }
   return out;

@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const path = require("node:path");
+const path = require("node:path").posix;
 const { discoverDomains } = require("../scripts/graph/lib/domain-discovery.cjs");
 
 test("discoverDomains picks known roots that exist", () => {

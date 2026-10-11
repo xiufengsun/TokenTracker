@@ -73,7 +73,7 @@ export function LeaderboardMeChip({
       className={cn(
         "group inline-flex h-9 items-center gap-2.5 rounded-full border pl-1 pr-3.5 transition-all duration-300 select-none",
         interactive
-          ? "border-oai-gray-200 hover:border-oai-brand-400 dark:border-oai-gray-800 dark:hover:border-oai-brand-500/80 bg-oai-gray-50/50 dark:bg-white/[0.02] backdrop-blur-md hover:bg-oai-brand-50/40 dark:hover:bg-oai-brand-950/20 active:scale-[0.97] dark:ring-1 dark:ring-white/[0.04] dark:hover:ring-white/[0.08]"
+          ? "border-oai-gray-200 hover:border-oai-gray-400 dark:border-oai-gray-800 dark:hover:border-oai-gray-500/80 bg-oai-gray-50/50 dark:bg-white/[0.02] backdrop-blur-md hover:bg-oai-gray-100/40 dark:hover:bg-oai-gray-900/20 active:scale-[0.97] dark:ring-1 dark:ring-white/[0.04] dark:hover:ring-white/[0.08]"
           : "border-oai-gray-100 dark:border-oai-gray-800/60 bg-oai-gray-50/20 dark:bg-white/[0.01] backdrop-blur-sm dark:ring-1 dark:ring-white/[0.02]",
         className,
       )}
@@ -83,21 +83,22 @@ export function LeaderboardMeChip({
         avatarUrl={me?.avatar_url}
         displayName={headlineName}
         seed={avatarSeed}
+        proActive={me?.pro_active === true}
       />
-      <span className="hidden sm:inline max-w-[120px] truncate text-xs font-semibold text-oai-black dark:text-oai-gray-200 group-hover:text-oai-brand-600 dark:group-hover:text-oai-brand-400 transition-colors">
+      <span className="hidden sm:inline max-w-[120px] truncate text-xs font-semibold text-oai-black dark:text-oai-gray-200 group-hover:text-oai-gray-800 dark:group-hover:text-oai-gray-100 transition-colors">
         {headlineName}
       </span>
+      {me?.pro_active === true && (
+        <span className="leaderboard-pro-badge" role="img" aria-label={copy("leaderboard.pro.badge_aria")} aria-description={copy("leaderboard.pro.tooltip")}>
+          {copy("leaderboard.pro.badge")}
+        </span>
+      )}
       <span className="text-xs font-bold tabular-nums text-oai-gray-800 dark:text-white">
         #{rank.toLocaleString()}
       </span>
       {percentile != null && percentile <= PERCENTILE_BADGE_MAX && (
         <span
-          className={cn(
-            "hidden sm:inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-extrabold tracking-wider tabular-nums uppercase transition-colors duration-300 ring-1",
-            percentile <= 10
-              ? "bg-amber-500/10 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400 ring-amber-500/20"
-              : "bg-oai-brand-100/50 text-oai-brand-700 dark:bg-oai-brand-500/10 dark:text-oai-brand-400 ring-oai-brand-500/10"
-          )}
+          className="hidden sm:inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-extrabold tracking-wider tabular-nums uppercase transition-colors duration-300 ring-1 bg-oai-gray-100 text-oai-gray-700 dark:bg-oai-gray-800 dark:text-oai-gray-300 ring-oai-gray-300/30 dark:ring-oai-gray-600/30"
         >
           {copy("leaderboard.summary.percentile", { p: String(percentile) })}
         </span>
@@ -105,15 +106,15 @@ export function LeaderboardMeChip({
       {interactive ? (
         <ArrowRight
           aria-hidden
-          className="size-3 text-oai-gray-400 transition-all duration-300 group-hover:text-oai-brand-500 dark:text-oai-gray-500 group-hover:translate-x-0.5 group-hover:scale-110"
+          className="size-3 text-oai-gray-400 transition-all duration-300 group-hover:text-oai-gray-600 dark:text-oai-gray-500 group-hover:translate-x-0.5 group-hover:scale-110"
         />
       ) : (
         <span
           className="relative flex h-1.5 w-1.5 shrink-0 items-center justify-center ml-1"
           title="You are here"
         >
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75 duration-1000"></span>
-          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-oai-gray-400 opacity-75 duration-1000"></span>
+          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-oai-gray-400 dark:bg-oai-gray-500"></span>
         </span>
       )}
     </Tag>

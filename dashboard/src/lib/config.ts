@@ -27,12 +27,7 @@ export function getBackendBaseUrl() {
   // applies when VITE_* env wasn't injected at build time — otherwise this
   // returned "" and usage API calls hit the Vercel host (no edge functions
   // there) → 404 → an empty dashboard after login.
-  const env = typeof import.meta !== "undefined" ? import.meta.env : undefined;
-  return (
-    env?.VITE_TOKENTRACKER_BACKEND_BASE_URL ||
-    env?.VITE_INSFORGE_BASE_URL ||
-    getInsforgeRemoteUrl()
-  ).trim();
+  return getInsforgeRemoteUrl();
 }
 
 /**

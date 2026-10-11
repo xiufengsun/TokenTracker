@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useInsforgeAuth } from "../contexts/InsforgeAuthContext.jsx";
 import { useLoginModal } from "../contexts/LoginModalContext.jsx";
 import { useLocale } from "../hooks/useLocale.js";
+import { useCloudAccount } from "../hooks/use-cloud-billing.js";
+import { isOfficialInsforgeInstance } from "../lib/insforge-config";
 import { isNativeApp } from "../lib/native-bridge.js";
 import { copy } from "../lib/copy";
 import { cn } from "../lib/cn";
@@ -34,6 +36,18 @@ function initialsFromName(name) {
   return s.slice(0, 2).toUpperCase();
 }
 
+export function isCurrentProAccount(account, now = Date.now()) {
+  const membership = account?.membership;
+  if (account?.environment !== "live" || membership?.environment !== "live"
+    || membership.phase !== "active" || membership.status !== "active"
+    || ![undefined, "hosted"].includes(membership.hosting_mode)
+    || typeof membership.expires_at !== "string" || !Number.isFinite(Date.parse(membership.expires_at))
+    || Date.parse(membership.expires_at) <= now) return false;
+  // The server derives access_source from current, unrevoked periods. History
+  // is capped, so an active period need not be present in the returned arrays.
+  return ["payment", "gift", "mixed"].includes(membership.access_source);
+}
+
 /**
  * Compact identity control. Avatar click navigates to /settings — all account
  * preferences live there now. Sign-in shows the login modal as before.
@@ -43,6 +57,8 @@ export function InsforgeUserHeaderControls({ className, variant = "header", coll
   useLocale();
   const isSidebar = variant === "sidebar";
   const { enabled, loading, signedIn, user, displayName } = useInsforgeAuth();
+  const billing = useCloudAccount({ enabled: isSidebar && enabled && !loading && signedIn && isOfficialInsforgeInstance() });
+  const proActive = isSidebar && !billing.error && isCurrentProAccount(billing.account);
   const { openLoginModal } = useLoginModal();
   const navigate = useNavigate();
   const avatarUrl = useMemo(() => pickAvatarUrl(user), [user]);
@@ -124,16 +140,17 @@ export function InsforgeUserHeaderControls({ className, variant = "header", coll
         className={cn(
           isSidebar
             ? cn(
-                "flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-oai-gray-200/60 dark:hover:bg-oai-gray-800 transition-colors min-w-0",
+                "tt-sidebar-account-control flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-oai-gray-200/60 dark:hover:bg-oai-gray-800 transition-colors min-w-0",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500",
                 collapsed && "justify-center px-0 py-0 h-9 w-9",
               )
             : "flex items-center gap-2 rounded-md pl-1 pr-2 py-1 border border-transparent hover:bg-oai-gray-100 dark:hover:bg-oai-gray-900/80 hover:border-oai-gray-200 dark:hover:border-oai-gray-800 transition-colors",
         )}
-        aria-label={copy("header.auth.open_settings")}
-        title={isSidebar && collapsed ? (displayName) : undefined}
+        aria-label={proActive ? `${copy("header.auth.open_settings")}, ${copy("leaderboard.pro.badge_aria")}` : copy("header.auth.open_settings")}
+        title={isSidebar && collapsed ? (proActive ? `${displayName}, ${copy("leaderboard.pro.badge_aria")}` : displayName) : undefined}
       >
         {isSidebar ? (
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+          <span className={cn("relative flex h-5 w-5 shrink-0 items-center justify-center rounded-full", proActive && "leaderboard-pro-avatar")}>
             {avatarSrc && !avatarFailed ? (
               <img
                 src={avatarSrc}
@@ -145,14 +162,21 @@ export function InsforgeUserHeaderControls({ className, variant = "header", coll
                 onError={() => setAvatarFailed(true)}
               />
             ) : initialsFromName(displayName) === "?" ? (
-              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-oai-brand-600/30 text-white ring-1 ring-oai-brand-500/50">
+              <span className={cn("flex h-5 w-5 items-center justify-center rounded-full text-white ring-1",
+                proActive ? "tt-sidebar-pro-fallback" : "bg-oai-brand-600/30 ring-oai-brand-500/50")}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3 h-3 opacity-80">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
                 </svg>
               </span>
             ) : (
-              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-oai-brand-600 text-[9px] font-semibold text-white ring-1 ring-oai-brand-500/50">
+              <span className={cn("flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-semibold text-white ring-1",
+                proActive ? "tt-sidebar-pro-fallback" : "bg-oai-brand-600 ring-oai-brand-500/50")}>
                 {initialsFromName(displayName)}
+              </span>
+            )}
+            {proActive && collapsed && (
+              <span aria-hidden title={copy("leaderboard.pro.badge_aria")} className="leaderboard-pro-badge absolute -bottom-1.5 left-1/2 -translate-x-1/2 !px-0.5 !text-[8px] !leading-[10px]">
+                {copy("leaderboard.pro.badge")}
               </span>
             )}
           </span>
@@ -177,6 +201,7 @@ export function InsforgeUserHeaderControls({ className, variant = "header", coll
             {initialsFromName(displayName)}
           </span>
         )}
+        {proActive && !collapsed && <span aria-hidden title={copy("leaderboard.pro.badge_aria")} className="leaderboard-pro-badge">{copy("leaderboard.pro.badge")}</span>}
         {isSidebar ? (
           !collapsed && (
             <span className="truncate text-[13px] font-medium text-oai-gray-900 dark:text-oai-gray-200 flex-1 text-left min-w-0">

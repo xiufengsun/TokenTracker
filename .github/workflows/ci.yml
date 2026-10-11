@@ -190,15 +190,92 @@ jobs:
           node-version: 24
           cache: npm
 
-      - name: Test Windows-specific Node paths
+      - name: Install Windows root dependencies
+        run: npm ci
+
+      # WAL fixtures launch the SQLite CLI in addition to Node's SQLite
+      # reader. Pin the official Windows tools and verify SQLite's published
+      # SHA3-256 before extraction; this is a test dependency only.
+      - name: Install SQLite for Windows test fixtures
+        shell: pwsh
         run: |
-          npm ci
-          node --test test/openclaw-parser.test.js
-          node --test --test-name-pattern="native Windows" test/usage-limits.test.js
-          node --test test/command-runner.test.js
+          $archive = Join-Path $env:RUNNER_TEMP 'sqlite-tools-win-x64-3540000.zip'
+          Invoke-WebRequest 'https://www.sqlite.org/2026/sqlite-tools-win-x64-3540000.zip' -OutFile $archive
+          $verify = @'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const bytes = fs.readFileSync(process.argv[1]);
+          if (bytes.length !== 6982216 || crypto.createHash('sha3-256').update(bytes).digest('hex') !== '8d1ccff873455c7f83c6e03ee253e81406d0e432ca9e7247ed6183929a824b33') throw Error('SQLite fixture tool checksum mismatch');
+          '@
+          node -e $verify $archive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tools = Join-Path $env:RUNNER_TEMP 'tokentracker-sqlite-test-tools'
+          Expand-Archive -LiteralPath $archive -DestinationPath $tools
+          $tools | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & (Join-Path $tools 'sqlite3.exe') --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test Windows updater
         run: dotnet test TokenTrackerWin.Tests/TokenTrackerWin.Tests.csproj --configuration Release
 
       - name: Build TokenTrackerWin
         run: dotnet build TokenTrackerWin/TokenTrackerWin.csproj --configuration Release
+
+      # Build review artifacts before a release so package/installer failures
+      # are caught without publishing a tag or changing public assets.
+      - name: Install Windows dashboard dependencies
+        run: npm ci --prefix dashboard --no-audit --no-fund
+
+      - name: Validate Windows TypeScript and retrospective references
+        run: node --test test/dashboard-typescript-guardrails.test.js test/validate-retros.test.js
+
+      - name: Build Windows dashboard with pet and quota
+        env:
+          VITE_INSFORGE_BASE_URL: https://srctyff5.us-east.insforge.app
+          VITE_INSFORGE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3OC0xMjM0LTU2NzgtOTBhYi1jZGVmMTIzNDU2NzgiLCJlbWFpbCI6ImFub25AaW5zZm9yZ2UuY29tIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExNDU5NDd9.T0auta_IrVIh0uXW1bob5QSnzvsnJmN28r5XkSGEuQY
+          TOKENTRACKER_BUILD_PET: "1"
+        run: npm run dashboard:build
+
+      # Build first because local-runtime tests verify dashboard/dist. Keep
+      # the Windows suite equivalent to Linux/macOS rather than selecting
+      # only already-known native paths. POSIX-only fixtures report skips.
+      - name: Test suite on Windows
+        run: node --test --test-timeout=120000 --test-concurrency=4 test/*.test.js
+
+      - name: Bundle and verify Windows review package
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File TokenTrackerWin/scripts/bundle-node.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet publish TokenTrackerWin/TokenTrackerWin.csproj -c Release -r win-x64 --self-contained true -o TokenTrackerWin/publish
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item TokenTrackerWin/EmbeddedServer TokenTrackerWin/publish/EmbeddedServer -Recurse
+          node scripts/verify-windows-package.cjs TokenTrackerWin/publish windows-package-manifest.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path TokenTrackerWin/publish/* -DestinationPath TokenTracker-review-win-x64.zip
+
+      # The shipped runtime is Node22, while build tooling uses Node24. Test
+      # the actual bundled binary too so native fs/undici regressions cannot
+      # hide behind a successful run on a different Node major.
+      - name: Test suite with the bundled Windows Node runtime
+        run: .\TokenTrackerWin\publish\EmbeddedServer\node.exe --test --test-timeout=120000 --test-concurrency=4 test/*.test.js
+
+      - name: Compile Windows review installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc)) { throw 'Preinstalled Inno Setup 6 compiler unavailable' }
+          $version = node -p "require('./package.json').version"
+          & $iscc "/DMyAppVersion=$version" TokenTrackerWin/installer/TokenTracker.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Windows review artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-review-${{ github.event.pull_request.head.sha || github.sha }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            TokenTracker-review-win-x64.zip
+            TokenTrackerWin/installer/Output/TokenTracker-Setup-v*.exe
+            windows-package-manifest.json

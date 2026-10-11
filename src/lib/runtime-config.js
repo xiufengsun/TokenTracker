@@ -30,25 +30,32 @@ function resolveRuntimeConfig({ cli = {}, config = {}, env = process.env, defaul
     defaults.baseUrl,
     DEFAULT_BASE_URL,
   );
+  const selectedBase = normalizeInstanceBaseUrl(baseUrl.value);
+  const configBase = normalizeInstanceBaseUrl(persistedBaseUrl || DEFAULT_BASE_URL);
+  const envBase = normalizeInstanceBaseUrl(env?.TOKENTRACKER_INSFORGE_BASE_URL || baseUrl.value);
+  const defaultBase = normalizeInstanceBaseUrl(defaults.baseUrl || DEFAULT_BASE_URL);
+  const custom = selectedBase !== DEFAULT_BASE_URL;
   const anonKey = pickString(
     cli.anonKey,
-    config.anonKey,
-    env?.TOKENTRACKER_INSFORGE_ANON_KEY,
-    defaults.anonKey,
-    DEFAULT_ANON_KEY,
+    configBase === selectedBase ? config.anonKey : undefined,
+    envBase === selectedBase ? env?.TOKENTRACKER_INSFORGE_ANON_KEY : undefined,
+    defaultBase === selectedBase ? defaults.anonKey : undefined,
+    custom ? null : DEFAULT_ANON_KEY,
   );
   const dashboardUrl = pickString(
     cli.dashboardUrl,
-    config.dashboardUrl,
-    env?.TOKENTRACKER_DASHBOARD_URL,
-    defaults.dashboardUrl,
-    DEFAULT_DASHBOARD_URL,
+    configBase === selectedBase ? config.dashboardUrl : undefined,
+    envBase === selectedBase ? env?.TOKENTRACKER_DASHBOARD_URL : undefined,
+    defaultBase === selectedBase ? defaults.dashboardUrl : undefined,
+    custom ? baseUrl.value : DEFAULT_DASHBOARD_URL,
   );
   const deviceToken = pickString(
     cli.deviceToken,
-    config.deviceToken,
-    env?.TOKENTRACKER_DEVICE_TOKEN,
-    defaults.deviceToken,
+    configBase === selectedBase && (!custom || normalizeInstanceBaseUrl(config.deviceTokenBaseUrl) === selectedBase)
+      ? config.deviceToken : undefined,
+    envBase === selectedBase && (!custom || normalizeInstanceBaseUrl(env?.TOKENTRACKER_INSFORGE_BASE_URL) === selectedBase)
+      ? env?.TOKENTRACKER_DEVICE_TOKEN : undefined,
+    defaultBase === selectedBase ? defaults.deviceToken : undefined,
     null,
   );
   const httpTimeoutMs = pickHttpTimeoutMs(
@@ -67,14 +74,20 @@ function resolveRuntimeConfig({ cli = {}, config = {}, env = process.env, defaul
     false,
   );
 
+  const unsafeKey = anonKey.value && (!isPublicAnonKey(anonKey.value) || (custom && anonKey.value === DEFAULT_ANON_KEY));
+  const configurationError = !selectedBase ? "invalid_insforge_base_url"
+    : !normalizeInstanceBaseUrl(dashboardUrl.value) ? "invalid_dashboard_url"
+    : unsafeKey ? "invalid_insforge_anon_key"
+    : custom && !anonKey.value ? "custom_insforge_anon_key_required" : null;
   return {
-    baseUrl: baseUrl.value,
-    anonKey: anonKey.value,
+    baseUrl: selectedBase || baseUrl.value,
+    anonKey: unsafeKey ? null : anonKey.value,
     dashboardUrl: dashboardUrl.value,
-    deviceToken: deviceToken.value,
+    deviceToken: configurationError ? null : deviceToken.value,
     httpTimeoutMs: httpTimeoutMs.value,
     debug: debug.value,
     autoRetryNoSpawn: autoRetryNoSpawn.value,
+    configurationError,
     sources: {
       baseUrl: baseUrl.source,
       anonKey: anonKey.source,
@@ -85,6 +98,58 @@ function resolveRuntimeConfig({ cli = {}, config = {}, env = process.env, defaul
       autoRetryNoSpawn: autoRetryNoSpawn.source,
     },
   };
+}
+
+function normalizeInstanceBaseUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    const loopback = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname);
+    if (url.username || url.password || url.search || url.hash ||
+      (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))) return null;
+    return url.toString().replace(/\/$/, "");
+  } catch { return null; }
+}
+
+function isPublicAnonKey(value) {
+  try {
+    if (typeof value !== "string") return false;
+    const key = value.trim();
+    if (key.startsWith("ik_")) return false;
+    if (/^anon_(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(key)) return true;
+    const parts = key.split(".");
+    if (parts.length !== 3 || !parts.every(part => /^[A-Za-z0-9_-]+$/.test(part))) return false;
+    return JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")).role === "anon";
+  } catch { return false; }
+}
+
+function assertInsforgeRuntime(runtime) {
+  if (!runtime?.configurationError) return runtime;
+  const messages = {
+    invalid_insforge_base_url: "InsForge URL must use HTTPS, or HTTP on localhost, without credentials, query or fragment.",
+    invalid_insforge_anon_key: "Use this instance's public anon key. Admin and service keys cannot be used by the client.",
+    invalid_dashboard_url: "Dashboard URL must use HTTPS, or HTTP on localhost, without credentials, query or fragment.",
+    custom_insforge_anon_key_required: "A custom InsForge URL requires its own public anon key. Configure --anon-key-file or TOKENTRACKER_INSFORGE_ANON_KEY.",
+  };
+  throw Object.assign(new Error(messages[runtime.configurationError] || "Invalid InsForge configuration"), {
+    code: runtime.configurationError, status: 503,
+  });
+}
+
+function clearDeviceIdentity(config) {
+  const next = { ...config };
+  for (const key of ["deviceToken", "deviceTokenBaseUrl", "deviceId", "user_id", "device_login_at"]) delete next[key];
+  return next;
+}
+
+function resetInstanceState(trackerDir) {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  fs.mkdirSync(trackerDir, { recursive: true });
+  fs.writeFileSync(path.join(trackerDir, "queue.state.json"), JSON.stringify({ offset: 0, updatedAt: new Date().toISOString() }), { mode: 0o600 });
+  for (const file of ["relay-cookies.json", "cloud-device-token.json", "cloud-upload-owner.json", "upload.throttle.json", "link_code_state.json"]) {
+    try { fs.unlinkSync(path.join(trackerDir, file)); }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
 }
 
 function pickString(...candidates) {
@@ -175,4 +240,9 @@ module.exports = {
   DEFAULT_HTTP_TIMEOUT_MS,
   resolveRuntimeConfig,
   isLegacyInsforgeBaseUrl,
+  normalizeInstanceBaseUrl,
+  isPublicAnonKey,
+  assertInsforgeRuntime,
+  clearDeviceIdentity,
+  resetInstanceState,
 };

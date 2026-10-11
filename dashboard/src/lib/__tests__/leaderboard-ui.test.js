@@ -26,6 +26,18 @@ describe("getPaginationFlags", () => {
 });
 
 describe("prependMeRowToPage", () => {
+  it("keeps server paid identity on the pinned row without changing rank or usage", () => {
+    const entries = [{ rank: 21, total_tokens: "30" }];
+    for (const proActive of [true, false, undefined, "true", 1]) {
+      const me = { rank: 1, user_id: "paid-owner", total_tokens: "155", pro_active: proActive };
+      const result = prependMeRowToPage({ entries, me, meLabel: "YOU" });
+      expect(result[0].pro_active).toBe(proActive === true);
+      expect(result[0].rank).toBe(1);
+      expect(result[0].total_tokens).toBe("155");
+      expect(result[1]).toBe(entries[0]);
+    }
+  });
+
   it("prepends a pinned me row when current page does not contain me", () => {
     const entries = Array.from({ length: 20 }, (_, i) => ({
       rank: i + 1,

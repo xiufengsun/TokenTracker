@@ -11,7 +11,8 @@ let cloudDeviceSessionGeneration = 0;
 let cloudSyncPrefMirror: Promise<void> = Promise.resolve();
 
 export type CloudDeviceSession = {
-  token: string;
+  token?: string;
+  localSessionId?: string;
   deviceId: string;
   issuedAt: string;
   ownerId?: string;
@@ -149,8 +150,16 @@ export function setStoredDeviceSession(session: CloudDeviceSession, expectedGene
 }
 
 export function clearCloudDeviceSession(): void {
+  const previousSessionId = memoryDeviceSession?.localSessionId;
+  if (previousSessionId && isLocalDashboardHost()) {
+    void import("./local-api-auth").then(async ({ getLocalApiAuthHeaders }) => {
+      const authHeaders = await getLocalApiAuthHeaders();
+      await fetch("/functions/tokentracker-cloud-session", { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders }, body: JSON.stringify({ clear: true, session_id: previousSessionId }) });
+    }).catch(() => {});
+  }
   cloudDeviceSessionGeneration += 1;
   memoryDeviceSession = null;
+  setCloudUsageReady(false);
   try {
     localStorage.removeItem(KEY_LAST_SYNC);
     localStorage.removeItem(KEY_DEVICE_ID);

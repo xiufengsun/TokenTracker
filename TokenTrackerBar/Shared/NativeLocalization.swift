@@ -38,6 +38,9 @@ public enum NativeLocalization {
     }
 
     public static var currentPreference: String {
+        if let profile = NativeQAProfile.current {
+            return normalizePreference(profile.defaults.string(forKey: preferenceKey))
+        }
         // The dashboard writes the main-app preference. Prefer it when present
         // so an old widget App Group value cannot force the menu bar back to a
         // previous language after an update.
@@ -76,12 +79,17 @@ public enum NativeLocalization {
 
     public static func storePreference(_ value: Any?) {
         let normalized = normalizePreference(value)
+        if let profile = NativeQAProfile.current {
+            profile.defaults.set(normalized, forKey: preferenceKey)
+            return
+        }
         UserDefaults.standard.set(normalized, forKey: preferenceKey)
         sharedDefaults?.set(normalized, forKey: preferenceKey)
     }
 
     /// Repair an App Group preference left behind by an older build.
     public static func synchronizeSharedPreference() {
+        guard NativeQAProfile.current == nil else { return }
         guard let local = UserDefaults.standard.string(forKey: preferenceKey) else { return }
         sharedDefaults?.set(normalizePreference(local), forKey: preferenceKey)
     }

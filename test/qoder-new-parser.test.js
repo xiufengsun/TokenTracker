@@ -307,7 +307,7 @@ test("resolveQoderCnProjectsDir honors QODER_CN_PROJECTS_DIR and ignores QODER/Q
       env: { QODER_CN_PROJECTS_DIR: "/cn-sessions/projects" },
       platform: "darwin",
     }),
-    "/cn-sessions/projects",
+    path.resolve("/cn-sessions/projects"),
   );
 });
 

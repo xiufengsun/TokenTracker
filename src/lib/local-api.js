@@ -3,7 +3,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
-const { DEFAULT_BASE_URL, resolveRuntimeConfig } = require("./runtime-config");
+const { DEFAULT_BASE_URL, resolveRuntimeConfig, assertInsforgeRuntime, normalizeInstanceBaseUrl, clearDeviceIdentity, resetInstanceState } = require("./runtime-config");
 const {
   filterRowsByUsageScope,
   getSourceScope,
@@ -14,6 +14,8 @@ const { accountSlugFor, fetchAccountUsage, mintAccessToken, invalidateCloudAccou
 const { getOrCreateMachineId, computeStableMachineId } = require("./machine-id");
 const { functionUrlFor, fetchFunctionResponse } = require("./function-url");
 const { createCloudDeviceTokenStore } = require("./cloud-device-token");
+const { parseBearerToken } = require("./bearer-token");
+const { writeJsonAtomicSync } = require("./atomic-json");
 
 const SYNC_TIMEOUT_MS = 120_000;
 // A failed account-view request should not stall every dashboard refresh
@@ -806,18 +808,11 @@ function normalizeRemoteHttpBaseUrl(value) {
   }
 }
 
-function resolveAllowedInsforgeBaseUrl(value) {
+function resolveAllowedInsforgeBaseUrl(value, runtime = resolveRuntimeConfig()) {
   const requested = normalizeRemoteHttpBaseUrl(value);
   if (!requested) return null;
 
-  const runtime = resolveRuntimeConfig();
-  const allowed = new Set(
-    [runtime.baseUrl, DEFAULT_BASE_URL]
-      .map((entry) => normalizeRemoteHttpBaseUrl(entry))
-      .filter(Boolean),
-  );
-
-  return allowed.has(requested) ? requested : null;
+  return requested === normalizeRemoteHttpBaseUrl(runtime.baseUrl) ? requested : null;
 }
 
 function parseCookieHeader(value) {
@@ -890,24 +885,29 @@ function readBodyLimited(req, maxBytes) {
 
 function runSyncCommand(extraEnv = {}, opts = {}) {
   return new Promise((resolve, reject) => {
-    const args = [TRACKER_BIN, "sync"];
+    const args = opts.trackerDataDir
+      ? ["-e", `require(${JSON.stringify(path.resolve(__dirname, "../commands/sync.js"))}).cmdSync(process.argv.slice(1), ${JSON.stringify({ trackerDataDir: opts.trackerDataDir, home: path.dirname(opts.trackerDataDir), ...(opts.syncContext || {}) })}).catch(e => { console.error(e.message); process.exitCode = 1; })`, "--"]
+      : [TRACKER_BIN, "sync"];
     if (opts.auto === true) args.push("--auto");
     if (opts.background === true) args.push("--background");
     if (opts.publishAccount === true) args.push("--publish-account");
     if (opts.allLocalSources === true) args.push("--all-local-sources");
     if (opts.drain === true) args.push("--drain");
     if (opts.waitForLock === true) args.push("--wait-for-lock");
+    if (opts.signal?.aborted) { reject(Object.assign(new Error("Account session changed"), { code: "auth_session_changed", status: 409 })); return; }
     const child = spawn(process.execPath, args, {
       env: {
         ...process.env, ...extraEnv,
         ...(extraEnv.TOKENTRACKER_DEVICE_TOKEN ? {
-          TOKENTRACKER_INSFORGE_BASE_URL: extraEnv.TOKENTRACKER_INSFORGE_BASE_URL || resolveRuntimeConfig().baseUrl,
-          TOKENTRACKER_INSFORGE_ANON_KEY: resolveRuntimeConfig().anonKey,
+          TOKENTRACKER_INSFORGE_BASE_URL: extraEnv.TOKENTRACKER_INSFORGE_BASE_URL,
+          TOKENTRACKER_INSFORGE_ANON_KEY: extraEnv.TOKENTRACKER_INSFORGE_ANON_KEY || "",
         } : {}),
         TOKENTRACKER_LOCAL_SYNC_DEVICE_TOKEN: extraEnv.TOKENTRACKER_DEVICE_TOKEN || "",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    const cancel = () => child.kill("SIGTERM");
+    opts.signal?.addEventListener("abort", cancel, { once: true });
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -915,18 +915,13 @@ function runSyncCommand(extraEnv = {}, opts = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(tid);
+      opts.signal?.removeEventListener("abort", cancel);
       fn(v);
     };
+    let timedOut = false;
     const tid = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGTERM");
-      finish(
-        reject,
-        Object.assign(new Error("Sync timed out"), {
-          code: "SYNC_TIMEOUT",
-          stdout: trimOutput(stdout),
-          stderr: trimOutput(stderr),
-        }),
-      );
     }, SYNC_TIMEOUT_MS);
     child.stdout?.on("data", (c) => {
       stdout += c;
@@ -938,6 +933,8 @@ function runSyncCommand(extraEnv = {}, opts = {}) {
       finish(reject, Object.assign(e, { stdout: trimOutput(stdout), stderr: trimOutput(stderr) }));
     });
     child.on("close", (code) => {
+      if (timedOut) { finish(reject, Object.assign(new Error("Sync timed out"), { code: "SYNC_TIMEOUT", stdout: trimOutput(stdout), stderr: trimOutput(stderr) })); return; }
+      if (opts.signal?.aborted) { finish(reject, Object.assign(new Error("Account session changed"), { code: "auth_session_changed", status: 409 })); return; }
       const r = { code: code ?? 1, stdout: trimOutput(stdout), stderr: trimOutput(stderr) };
       if (code === 0) {
         finish(resolve, r);
@@ -1141,7 +1138,7 @@ function buildProxyHeaders(headers) {
 // Main handler factory
 // ---------------------------------------------------------------------------
 
-function createLocalApiHandler({ queuePath, serverVersion = null }) {
+function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir: isolatedTrackerDataDir = null, syncContext = null }) {
   const qp = queuePath || resolveQueuePath();
   const normalizedServerVersion = typeof serverVersion === "string" ? serverVersion.trim() : "";
 
@@ -1151,13 +1148,24 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
   const csrfRelayCookieName = "insforge_csrf_token";
   let relayCookies = new Map();
   const localAuthToken = crypto.randomBytes(24).toString("hex");
-  const trackerDataDir = path.join(os.homedir(), ".tokentracker", "tracker");
+  const trackerDataDir = isolatedTrackerDataDir || path.dirname(qp);
   const cookiePath = path.join(trackerDataDir, "relay-cookies.json");
   const localSyncDeviceTokenStore = createCloudDeviceTokenStore(path.join(trackerDataDir, "cloud-device-token.json"));
   const localSyncDeviceTokenCache = new Map();
   const localSyncDeviceTokenInflight = new Map();
   let localSyncDeviceTokenUserId = "";
+  let localCloudSession = null;
+  let localCloudGeneration = 0;
+  const activeCloudSyncs = new Set();
+  const localSyncDeviceMetadata = new Map();
+  function invalidateLocalCloudSession() {
+    localCloudGeneration += 1;
+    localCloudSession = null;
+    for (const controller of activeCloudSyncs) controller.abort();
+  }
   function clearLocalSyncDeviceTokenCache() {
+    invalidateLocalCloudSession();
+    localSyncDeviceMetadata.clear();
     localSyncDeviceTokenCache.clear();
     localSyncDeviceTokenInflight.clear();
     localSyncDeviceTokenStore.clear();
@@ -1176,10 +1184,10 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
       if (attemptId && state.lastErrorAttemptId === attemptId &&
           Date.parse(state.lastErrorAt || "") >= syncStartedAt && Number(state.lastErrorStatus) > 0) {
         if (state.lastErrorCode === "CLOUD_DEVICE_TOKEN_REJECTED") invalidateLocalSyncDeviceToken(deviceToken);
-        return { code: state.lastErrorCode || "CLOUD_UPLOAD_FAILED", status: Number(state.lastErrorStatus) };
+        return { code: state.lastErrorCode || "CLOUD_UPLOAD_FAILED", status: Number(state.lastErrorStatus), retryAfterMs: Math.max(0, Math.max(Number(state.backoffUntilMs || 0), Number(state.nextAllowedAtMs || 0)) - Date.now()), nextAllowedAt: state.nextAllowedAtMs ? new Date(state.nextAllowedAtMs).toISOString() : null };
       }
-      if (backoff && Number(state.backoffUntilMs || 0) > syncStartedAt) {
-        return { code: "SYNC_UPLOAD_BACKOFF", status: 429 };
+      if (backoff && Math.max(Number(state.backoffUntilMs || 0), Number(state.nextAllowedAtMs || 0)) > syncStartedAt) {
+        return { code: "SYNC_UPLOAD_BACKOFF", status: 429, retryAfterMs: Math.max(0, Math.max(Number(state.backoffUntilMs || 0), Number(state.nextAllowedAtMs || 0)) - Date.now()), nextAllowedAt: state.nextAllowedAtMs ? new Date(state.nextAllowedAtMs).toISOString() : null };
       }
     } catch { /* no upload failure was recorded */ }
     return null;
@@ -1191,6 +1199,46 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
   const accountViewFailures = new Map();
   const accountViewInFlight = new Map();
   let accountUploadState = readAccountUploadState();
+  const runtimeConfigPath = path.join(path.dirname(qp), "config.json");
+  const instancePath = path.join(trackerDataDir, "runtime-instance.json");
+  const issuedAccessTokenInstances = new Map();
+  let instanceFingerprint = "";
+  try { instanceFingerprint = JSON.parse(fs.readFileSync(instancePath, "utf8")).fingerprint || ""; } catch { /* first start */ }
+
+  function fingerprintFor(runtime) {
+    return crypto.createHash("sha256").update(`${runtime.baseUrl}\0${runtime.anonKey || ""}`).digest("hex");
+  }
+
+  function getRuntime() {
+    let config = {};
+    let invalid = false;
+    try { config = JSON.parse(fs.readFileSync(runtimeConfigPath, "utf8")); }
+    catch (error) { invalid = error.code !== "ENOENT"; }
+    if (!config || typeof config !== "object" || Array.isArray(config)) { config = {}; invalid = true; }
+    const runtime = resolveRuntimeConfig({ config: config || {}, env: process.env });
+    if (invalid) runtime.configurationError = "invalid_local_config";
+    if (runtime.configurationError || (!fs.existsSync(runtimeConfigPath) && !fs.existsSync(qp))) return runtime;
+    const fingerprint = fingerprintFor(runtime);
+    if (fingerprint !== instanceFingerprint) {
+      if (instanceFingerprint || runtime.baseUrl !== DEFAULT_BASE_URL) {
+        clearRelayCookies("backend instance changed");
+        _nativeAuthPending = false; _nativeAuthExpiry = 0;
+        resetInstanceState(path.dirname(qp));
+        if (trackerDataDir !== path.dirname(qp)) resetInstanceState(trackerDataDir);
+        accountViewFailures.clear(); accountViewInFlight.clear();
+        if (["deviceToken", "deviceId", "user_id"].some(key => config?.[key]) &&
+            normalizeInstanceBaseUrl(config.deviceTokenBaseUrl) !== runtime.baseUrl) {
+          config = clearDeviceIdentity(config);
+          writeJsonAtomicSync(runtimeConfigPath, config);
+          runtime.deviceToken = null;
+        }
+      }
+      fs.mkdirSync(trackerDataDir, { recursive: true });
+      fs.writeFileSync(instancePath, JSON.stringify({ fingerprint }), { mode: 0o600 });
+      instanceFingerprint = fingerprint;
+    }
+    return runtime;
+  }
 
   function readAccountUploadState() {
     try {
@@ -1322,13 +1370,18 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
     }
   }
 
-  function captureAuthTokensFromBody(bodyBuffer, contentType, { newLogin = false } = {}) {
+  function captureAuthTokensFromBody(bodyBuffer, contentType, { newLogin = false, sourceFingerprint } = {}) {
     if (!bodyBuffer || !String(contentType || "").toLowerCase().includes("application/json")) return;
     let parsed = null;
     try {
       parsed = JSON.parse(bodyBuffer.toString("utf8"));
     } catch {
       return;
+    }
+    if (sourceFingerprint && typeof parsed?.accessToken === "string" && parsed.accessToken.length <= 8192) {
+      const hash = crypto.createHash("sha256").update(parsed.accessToken).digest("hex");
+      if (!issuedAccessTokenInstances.has(hash)) issuedAccessTokenInstances.set(hash, sourceFingerprint);
+      while (issuedAccessTokenInstances.size > 64) issuedAccessTokenInstances.delete(issuedAccessTokenInstances.keys().next().value);
     }
     let changed = false;
     const token = typeof parsed?.csrfToken === "string" ? parsed.csrfToken.trim() : "";
@@ -1422,23 +1475,17 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
   async function issueDeviceTokenForLocalSync(queuePathForMachineId, options = {}) {
     if (!getCloudSyncPref()) return null;
     const refreshToken = getRefreshTokenForCloud();
-    if (!refreshToken) return null;
+    if (!options.accessToken && !refreshToken) return null;
     const machineId = getOrCreateMachineId(queuePathForMachineId);
     if (!machineId) return null;
-
-    const runtime = resolveRuntimeConfig();
-    const baseUrl =
-      normalizeRemoteHttpBaseUrl(options.baseUrl) ||
-      normalizeRemoteHttpBaseUrl(runtime.baseUrl) ||
-      normalizeRemoteHttpBaseUrl(DEFAULT_BASE_URL);
+    const runtime = assertInsforgeRuntime(getRuntime());
+    const baseUrl = normalizeRemoteHttpBaseUrl(options.baseUrl) ||
+      normalizeRemoteHttpBaseUrl(runtime.baseUrl);
     const sessionAtStart = getCloudAccountSessionGeneration();
     const cloudPrefAtStart = cloudSyncPrefGeneration;
-    const minted = await mintAccessToken({
-      baseUrl,
-      anonKey: runtime.anonKey,
-      refreshToken,
-      timeoutMs: runtime.httpTimeoutMs,
-      throwOnFailure: true,
+    const generationAtStart = localCloudGeneration;
+    const minted = options.accessToken ? { accessToken: options.accessToken } : await mintAccessToken({
+      baseUrl, anonKey: runtime.anonKey, refreshToken, timeoutMs: runtime.httpTimeoutMs, throwOnFailure: true,
     }).catch((error) => {
       if (error.status === 401 && sessionAtStart === getCloudAccountSessionGeneration()) clearLocalSyncDeviceTokenCache();
       throw error;
@@ -1451,13 +1498,16 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
     if (rotatedRefreshToken) setRelayRefreshToken(rotatedRefreshToken);
     if (minted.csrfToken) setRelayCsrfToken(minted.csrfToken);
     if (!getCloudSyncPref() || cloudPrefAtStart !== cloudSyncPrefGeneration) return null;
-    // The token comes from a successful refresh, not from a caller-supplied JWT.
-    // Token rotation keeps the same subject and therefore the same device key.
+    // Refresh validates native ownership. A browser JWT must additionally pass
+    // token issuance upstream before the mirror receives an upload binding.
     let userId = "";
     try {
       const payload = JSON.parse(Buffer.from(minted.accessToken.split(".")[1], "base64url").toString("utf8"));
       userId = typeof payload.sub === "string" ? payload.sub : "";
     } catch { /* legacy opaque access tokens retain their isolated refresh key */ }
+    if (options.expectedOwnerId && userId !== options.expectedOwnerId) {
+      throw Object.assign(new Error("Account owner mismatch"), { status: 409, code: "auth_owner_mismatch" });
+    }
     if (userId && localSyncDeviceTokenUserId && userId !== localSyncDeviceTokenUserId) {
       clearLocalSyncDeviceTokenCache();
     }
@@ -1465,15 +1515,18 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
     const identity = userId || `refresh:${rotatedRefreshToken || refreshToken}`;
     const cacheKey = localSyncDeviceTokenCacheKey(identity, machineId, baseUrl);
     const binding = { userId, baseUrl, machineId };
-    const cachedToken = localSyncDeviceTokenCache.get(cacheKey) ||
-      (userId ? localSyncDeviceTokenStore.get(binding) : null);
+    const cachedToken = !options.accessToken && (localSyncDeviceTokenCache.get(cacheKey) ||
+      (userId ? localSyncDeviceTokenStore.get(binding) : null));
     if (cachedToken) {
       localSyncDeviceTokenCache.set(cacheKey, cachedToken);
       if (userId) localSyncDeviceTokenStore.set(binding, cachedToken);
-      return cachedToken;
+      return options.returnSession ? localSyncDeviceMetadata.get(cachedToken) || null : cachedToken;
     }
     const inflightToken = localSyncDeviceTokenInflight.get(cacheKey);
-    if (inflightToken?.sessionGeneration === sessionAtStart) return inflightToken.promise;
+    if (inflightToken?.sessionGeneration === sessionAtStart && inflightToken.generation === generationAtStart) {
+      const token = await inflightToken.promise;
+      return options.returnSession ? localSyncDeviceMetadata.get(token) || null : token;
+    }
 
     const issuePromise = (async () => {
       const root = String(baseUrl || DEFAULT_BASE_URL).replace(/\/$/, "");
@@ -1511,26 +1564,34 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
       }).finally(() => {
         if (timeoutId) clearTimeout(timeoutId);
       });
-      if (sessionAtStart !== getCloudAccountSessionGeneration() || !getCloudSyncPref() || cloudPrefAtStart !== cloudSyncPrefGeneration) return null;
+      getRuntime();
+      if (sessionAtStart !== getCloudAccountSessionGeneration() || !getCloudSyncPref() || cloudPrefAtStart !== cloudSyncPrefGeneration || generationAtStart !== localCloudGeneration) return null;
       if (!res.ok) {
         if (res.status === 401 && sessionAtStart === getCloudAccountSessionGeneration()) {
           localSyncDeviceTokenCache.delete(cacheKey);
           localSyncDeviceTokenStore.clear(binding);
         }
+        const denied = await res.json().catch(() => ({}));
+        if (typeof denied?.code === "string" && denied.code.startsWith("cloud_")) {
+          throw Object.assign(new Error(denied.code), { code: denied.code, status: res.status,
+            recoveryUrl: denied.recovery_url });
+        }
         return null;
       }
       const data = await res.json().catch(() => null);
       const token = typeof data?.token === "string" ? data.token.trim() : "";
-      if (sessionAtStart !== getCloudAccountSessionGeneration() || !getCloudSyncPref() || cloudPrefAtStart !== cloudSyncPrefGeneration) return null;
+      if (sessionAtStart !== getCloudAccountSessionGeneration() || !getCloudSyncPref() || cloudPrefAtStart !== cloudSyncPrefGeneration || generationAtStart !== localCloudGeneration) return null;
       if (token) {
+        localSyncDeviceMetadata.set(token, { token, deviceId: data.device_id, issuedAt: data.created_at || new Date().toISOString() });
         localSyncDeviceTokenCache.set(cacheKey, token);
         if (userId) localSyncDeviceTokenStore.set(binding, token);
       }
       return token || null;
     })();
-    localSyncDeviceTokenInflight.set(cacheKey, { promise: issuePromise, sessionGeneration: sessionAtStart });
+    localSyncDeviceTokenInflight.set(cacheKey, { promise: issuePromise, sessionGeneration: sessionAtStart, generation: generationAtStart });
     try {
-      return await issuePromise;
+      const token = await issuePromise;
+      return options.returnSession ? localSyncDeviceMetadata.get(token) || null : token;
     } finally {
       if (localSyncDeviceTokenInflight.get(cacheKey)?.promise === issuePromise) localSyncDeviceTokenInflight.delete(cacheKey);
     }
@@ -1553,6 +1614,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
     if (err.name === "AbortError" || err.name === "TimeoutError" || err.code === "auth_timeout") {
       return "transient-timeout";
     }
+    if (typeof err.code === "string" && err.code.startsWith("cloud_")) return err.code.replaceAll("_", "-");
     if (err.code === "auth_rejected" || err.code === "auth_invalid" || err.status === 401 || err.status === 403) {
       return "transient-auth";
     }
@@ -1570,7 +1632,8 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
     const refreshToken = getRefreshTokenForCloud();
     if (!refreshToken) return ACCOUNT_FALLBACK_SIGNED_OUT;
     invalidateAfterAccountUpload();
-    const runtime = resolveRuntimeConfig();
+    const runtime = getRuntime();
+    if (runtime.configurationError) return ACCOUNT_FALLBACK_SIGNED_OUT;
     const failureKey = `${runtime.baseUrl}\0${refreshToken}`;
     const sessionAtStart = getCloudAccountSessionGeneration();
     const cloudPrefAtStart = cloudSyncPrefGeneration;
@@ -1598,6 +1661,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
           refreshToken,
           timeoutMs,
           onSessionRefreshed: (session) => {
+            getRuntime();
             if (sessionAtStart !== getCloudAccountSessionGeneration()) {
               throw Object.assign(new Error("Account session changed"), { code: "auth_session_changed" });
             }
@@ -1612,6 +1676,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
         pending.then(cleanup, cleanup);
       }
       const out = await pending;
+      getRuntime();
       // `null` here means the slug has no cloud equivalent, or the session
       // vanished mid-request — a routing/session fact, not an outage.
       if (!out) return ACCOUNT_FALLBACK_SIGNED_OUT;
@@ -1652,7 +1717,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
       // erroring, but say so: this is a *temporary* downgrade and the client
       // must not treat it as the user's real data scope.
       const reason = classifyAccountFallback(e);
-      if (resolveRuntimeConfig().debug) {
+      if (getRuntime().debug) {
         console.warn(`[LocalAPI] account view fallback (${reason}) for ${usageSlug}:`, e?.message || e);
       }
       rememberAccountViewFailure(failureKey);
@@ -1707,6 +1772,45 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
 
   return async function handleLocalApi(req, res, url) {
     const p = url.pathname;
+    // Session recovery and the one-time native callback marker belong to local
+    // clients. Reject foreign requests before consuming either, including preflights.
+    const nativeMarkerRead = p === "/api/auth-bridge/verifier" && String(req.method).toUpperCase() === "GET";
+    if (p.startsWith("/api/auth/") || nativeMarkerRead) {
+      if (!hasAllowedLoopbackOrigin(req.headers || {}) || req.headers?.["sec-fetch-site"] === "cross-site") {
+        json(res, { code: "untrusted_auth_origin", error: "Authentication requests must come from the local dashboard." }, 403);
+        return true;
+      }
+      if (String(req.method).toUpperCase() === "OPTIONS") {
+        res.writeHead(204, {
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        });
+        res.end();
+        return true;
+      }
+    }
+    const selectedRuntime = getRuntime();
+    const callerInstance = req.headers?.["x-tokentracker-instance"];
+    if (callerInstance && normalizeInstanceBaseUrl(callerInstance) !== selectedRuntime.baseUrl) {
+      json(res, { code: "instance_changed", error: "The configured backend instance changed. Reload and sign in again." }, 409);
+      return true;
+    }
+    const bearer = parseBearerToken(req.headers?.authorization);
+    const issuedFor = bearer && issuedAccessTokenInstances.get(crypto.createHash("sha256").update(bearer).digest("hex"));
+    if (issuedFor && issuedFor !== fingerprintFor(selectedRuntime)) {
+      json(res, { code: "instance_changed", error: "This session belongs to another backend instance. Sign in again." }, 409);
+      return true;
+    }
+    if (p === "/api/runtime-config.js") {
+      if (String(req.method).toUpperCase() !== "GET") { json(res, { error: "Method Not Allowed" }, 405); return true; }
+      const descriptor = { baseUrl: normalizeInstanceBaseUrl(selectedRuntime.baseUrl) || "",
+        anonKey: selectedRuntime.configurationError ? null : selectedRuntime.anonKey,
+        dashboardUrl: normalizeInstanceBaseUrl(selectedRuntime.dashboardUrl) || "", configurationError: selectedRuntime.configurationError };
+      const value = JSON.stringify(descriptor).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+      res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
+      res.end(`window.__TOKENTRACKER_RUNTIME_CONFIG__=${value};`);
+      return true;
+    }
 
     if (p === "/api/local-auth") {
       if (String(req.method || "GET").toUpperCase() !== "GET") {
@@ -1820,12 +1924,32 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
 
     // --- auth proxy: forward /api/auth/* to InsForge cloud ---
     if (p.startsWith("/api/auth/")) {
+      if (String(req.method).toUpperCase() === "POST" && /^\/api\/auth\/(?:logout|sessions|sign-in|oauth\/exchange)$/.test(p)) {
+        clearLocalSyncDeviceTokenCache();
+        invalidateCloudAccountPayloadCache({ sessionChanged: true });
+      }
       const authSessionAtStart = getCloudAccountSessionGeneration();
-      const runtime = resolveRuntimeConfig();
+      const runtime = getRuntime();
+      try { assertInsforgeRuntime(runtime); } catch (error) { json(res, { code: error.code, error: error.message }, 503); return true; }
       const insforgeBase = runtime.baseUrl || DEFAULT_BASE_URL;
+      if (req.headers.apikey && req.headers.apikey !== runtime.anonKey) {
+        json(res, { code: "instance_changed", error: "The public client key belongs to another backend instance." }, 409);
+        return true;
+      }
       try {
         const targetUrl = `${insforgeBase.replace(/\/$/, "")}${p}${url.search || ""}`;
         const proxyHeaders = buildProxyHeaders(req.headers);
+        // Browser cookies survive changes to the loopback server's backend.
+        // Only this instance's captured cookies can be relayed, including when
+        // switching from a custom instance back to the official service.
+        const hadBrowserCookies = Boolean(normalizeCookieHeader(proxyHeaders.cookie).trim());
+        proxyHeaders.cookie = hadBrowserCookies ? buildRelayCookieHeader("") : "";
+        if (proxyHeaders["x-csrf-token"] !== getRelayCookieValue(csrfRelayCookieName)) delete proxyHeaders["x-csrf-token"];
+        if (insforgeBase !== DEFAULT_BASE_URL && proxyHeaders.authorization && !callerInstance) {
+          json(res, { code: "instance_changed", error: "Reload the local dashboard before using a custom backend session." }, 409);
+          return true;
+        }
+        proxyHeaders.apikey = runtime.anonKey;
         const hasClientCookie = normalizeCookieHeader(proxyHeaders["cookie"]).trim().length > 0;
         const hasCsrfHeader = typeof proxyHeaders["x-csrf-token"] === "string" && proxyHeaders["x-csrf-token"].trim().length > 0;
         const relayCsrfToken = getRelayCookieValue(csrfRelayCookieName);
@@ -1865,6 +1989,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
         const injectedRelayCookies =
           shouldInjectRelayCookies && relayCookies.size > 0 && mergedCookie !== originalCookieHeader;
         if (mergedCookie) proxyHeaders["cookie"] = mergedCookie;
+        else delete proxyHeaders["cookie"];
 
         const bodyChunks = [];
         for await (const chunk of req) bodyChunks.push(chunk);
@@ -1915,6 +2040,11 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
           }
         }
 
+        const latestRuntime = getRuntime();
+        if (latestRuntime.configurationError || latestRuntime.baseUrl !== runtime.baseUrl || latestRuntime.anonKey !== runtime.anonKey) {
+          json(res, { code: "instance_changed", error: "The configured backend changed during authentication. Reload and sign in again." }, 409);
+          return true;
+        }
         // Error responses must not mutate relay state: a 403's deletion
         // set-cookie (insforge_refresh_token=; Expires=1970) would otherwise
         // destroy a still-valid persisted session.
@@ -1939,7 +2069,9 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
           if (p === "/api/auth/logout") {
             clearRelayCookies("sign out");
           } else {
-            captureAuthTokensFromBody(resBody, proxyRes.headers.get("content-type"), { newLogin: p !== "/api/auth/refresh" });
+            captureAuthTokensFromBody(resBody, proxyRes.headers.get("content-type"), {
+              newLogin: p !== "/api/auth/refresh", sourceFingerprint: fingerprintFor(runtime),
+            });
           }
         }
         if (
@@ -2134,6 +2266,36 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
       return true;
     }
 
+    // The browser supplies its current JWT only to prove ownership upstream.
+    // Uploads use this server-held binding, never a caller's opaque device token.
+    if (p === "/functions/tokentracker-cloud-session") {
+      if (String(req.method).toUpperCase() !== "POST") { json(res, { error: "Method Not Allowed" }, 405); return true; }
+      if (!isAuthorizedLocalMutation(req)) { json(res, { error: "Unauthorized" }, 401); return true; }
+      try {
+        const body = await readJsonBody(req);
+        assertInsforgeRuntime(getRuntime());
+        if (body.clear === true) {
+          if (body.session_id && body.session_id === localCloudSession?.id) clearLocalSyncDeviceTokenCache();
+          json(res, { ok: true }); return true;
+        }
+        if (!getCloudSyncPref()) { json(res, { code: "CLOUD_SYNC_DISABLED" }, 409); return true; }
+        const accessToken = String(req.headers.authorization || "").replace(/^Bearer /i, "").trim();
+        const ownerId = typeof body.expectedOwnerId === "string" ? body.expectedOwnerId.trim() : "";
+        if (!accessToken || !ownerId) { json(res, { code: "auth_required" }, 401); return true; }
+        const baseUrl = resolveAllowedInsforgeBaseUrl(body.insforgeBaseUrl || getRuntime().baseUrl, getRuntime());
+        if (!baseUrl) { json(res, { error: "Unsupported insforgeBaseUrl override" }, 400); return true; }
+        clearLocalSyncDeviceTokenCache();
+        const generation = localCloudGeneration;
+        await Promise.all([...activeCloudSyncs].map(controller => controller.done).filter(Boolean));
+        const issued = await issueDeviceTokenForLocalSync(qp, { baseUrl, accessToken, expectedOwnerId: ownerId, returnSession: true });
+        if (generation !== localCloudGeneration) { json(res, { code: "auth_session_changed" }, 409); return true; }
+        if (!issued?.token || !issued.deviceId) { json(res, { code: "auth_rejected" }, 401); return true; }
+        localCloudSession = { id: crypto.randomUUID(), ownerId, baseUrl, generation, token: issued.token };
+        json(res, { session_id: localCloudSession.id, device_id: issued.deviceId, created_at: issued.issuedAt });
+      } catch (error) { json(res, { error: error.message, code: error.code || null, recovery_url: error.recoveryUrl || null }, error.status || 502); }
+      return true;
+    }
+
     // --- local-sync (POST) ---
     if (p === "/functions/tokentracker-local-sync") {
       if (String(req.method || "GET").toUpperCase() !== "POST") {
@@ -2151,8 +2313,15 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
         } catch {
           body = {};
         }
-        const extraEnv = {};
+        const currentRuntime = getRuntime();
+        if (body.drain === true || body.cloudSessionId || body.insforgeBaseUrl || body.expectedOwnerId) assertInsforgeRuntime(currentRuntime);
+        const extraEnv = { TOKENTRACKER_CLOUD_RECHECK: "0", TOKENTRACKER_INSFORGE_BASE_URL: currentRuntime.baseUrl, TOKENTRACKER_INSFORGE_ANON_KEY: currentRuntime.anonKey || "" };
         const drain = body.drain === true;
+        // A user action after membership/resume may probe the server again.
+        // The server still enforces membership, paused slots and its deadline.
+        if (drain && body.recheckCloudAccess === true && body.auto !== true) {
+          extraEnv.TOKENTRACKER_CLOUD_RECHECK = "1";
+        }
         // Native Sync Now combines an incremental background scan with a full
         // cloud drain. A plain {drain:true} request remains an exhaustive sync.
         const auto = body.auto === true;
@@ -2167,16 +2336,20 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
         if (background && body.nativeOnlyWsl === true) {
           extraEnv.TOKENTRACKER_WSL_MODE = "native-only";
         }
-        if (typeof body.deviceToken === "string" && body.deviceToken.trim()) {
-          if (!getCloudSyncPref() && !background) {
-            json(res, { ok: false, error: "Cloud sync disabled", code: "CLOUD_SYNC_DISABLED" }, 409);
-            return true;
-          }
-          extraEnv.TOKENTRACKER_DEVICE_TOKEN = body.deviceToken.trim();
+        if (body.deviceToken != null && !background) {
+          json(res, { ok: false, error: "Use the current cloud session", code: getCloudSyncPref() ? "auth_session_required" : "CLOUD_SYNC_DISABLED" }, 409);
+          return true;
         }
+        const browserSession = body.cloudSessionId ? localCloudSession : null;
+        if (body.cloudSessionId === "" || (body.expectedOwnerId && !body.cloudSessionId)) { json(res, { ok: false, code: "auth_session_required" }, 409); return true; }
+        if (body.cloudSessionId && (!browserSession || body.cloudSessionId !== browserSession.id ||
+            body.expectedOwnerId !== browserSession.ownerId || browserSession.generation !== localCloudGeneration || !getCloudSyncPref())) {
+          json(res, { ok: false, code: "auth_session_changed" }, 409); return true;
+        }
+        if (browserSession) extraEnv.TOKENTRACKER_DEVICE_TOKEN = browserSession.token;
         let localSyncBaseUrl = null;
         if (body.insforgeBaseUrl != null) {
-          const allowedBaseUrl = resolveAllowedInsforgeBaseUrl(body.insforgeBaseUrl);
+          const allowedBaseUrl = resolveAllowedInsforgeBaseUrl(body.insforgeBaseUrl, getRuntime());
           if (!allowedBaseUrl) {
             json(res, { ok: false, error: "Unsupported insforgeBaseUrl override" }, 400);
             return true;
@@ -2184,6 +2357,11 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
           extraEnv.TOKENTRACKER_INSFORGE_BASE_URL = allowedBaseUrl;
           localSyncBaseUrl = allowedBaseUrl;
         }
+        if (browserSession) {
+          extraEnv.TOKENTRACKER_INSFORGE_BASE_URL = browserSession.baseUrl;
+          localSyncBaseUrl = browserSession.baseUrl;
+        }
+        const uploadGeneration = localCloudGeneration;
         if ((!background || publishAccount) &&
             !extraEnv.TOKENTRACKER_DEVICE_TOKEN &&
             getCloudSyncPref() &&
@@ -2192,9 +2370,10 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
           const issuerSessionAtStart = getCloudAccountSessionGeneration();
           const issuerCloudPrefAtStart = cloudSyncPrefGeneration;
           try {
-            issuedToken = await issueDeviceTokenForLocalSync(qp, { baseUrl: localSyncBaseUrl });
+            issuedToken = await issueDeviceTokenForLocalSync(qp, { baseUrl: localSyncBaseUrl, expectedOwnerId: localCloudSession?.ownerId });
           } catch (e) {
-            if (resolveRuntimeConfig().debug) {
+            if (e?.code?.startsWith("cloud_") || e?.code === "auth_owner_mismatch") throw e;
+            if (getRuntime().debug) {
               console.warn("[LocalAPI] local sync device token issue failed:", e?.message || e);
             }
           }
@@ -2215,9 +2394,30 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
             extraEnv.TOKENTRACKER_DEVICE_TOKEN = issuedToken;
           }
         }
+        if (extraEnv.TOKENTRACKER_DEVICE_TOKEN && uploadGeneration !== localCloudGeneration) {
+          json(res, { ok: false, code: "auth_session_changed" }, 409); return true;
+        }
+        await Promise.all([...activeCloudSyncs].filter(controller => controller.signal.aborted).map(controller => controller.done).filter(Boolean));
+        if (extraEnv.TOKENTRACKER_DEVICE_TOKEN && uploadGeneration !== localCloudGeneration) throw Object.assign(new Error("Account session changed"), { code: "auth_session_changed", status: 409 });
+        if (extraEnv.TOKENTRACKER_DEVICE_TOKEN && localSyncDeviceTokenUserId) {
+          const binding = JSON.stringify({ ownerId: localSyncDeviceTokenUserId, baseUrl: localSyncBaseUrl || getRuntime().baseUrl });
+          const ownerPath = path.join(path.dirname(qp), "cloud-upload-owner.json");
+          let previous = "";
+          try { previous = fs.readFileSync(ownerPath, "utf8"); } catch { /* an unbound legacy cursor cannot prove its previous owner */ }
+          if (previous !== binding) {
+            fs.writeFileSync(path.join(path.dirname(qp), "queue.state.json"), JSON.stringify({ offset: 0, updatedAt: new Date().toISOString() }), { mode: 0o600 });
+            try { fs.unlinkSync(path.join(path.dirname(qp), "upload.throttle.json")); } catch { /* no cooldown yet */ }
+          }
+          fs.writeFileSync(ownerPath, binding, { mode: 0o600 });
+        }
+        const controller = new AbortController();
+        if (extraEnv.TOKENTRACKER_DEVICE_TOKEN) activeCloudSyncs.add(controller);
         const syncStartedAt = Date.now();
         extraEnv.TOKENTRACKER_LOCAL_SYNC_ATTEMPT_ID = crypto.randomUUID();
-        const result = await runSyncCommand(extraEnv, {
+        const syncPromise = runSyncCommand(extraEnv, {
+          signal: controller.signal,
+          trackerDataDir: isolatedTrackerDataDir,
+          syncContext,
           drain,
           auto,
           background,
@@ -2225,11 +2425,15 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
           allLocalSources,
           waitForLock:
             !drain && !background && Boolean(extraEnv.TOKENTRACKER_DEVICE_TOKEN),
-        }).catch((error) => {
+        });
+        controller.done = syncPromise.catch(() => {});
+        const result = await syncPromise.catch((error) => {
+          if (uploadGeneration !== localCloudGeneration) throw Object.assign(new Error("Account session changed"), { code: "auth_session_changed", status: 409 });
           const failure = currentCloudUploadFailure(syncStartedAt, { backoff: auto && drain, deviceToken: extraEnv.TOKENTRACKER_DEVICE_TOKEN, attemptId: extraEnv.TOKENTRACKER_LOCAL_SYNC_ATTEMPT_ID });
           if (failure) Object.assign(error, failure);
           throw error;
-        });
+        }).finally(() => activeCloudSyncs.delete(controller));
+        if (extraEnv.TOKENTRACKER_DEVICE_TOKEN && uploadGeneration !== localCloudGeneration) throw Object.assign(new Error("Account session changed"), { code: "auth_session_changed", status: 409 });
         const failure = currentCloudUploadFailure(syncStartedAt, { deviceToken: extraEnv.TOKENTRACKER_DEVICE_TOKEN, attemptId: extraEnv.TOKENTRACKER_LOCAL_SYNC_ATTEMPT_ID });
         if (failure) throw Object.assign(new Error("Cloud upload failed"), failure);
         invalidateAfterAccountUpload();
@@ -2240,9 +2444,18 @@ function createLocalApiHandler({ queuePath, serverVersion = null }) {
         } catch (_e) {
           // ignore if module load fails
         }
-        json(res, { ok: true, ...result });
+        let cloudAccess = { uploaded: false, pending: true };
+        try {
+          const state = JSON.parse(fs.readFileSync(path.join(path.dirname(qp), "upload.throttle.json"), "utf8"));
+          if (state.nextAllowedAtMs) cloudAccess.next_allowed_at = new Date(state.nextAllowedAtMs).toISOString();
+          cloudAccess.uploaded = state.lastSuccessAttemptId === extraEnv.TOKENTRACKER_LOCAL_SYNC_ATTEMPT_ID &&
+            Number(state.lastSuccessMs || 0) >= syncStartedAt;
+          const queueState = JSON.parse(fs.readFileSync(path.join(path.dirname(qp), "queue.state.json"), "utf8"));
+          cloudAccess.pending = fs.statSync(qp).size > Number(queueState.offset || 0);
+        } catch { /* no upload has been attempted yet */ }
+        json(res, { ok: true, ...result, ...cloudAccess });
       } catch (e) {
-        json(res, { ok: false, error: e?.message, code: e?.code ?? null, stdout: e?.stdout || "", stderr: e?.stderr || "" }, e?.status || 500);
+        json(res, { ok: false, error: e?.message, code: e?.code ?? null, recovery_url: e?.recoveryUrl ?? null, next_allowed_at: e?.nextAllowedAt ?? null, retry_after_seconds: e?.retryAfterMs ? Math.ceil(e.retryAfterMs / 1000) : null, stdout: e?.stdout || "", stderr: e?.stderr || "" }, e?.status || 500);
       }
       return true;
     }

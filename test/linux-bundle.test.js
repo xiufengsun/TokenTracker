@@ -11,6 +11,9 @@ const repoRoot = path.resolve(__dirname, "..");
 const linuxDir = path.join(repoRoot, "TokenTrackerLinux");
 const bundleScript = path.join(linuxDir, "scripts", "bundle-node-linux.sh");
 const canonicalIcon = path.join(repoRoot, "dashboard", "public", "icon-512.png");
+const unixBundleFixture = {
+  skip: process.platform === "win32" && "Linux bundle fixtures require POSIX Bash, executable scripts and symlinks; Linux and macOS CI run them",
+};
 
 function sha256(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
@@ -25,7 +28,7 @@ function makeTempDir(prefix) {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
-test("Linux bundle rebuilds an isolated runtime and synchronizes an isolated Tauri icon", () => {
+test("Linux bundle rebuilds an isolated runtime and synchronizes an isolated Tauri icon", unixBundleFixture, () => {
   const tempDir = makeTempDir("tokentracker-linux-bundle-");
   const toolsDir = path.join(tempDir, "tools");
   const embeddedServer = path.join(tempDir, "EmbeddedServer");
@@ -125,7 +128,7 @@ chmod +x "$destination/node-v22.22.2-linux-x64/bin/node"
   }
 });
 
-test("Linux bundle refuses to clean an unsafe output path", () => {
+test("Linux bundle refuses to clean an unsafe output path", unixBundleFixture, () => {
   const tempDir = makeTempDir("tokentracker-linux-clean-");
   const unsafeOutput = path.join(tempDir, "important-output");
   const sentinel = path.join(unsafeOutput, "keep.txt");
@@ -153,7 +156,7 @@ test("Linux bundle refuses to clean an unsafe output path", () => {
   }
 });
 
-test("Linux bundle refuses to clean through a symlinked parent directory", () => {
+test("Linux bundle refuses to clean through a symlinked parent directory", unixBundleFixture, () => {
   const tempDir = makeTempDir("tokentracker-linux-symlink-");
   const realParent = path.join(tempDir, "real-parent");
   const linkedParent = path.join(tempDir, "linked-parent");
@@ -184,7 +187,7 @@ test("Linux bundle refuses to clean through a symlinked parent directory", () =>
   }
 });
 
-test("Linux bundle rejects unsupported architecture overrides before downloading", () => {
+test("Linux bundle rejects unsupported architecture overrides before downloading", unixBundleFixture, () => {
   const result = spawnSync("bash", [bundleScript, "--clean"], {
     cwd: repoRoot,
     env: {

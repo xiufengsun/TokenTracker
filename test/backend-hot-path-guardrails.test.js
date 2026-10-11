@@ -340,7 +340,7 @@ test("signed-in users cannot trigger expensive month, total, or all-period leade
     source,
     /if \(authorization === "signed-in" && body\.period !== "week"\)\s*return json\(\{ error: "signed-in users may only refresh week" \}, 403\);/u,
   );
-  assert.match(clientSource, /body: JSON\.stringify\(\{ period: "week", source \}\)/u);
+  assert.doesNotMatch(clientSource, /tokentracker-leaderboard-refresh/u, "ordinary synchronization must leave public refresh scheduling to the server");
 });
 
 test("the unauthenticated public reads cannot reach any refresh write path", () => {
@@ -537,7 +537,7 @@ test("leaderboard bans block token issuance and usage ingestion", () => {
 
   assert.ok(
     tokenIssue.indexOf("if (isLeaderboardBlockedUser(userId))")
-      < tokenIssue.indexOf("// Device identity resolution"),
+      < tokenIssue.indexOf('cloudRpc(dbClient, "cloud_issue_device_token"'),
     "normal token issuance must reject the account before mutating a device",
   );
   assert.ok(
@@ -547,7 +547,7 @@ test("leaderboard bans block token issuance and usage ingestion", () => {
   );
   assert.ok(
     ingest.indexOf("if (isLeaderboardBlockedUser(userId))")
-      < ingest.indexOf('.from("tokentracker_hourly")'),
+      < ingest.indexOf('cloudRpc(client, "cloud_ingest_usage"'),
     "ingest must reject the account before writing usage",
   );
 
@@ -593,15 +593,18 @@ test("telemetry heartbeat uses one atomic database upsert RPC", () => {
 });
 
 test("device creation absorbs concurrent unique-key races without database errors", () => {
+  const migration=read("migrations/20261004120000_cloud-machine-access.sql");
   for (const file of ["tokentracker-device-token-issue.ts", "tokentracker-device-flow-poll.ts"]) {
     const source = read(`dashboard/edge-patches/${file}`);
     assert.match(
       source,
-      /\.upsert\([\s\S]{0,180}machine_id: machineId[\s\S]{0,80}\{ ignoreDuplicates: true \}/u,
-      `${file} must use INSERT ON CONFLICT DO NOTHING before selecting the winner`,
+      /cloudRpc\([^,]+, "cloud_issue_device_token"/u,
+      `${file} must serialize device admission through the shared transaction`,
     );
-    assert.doesNotMatch(source, /\.insert\([\s\S]{0,180}ignoreDuplicates/u);
+    assert.doesNotMatch(source, /\.from\("tokentracker_devices"\)\.insert/u);
   }
+  assert.match(migration,/pg_advisory_xact_lock/u);
+  assert.match(migration,/INSERT INTO public\.tokentracker_devices[\s\S]{0,450}ON CONFLICT DO NOTHING/u);
 });
 
 test("desktop auto refresh does not poll cloud account aggregates every 30 seconds", () => {
@@ -628,28 +631,14 @@ test("unused direct profile-like table grants stay revoked", () => {
   );
 });
 
-// Do not reintroduce Content-Encoding in an edge function.
-//
-// The obvious read of these endpoints is that the big ones should gzip: a
-// 52-week heatmap serializes ~65 KB and a leaderboard page ~77 KB of highly
-// repetitive JSON, and every caller advertises gzip by default. That branch was
-// written twice and shipped once, and it never reached a client.
-//
-// The InsForge gateway decompresses an encoded edge response and forwards it as
-// identity. Measured end to end on 2026-09-20 against the public leaderboard
-// endpoint, cache-busted, with and without `Accept-Encoding: gzip`: 77529 bytes
-// on the wire both times, `Vary: Accept-Encoding` passed through but
-// `Content-Encoding` stripped, `Content-Length` and the ETag both computed over
-// the plain body, and the body itself starting `{"en` rather than the gzip
-// magic 1f 8b.
-//
-// So the compression cost is paid twice and saves nothing. Shrink these
-// responses by sending fewer bytes (the *_compact RPCs above) or fewer requests
-// (the CLI and tray caches). If the gateway ever starts passing an encoding
-// through, delete this test along with the change that proves it.
-test("edge functions do not compress their own responses", () => {
+// The legacy gateway strips gzip, so other handlers remain plain. The deployed
+// model-breakdown wrapper also serves the verified direct function2 route.
+// Its negotiation, fallback and HTTP payload equality have runtime regressions
+// in account-model-breakdown-gzip.test.js; preserve that existing adapter.
+test("other edge functions remain plain alongside the direct model response adapter", () => {
   const edgeDir = path.join(ROOT, "dashboard/edge-patches");
   for (const file of fs.readdirSync(edgeDir).filter((name) => name.endsWith(".ts"))) {
+    if (file === "tokentracker-account-model-breakdown.ts") continue;
     const source = read(`dashboard/edge-patches/${file}`);
     assert.doesNotMatch(
       source,

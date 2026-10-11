@@ -592,7 +592,10 @@ test("an inode rewrite still uses historical Codex hashes without rematerializin
     const cursors = {
       version: 1,
       files: {
-        [rolloutPath]: { inode: stat.ino + 1, offset: stat.size, lastTotal: null },
+        // NTFS inode numbers can exceed Number.MAX_SAFE_INTEGER, so adding
+        // one can round back to the same inode. A negative sentinel is
+        // guaranteed to differ from this file's actual inode on every host.
+        [rolloutPath]: { inode: -1, offset: stat.size, lastTotal: null },
       },
       codexHashes: observedHashes.proxy,
     };

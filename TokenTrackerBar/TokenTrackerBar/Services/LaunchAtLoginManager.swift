@@ -16,6 +16,7 @@ final class LaunchAtLoginManager: ObservableObject {
     private static let didAutoEnableKey = "LaunchAtLoginAutoEnabled"
 
     init() {
+        guard !NativeQAProfile.isQABuild else { fatalError("Native QA cannot construct login-item services") }
         guard #available(macOS 13, *) else { return }
 
         isEnabled = SMAppService.mainApp.status == .enabled

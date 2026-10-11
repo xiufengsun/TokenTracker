@@ -195,7 +195,7 @@ test("parseQoderDbIncremental moves request ownership when an earlier assistant 
 test("resolveQoderDbPath supports the macOS default and explicit override", () => {
   assert.equal(
     resolveQoderDbPath({ home: "/Users/test", env: {}, platform: "darwin" }),
-    "/Users/test/Library/Application Support/Qoder/SharedClientCache/cache/db/local.db",
+    path.join("/Users/test", "Library", "Application Support", "Qoder", "SharedClientCache", "cache", "db", "local.db"),
   );
   assert.equal(
     resolveQoderDbPath({
@@ -203,7 +203,7 @@ test("resolveQoderDbPath supports the macOS default and explicit override", () =
       env: { QODER_DB_PATH: "/tmp/qoder.db" },
       platform: "darwin",
     }),
-    "/tmp/qoder.db",
+    path.resolve("/tmp/qoder.db"),
   );
 });
 
@@ -316,6 +316,6 @@ test("resolveQoderCnDbPaths ignores QODER_HOME and honors QODER_CN_HOME", () => 
   });
   assert.equal(
     withOverride.native,
-    path.join("/cn-home", "SharedClientCache", "cache", "db", "local.db"),
+    path.resolve("/cn-home", "SharedClientCache", "cache", "db", "local.db"),
   );
 });

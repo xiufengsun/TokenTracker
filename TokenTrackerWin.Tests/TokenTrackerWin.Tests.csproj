@@ -29,6 +29,8 @@
     <Compile Include="../TokenTrackerWin/TokenUnits.cs" Link="TokenUnits.cs" />
     <Compile Include="../TokenTrackerWin/AutoUpdatePolicy.cs" Link="AutoUpdatePolicy.cs" />
     <Compile Include="../TokenTrackerWin/UpdateIntegrity.cs" Link="UpdateIntegrity.cs" />
+    <Compile Include="../TokenTrackerWin/NativeReturnUri.cs" Link="NativeReturnUri.cs" />
+    <Compile Include="../TokenTrackerWin/CloudUsageExport.cs" Link="CloudUsageExport.cs" />
   </ItemGroup>
 
 </Project>

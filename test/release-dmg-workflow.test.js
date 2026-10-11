@@ -131,6 +131,24 @@ test("release is created as a draft and only published after every platform buil
   );
 });
 
+test("prepare-only release verifies assets and checksums without publishing or notifying Homebrew", () => {
+  const content = loadWorkflow();
+  assert.match(content, / {6}publish:\n(?: {8}[^\n]*\n)* {8}type: boolean\n {8}default: true/);
+  const steps = content.split("\n      - name:").slice(1);
+  const publicActions = steps.filter(step => step.includes("--draft=false") || step.includes("homebrew-tokentracker/dispatches"));
+  assert.equal(publicActions.length, 2, "both public side effects must remain visible to this gate");
+  for (const step of publicActions) {
+    assert.match(step, /\n {8}if: \$\{\{ inputs\.publish == true \}\}/,
+      "prepare-only builds must not expose the release or notify the tap");
+  }
+  for (const name of ["Verify every platform asset landed", "Publish SHA256SUMS"]) {
+    const step = steps.find(value => value.trimStart().startsWith(name + "\n"));
+    assert.ok(step, name);
+    assert.doesNotMatch(step, /\n {8}if:.*inputs\.publish/,
+      "draft-only preparation must still verify all six assets and downloaded checksums");
+  }
+});
+
 test("published releases are immutable and builds use the version tag", () => {
   const content = loadWorkflow();
   assert.ok(

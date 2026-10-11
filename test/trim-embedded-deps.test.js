@@ -23,7 +23,11 @@ test("the trimmed wa-sqlite package still runs the TRAE SQLite reader", async (t
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const nodeModules = path.join(dir, "node_modules");
   const packageDir = path.join(nodeModules, "@journeyapps", "wa-sqlite");
-  fs.cpSync(path.join(ROOT, "node_modules", "@journeyapps", "wa-sqlite"), packageDir, { recursive: true });
+  fs.cpSync(path.join(ROOT, "node_modules", "@journeyapps", "wa-sqlite"), packageDir, {
+    recursive: true,
+    // Node22's native Windows recursive copy crashes on Unicode repo paths.
+    ...(process.platform === "win32" ? { filter: () => true } : {}),
+  });
   fs.mkdirSync(path.join(dir, "lib"));
   fs.copyFileSync(path.join(ROOT, "src", "lib", "trae-sqlite.js"), path.join(dir, "lib", "trae-sqlite.js"));
 

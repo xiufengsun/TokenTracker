@@ -8,6 +8,28 @@
 .sessions-row-identity {
   grid-column: 1;
   grid-row: 1;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  column-gap: 12px;
+  row-gap: 2px;
+}
+
+/* The provider shares the title's row, including its taller phone hit area. */
+.sessions-row-provider {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+}
+
+.sessions-row-title {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: start;
+}
+
+.sessions-summary-help:focus-visible {
+  outline: 2px solid currentColor !important;
+  outline-offset: 3px;
 }
 
 .sessions-row-metrics {
@@ -34,6 +56,8 @@
    edge, so spacing alone separates items there; desktop rows fit on one line
    and get the dots. */
 .sessions-row-meta {
+  grid-column: 2;
+  grid-row: 2;
   column-gap: 12px;
 }
 

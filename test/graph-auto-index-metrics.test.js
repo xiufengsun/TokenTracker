@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const path = require("node:path");
+const path = require("node:path").posix;
 const { scanDomainMetrics } = require("../scripts/graph/lib/metrics.cjs");
 
 test("scanDomainMetrics counts files and noise", () => {

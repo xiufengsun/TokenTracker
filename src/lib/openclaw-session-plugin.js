@@ -2,7 +2,7 @@ const os = require("node:os");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const fssync = require("node:fs");
-const cp = require("node:child_process");
+const { runOpenclawCli } = require("./openclaw-cli");
 
 const OPENCLAW_SESSION_PLUGIN_ID = "openclaw-session-sync";
 const OPENCLAW_SESSION_PLUGIN_DIRNAME = "openclaw-plugin";
@@ -309,64 +309,6 @@ async function removeOpenclawSessionPluginConfig({
   await fs.rm(pluginEntryDir, { recursive: true, force: true }).catch(() => {});
 
   return { removed: changed || hadFiles, ...paths };
-}
-
-function runOpenclawCli(args, env = process.env) {
-  // Test-only escape hatch: skip spawning the real `openclaw` CLI. Behaves like
-  // the CLI being absent (which is the CI environment anyway), so callers take
-  // their graceful skip path. Avoids a ~2s `plugins install --link` per cmdInit
-  // on dev machines that happen to have openclaw installed.
-  if ((env && env.TOKENTRACKER_SKIP_OPENCLAW_CLI) === "1") {
-    return {
-      code: 1,
-      skippedReason: "openclaw-cli-missing",
-      error: "skipped via TOKENTRACKER_SKIP_OPENCLAW_CLI",
-      stdout: "",
-      stderr: "",
-    };
-  }
-  let res;
-  try {
-    res = cp.spawnSync("openclaw", args, {
-      env,
-      encoding: "utf8",
-      timeout: 30_000,
-    });
-  } catch (err) {
-    return {
-      code: 1,
-      skippedReason: err?.code === "ENOENT" ? "openclaw-cli-missing" : "openclaw-cli-error",
-      error: err?.message || String(err),
-      stdout: "",
-      stderr: "",
-    };
-  }
-
-  if (res.error?.code === "ENOENT") {
-    return {
-      code: 1,
-      skippedReason: "openclaw-cli-missing",
-      error: res.error.message,
-      stdout: res.stdout || "",
-      stderr: res.stderr || "",
-    };
-  }
-
-  if ((res.status || 0) !== 0) {
-    return {
-      code: Number(res.status || 1),
-      skippedReason: "openclaw-plugins-install-failed",
-      error: (res.stderr || res.stdout || "").trim() || "openclaw plugins install failed",
-      stdout: res.stdout || "",
-      stderr: res.stderr || "",
-    };
-  }
-
-  return {
-    code: 0,
-    stdout: res.stdout || "",
-    stderr: res.stderr || "",
-  };
 }
 
 function buildSessionPluginPackageJson() {

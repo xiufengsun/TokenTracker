@@ -470,10 +470,12 @@ test("ingest edge validates account_session_states and upserts them via the LWW 
   assert.match(ts, /body\.account_session_states/, "edge reads the account_session_states payload");
   assert.match(ts, /Invalid account session state/, "malformed states fail closed");
   assert.match(ts, /r\.source \+ "\|" \+ r\.session_id/, "batch dedup is last-wins per session");
-  assert.match(ts, /tokentracker_upsert_account_session_states/, "edge calls the LWW upsert RPC");
+  assert.match(ts, /cloud_ingest_usage/, "edge delegates admission and both writes to one transaction");
+  const sql = readRepoFile("migrations/20261004120000_cloud-machine-access.sql");
+  assert.match(sql, /tokentracker_upsert_account_session_states/, "transaction calls the LWW upsert RPC");
   // Session states land AFTER the hourly upsert in file order.
   assert.ok(
-    ts.indexOf('from("tokentracker_hourly")') < ts.indexOf("tokentracker_upsert_account_session_states"),
+    sql.indexOf("INSERT INTO public.tokentracker_hourly AS h") < sql.indexOf("tokentracker_upsert_account_session_states"),
     "bucket rows land before the canonical states describing them",
   );
 });

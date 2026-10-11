@@ -4,6 +4,18 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
+const { createHash } = require("node:crypto");
+const publicAnon = [Buffer.from('{"alg":"HS256"}').toString("base64url"),
+  Buffer.from('{"role":"anon"}').toString("base64url"), "custom-test-signature"].join(".");
+
+function bindFixtureInstance(trackerDir, baseUrl, extra = {}) {
+  fs.writeFileSync(path.join(trackerDir, "config.json"), JSON.stringify({
+    machineId: "machine-abcdef12", baseUrl, anonKey: publicAnon, ...extra,
+  }));
+  fs.writeFileSync(path.join(trackerDir, "runtime-instance.json"), JSON.stringify({
+    fingerprint: createHash("sha256").update(`${baseUrl}\0${publicAnon}`).digest("hex"),
+  }));
+}
 
 function createRequest({ method = "GET", headers = {}, body } = {}) {
   const req = new EventEmitter();
@@ -50,6 +62,8 @@ function loadLocalApiWithSpawn(fakeSpawn) {
   childProcess.spawn = fakeSpawn;
   delete require.cache[require.resolve("../src/lib/local-api")];
   const mod = require("../src/lib/local-api");
+  const factory = mod.createLocalApiHandler;
+  mod.createLocalApiHandler = options => factory({ ...options, trackerDataDir: options.trackerDataDir || path.dirname(options.queuePath), syncContext: options.syncContext || { scanSources: [] } });
   return {
     mod,
     restore() {
@@ -62,7 +76,7 @@ function loadLocalApiWithSpawn(fakeSpawn) {
 
 function createSuccessfulSpawn(calls) {
   return (cmd, args, options) => {
-    calls.push({ cmd, args, options });
+    calls.push({ cmd, args: args[0] === "-e" ? [path.join(process.cwd(), "bin/tracker.js"), "sync", ...args.slice(3)] : args, options });
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
@@ -92,14 +106,16 @@ async function runLocalSync(body, options = {}) {
 
   try {
     const handler = mod.createLocalApiHandler({
-      queuePath: options.queuePath || path.join(process.cwd(), "tmp-queue.jsonl"),
+      queuePath: options.queuePath || path.join(tmpHome, ".tokentracker", "tracker", "queue.jsonl"),
+      trackerDataDir: path.join(tmpHome, ".tokentracker", "tracker"),
+      syncContext: options.syncContext,
     });
     const localAuthToken = await getLocalAuthToken(handler);
     const req = createRequest({
       method: "POST",
       headers: { "x-tokentracker-local-auth": localAuthToken },
       body: JSON.stringify({
-        ...(options.includeDeviceToken === false ? {} : { deviceToken: "device-token" }),
+        ...(options.includeDeviceToken === true ? { deviceToken: "device-token" } : {}),
         ...body,
       }),
     });
@@ -130,7 +146,7 @@ function createCloudSyncHome(prefix) {
   const trackerDir = path.join(tmpHome, ".tokentracker", "tracker");
   fs.mkdirSync(trackerDir, { recursive: true });
   fs.writeFileSync(path.join(trackerDir, "cloud-sync-pref.json"), JSON.stringify({ enabled: true }));
-  fs.writeFileSync(path.join(trackerDir, "config.json"), JSON.stringify({ machineId: "machine-abcdef12" }));
+  bindFixtureInstance(trackerDir, "https://cloud.example");
   fs.writeFileSync(
     path.join(trackerDir, "relay-cookies.json"),
     JSON.stringify({
@@ -216,11 +232,10 @@ test("local-api background and lightweight require boolean true", async () => {
   for (const body of cases) {
     const call = await runLocalSync({ auto: true, ...body });
     const args = call.args;
-    assert.deepEqual(args.slice(-4), [
+    assert.deepEqual(args.slice(-3), [
       path.join(process.cwd(), "bin/tracker.js"),
       "sync",
       "--auto",
-      "--wait-for-lock",
     ]);
   }
 });
@@ -347,7 +362,7 @@ test("disabled cloud sync suppresses background account publication even with a 
       "--auto",
       "--background",
     ]);
-    assert.equal(call.options.env.TOKENTRACKER_DEVICE_TOKEN, "device-token");
+    assert.equal(call.options.env.TOKENTRACKER_DEVICE_TOKEN, undefined);
   } finally {
     fs.rmSync(fixture.tmpHome, { recursive: true, force: true });
   }
@@ -437,28 +452,34 @@ test("local-api manual and drain sync still issue relayed cloud device tokens", 
 test("native background payload reaches ingest with the runtime anon key", async () => {
   const http = require("node:http");
   const realSpawn = require("node:child_process").spawn;
-  const { DEFAULT_ANON_KEY } = require("../src/lib/runtime-config");
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-native-publish-"));
   const trackerDir = path.join(tmpHome, ".tokentracker", "tracker");
+  const savedBaseUrl = process.env.TOKENTRACKER_INSFORGE_BASE_URL;
   const requests = [];
   const backend = http.createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => { body += chunk; });
     req.on("end", () => {
       requests.push({ url: req.url, headers: req.headers, body: JSON.parse(body || "{}") });
-      res.writeHead(req.url === "/functions/tokentracker-ingest" ? 200 : 404,
-        { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ inserted: 1, skipped: 0 }));
+      const payload = req.url.startsWith("/api/auth/refresh")
+        ? { accessToken: `e30.${Buffer.from(JSON.stringify({ sub: "fixture-owner", exp: Date.now()/1000+3600 })).toString("base64url")}.sig` }
+        : req.url === "/functions/tokentracker-device-token-issue"
+          ? { token: "fixture-device-token", device_id: "fixture-device" }
+          : { inserted: 1, skipped: 0, status: "self_hosted", can_upload: true,
+            machine_limit: null, history_days: null, sync_interval_seconds: 0, next_allowed_at: new Date().toISOString() };
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(payload));
     });
   });
   await new Promise((resolve) => backend.listen(0, "127.0.0.1", resolve));
+  process.env.TOKENTRACKER_INSFORGE_BASE_URL = `http://127.0.0.1:${backend.address().port}`;
   try {
     fs.mkdirSync(trackerDir, { recursive: true });
     fs.writeFileSync(path.join(trackerDir, "cloud-sync-pref.json"), JSON.stringify({ enabled: true }));
-    fs.writeFileSync(path.join(trackerDir, "config.json"), JSON.stringify({
-      baseUrl: `http://127.0.0.1:${backend.address().port}`,
-      deviceToken: "fixture-device-token",
-    }));
+    bindFixtureInstance(trackerDir, process.env.TOKENTRACKER_INSFORGE_BASE_URL, {
+      deviceToken: "fixture-device-token", deviceTokenBaseUrl: process.env.TOKENTRACKER_INSFORGE_BASE_URL,
+    });
+    fs.writeFileSync(path.join(trackerDir, "relay-cookies.json"), JSON.stringify({ insforge_refresh_token: "insforge_refresh_token=fixture-refresh; Path=/; HttpOnly; SameSite=Lax" }));
     const sessions = path.join(tmpHome, ".codex", "sessions", "2026", "09", "07");
     fs.mkdirSync(sessions, { recursive: true });
     const usage = { input_tokens: 64, cached_input_tokens: 0, output_tokens: 0,
@@ -472,8 +493,9 @@ test("native background payload reaches ingest with the runtime anon key", async
       tmpHome,
       queuePath: path.join(trackerDir, "queue.jsonl"),
       includeDeviceToken: false,
+      syncContext: { home: tmpHome, scanSources: ["codex"] },
       spawnFactory: (calls) => (cmd, args, options) => {
-        calls.push({ cmd, args, options });
+        calls.push({ cmd, args: args[0] === "-e" ? [path.join(process.cwd(), "bin/tracker.js"), "sync", ...args.slice(3)] : args, options });
         return realSpawn(cmd, args, {
           ...options,
           env: {
@@ -481,27 +503,34 @@ test("native background payload reaches ingest with the runtime anon key", async
             // paths, credentials, or cloud endpoint overrides.
             SystemRoot: process.env.SystemRoot || "",
             PATH: path.dirname(process.execPath),
-            HOME: tmpHome, USERPROFILE: tmpHome,
             APPDATA: path.join(tmpHome, "AppData", "Roaming"),
             LOCALAPPDATA: path.join(tmpHome, "AppData", "Local"),
             XDG_DATA_HOME: path.join(tmpHome, ".local", "share"),
             TOKENTRACKER_WSL_MODE: options.env.TOKENTRACKER_WSL_MODE,
             TOKENTRACKER_AUTO_RETRY_NO_SPAWN: "1",
+            TOKENTRACKER_LOCAL_SYNC_DEVICE_TOKEN: options.env.TOKENTRACKER_LOCAL_SYNC_DEVICE_TOKEN || "",
+            TOKENTRACKER_DEVICE_TOKEN: options.env.TOKENTRACKER_DEVICE_TOKEN || "",
+            TOKENTRACKER_INSFORGE_BASE_URL: options.env.TOKENTRACKER_INSFORGE_BASE_URL,
+            TOKENTRACKER_INSFORGE_ANON_KEY: options.env.TOKENTRACKER_INSFORGE_ANON_KEY,
           },
         });
       },
     });
     assert.equal(call.options.env.TOKENTRACKER_WSL_MODE, "native-only");
     assert.ok(requests.every((request) => [
-      "/functions/tokentracker-ingest", "/functions/tokentracker-telemetry",
+      "/functions/tokentracker-ingest", "/functions/tokentracker-telemetry", "/api/auth/refresh?client_type=mobile", "/functions/tokentracker-device-token-issue",
     ].includes(request.url)));
     const ingests = requests.filter((request) => request.url === "/functions/tokentracker-ingest");
     assert.equal(ingests.length, 1);
-    assert.equal(ingests[0].headers.apikey, DEFAULT_ANON_KEY);
+    assert.equal(ingests[0].headers.apikey, publicAnon);
     assert.equal(ingests[0].headers.authorization, "Bearer fixture-device-token");
     const queueState = JSON.parse(fs.readFileSync(path.join(trackerDir, "queue.state.json"), "utf8"));
     assert.ok(queueState.offset > 0, "successful ingest acknowledges the local queue");
+    const throttle = JSON.parse(fs.readFileSync(path.join(trackerDir, "upload.throttle.json"), "utf8"));
+    assert.ok(throttle.nextAllowedAtMs <= throttle.lastSuccessMs + 60_000,
+      "a self-hosted zero deadline retains only client jitter, not a hosted membership interval");
   } finally {
+    if (savedBaseUrl === undefined) delete process.env.TOKENTRACKER_INSFORGE_BASE_URL; else process.env.TOKENTRACKER_INSFORGE_BASE_URL = savedBaseUrl;
     await new Promise((resolve) => backend.close(resolve));
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }

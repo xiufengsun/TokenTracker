@@ -119,8 +119,12 @@ function updateSessionPreserveDbMtimeWithWal(dbPath, id, values) {
         fs.utimesSync(dbPath, before.atime, before.mtime);
         resolve({
           close() {
-            child.stdin.write(".quit\n");
-            child.stdin.end();
+            return new Promise((resolveClose, rejectClose) => {
+              child.once("close", (code) => code === 0
+                ? resolveClose()
+                : rejectClose(new Error(`sqlite writer exited with ${code}`)));
+              child.stdin.end(".quit\n");
+            });
           },
         });
       } catch (err) {
@@ -709,7 +713,7 @@ test("parseCopilotAppDbIncremental reprocesses when only SQLite sidecars change"
     assert.equal(latest[0].output_tokens, 15);
     assert.equal(latest[0].total_tokens, 165);
   } finally {
-    if (walWriter) walWriter.close();
+    if (walWriter) await walWriter.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

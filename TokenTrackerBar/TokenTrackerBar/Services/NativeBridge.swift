@@ -82,7 +82,51 @@ final class NativeBridge {
 
     // MARK: - Message dispatch
 
+    func saveCloudUsageExport(message: [String: Any], source: WKWebView, permitted: Bool) {
+        let requestID = (message["requestId"] as? String) ?? ""
+        guard UUID(uuidString: requestID) != nil else { return }
+        var result: [String: Any] = ["requestId": requestID, "saved": false]
+        do {
+            guard permitted else {
+                result["errorCode"] = "forbidden_source"
+                postCloudExportResult(result, to: source)
+                return
+            }
+            let export = try CloudUsageExport(message: message)
+            let directory: URL
+            if let profile = NativeQAProfile.current {
+                directory = URL(fileURLWithPath: profile.runDirectory).appendingPathComponent("Downloads", isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                       attributes: [.posixPermissions: 0o700])
+            } else {
+                directory = try FileManager.default.url(for: .downloadsDirectory, in: .userDomainMask,
+                                                        appropriateFor: nil, create: true)
+            }
+            result["filename"] = try export.save(in: directory)
+            result["saved"] = true
+        } catch let failure as CloudUsageExport.Failure {
+            result["errorCode"] = failure.rawValue
+        } catch {
+            result["errorCode"] = "save_failed"
+        }
+        postCloudExportResult(result, to: source)
+    }
+
+    private func postCloudExportResult(_ result: [String: Any], to source: WKWebView) {
+        guard let bytes = try? JSONSerialization.data(withJSONObject: result),
+              let json = String(data: bytes, encoding: .utf8) else { return }
+        source.evaluateJavaScript("window.dispatchEvent(new CustomEvent('tokentracker:cloud-export-result', {detail: \(json)}));",
+                                  completionHandler: nil)
+    }
+
     func handle(message: Any) {
+        if let profile = NativeQAProfile.current {
+            guard let dict = message as? [String: Any], profile.permitsNativeMessage(dict) else {
+                fatalError("Native QA bridge message rejected")
+            }
+            handleQAMessage(dict, profile: profile)
+            return
+        }
         guard let dict = message as? [String: Any],
               let type = dict["type"] as? String else { return }
 
@@ -144,6 +188,55 @@ final class NativeBridge {
         }
     }
 
+    private func handleQAMessage(_ message: [String: Any], profile: NativeQAProfile) {
+        switch message["type"] as? String {
+        case "getSettings":
+            let defaults = profile.defaults
+            let payload: [String: Any] = [
+                "showStats": false, "menuBarItems": [], "menuBarAvailableItems": [], "menuBarMaxItems": 3,
+                "menuBarIconStyle": "static", "animatedIcon": false, "toastOnReset": false,
+                "confettiOnReset": false, "autoUpdateEnabled": false, "launchAtLogin": false,
+                "launchAtLoginSupported": false, "dynamicIslandEnabled": false,
+                "dynamicIslandSupported": false, "hideMenuBarIcon": false, "isSyncing": false,
+                "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
+                "updateStatus": NSNull(), "updateBusy": false, "locale": NativeLocalization.currentPreference,
+                "currency": defaults.string(forKey: "currency") ?? "USD",
+                "currencySymbol": defaults.string(forKey: "currencySymbol") ?? "$",
+                "exchangeRate": defaults.object(forKey: "exchangeRate") ?? 1.0,
+                "limitsDisplayMode": "all", "limitsPreferences": []
+            ]
+            pushQAEvent("native:settings", payload: payload)
+        case "getPetSettings":
+            pushQAEvent("native:petSettings", payload: ["visible": false, "character": "clawd", "size": "medium"])
+        case "getNotificationStatus":
+            pushQAEvent("native:notificationPermission", payload: ["status": "denied"])
+        case "getSystemAppearance":
+            DashboardWindowController.shared.pushCurrentSystemAppearanceToWeb()
+        case "setChromeAppearance":
+            DashboardWindowController.shared.applyChromeAppearance(theme: message["theme"] as! String,
+                                                                  resolvedIsDark: message["isDark"] as! Bool)
+        case "setSetting":
+            let key = message["key"] as! String
+            if key == "locale" { NativeLocalization.storePreference(message["value"]) }
+            else { profile.defaults.set(message["value"], forKey: key) }
+            handleQAMessage(["type": "getSettings"], profile: profile)
+        case "action":
+            if message["name"] as? String == "quit" { AppDelegate.requestQuit(); return }
+            let url = URL(string: message["value"] as! String)!
+            Task { @MainActor in
+                guard await profile.approveExternalURL(url) else { fatalError("Native QA checkout ownership rejected") }
+                NSWorkspace.shared.open(url)
+            }
+        default: fatalError("Native QA bridge message rejected")
+        }
+    }
+
+    private func pushQAEvent(_ name: String, payload: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else { fatalError("Native QA event rejected") }
+        webView?.evaluateJavaScript("window.dispatchEvent(new CustomEvent('\(name)', { detail: \(json) }));")
+    }
+
     private func syncNotificationPermission(requestIfNeeded: Bool) {
         let center = UNUserNotificationCenter.current()
         Task {
@@ -191,6 +284,10 @@ final class NativeBridge {
     // MARK: - State push
 
     func pushSettings() {
+        if let profile = NativeQAProfile.current {
+            handleQAMessage(["type": "getSettings"], profile: profile)
+            return
+        }
         let launchAtLoginValue: Bool
         let launchAtLoginSupported: Bool
         if #available(macOS 13, *) {

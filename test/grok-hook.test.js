@@ -181,7 +181,7 @@ test("generated Grok handler preserves zero context after compaction", async () 
 test("buildGrokSessionEndHookJson quotes handler paths for shell command", () => {
   const hookJson = buildGrokSessionEndHookJson({
     notifyGrokHandlerPath: "/tmp/Token Tracker's/bin/grok-session-end-hook.cjs",
-  });
+  }, { platform: "linux" });
 
   assert.equal(
     hookJson.hooks.SessionEnd[0].hooks[0].command,
@@ -226,7 +226,8 @@ test("upsertGrokHook writes handler to canonical tokentracker bin dir", async ()
 
     assert.equal(result.hookPath, hookPath);
     assert.equal(result.handlerPath, handlerPath);
-    assert.match(await fs.readFile(hookPath, "utf8"), new RegExp(handlerPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    const hookJson = JSON.parse(await fs.readFile(hookPath, "utf8"));
+    assert.ok(hookJson.hooks.SessionEnd[0].hooks[0].command.includes(handlerPath));
     await fs.stat(handlerPath);
     await assert.rejects(fs.stat(legacyHandlerPath), /ENOENT/);
 

@@ -33,7 +33,7 @@ function usageJsonFor({ nowMs = Date.now(), periods } = {}) {
 
 function mockRunner({ which = true, usageStdout = "", usageStatus = 0, plansStdout = "{}" } = {}) {
   return (command, args) => {
-    if (command === "which") {
+    if (command === "which" || command === "where") {
       return which
         ? { status: 0, stdout: "/usr/local/bin/arkcli\n", stderr: "" }
         : { status: 1, stdout: "", stderr: "" };
@@ -148,7 +148,7 @@ test("fetchArkAgentPlanLimits reports a friendly 127 message and serves the disk
   }, { home, nowMs });
 
   const cached = await fetchArkAgentPlanLimits({
-    commandRunner: (command) => (command === "which"
+    commandRunner: (command) => (command === "which" || command === "where"
       ? { status: 0, stdout: "/usr/local/bin/arkcli\n", stderr: "" }
       : { status: 127, stdout: "", stderr: "command not found" }),
     home,
@@ -161,7 +161,7 @@ test("fetchArkAgentPlanLimits reports a friendly 127 message and serves the disk
   // Without a cache the raw 127 becomes an actionable hint instead.
   const home2 = tmpHome(t);
   const errored = await fetchArkAgentPlanLimits({
-    commandRunner: (command) => (command === "which"
+    commandRunner: (command) => (command === "which" || command === "where"
       ? { status: 0, stdout: "/usr/local/bin/arkcli\n", stderr: "" }
       : { status: 127, stdout: "", stderr: "command not found" }),
     home: home2,

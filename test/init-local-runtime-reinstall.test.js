@@ -5,6 +5,8 @@ const fs = require("node:fs/promises");
 const { spawn, spawnSync } = require("node:child_process");
 const http = require("node:http");
 const { test } = require("node:test");
+const publicAnon = [Buffer.from('{"alg":"HS256"}').toString("base64url"),
+  Buffer.from('{"role":"anon"}').toString("base64url"), "test-signature"].join(".");
 const { installLocalTrackerApp } = require("../src/commands/init");
 
 const repoRoot = path.join(__dirname, "..");
@@ -41,7 +43,9 @@ test("init first sync keeps local data and credentials without uploading when no
       await fs.mkdir(trackerDir, { recursive: true });
       const prefPath = path.join(trackerDir, "cloud-sync-pref.json");
       if (enabled !== null) await fs.writeFile(prefPath, JSON.stringify({ enabled }));
-      await fs.writeFile(path.join(trackerDir, "config.json"), JSON.stringify({ deviceToken: "fixture-token" }));
+      const baseUrl = `http://127.0.0.1:${server.address().port}`;
+      await fs.writeFile(path.join(trackerDir, "config.json"), JSON.stringify({ baseUrl, anonKey: publicAnon,
+        deviceToken: "fixture-token", deviceTokenBaseUrl: baseUrl }));
       const row = { source: "fixture", model: "fixture-model", hour_start: "2026-10-01T00:00:00Z", input_tokens: 20, output_tokens: 0, total_tokens: 20 };
       await fs.writeFile(path.join(trackerDir, "queue.jsonl"), JSON.stringify(row) + "\n");
       const env = {
@@ -85,7 +89,7 @@ test("init can rerun from installed local runtime without self-deleting app sour
     await fs.writeFile(path.join(env.CODEX_HOME, "config.toml"), "# empty\n", "utf8");
 
     const firstInit = runTracker(
-      ["init", "--yes", "--no-auth", "--no-open", "--base-url", "https://example.invalid"],
+      ["init", "--yes", "--no-auth", "--no-open", "--base-url", "https://example.invalid", "--anon-key", publicAnon],
       env,
     );
     assert.equal(
@@ -99,7 +103,7 @@ test("init can rerun from installed local runtime without self-deleting app sour
 
     const secondInit = runLocalTracker(
       trackerBinPath,
-      ["init", "--yes", "--no-auth", "--no-open", "--base-url", "https://example.invalid"],
+      ["init", "--yes", "--no-auth", "--no-open", "--base-url", "https://example.invalid", "--anon-key", publicAnon],
       env,
     );
     assert.equal(

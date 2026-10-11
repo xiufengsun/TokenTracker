@@ -8,6 +8,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv } from "vite";
 import os from "node:os";
 import { copyRegistryPlugin } from "./scripts/copy-registry-plugin.mjs";
+import { validateInsforgeBuildEnv } from "./src/lib/insforge-deployment-config.mjs";
 
 const COPY_REQUIRED_KEYS = [
   "landing.meta.title",
@@ -952,7 +953,7 @@ async function handleLocalApi(req, res, url) {
     const maxValue = allValues.length > 0 ? allValues[allValues.length - 1] : 0;
 
     // 根据最大值计算 level (0-4)
-    function calcLevel(value) {
+    const calcLevel = (value) => {
       if (value <= 0) return 0;
       if (maxValue === 0) return 1;
       const ratio = value / maxValue;
@@ -960,7 +961,7 @@ async function handleLocalApi(req, res, url) {
       if (ratio <= 0.5) return 2;
       if (ratio <= 0.75) return 3;
       return 4;
-    }
+    };
 
     while (cursor <= end) {
       const day = cursor.toISOString().slice(0, 10);
@@ -1263,6 +1264,9 @@ function localDataApiPlugin() {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, ROOT_DIR, "VITE_");
+  const backendConfiguration = validateInsforgeBuildEnv(env);
+  if (backendConfiguration.errorCode)
+    throw new Error(`InsForge frontend configuration rejected: ${backendConfiguration.errorCode}. Values were not logged.`);
   const fallbackVersion = loadAppVersion();
   const define = {};
 
@@ -1288,6 +1292,16 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       copyRegistryPlugin(),
+      {
+        name: "tokentracker-third-party-notices",
+        apply: "build",
+        generateBundle() {
+          // dist is shared by the web deployment, npm package and all desktop
+          // EmbeddedServer bundles, so licenses travel with the shipped code.
+          this.emitFile({ type: "asset", fileName: "THIRD_PARTY_NOTICES.txt",
+            source: fs.readFileSync(path.join(REPO_ROOT, "THIRD_PARTY_NOTICES.md"), "utf8") });
+        },
+      },
       react(),
       richLinkMetaPlugin(),
       routeSeoPagesPlugin(),
@@ -1322,15 +1336,15 @@ export default defineConfig(({ mode }) => {
             rewrite: (p) => p.replace(/^\/proxy\/ipcheck/, ""),
           },
         };
-        const insforge = loadEnv("development", ROOT_DIR, "VITE_").VITE_INSFORGE_BASE_URL;
-        if (insforge) {
-          proxies["/api/auth"] = {
-            target: insforge,
-            changeOrigin: true,
-            secure: true,
-            cookieDomainRewrite: "localhost",
-          };
-        }
+        // Match the frontend's validated configuration, including its official
+        // default. Otherwise the SDK receives SPA HTML as a successful config.
+        proxies["/api/auth"] = {
+          target: backendConfiguration.baseUrl,
+          changeOrigin: true,
+          secure: true,
+          // Host-only cookies work on both localhost and 127.0.0.1.
+          cookieDomainRewrite: "",
+        };
         return proxies;
       })(),
     },

@@ -30,6 +30,7 @@
  *   (leaderboard-refresh.ts / leaderboard-profile.ts), so they agree.
  */
 import { createClient } from "npm:@insforge/sdk";
+import { cloudReadAccess, cloudFailure, cloudHistoryFailure } from "./cloud/access.ts";
 
 const SOURCES_WITH_AUTHORITATIVE_COST = new Set(["grok", "cline"]);
 
@@ -760,8 +761,8 @@ interface DayRoll {
 function costOfDim(dim: CompactSummary["cost_dims"][number]): number {
   return computeRowCost({
     bucket: "",
-    source: dim[0],
-    model: dim[1],
+    source: dim[0] ?? "",
+    model: dim[1] ?? "unknown",
     pricing_tier: dim[2] ?? undefined,
     input_tokens: Number(dim[3]) || 0,
     output_tokens: Number(dim[4]) || 0,
@@ -814,6 +815,14 @@ export default async function (req: Request): Promise<Response> {
 
   const userId = await verifiedUserIdFromJwt(req.headers.get("Authorization"));
   if (!userId) return json({ error: "Unauthorized" }, 401);
+
+  let cloudAccess;
+  try { cloudAccess = await cloudReadAccess(client, userId, "daily"); }
+  catch { return json({ error: "Cloud access unavailable", code: "cloud_access_unavailable" }, 503); }
+  if (!cloudAccess.ok) return cloudFailure(cloudAccess, corsHeaders);
+  const historyFailure = cloudHistoryFailure(cloudAccess, to);
+  if (historyFailure) return cloudFailure(historyFailure, corsHeaders);
+  if (cloudAccess.available_from && from < cloudAccess.available_from) from = cloudAccess.available_from;
 
   // The v2 RPC resolves and validates device ownership in the same database
   // statement as aggregation, avoiding a second PostgREST connection.

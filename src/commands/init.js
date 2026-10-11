@@ -79,7 +79,8 @@ const {
   resolveReasonixHome,
   resolveTraeStoragePath,
 } = require("../lib/rollout");
-const { resolveRuntimeConfig, DEFAULT_BASE_URL } = require("../lib/runtime-config");
+const { resolveRuntimeConfig, DEFAULT_BASE_URL, normalizeInstanceBaseUrl, assertInsforgeRuntime,
+  clearDeviceIdentity, resetInstanceState } = require("../lib/runtime-config");
 const {
   BOLD,
   DIM,
@@ -159,9 +160,10 @@ const SUPPORTED_PROVIDERS = [
   "Command Code",
 ];
 
-async function cmdInit(argv) {
+async function cmdInit(argv, options = {}) {
   const opts = parseArgs(argv);
-  const home = os.homedir();
+  const home = options.home || os.homedir();
+  if (opts.anonKeyFile) opts.anonKey = (await fs.readFile(opts.anonKeyFile, "utf8")).trim();
 
   const { rootDir, trackerDir, binDir } = await resolveTrackerPaths({ home });
 
@@ -171,10 +173,11 @@ async function cmdInit(argv) {
 
   const existingConfig = await readJson(configPath);
   const runtime = resolveRuntimeConfig({
-    cli: { baseUrl: opts.baseUrl, dashboardUrl: opts.dashboardUrl },
+    cli: { baseUrl: opts.baseUrl, dashboardUrl: opts.dashboardUrl, anonKey: opts.anonKey },
     config: existingConfig || {},
     env: process.env,
   });
+  assertInsforgeRuntime(runtime);
   const notifyPath = path.join(binDir, "notify.cjs");
   const appDir = path.join(trackerDir, "app");
   const trackerBinPath = path.join(appDir, "bin", "tracker.js");
@@ -369,16 +372,28 @@ async function runSetup({
     existingConfig && typeof existingConfig === "object" && !Array.isArray(existingConfig)
       ? existingConfig
       : {};
+  const previousRuntime = resolveRuntimeConfig({ config: existingPlainConfig, env: {} });
+  const changedInstance = normalizeInstanceBaseUrl(previousRuntime.baseUrl) !== runtime.baseUrl ||
+    previousRuntime.anonKey !== runtime.anonKey;
+  if (changedInstance) {
+    resetInstanceState(trackerDir);
+    deviceToken = null; deviceId = null;
+  }
   const config = {
-    ...existingPlainConfig,
+    ...(changedInstance ? clearDeviceIdentity(existingPlainConfig) : existingPlainConfig),
     installedAt,
     // Keep a persisted legacy URL until the first sync. sync owns the migration
     // lock and must reset the upload offset/backoff before removing this marker;
     // rewriting it here would skip the historical replay permanently.
     baseUrl: opts.baseUrl || existingPlainConfig.baseUrl || DEFAULT_BASE_URL,
   };
-  if (opts.dashboardUrl) {
-    config.dashboardUrl = opts.dashboardUrl;
+  if (changedInstance || opts.dashboardUrl) {
+    config.dashboardUrl = runtime.dashboardUrl;
+  }
+  if (changedInstance || opts.anonKey || runtime.sources.anonKey === "env") config.anonKey = runtime.anonKey;
+  if (runtime.baseUrl !== DEFAULT_BASE_URL) {
+    config.baseUrl = runtime.baseUrl;
+    config.dashboardUrl = runtime.dashboardUrl;
   }
 
   await writeJson(configPath, config);
@@ -1333,6 +1348,8 @@ function parseArgs(argv) {
   const out = {
     baseUrl: null,
     dashboardUrl: null,
+    anonKey: null,
+    anonKeyFile: null,
     email: null,
     password: null,
     deviceName: null,
@@ -1347,6 +1364,8 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === "--base-url") out.baseUrl = argv[++i] || null;
     else if (a === "--dashboard-url") out.dashboardUrl = argv[++i] || null;
+    else if (a === "--anon-key") out.anonKey = argv[++i] || null;
+    else if (a === "--anon-key-file") out.anonKeyFile = argv[++i] || null;
     else if (a === "--email") out.email = argv[++i] || null;
     else if (a === "--password") out.password = argv[++i] || null;
     else if (a === "--device-name") out.deviceName = argv[++i] || null;

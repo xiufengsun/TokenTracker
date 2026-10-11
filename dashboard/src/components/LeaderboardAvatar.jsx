@@ -37,12 +37,14 @@ export function LeaderboardAvatar({
   displayName,
   seed,
   size = "md",
+  proActive = false,
   className,
 }) {
   const dim = SIZE_CLASS[size] || SIZE_CLASS.md;
   const hue = hashHue(seed ?? displayName ?? "");
   const safeUrl = typeof avatarUrl === "string" ? avatarUrl.trim() : "";
   const [failed, setFailed] = React.useState(false);
+  const proFrame = proActive === true ? "leaderboard-pro-avatar" : null;
 
   React.useEffect(() => {
     setFailed(false);
@@ -55,7 +57,7 @@ export function LeaderboardAvatar({
         alt=""
         referrerPolicy="no-referrer"
         onError={() => setFailed(true)}
-        className={cn("rounded-full object-cover ring-1 ring-white/10", dim, className)}
+        className={cn("rounded-full object-cover ring-1 ring-white/10", dim, className, proFrame)}
       />
     );
   }
@@ -66,6 +68,7 @@ export function LeaderboardAvatar({
         "flex shrink-0 items-center justify-center rounded-full font-semibold text-white ring-1 ring-white/10",
         dim,
         className,
+        proFrame,
       )}
       style={{ backgroundColor: `hsl(${hue} 42% 34%)` }}
       aria-hidden

@@ -12,6 +12,7 @@ import { getLeaderboardProfile } from "../../lib/api";
 import { resolveAuthAccessTokenWithRetry } from "../../lib/auth-token";
 import { buildActivityHeatmap } from "../../lib/activity-heatmap";
 import { LeaderboardAvatar } from "../LeaderboardAvatar.jsx";
+import { LeaderboardProBadge } from "../LeaderboardProBadge.jsx";
 import { ProviderIcon } from "../../ui/dashboard/components/ProviderIcon.jsx";
 import { ActivityHeatmap } from "../../ui/dashboard/components/ActivityHeatmap.jsx";
 import { cn } from "../../lib/cn";
@@ -246,6 +247,7 @@ function Header({ user, onClose }) {
         displayName={user?.display_name || ""}
         seed={user?.user_id || user?.display_name}
         size="lg"
+        proActive={user?.pro_active === true}
         className="shrink-0 ring-1 ring-oai-gray-200 dark:ring-oai-gray-800"
       />
       <div className="min-w-0 flex-1">
@@ -253,6 +255,7 @@ function Header({ user, onClose }) {
           <h2 className="truncate text-base font-semibold text-oai-black dark:text-white">
             {user?.display_name || "—"}
           </h2>
+          <LeaderboardProBadge proActive={user?.pro_active === true} />
           {user?.rank ? (
             <span className={cn(
               "shrink-0 inline-flex items-center px-2 py-0.5 rounded text-xs font-bold font-mono uppercase tracking-wider border shadow-sm",
@@ -322,6 +325,7 @@ function PageHero({ user, topBadge }) {
         displayName={user?.display_name || ""}
         seed={user?.user_id || user?.display_name}
         size="xl"
+        proActive={user?.pro_active === true}
         className="shrink-0 ring-1 ring-oai-gray-200 dark:ring-oai-gray-800 rounded-full"
       />
       <div className="min-w-0 flex-1 flex items-center justify-between gap-4">
@@ -330,6 +334,7 @@ function PageHero({ user, topBadge }) {
             <h1 className="truncate text-2xl sm:text-[28px] font-semibold tracking-tight leading-tight text-oai-black dark:text-white">
               {user?.display_name || "—"}
             </h1>
+            <LeaderboardProBadge proActive={user?.pro_active === true} />
             {user?.user_id && <LikeButton userId={user.user_id} />}
           </div>
           {handle ? (

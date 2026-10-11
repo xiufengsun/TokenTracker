@@ -1,0 +1,10 @@
+# SQL function rewrites and generated-asset checks require identical source bytes
+# on Windows and Unix. Do not let core.autocrlf rewrite checked-out text files.
+* text=auto eol=lf
+
+# Keep command scripts compatible with the Windows command interpreter.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Inno Setup translations are vendor files; preserve their original bytes.
+*.isl -text

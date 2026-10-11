@@ -38,7 +38,7 @@ targets:
         PRODUCT_NAME: TokenTracker
         INFOPLIST_VALUES: |
           LSUIElement = YES
-        MARKETING_VERSION: "1.2.2"
+        MARKETING_VERSION: "1.3.4"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_EMIT_LOC_STRINGS: "YES"
         CODE_SIGN_STYLE: Automatic
@@ -79,6 +79,53 @@ targets:
       properties:
         com.apple.security.network.client: true
 
+  # Acceptance-only app, using the real window/bridge sources without a widget dependency.
+  TokenTrackerNativeQA:
+    type: application
+    platform: macOS
+    sources:
+      - path: TokenTrackerBar
+        excludes:
+          - "EmbeddedServer/**"
+          - "AppIcon.icon"
+      - path: Shared
+    dependencies:
+      - package: Vortex
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tokentracker.bar.qa
+        PRODUCT_NAME: TokenTrackerQA
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) TOKENTRACKER_NATIVE_QA"
+        ENABLE_APP_SANDBOX: NO
+        CODE_SIGNING_ALLOWED: NO
+    info:
+      path: NativeQA/Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleDisplayName: TokenTracker QA
+        CFBundleName: TokenTracker QA
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "0.0.0"
+        CFBundleURLTypes:
+          - CFBundleURLName: com.tokentracker.bar.qa.billing
+            CFBundleURLSchemes:
+              - tokentracker-qa
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoads: true
+    postBuildScripts:
+      - script: |
+          SRC_DIR="${SRCROOT}/EmbeddedServer"
+          DST_DIR="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/EmbeddedServer"
+          if [ -d "$SRC_DIR" ]; then
+            rm -rf "$DST_DIR"
+            cp -a "$SRC_DIR" "$DST_DIR"
+            chmod +x "$DST_DIR/node"
+          fi
+          exit 0
+        name: "Copy EmbeddedServer to QA bundle"
+
   TokenTrackerWidget:
     type: app-extension
     platform: macOS
@@ -89,7 +136,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tokentracker.bar.widget
         PRODUCT_NAME: TokenTrackerWidget
-        MARKETING_VERSION: "1.2.2"
+        MARKETING_VERSION: "1.3.4"
         CURRENT_PROJECT_VERSION: "1"
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         SWIFT_EMIT_LOC_STRINGS: "YES"

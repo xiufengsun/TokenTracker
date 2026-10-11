@@ -3,6 +3,7 @@
  * 用 device token（SHA-256 hash）验证身份，用 service role key 写 DB。
  */
 import { createClient } from "npm:@insforge/sdk";
+import { cloudRpc, cloudFailure } from "./cloud/access.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -42,7 +43,12 @@ export default async function (req: Request): Promise<Response> {
   const deviceToken = authHeader?.replace(/^Bearer\s+/i, "");
   if (!deviceToken) return json({ error: "Missing bearer token" }, 401);
 
-  const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+  // Bound bytes before parsing; clients retain their queue offset on rejection.
+  if (Number(req.headers.get("Content-Length") || 0) > 1_048_576) return json({ error: "Upload too large" }, 413);
+  const rawBody = await req.text();
+  if (new TextEncoder().encode(rawBody).byteLength > 1_048_576) return json({ error: "Upload too large" }, 413);
+  let body: Record<string, unknown> | null = null;
+  try { body = JSON.parse(rawBody); } catch { /* malformed request */ }
   if (!body) return json({ error: "Invalid JSON body" }, 400);
 
   const baseUrl = Deno.env.get("INSFORGE_BASE_URL")!;
@@ -204,28 +210,16 @@ export default async function (req: Request): Promise<Response> {
   }
   const rows = Array.from(dedupedMap.values());
 
-  const { error: upsertErr } = await client.database
-    .from("tokentracker_hourly")
-    .upsert(rows, {
-      onConflict: "user_id,device_id,hour_start,source,model",
+  try {
+    const result = await cloudRpc(client, "cloud_ingest_usage", {
+      p_token_hash: tokenHash, p_rows: rows, p_states: stateRows,
+      p_upload_id: typeof body.upload_id === "string" && /^[0-9a-f-]{36}$/i.test(body.upload_id)
+        ? body.upload_id : null,
     });
-
-  if (upsertErr) return json({ error: upsertErr.message }, 500);
-
-  if (stateRows.length > 0) {
-    // Write AFTER the bucket rows of the same upload landed, so canonical
-    // session state never advances for an upload whose device-level rows
-    // failed. The rpc applies a STRICTLY-newer LWW guard
-    // (EXCLUDED.snapshot_verified_at > stored): replays are idempotent and
-    // a transport retry of an older observation can never displace a newer
-    // one. Equal-stamp conflicts keep the first-applied row (stable under
-    // retries).
-    const { error: stateErr } = await client.database.rpc(
-      "tokentracker_upsert_account_session_states",
-      { p_user_id: userId, p_states: stateRows },
-    );
-    if (stateErr) return json({ error: stateErr.message }, 500);
+    if (!result.ok) return cloudFailure(result, corsHeaders);
+    return json(result);
+  } catch (error) {
+    console.error("cloud ingest transaction failed", (error as Error).message);
+    return json({ error: "Cloud access unavailable", code: "cloud_access_unavailable" }, 503);
   }
-
-  return json({ ok: true, inserted: rows.length, skipped: 0 });
 }

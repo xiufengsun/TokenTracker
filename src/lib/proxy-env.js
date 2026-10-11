@@ -326,6 +326,11 @@ function resolveFetchImpl(fetchImpl) {
 
 const PROXY_TEST_TIMEOUT_MS = 5000;
 
+function proxyErrorMessage(error, fallback) {
+  const message = typeof error?.message === "string" ? error.message.split(/[\r\n]/)[0].trim() : "";
+  return message.slice(0, 500) || fallback;
+}
+
 async function runProxyConnectivityTest({
   proxyUrl,
   targetUrl,
@@ -357,7 +362,7 @@ async function runProxyConnectivityTest({
     });
     return { ok: true, status: res.status, latencyMs: latency() };
   } catch (error) {
-    return { ok: false, error: error?.message || String(error), latencyMs: latency() };
+    return { ok: false, error: proxyErrorMessage(error, "Proxy request failed"), latencyMs: latency() };
   } finally {
     closeDispatcherQuietly(dispatcher);
   }
@@ -447,7 +452,7 @@ function applyUndiciProxyIfNeeded({
   try {
     dispatcher = createProxyDispatcher(proxyUrl, parts);
   } catch (error) {
-    const message = error?.message || String(error);
+    const message = proxyErrorMessage(error, "Could not construct the proxy dispatcher");
     return manual ? failManual(message, warn, parts) : null;
   }
   if (!dispatcher) {
@@ -458,7 +463,7 @@ function applyUndiciProxyIfNeeded({
     swapOwnedDispatcher(parts.setter, dispatcher);
   } catch (error) {
     closeDispatcherQuietly(dispatcher);
-    const message = error?.message || String(error);
+    const message = proxyErrorMessage(error, "Could not install the proxy dispatcher");
     return manual ? failManual(message, warn, parts) : null;
   }
 
