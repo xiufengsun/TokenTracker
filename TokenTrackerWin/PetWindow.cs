@@ -50,6 +50,8 @@ internal sealed class PetWindow : Window
     private long _rageUntil;          // TickCount until which the overheated "error" gag shows
     private bool _rage;
     private bool _coreReady;
+    private bool _contextQueued;
+    private string? _lastContextScript;
     private bool _exiting;
     private nint _hwnd;
     private string _curSymbol = "$";
@@ -332,7 +334,7 @@ internal sealed class PetWindow : Window
 
         // Re-push currency + locale after every (re)load so the bubble + quips match
         // the app's unit/language even across navigations.
-        core.NavigationCompleted += (_, _) => PushContext();
+        core.NavigationCompleted += (_, _) => { _lastContextScript = null; PushContext(); };
 
         NavigateWhenServerReady();
     }
@@ -653,15 +655,20 @@ internal sealed class PetWindow : Window
     /// </summary>
     public void ApplyCurrency(string symbol, decimal rate)
     {
-        _curSymbol = string.IsNullOrEmpty(symbol) ? "$" : symbol;
-        _curRate = rate > 0 ? rate : 1m;
+        var nextSymbol = string.IsNullOrEmpty(symbol) ? "$" : symbol;
+        var nextRate = rate > 0 ? rate : 1m;
+        if (_curSymbol == nextSymbol && _curRate == nextRate) return;
+        _curSymbol = nextSymbol;
+        _curRate = nextRate;
         PushContext();
     }
 
     /// <summary>Push the resolved UI locale so the pet's tap quips match the app's language.</summary>
     public void ApplyLocale(string locale)
     {
-        _locale = string.IsNullOrWhiteSpace(locale) ? "en" : locale;
+        var next = string.IsNullOrWhiteSpace(locale) ? "en" : locale;
+        if (_locale == next) return;
+        _locale = next;
         PushContext();
     }
 
@@ -676,6 +683,7 @@ internal sealed class PetWindow : Window
     /// <summary>Push whether a sync is in progress (drives the "typing" animation, like macOS).</summary>
     public void ApplySyncing(bool syncing)
     {
+        if (_syncing == syncing) return;
         _syncing = syncing;
         PushContext();
     }
@@ -685,7 +693,9 @@ internal sealed class PetWindow : Window
     {
         try
         {
-            _limits = string.IsNullOrWhiteSpace(json) ? null : JsonNode.Parse(json);
+            var next = string.IsNullOrWhiteSpace(json) ? null : JsonNode.Parse(json);
+            if (JsonNode.DeepEquals(_limits, next)) return;
+            _limits = next;
         }
         catch
         {
@@ -725,13 +735,24 @@ internal sealed class PetWindow : Window
     /// <summary>Push whether the local server is reachable (drives the disconnected animation).</summary>
     public void ApplyConnected(bool connected)
     {
+        if (_connected == connected) return;
         _connected = connected;
         PushContext();
     }
 
     private void PushContext()
     {
-        if (!_coreReady) return;
+        if (!_coreReady || _contextQueued || _exiting) return;
+        _contextQueued = true;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() =>
+        {
+            _contextQueued = false;
+            if (_coreReady && !_exiting) _ = FlushContextAsync();
+        }));
+    }
+
+    private async Task FlushContextAsync()
+    {
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         var sym = System.Text.Json.JsonSerializer.Serialize(_curSymbol);
         var rate = _curRate.ToString(inv);
@@ -766,7 +787,7 @@ internal sealed class PetWindow : Window
         var lookDirection = _lastLookDirection >= 0 ? _lastLookDirection.ToString() : "null";
         try
         {
-            _ = _webView.CoreWebView2.ExecuteScriptAsync(
+            var script =
                 $"window.__ttPetCurrency={{symbol:{sym},rate:{rate}}};" +
                 $"window.__ttPetLocale={loc};" +
                 $"window.__ttPetTokenUnitSystem={unitSystem};" +
@@ -793,7 +814,12 @@ internal sealed class PetWindow : Window
                 "window.dispatchEvent(new Event('pet:limits'));" +
                 "window.dispatchEvent(new Event('pet:bubble-band'));" +
                 "window.dispatchEvent(new Event('pet:connected'));" +
-                "window.dispatchEvent(new Event('pet:minimode'));");
+                "window.dispatchEvent(new Event('pet:minimode'));";
+            // One tray tick updates several fields. Send one complete snapshot,
+            // and let an unchanged snapshot leave the renderer idle.
+            if (script == _lastContextScript) return;
+            await _webView.CoreWebView2.ExecuteScriptAsync(script);
+            _lastContextScript = script;
         }
         catch { /* page mid-navigation */ }
     }

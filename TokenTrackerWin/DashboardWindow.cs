@@ -795,9 +795,9 @@ internal sealed class DashboardWindow : Window
               z-index:0!important;
               pointer-events:none!important;
               border-radius:10px!important;
-              /* Frosted blur restored — this is the glass/translucent texture. */
-              backdrop-filter:blur(40px) saturate(135%)!important;
-              -webkit-backdrop-filter:blur(40px) saturate(135%)!important;
+              /* DWM already supplies acrylic; another full-window blur doubles composition work. */
+              backdrop-filter:none!important;
+              -webkit-backdrop-filter:none!important;
             }
             html.native-windows-app.dark body.tt-native-glass-shell::before{
               background:

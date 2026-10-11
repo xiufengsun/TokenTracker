@@ -246,7 +246,6 @@ function computeRowCost(row) {
   // `outputTokens` is the AI SDK total (text + reasoning), so
   // reasoning_output_tokens is a subset marker, never a second line item.
   const reasoningIncludedInOutput =
-    row.source === "claude" ||
     row.source === "codex" ||
     row.source === "acode" ||
     row.source === "every-code" ||
