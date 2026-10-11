@@ -78,7 +78,7 @@ interface UsageLimitsData {
   kiro: { configured: boolean; error?: string | null; plan_label?: string | null; plan_name?: string | null; primary_window?: { used_percent: number; reset_at?: string | null } | null; secondary_window?: { used_percent: number; reset_at?: string | null } | null };
   grok: { configured: boolean; error?: string | null; plan_label?: string | null; primary_window?: { used_percent: number; reset_at?: string | null } | null; secondary_window?: { used_percent: number; reset_at?: string | null } | null };
   antigravity: { configured: boolean; error?: string | null; plan_label?: string | null; auth_action_required?: string | null; account_email?: string | null; account_plan?: string | null; cached?: boolean; cached_at?: string | null; primary_window?: { used_percent: number; reset_at?: string | null } | null; secondary_window?: { used_percent: number; reset_at?: string | null } | null; tertiary_window?: { used_percent: number; reset_at?: string | null } | null; quaternary_window?: { used_percent: number; reset_at?: string | null } | null };
-  zcode: { configured: boolean; error?: string | null; plan_label?: string | null; plan_id?: string | null; plan_kind?: string | null; primary_window?: { used_percent: number; reset_at?: string | null } | null; secondary_window?: { used_percent: number; reset_at?: string | null } | null; tertiary_window?: { used_percent: number; reset_at?: string | null } | null ; buckets?: Array<{ label?: string; entitlement_id?: string; plan_name?: string | null; period?: string | null; window?: { used_percent: number; reset_at?: string | null } | null }> };
+  zcode: { configured: boolean; error?: string | null; plan_label?: string | null; plan_id?: string | null; plan_kind?: string | null; reset_credits?: { error?: string; five_hour?: Array<{ expires_at: string }>; weekly?: Array<{ expires_at: string }> }; start_plan?: { configured: boolean; error?: string | null; plan_label?: string | null; plan_kind?: string | null; buckets?: Array<{ label?: string; entitlement_id?: string; plan_name?: string | null; period?: string | null; remaining_units?: number | null; total_units?: number | null; window?: { used_percent: number; reset_at?: string | null } | null }> } | null; primary_window?: { used_percent: number; reset_at?: string | null } | null; secondary_window?: { used_percent: number; reset_at?: string | null } | null; tertiary_window?: { used_percent: number; reset_at?: string | null } | null ; buckets?: Array<{ label?: string; entitlement_id?: string; plan_name?: string | null; period?: string | null; window?: { used_percent: number; reset_at?: string | null } | null }> };
   opencodeGo: { configured: boolean; error?: string | null; plan_label?: string | null; source?: string | null; subscription_status?: "active" | "inactive" | "unknown" | null; primary_window?: { used_percent: number; reset_at?: string | null } | null; secondary_window?: { used_percent: number; reset_at?: string | null } | null; tertiary_window?: { used_percent: number; reset_at?: string | null } | null };
   qoder: {
     configured: boolean;
@@ -206,24 +206,32 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
     [localEnabled, publishToPreloadCache],
   );
 
-  const refresh = useCallback(async () => {
-    if (!localEnabled) return;
+  // Forced manual refresh. Resolves with the payload that was applied (the
+  // same object handed to setData, so a caller can read `fetched_at` off it),
+  // or null when nothing new was applied — fetch failure, a superseded
+  // request, or a non-local host. Callers that just want the refresh keep
+  // working: the previous contract was Promise<void>.
+  const refresh = useCallback(async (): Promise<UsageLimitsData | null> => {
+    if (!localEnabled) return null;
     const isCurrent = beginRequest();
     try {
       const res = await getUsageLimits({
         refresh: true,
         devinEnabled: isDevinProviderSelected(),
       });
-      if (!isCurrent()) return;
+      if (!isCurrent()) return null;
       const nextData = res && typeof res === "object" ? res as UsageLimitsData : null;
-      setData(withoutUnselectedDevin(nextData, isDevinProviderSelected()));
+      const next = withoutUnselectedDevin(nextData, isDevinProviderSelected());
+      setData(next);
       setError(null);
       setIsLoading(false);
-      publishSuccessfulState(nextData, "manual-refresh");
+      publishSuccessfulState(next, "manual-refresh");
+      return next;
     } catch (err) {
-      if (!isCurrent()) return;
+      if (!isCurrent()) return null;
       setError((err as Error)?.message || String(err));
       setIsLoading(false);
+      return null;
     }
   }, [beginRequest, localEnabled, publishSuccessfulState]);
 

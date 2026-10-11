@@ -184,6 +184,21 @@ function withZcodePlanSettings(settings, run) {
   });
 }
 
+/** Run a scenario in a ZCode 3.14 home (credentials.json only, no config.json). */
+function withZcode314LoginHome(credentials, run, { setting } = {}) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tt-zcode-login-"));
+  const v2 = path.join(tmp, ".zcode", "v2");
+  fs.mkdirSync(v2, { recursive: true });
+  writeZcodeCredentials(v2, tmp, credentials);
+  fs.writeFileSync(path.join(v2, "setting.json"), JSON.stringify(setting || {
+    providerFamilyDomain: "bigmodel",
+    providerFamilyConnectionSelections: { bigmodel: { kind: "individual-coding-plan" } },
+  }));
+  return Promise.resolve().then(() => run(tmp, v2)).finally(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+}
+
 describe("ZCode team-plan quotas", () => {
   for (const [family, origin] of [["bigmodel", "https://bigmodel.cn"], ["zai", "https://api.z.ai"]]) {
     it(`queries the selected ${family} team instead of the personal coding plan`, async () => {
@@ -344,6 +359,518 @@ describe("deriveZcodePlanLabel", () => {
   });
 });
 
+describe("ZCode active-region preference", () => {
+  it("orders candidates with the active region first within each plan kind", async () => {
+    await withZcodePlanSettings({
+      providerFamilyDomain: "bigmodel",
+      modelProviderFamilySelectedKeys: { zai: "coding-plan:builtin:zai-coding-plan" },
+    }, async (home, v2) => {
+      fs.writeFileSync(path.join(v2, "config.json"), JSON.stringify({
+        provider: Object.fromEntries(["bigmodel", "zai"].flatMap((family) => [
+          [`builtin:${family}-coding-plan`, { enabled: true, options: { apiKey: `${family}-coding-key` } }],
+          [`builtin:${family}-start-plan`, { enabled: true, options: { apiKey: `${family}-start-key` } }],
+        ])),
+      }));
+      fs.writeFileSync(path.join(v2, "coding-plan-cache.json"), JSON.stringify({
+        entryStatus: { items: Object.fromEntries(
+          ["bigmodel", "zai"].flatMap((family) => [
+            [`builtin:${family}-coding-plan`, { status: "available" }],
+            [`builtin:${family}-start-plan`, { status: "available" }],
+          ]),
+        ) },
+      }));
+      writeZcodeCredentials(v2, home, { "oauth:active_provider": "bigmodel" });
+      assert.deepEqual(loadZcodeAuthCandidates({ home, env: {} }).map((auth) => auth.providerKey), [
+        "builtin:bigmodel-coding-plan",
+        "builtin:zai-coding-plan",
+        "builtin:bigmodel-start-plan",
+        "builtin:zai-start-plan",
+      ]);
+    });
+  });
+
+  it("serves the active region's paid plan even when another region was selected before", async () => {
+    await withZcodePlanSettings({
+      providerFamilyDomain: "bigmodel",
+      modelProviderFamilySelectedKeys: { zai: "coding-plan:builtin:zai-coding-plan" },
+    }, async (home, v2) => {
+      writeZcodeCredentials(v2, home, { "oauth:active_provider": "bigmodel" });
+      const requests = [];
+      const result = await fetchZcodeLimits({
+        home,
+        env: {},
+        fetchImpl: async (url, options) => {
+          requests.push({ url, authorization: options.headers.authorization });
+          return { ok: true, status: 200, async json() { return codingPlanQuotaBody(); } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.equal(result.provider_key, "builtin:bigmodel-coding-plan");
+      assert.deepEqual(requests, [{
+        url: "https://bigmodel.cn/api/monitor/usage/quota/limit",
+        authorization: "bigmodel-key",
+      }]);
+    });
+  });
+
+  it("follows the model settings' domain even without any OAuth login", async () => {
+    await withZcodePlanSettings({
+      providerFamilyDomain: "bigmodel",
+      modelProviderFamilySelectedKeys: { zai: "coding-plan:builtin:zai-coding-plan" },
+    }, async (home) => {
+      const requests = [];
+      const result = await fetchZcodeLimits({
+        home,
+        env: {},
+        // API-key-only install: no credentials.json login at all, so the
+        // settings domain is the only signal for the active region.
+        fetchImpl: async (url) => {
+          requests.push(url);
+          return { ok: true, status: 200, async json() { return codingPlanQuotaBody(); } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.equal(result.provider_key, "builtin:bigmodel-coding-plan");
+      assert.deepEqual(requests, ["https://bigmodel.cn/api/monitor/usage/quota/limit"]);
+    });
+  });
+});
+
+describe("ZCode reset-card inventory", () => {
+  const resetBody = () => ({ code: 0, data: {
+    available_five_hour_resets: [{ expire_at: Date.now() + 86400000 }],
+    available_week_resets: [{ expire_at: Date.now() + 172800000 }],
+  } });
+  const emptyGrantsBody = () => ({ code: 0, data: { balances: [] } });
+
+  for (const family of ["bigmodel", "zai"]) {
+    it(`reads ${family} reset cards with that family's login token`, async () => {
+      await withZcodePlanSettings({
+        providerFamilyDomain: family,
+        modelProviderFamilySelectedKeys: { [family]: `coding-plan:builtin:${family}-coding-plan` },
+      }, async (home, v2) => {
+        writeZcodeCredentials(v2, home, {
+          "oauth:active_provider": family, zcodejwttoken: "zcode-jwt",
+          "oauth:bigmodel:access_token": "bigmodel-login",
+          "oauth:zai:access_token": "zai-login",
+          // The extras gate now requires a provable login identity: user_info
+          // carries the login's account id and the account credential
+          // byte-equals the config.json key, so that key inherits the identity.
+          [`oauth:${family}:user_info`]: JSON.stringify({ id: "reset-owner" }),
+          [`account-provider:coding-plan:account:${family}-individual-coding-plan:account:reset-owner:api-key`]: `${family}-key`,
+        });
+        const requests = [];
+        const result = await fetchZcodeLimits({
+          home, env: {},
+          fetchImpl: async (url, options) => {
+            requests.push(url);
+            if (url.endsWith("/reset/status")) {
+              assert.equal(options.headers.Authorization, "Bearer zcode-jwt");
+              assert.equal(options.headers["X-Bigmodel-Authorization"], `${family}-login`);
+              assert.equal(options.headers["Bigmodel-Target-Type"], "PERSONAL");
+              return { ok: true, async json() { return resetBody(); } };
+            }
+            if (url.includes("/billing/balance")) {
+              // No bonus grants on this login: the Start Plan section stays hidden.
+              return { ok: true, async json() { return emptyGrantsBody(); } };
+            }
+            return { ok: true, async json() { return codingPlanQuotaBody(); } };
+          },
+        });
+        assert.equal(result.error, null);
+        assert.equal(result.provider_key, `builtin:${family}-coding-plan`);
+        assert.equal(result.reset_credits.five_hour.length, 1);
+        assert.equal(result.reset_credits.weekly.length, 1);
+        assert.equal(result.start_plan, undefined);
+        assert.equal(requests.length, 3);
+      });
+    });
+  }
+
+  for (const [selected, active, credentials] of [
+    ["zai", "bigmodel", { "oauth:zai:access_token": "zai-login" }],
+    ["bigmodel", "bigmodel", { "oauth:zai:access_token": "wrong-family-login" }],
+  ]) {
+    it(`does not substitute another account family for ${selected} reset inventory`, async () => {
+      await withZcodePlanSettings({
+        modelProviderFamilySelectedKeys: { [selected]: `coding-plan:builtin:${selected}-coding-plan` },
+      }, async (home, v2) => {
+        writeZcodeCredentials(v2, home, {
+          "oauth:active_provider": active, zcodejwttoken: "zcode-jwt", ...credentials,
+        });
+        const urls = [];
+        const result = await fetchZcodeLimits({ home, env: {}, fetchImpl: async (url) => {
+          urls.push(url);
+          return { ok: true, async json() { return codingPlanQuotaBody(); } };
+        } });
+        assert.equal(result.error, null);
+        assert.equal(result.reset_credits, undefined);
+        // The reset status endpoint is never contacted with another family's token.
+        assert.ok(!urls.some((url) => url.endsWith("/reset/status")));
+      });
+    });
+  }
+
+  for (const budgetExhausted of [false, true]) {
+    it(`preserves quota windows when reset inventory ${budgetExhausted ? "has no remaining time budget" : "fails"}`, async () => {
+      await withZcodePlanSettings({
+        modelProviderFamilySelectedKeys: { bigmodel: "coding-plan:builtin:bigmodel-coding-plan" },
+      }, async (home, v2) => {
+        writeZcodeCredentials(v2, home, {
+          "oauth:active_provider": "bigmodel", zcodejwttoken: "zcode-jwt",
+          "oauth:bigmodel:access_token": "regional-jwt",
+          // The extras gate now requires a provable login identity: the
+          // account credential byte-equals the config.json key the plan
+          // settings wrote, so the key inherits the login's account id.
+          "oauth:bigmodel:user_info": JSON.stringify({ id: "reset-owner" }),
+          "account-provider:coding-plan:account:bigmodel-individual-coding-plan:account:reset-owner:api-key": "bigmodel-key",
+        });
+        const result = await fetchZcodeLimits({
+          home, env: {}, providerTimeoutMs: budgetExhausted ? 50 : 8000,
+          fetchImpl: async (url) => {
+            if (url.endsWith("/reset/status")) return { ok: false, status: 500 };
+            return { ok: true, async json() { return codingPlanQuotaBody(); } };
+          },
+        });
+        assert.equal(result.error, null);
+        assert.equal(result.plan_label, "Pro");
+        assert.equal(result.primary_window.used_percent, 25);
+        assert.match(result.reset_credits.error, budgetExhausted ? /budget exhausted/ : /HTTP 500/);
+      });
+    });
+  }
+});
+
+describe("ZCode login-scoped extras", () => {
+  const LOGIN_ID = "fixture-current-account";
+  const STALE_ID = "99999999999999999";
+  const accountKeyName = (family, accountId) =>
+    `account-provider:coding-plan:account:${family}-individual-coding-plan:account:${accountId}:api-key`;
+  const loginCredentials = (extra = {}) => ({
+    "oauth:active_provider": "bigmodel",
+    zcodejwttoken: "zcode-jwt",
+    "oauth:bigmodel:access_token": "bigmodel-login",
+    "oauth:bigmodel:user_info": JSON.stringify({ id: LOGIN_ID, username: "current" }),
+    ...extra,
+  });
+  const resetBody = () => ({ code: 0, data: {
+    available_five_hour_resets: [{ expire_at: Date.now() + 86400000 }],
+    available_week_resets: [],
+  } });
+
+  it("reads quota and login-scoped extras with the signed-in account's own key", async () => {
+    await withZcode314LoginHome(loginCredentials({
+      [accountKeyName("bigmodel", STALE_ID)]: "stale-account-key",
+      [accountKeyName("bigmodel", LOGIN_ID)]: "current-account-key",
+    }), async (home) => {
+      const quotaKeys = [];
+      const result = await fetchZcodeLimits({
+        home, env: {},
+        fetchImpl: async (url, options) => {
+          if (url.includes("/quota/limit")) {
+            quotaKeys.push(options.headers.authorization);
+            return { ok: true, async json() { return codingPlanQuotaBody(); } };
+          }
+          if (url.endsWith("/reset/status")) {
+            return { ok: true, async json() { return resetBody(); } };
+          }
+          return { ok: true, async json() { return balanceBody(); } };
+        },
+      });
+      assert.equal(result.error, null);
+      // A leftover key from a previously signed-in account must never outrank
+      // the current login's key for the primary windows.
+      assert.deepEqual(quotaKeys, ["current-account-key"]);
+      assert.equal(result.reset_credits.five_hour.length, 1);
+      assert.equal(result.start_plan?.configured, true);
+      assert.equal(result.start_plan.plan_label, "Start");
+    });
+  });
+
+  it("withholds login-scoped extras when only another account's quota key exists", async () => {
+    await withZcode314LoginHome(loginCredentials({
+      [accountKeyName("bigmodel", STALE_ID)]: "stale-account-key",
+    }), async (home) => {
+      const urls = [];
+      const result = await fetchZcodeLimits({
+        home, env: {},
+        fetchImpl: async (url) => {
+          urls.push(url);
+          return { ok: true, async json() { return codingPlanQuotaBody(); } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.equal(result.reset_credits, undefined);
+      assert.equal(result.start_plan, undefined);
+      assert.deepEqual(urls, ["https://bigmodel.cn/api/monitor/usage/quota/limit"]);
+    });
+  });
+
+  it("reads login-scoped extras for config.json keys the app wrote for the active login", async () => {
+    await withZcode314LoginHome(loginCredentials({
+      [accountKeyName("bigmodel", LOGIN_ID)]: "current-account-key",
+    }), async (home, v2) => {
+      // ZCode writes the current login's own key into config.json; the
+      // byte-equal account credential proves the config key's ownership.
+      fs.writeFileSync(path.join(v2, "config.json"), JSON.stringify({
+        provider: { "builtin:bigmodel-coding-plan": { enabled: true, options: { apiKey: "current-account-key" } } },
+      }));
+      const result = await fetchZcodeLimits({
+        home, env: {},
+        fetchImpl: async (url) => {
+          if (url.includes("/quota/limit")) {
+            return { ok: true, async json() { return codingPlanQuotaBody(); } };
+          }
+          if (url.endsWith("/reset/status")) {
+            return { ok: true, async json() { return resetBody(); } };
+          }
+          return { ok: true, async json() { return balanceBody(); } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.equal(result.provider_key, "builtin:bigmodel-coding-plan");
+      assert.equal(result.reset_credits.five_hour.length, 1);
+      assert.equal(result.start_plan?.configured, true);
+    });
+  });
+
+  it("does not merge login-scoped extras with a config key left over from another account", async () => {
+    await withZcode314LoginHome(loginCredentials({
+      [accountKeyName("bigmodel", STALE_ID)]: "stale-account-key",
+    }), async (home, v2) => {
+      // The stale account's key survived in config.json after the login switched.
+      fs.writeFileSync(path.join(v2, "config.json"), JSON.stringify({
+        provider: { "builtin:bigmodel-coding-plan": { enabled: true, options: { apiKey: "stale-account-key" } } },
+      }));
+      const urls = [];
+      const result = await fetchZcodeLimits({
+        home, env: {},
+        fetchImpl: async (url) => {
+          urls.push(url);
+          return { ok: true, async json() { return codingPlanQuotaBody(); } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.equal(result.reset_credits, undefined);
+      assert.equal(result.start_plan, undefined);
+      assert.deepEqual(urls, ["https://bigmodel.cn/api/monitor/usage/quota/limit"]);
+    });
+  });
+
+  it("withholds login-scoped extras for a config key no account credential vouches for", async () => {
+    await withZcode314LoginHome(loginCredentials(), async (home, v2) => {
+      fs.writeFileSync(path.join(v2, "config.json"), JSON.stringify({
+        provider: { "builtin:bigmodel-coding-plan": { enabled: true, options: { apiKey: "orphan-config-key" } } },
+      }));
+      const urls = [];
+      const result = await fetchZcodeLimits({
+        home, env: {},
+        fetchImpl: async (url) => {
+          urls.push(url);
+          return { ok: true, async json() { return codingPlanQuotaBody(); } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.equal(result.reset_credits, undefined);
+      assert.equal(result.start_plan, undefined);
+      assert.deepEqual(urls, ["https://bigmodel.cn/api/monitor/usage/quota/limit"]);
+    });
+  });
+
+  it("withholds login-scoped extras when the login identity is missing", async () => {
+    // The per-account key matches a real login id, but user_info is absent,
+    // so the ownership cannot be proven and the extras must not merge.
+    await withZcode314LoginHome({
+      "oauth:active_provider": "bigmodel",
+      zcodejwttoken: "zcode-jwt",
+      "oauth:bigmodel:access_token": "bigmodel-login",
+      [accountKeyName("bigmodel", LOGIN_ID)]: "current-account-key",
+    }, async (home) => {
+      const urls = [];
+      const result = await fetchZcodeLimits({
+        home, env: {},
+        fetchImpl: async (url) => {
+          urls.push(url);
+          return { ok: true, async json() { return codingPlanQuotaBody(); } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.equal(result.reset_credits, undefined);
+      assert.equal(result.start_plan, undefined);
+      assert.deepEqual(urls, ["https://bigmodel.cn/api/monitor/usage/quota/limit"]);
+    });
+  });
+
+  it("withholds login-scoped extras when user_info is unparseable", async () => {
+    // Same shape as the missing-user_info case: the paid plan keeps serving
+    // from its own account key, but nothing can prove ownership for extras.
+    await withZcode314LoginHome(loginCredentials({
+      "oauth:bigmodel:user_info": "{not-json",
+      [accountKeyName("bigmodel", LOGIN_ID)]: "current-account-key",
+    }), async (home) => {
+      const urls = [];
+      const result = await fetchZcodeLimits({
+        home, env: {},
+        fetchImpl: async (url) => {
+          urls.push(url);
+          return { ok: true, async json() { return codingPlanQuotaBody(); } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.equal(result.reset_credits, undefined);
+      assert.equal(result.start_plan, undefined);
+      assert.deepEqual(urls, ["https://bigmodel.cn/api/monitor/usage/quota/limit"]);
+    });
+  });
+
+  it("matches a team account key to the login before reading reset cards", async () => {
+    const teamKeyName = [
+      "account-provider:team",
+      encodeURIComponent("account:bigmodel-team-coding-plan"),
+      "product-max",
+      encodeURIComponent("org:example"),
+      "proj-example",
+      `account:${LOGIN_ID}:api-key`,
+    ].join(":");
+    await withZcode314LoginHome(loginCredentials({ [teamKeyName]: "team-key" }), async (home) => {
+      const result = await fetchZcodeLimits({
+        home, env: {},
+        fetchImpl: async (url, options) => {
+          if (url.includes("/quota/limit")) {
+            assert.equal(options.headers.authorization, "team-key");
+            return { ok: true, async json() { return codingPlanQuotaBody(); } };
+          }
+          if (url.endsWith("/reset/status")) {
+            assert.equal(options.headers["Bigmodel-Target-Type"], "TEAM");
+            return { ok: true, async json() { return resetBody(); } };
+          }
+          return { ok: true, async json() { return balanceBody(); } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.equal(result.reset_credits.five_hour.length, 1);
+    });
+  });
+});
+
+describe("ZCode start-plan grants pipeline", () => {
+  const loginCredentials = (extra = {}) => ({
+    "oauth:active_provider": "bigmodel",
+    zcodejwttoken: "zcode-jwt",
+    "oauth:bigmodel:access_token": "bigmodel-login",
+    "oauth:bigmodel:user_info": JSON.stringify({ id: "fixture-current-account" }),
+    "account-provider:coding-plan:account:bigmodel-individual-coding-plan:account:fixture-current-account:api-key": "current-account-key",
+    ...extra,
+  });
+  // Bonus payload shape from billing/balance: daily Start Plan plus a one-time promotion.
+  const grantsBalanceBody = () => ({
+    code: 0,
+    data: {
+      server_time: 1790300000,
+      plans: [
+        {
+          user_plan_id: "upl_weekend", plan_id: "zcode-v3-start-plan-0924-wk", name: "ZCode Weekend Build",
+          status: "active", entitlements: [{ entitlement_id: "ent-wk-1", show_name: "GLM-5.3-Flash", period: "one_time" }],
+        },
+      ],
+      balances: [
+        {
+          user_plan_id: "upl_weekend", plan_id: "zcode-v3-start-plan-0924-wk", entitlement_id: "ent-wk-1",
+          show_name: "GLM-5.3-Flash", total_units: 300_000_000, used_units: 3_000_000,
+          remaining_units: 297_000_000, period_end: 1790557200, expires_at: 1790557200,
+        },
+      ],
+    },
+  });
+
+  it("attaches the login's bonus grants alongside the paid coding plan", async () => {
+    await withZcode314LoginHome(loginCredentials(), async (home) => {
+      const result = await fetchZcodeLimits({
+        home, env: {},
+        fetchImpl: async (url) => {
+          if (url.includes("/quota/limit")) {
+            return { ok: true, async json() { return codingPlanQuotaBody(); } };
+          }
+          assert.equal(url.includes("/billing/balance"), true);
+          return { ok: true, async json() { return grantsBalanceBody(); } };
+        },
+      });
+      assert.equal(result.error, null);
+      // Paid plan stays the primary display…
+      assert.equal(result.plan_kind, "coding-plan");
+      assert.equal(result.plan_label, "Pro");
+      assert.equal(result.primary_window.used_percent, 25);
+      // …with the login's bonus grants attached for the collapsed Start Plan section.
+      assert.equal(result.start_plan.configured, true);
+      assert.equal(result.start_plan.error, null);
+      assert.equal(result.start_plan.plan_kind, "start-plan");
+      assert.equal(result.start_plan.plan_label, "Start");
+      assert.deepEqual(result.start_plan.buckets.map((bucket) => bucket.label), [
+        "GLM-5.3-Flash · ZCode Weekend Build",
+      ]);
+      assert.deepEqual(result.start_plan.buckets[0].window, {
+        used_percent: 1,
+        reset_at: new Date(1790557200 * 1000).toISOString(),
+      });
+    });
+  });
+
+  it("keeps the paid plan intact and reports the failure when the grants request fails", async () => {
+    await withZcode314LoginHome(loginCredentials(), async (home) => {
+      const result = await fetchZcodeLimits({
+        home, env: {},
+        fetchImpl: async (url) => {
+          if (url.includes("/quota/limit")) {
+            return { ok: true, async json() { return codingPlanQuotaBody(); } };
+          }
+          return { ok: false, status: 500, async json() { return {}; } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.equal(result.plan_label, "Pro");
+      assert.equal(result.primary_window.used_percent, 25);
+      assert.match(result.start_plan.error, /billing API returned 500/);
+    });
+  });
+
+  it("reports an HTTP 200 with a nonzero business code as a failed grants read", async () => {
+    await withZcode314LoginHome(loginCredentials(), async (home) => {
+      const result = await fetchZcodeLimits({
+        home, env: {},
+        fetchImpl: async (url) => {
+          if (url.includes("/quota/limit")) {
+            return { ok: true, async json() { return codingPlanQuotaBody(); } };
+          }
+          // Server-side rejection served as HTTP 200 with an empty data object:
+          // without the business-code check this would pose as "no grants".
+          return { ok: true, status: 200, async json() { return { code: 1234, msg: "plan service unavailable", data: {} }; } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.equal(result.plan_label, "Pro");
+      assert.equal(result.primary_window.used_percent, 25);
+      assert.match(result.start_plan.error, /code=1234/);
+      assert.match(result.start_plan.error, /plan service unavailable/);
+    });
+  });
+
+  it("omits the grants section when the login carries no balances", async () => {
+    await withZcode314LoginHome(loginCredentials(), async (home) => {
+      const result = await fetchZcodeLimits({
+        home, env: {},
+        fetchImpl: async (url) => {
+          if (url.includes("/quota/limit")) {
+            return { ok: true, async json() { return codingPlanQuotaBody(); } };
+          }
+          return { ok: true, async json() { return { code: 0, data: { balances: [] } }; } };
+        },
+      });
+      assert.equal(result.error, null);
+      assert.equal(result.start_plan, undefined);
+    });
+  });
+});
+
 describe("normalizeZcodeBalanceResponse", () => {
   it("maps each model balance to a window with used_percent + reset, sorted by total", () => {
     const r = normalizeZcodeBalanceResponse(balanceBody());
@@ -408,6 +935,46 @@ describe("resolveZcodeAppVersion", () => {
 });
 
 describe("loadZcodeApiKey", () => {
+  for (const [family, origin] of [["bigmodel", "https://bigmodel.cn"], ["zai", "https://api.z.ai"]]) {
+    for (const selectedStart of [true, false]) {
+      it(`prefers the ${family} subscription over daily Start Plan grants ${selectedStart ? "when Start is selected" : "without a saved selection"}`, async () => {
+        const setting = selectedStart ? {
+          providerFamilyDomain: family,
+          modelProviderFamilySelectedKeys: { [family]: `coding-plan:builtin:${family}-start-plan` },
+        } : {};
+        await withZcodePlanSettings(setting, async (home, v2) => {
+          fs.writeFileSync(path.join(v2, "config.json"), JSON.stringify({
+            provider: {
+              [`builtin:${family}-coding-plan`]: { enabled: true, options: { apiKey: "coding-key" } },
+              [`builtin:${family}-start-plan`]: { enabled: true, options: { apiKey: "start-key" } },
+            },
+          }));
+          fs.writeFileSync(path.join(v2, "coding-plan-cache.json"), JSON.stringify({
+            entryStatus: { items: {
+              [`builtin:${family}-coding-plan`]: { status: "available" },
+              [`builtin:${family}-start-plan`]: { status: "available" },
+            } },
+          }));
+          const requests = [];
+          const result = await fetchZcodeLimits({
+            home,
+            env: {},
+            fetchImpl: async (url) => {
+              requests.push(url);
+              return { ok: true, status: 200, async json() {
+                return url.includes("/quota/limit") ? codingPlanQuotaBody() : balanceBody();
+              } };
+            },
+          });
+          assert.equal(result.error, null);
+          assert.equal(result.provider_key, `builtin:${family}-coding-plan`);
+          assert.equal(result.plan_label, "Pro");
+          assert.deepEqual(requests, [`${origin}/api/monitor/usage/quota/limit`]);
+        });
+      });
+    }
+  }
+
   it("maps all built-in ZCode plan providers to the zcode-plan billing root", () => {
     for (const key of ["builtin:bigmodel-start-plan", "builtin:zai-start-plan"]) {
       assert.equal(
@@ -1168,6 +1735,23 @@ describe("ZCode 3.14 credential-only layout", () => {
       assert.equal(auths[0].quotaUrl, "https://api.z.ai/api/monitor/usage/quota/limit");
       assert.equal(auths[1].billingBaseUrl, "https://zcode.z.ai/api/v1/zcode-plan");
     });
+  });
+
+  it("prefers an account subscription even when the selected connection is Start Plan", async () => {
+    await withZcode314Home({
+      "oauth:active_provider": "bigmodel",
+      zcodejwttoken: "jwt-token",
+      "account-provider:coding-plan:account:bigmodel-individual-coding-plan:account:acct-1:api-key": "coding-key",
+    }, (home) => {
+      const auths = loadZcodeAuthCandidates({ home, env: {} });
+      assert.deepEqual(auths.map((auth) => auth.providerKey), [
+        "builtin:bigmodel-coding-plan",
+        "builtin:bigmodel-start-plan",
+      ]);
+    }, { setting: {
+      providerFamilyDomain: "bigmodel",
+      providerFamilyConnectionSelections: { bigmodel: { kind: "start-plan" } },
+    } });
   });
 
   it("falls back to the start plan and sends the telemetry device id to billing/balance", async () => {

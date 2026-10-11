@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const crypto = require("node:crypto");
 const os = require("node:os");
 const path = require("node:path");
+const { fetchZcodeResetCredits } = require("./zcode-reset-credits");
 
 const DEFAULT_BILLING_BASE_URL = "https://zcode.z.ai/api/v1/zcode-plan";
 const DEFAULT_ZAI_MONITOR_BASE_URL = "https://api.z.ai";
@@ -248,14 +249,15 @@ function resolveZcodeCredentialAuth(providerKey, { home, env } = {}) {
  *   account-provider:coding-plan:account:<family>-individual-coding-plan:account:<id>:api-key
  *   account-provider:team:<providerId>:<productId>:<orgId>:<projectId>:account:<id>:api-key
  * Team segments are URI-encoded by ZCode. Start-plan balances use the zcodejwttoken instead.
- * @returns {{ providerKey: string, teamContext: { organizationId: string, projectId: string } | null } | null}
+ * @returns {{ providerKey: string, accountId: string, teamContext: { organizationId: string, projectId: string } | null } | null}
  */
 function parseZcodeAccountProviderCredentialName(name) {
-  const match = typeof name === "string" ? name.match(/^account-provider:(.+):account:[^:]+:api-key$/) : null;
+  const match = typeof name === "string" ? name.match(/^account-provider:(.+):account:([^:]+):api-key$/) : null;
   if (!match) return null;
   const scope = match[1];
+  const accountId = match[2];
   const individual = scope.match(/^coding-plan:account:(bigmodel|zai)-individual-coding-plan$/);
-  if (individual) return { providerKey: `builtin:${individual[1]}-coding-plan`, teamContext: null };
+  if (individual) return { providerKey: `builtin:${individual[1]}-coding-plan`, accountId, teamContext: null };
   if (!scope.startsWith("team:")) return null;
   const parts = scope.slice("team:".length).split(":");
   if (parts.length !== 4) return null;
@@ -263,7 +265,47 @@ function parseZcodeAccountProviderCredentialName(name) {
     const [providerId, productId, organizationId, projectId] = parts.map((part) => decodeURIComponent(part).trim());
     const team = providerId.match(/^account:(bigmodel|zai)-team-coding-plan$/);
     if (!team || !productId || !organizationId || !projectId) return null;
-    return { providerKey: `builtin:${team[1]}-coding-plan`, teamContext: { organizationId, projectId } };
+    return { providerKey: `builtin:${team[1]}-coding-plan`, accountId, teamContext: { organizationId, projectId } };
+  } catch (_error) {
+    return null;
+  }
+}
+
+/** Region ("bigmodel" | "zai") a built-in plan provider belongs to. */
+function zcodeProviderFamily(providerKey) {
+  return providerKey === "builtin:zai-coding-plan" || providerKey === "builtin:zai-start-plan" ? "zai" : "bigmodel";
+}
+
+/**
+ * Region whose plan should be served first. The model settings' domain is the
+ * region the user actually picked, so it wins; the OAuth login region only
+ * backs installs that never recorded a domain (API-key-only setups).
+ */
+function loadZcodeActiveRegion({ home, env } = {}) {
+  try {
+    const settingPath = path.join(resolveZcodeHome({ home, env }), "v2", "setting.json");
+    if (fs.existsSync(settingPath)) {
+      const setting = JSON.parse(fs.readFileSync(settingPath, "utf8"));
+      const domain = typeof setting?.providerFamilyDomain === "string" ? setting.providerFamilyDomain.trim() : "";
+      if (domain === "bigmodel" || domain === "zai") return domain;
+    }
+  } catch (_error) {
+    // Fall through to the login region below.
+  }
+  const active = loadZcodeActiveProvider({ home, env });
+  return active === "bigmodel" || active === "zai" ? active : "";
+}
+
+/**
+ * Account id of the signed-in login for a region, from `oauth:<family>:user_info`.
+ * Reset cards and Start Plan grants are personal to this login, so their
+ * credentials may only ride along with quota keys that provably share it.
+ */
+function loadZcodeLoginAccountId(family, { home, env } = {}) {
+  const raw = loadZcodeCredential(`oauth:${family}:user_info`, { home, env });
+  try {
+    const id = JSON.parse(raw)?.id;
+    return typeof id === "string" && id.trim() ? id.trim() : null;
   } catch (_error) {
     return null;
   }
@@ -279,7 +321,7 @@ function loadZcodeAccountProviderAuths({ home, env } = {}) {
     const decrypted = decryptZcodeCredentialValue(credentials[name], { home, env });
     const apiKey = typeof decrypted === "string" ? decrypted.trim() : "";
     if (!apiKey) continue;
-    (out[parsed.providerKey] ||= []).push({ apiKey, teamContext: parsed.teamContext });
+    (out[parsed.providerKey] ||= []).push({ apiKey, accountId: parsed.accountId, teamContext: parsed.teamContext });
   }
   return out;
 }
@@ -346,8 +388,11 @@ function resolveZcodeProviderQuotaUrl(providerKey, provider, env = process.env) 
 
 /**
  * Build quota/billing candidates from enabled providers and their existing keys.
- * Selected plans take precedence; team scope stays attached to its own provider.
- * ZCode 3.14+ dropped v2/config.json: there, candidates come from credentials.json
+ * Coding plans precede promotional Start Plan grants, and within each plan kind
+ * the active region's providers come first so switching regions never keeps
+ * serving the previously saved other-region plan. Selected plans take
+ * precedence; team scope stays attached to its own provider. ZCode 3.14+
+ * dropped v2/config.json: there, candidates come from credentials.json
  * alone (the active family's zcodejwttoken for start plans, per-account coding-plan keys).
  */
 function loadZcodeAuthCandidates({ home, env } = {}) {
@@ -358,8 +403,11 @@ function loadZcodeAuthCandidates({ home, env } = {}) {
     const config = hasConfig ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
     if (!config || typeof config !== "object") return [];
     const providers = config.provider || {};
-    // Per-account keys are a 3.14+ concept; a legacy config.json stays the only key source there.
-    const accountAuths = hasConfig ? {} : loadZcodeAccountProviderAuths({ home, env });
+    // Per-account keys are a 3.14+ concept; a legacy config.json stays the only
+    // quota-key source there. The account keys are still read in mixed layouts
+    // (config.json + newer credentials.json) purely to prove key ownership.
+    const accountAuths = loadZcodeAccountProviderAuths({ home, env });
+    const accountAuthsAsKeys = hasConfig ? {} : accountAuths;
     const defaultCandidates = [
       "builtin:bigmodel-start-plan",
       "builtin:zai-start-plan",
@@ -372,11 +420,16 @@ function loadZcodeAuthCandidates({ home, env } = {}) {
     const selectedCandidates = selectedPlans.map((plan) => plan.providerKey)
       .filter((key) => defaultCandidates.includes(key));
     const availableCandidates = defaultCandidates.filter((key) => availability?.[key]?.status === "available");
+    const activeFamily = loadZcodeActiveRegion({ home, env });
+    const regionRank = (key) => activeFamily && zcodeProviderFamily(key) === activeFamily ? 0 : 1;
     const candidates = [
       ...selectedCandidates,
       ...availableCandidates,
       ...defaultCandidates,
-    ].filter((key, index, all) => all.indexOf(key) === index);
+    ].filter((key, index, all) => all.indexOf(key) === index)
+      .sort((a, b) =>
+        (Number(isZcodeCodingPlanProvider(b)) - Number(isZcodeCodingPlanProvider(a)))
+        || (regionRank(a) - regionRank(b)));
     const auths = [];
     for (const key of candidates) {
       const configured = providers[key];
@@ -389,15 +442,36 @@ function loadZcodeAuthCandidates({ home, env } = {}) {
       const teamContext = selectedPlans.find((plan) => plan.providerKey === key)?.teamContext;
       // Legacy layouts only trust the shared JWT for providers config.json still lists.
       const credentialApiKey = provider || !hasConfig ? resolveZcodeCredentialAuth(key, { home, env }) : "";
-      const accountEntries = (accountAuths[key] || []).map((entry) => ({
-        apiKey: entry.apiKey,
-        authSource: "credential:account-provider",
-        teamContext: entry.teamContext,
-      }));
+      // A config.json key that byte-equals a per-account credential inherits
+      // that credential's account identity, so ownership stays provable for
+      // keys the ZCode app wrote into config.json for the current login.
+      const owningAccount = Object.values(accountAuths).flat()
+        .find((entry) => entry.apiKey === apiKey) || null;
+      // Leftover keys from previously signed-in accounts stay as fallbacks but
+      // never outrank the current login's key, so the primary window cannot
+      // show account A's quota while login-scoped extras show account B's.
+      const family = zcodeProviderFamily(key);
+      const loginAccountId = loadZcodeLoginAccountId(family, { home, env });
+      const accountEntries = (accountAuthsAsKeys[key] || [])
+        .slice()
+        .sort((a, b) => (loginAccountId
+          ? Number(a.accountId !== loginAccountId) - Number(b.accountId !== loginAccountId)
+          : 0))
+        .map((entry) => ({
+          apiKey: entry.apiKey,
+          authSource: "credential:account-provider",
+          teamContext: entry.teamContext,
+          accountId: entry.accountId,
+        }));
       const authEntries = [
         credentialApiKey ? { apiKey: credentialApiKey, authSource: "credential:zcodejwttoken", teamContext } : null,
         ...accountEntries,
-        apiKey ? { apiKey, authSource: "provider:config", teamContext } : null,
+        apiKey ? {
+          apiKey,
+          authSource: "provider:config",
+          teamContext,
+          ...(owningAccount ? { accountId: owningAccount.accountId } : {}),
+        } : null,
       ].filter(Boolean);
       const seenKeys = new Set();
       for (const entry of authEntries) {
@@ -412,6 +486,7 @@ function loadZcodeAuthCandidates({ home, env } = {}) {
           billingBaseUrl,
           quotaUrl,
           ...(entry.teamContext ? { teamContext: entry.teamContext } : {}),
+          ...(entry.accountId ? { accountId: entry.accountId } : {}),
           availability: availability?.[key]?.status || null,
         });
       }
@@ -599,7 +674,7 @@ function normalizeZcodeBalanceResponse(body) {
   };
 }
 
-async function fetchZcodeBilling(apiKey, { fetchImpl = fetch, baseUrl, env, home } = {}) {
+async function fetchZcodeBilling(apiKey, { fetchImpl = fetch, baseUrl, env, home, signal } = {}) {
   const root = (baseUrl || resolveZcodeBillingBaseUrl(env)).replace(/\/$/, "");
   const url = new URL(`${root}/billing/balance`);
   const appVersion = resolveZcodeAppVersion({ home, env });
@@ -614,6 +689,7 @@ async function fetchZcodeBilling(apiKey, { fetchImpl = fetch, baseUrl, env, home
   const res = await fetchImpl(url.toString(), {
     method: "GET",
     headers,
+    signal,
   });
   if (res.status === 401 || res.status === 403) {
     throw new Error("Not authenticated with ZCode. Run `zcode` in Terminal to log in.");
@@ -633,6 +709,43 @@ async function fetchZcodeBilling(apiKey, { fetchImpl = fetch, baseUrl, env, home
     throw new Error(`ZCode billing API returned ${res.status}${detail}`);
   }
   return res.json();
+}
+
+/**
+ * Read the signed-in login's Start Plan grants (bonus buckets) from billing/balance.
+ * Read-only; a timed-out request aborts its connection so the optional read
+ * never drags on the primary quota windows.
+ */
+async function fetchZcodeStartPlanGrants({ zcodeToken, fetchImpl = fetch, env, home, timeoutMs = 2000 } = {}) {
+  const controller = new AbortController();
+  let timer;
+  try {
+    return await Promise.race([
+      (async () => {
+        const body = await fetchZcodeBilling(zcodeToken, {
+          fetchImpl,
+          baseUrl: resolveZcodeBillingBaseUrl(env),
+          env,
+          home,
+          signal: controller.signal,
+        });
+        // An HTTP 200 with a nonzero business code and empty data must surface
+        // as a failed read, not silently pose as "no grants".
+        if (body && typeof body.code === "number" && body.code !== 0) {
+          throw new Error(`ZCode start plan grants API error: code=${body.code} msg=${body?.msg || "unknown"}`);
+        }
+        return normalizeZcodeBalanceResponse(body);
+      })(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error("ZCode start plan grants request timed out"));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -881,10 +994,38 @@ function zcodeLogFallbackResult(logRecord, errors = []) {
 }
 
 /**
+ * Login tokens for reset cards / Start Plan grants, or null when the quota key
+ * cannot be proven to belong to the signed-in login. Both extras are personal
+ * to the current login. Any key carrying an account id (per-account
+ * credentials, or config.json keys that byte-equal one) must match the login's
+ * id. Once a login identity exists, an unprovable key (a config.json key no
+ * account credential vouches for — e.g. left over from a switched account)
+ * never merges its quota with this login's cards. When the login identity
+ * itself is unreadable (user_info missing or unparseable) nothing can prove
+ * the key belongs to the signed-in account either, so the extras are skipped
+ * and only the main plan quota stays.
+ */
+function loadZcodeLoginScopedTokens(family, auth, { home, env } = {}) {
+  if (loadZcodeActiveProvider({ home, env }) !== family) return null;
+  const loginAccountId = loadZcodeLoginAccountId(family, { home, env });
+  if (!loginAccountId) return null;
+  if (auth.accountId) {
+    if (auth.accountId !== loginAccountId) return null;
+  } else if (auth.auth_source === "credential:account-provider" || auth.auth_source === "provider:config") {
+    return null;
+  }
+  const zcodeToken = loadZcodeCredential("zcodejwttoken", { home, env });
+  if (!zcodeToken) return null;
+  const codingPlanToken = loadZcodeCredential(`oauth:${family}:access_token`, { home, env });
+  return { zcodeToken, codingPlanToken };
+}
+
+/**
  * Return normalized quota windows, trying eligible providers and recent billing logs.
  * Credentials and internal team routing identifiers are omitted from the result.
  */
-async function fetchZcodeLimits({ home, env, fetchImpl = fetch, nowMs = Date.now() } = {}) {
+async function fetchZcodeLimits({ home, env, fetchImpl = fetch, nowMs = Date.now(), providerTimeoutMs } = {}) {
+  const startedAt = Date.now();
   if (!isZcodeInstalled({ home, env })) {
     return { configured: false };
   }
@@ -929,6 +1070,62 @@ async function fetchZcodeLimits({ home, env, fetchImpl = fetch, nowMs = Date.now
         emptySuccess = emptySuccess || result;
         continue;
       }
+      if (auth.planKind === "coding-plan") {
+        const family = zcodeProviderFamily(auth.providerKey);
+        const tokens = loadZcodeLoginScopedTokens(family, auth, { home, env });
+        if (tokens) {
+          const remainingMs = providerTimeoutMs > 0 ? providerTimeoutMs - (Date.now() - startedAt) - 100 : 4000;
+          if (remainingMs <= 0) {
+            result.reset_credits = { error: "ZCode reset credits: provider time budget exhausted" };
+            result.start_plan = { configured: true, error: "ZCode start plan grants: provider time budget exhausted" };
+          } else {
+            const timeoutMs = Math.min(2000, remainingMs);
+            // Reset cards additionally need the region's login token; without
+            // it the status endpoint cannot identify a coding plan, so the
+            // inventory stays absent instead of surfacing a blocking error.
+            await Promise.all([
+              (tokens.codingPlanToken
+                ? fetchZcodeResetCredits({
+                    zcodeToken: tokens.zcodeToken,
+                    codingPlanToken: tokens.codingPlanToken,
+                    teamContext: auth.teamContext,
+                    fetchImpl,
+                    nowMs,
+                    timeoutMs,
+                  })
+                : Promise.resolve(null)
+              ).then(
+                (value) => {
+                  if (value) result.reset_credits = value;
+                },
+                (reason) => {
+                  result.reset_credits = { error: reason?.message || "Could not read ZCode reset credits" };
+                },
+              ),
+              fetchZcodeStartPlanGrants({
+                zcodeToken: tokens.zcodeToken,
+                fetchImpl,
+                env,
+                home,
+                timeoutMs,
+              }).then(
+                (value) => {
+                  // No grants on the login → no section, instead of an empty card.
+                  if (Array.isArray(value.buckets) && value.buckets.length) {
+                    result.start_plan = { configured: true, error: null, ...value };
+                  }
+                },
+                (reason) => {
+                  result.start_plan = {
+                    configured: true,
+                    error: reason?.message || "Could not read ZCode start plan grants",
+                  };
+                },
+              ),
+            ]);
+          }
+        }
+      }
       return result;
     } catch (error) {
       errors.push(`${auth.providerKey}: ${error?.message || "Unknown error"}`);
@@ -958,6 +1155,8 @@ module.exports = {
   loadZcodeProviderAvailability,
   loadZcodeSelectedPlanProviderKeys,
   loadZcodeCredential,
+  loadZcodeLoginAccountId,
+  zcodeProviderFamily,
   loadLatestZcodeBalanceFromLogs,
   resolveZcodeProviderBillingBaseUrl,
   resolveZcodeProviderQuotaUrl,
@@ -968,5 +1167,6 @@ module.exports = {
   normalizeZcodeCodingPlanQuotaResponse,
   fetchZcodeBilling,
   fetchZcodeCodingPlanQuota,
+  fetchZcodeStartPlanGrants,
   fetchZcodeLimits,
 };

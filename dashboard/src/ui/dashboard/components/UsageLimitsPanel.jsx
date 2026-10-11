@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Clock as ClockIcon, Infinity as InfinityIcon } from "lucide-react";
+import { ChevronDown, Gift, Clock as ClockIcon, Infinity as InfinityIcon } from "lucide-react";
 import { Card } from "../../components";
 import { FadeIn } from "../../foundation/FadeIn.jsx";
 import { copy, getCopyLocale } from "../../../lib/copy";
@@ -330,7 +330,7 @@ function StatusBadge({ label, age = null, tone = "live", tooltip = null }) {
   );
 }
 
-function ToolGroup({ name, providerId, children, expandable = false, expanded = false, onToggle, badge = null, rightAdornment = null }) {
+function ToolGroup({ name, providerId, children, expandable = false, expanded = false, onToggle, badge = null, rightAdornment = null, toggleOnHeader = false }) {
   const providerKey = limitProviderIconKey(providerId);
   const header = (
     <div className="flex items-center gap-1.5">
@@ -347,6 +347,23 @@ function ToolGroup({ name, providerId, children, expandable = false, expanded = 
     return (
       <div className="flex flex-col gap-1.5">
         {header}
+        {children}
+      </div>
+    );
+  }
+
+  if (toggleOnHeader) {
+    return (
+      <div className="flex flex-col gap-1.5">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={onToggle}
+          className="flex w-full items-center justify-between rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500"
+        >
+          {header}
+          <ChevronDown size={13} aria-hidden className={`text-oai-gray-400 transition-transform ${expanded ? "rotate-180" : ""}`} />
+        </button>
         {children}
       </div>
     );
@@ -568,7 +585,53 @@ function ResetBankSection({ model }) {
   );
 }
 
+function ZcodeResetBankSection({ data }) {
+  const now = Date.now();
+  const groups = [
+    { key: "five_hour", label: copy("limits.label.zcode_5h") },
+    { key: "weekly", label: copy("limits.label.zcode_weekly") },
+  ].map((group) => ({
+    ...group,
+    cards: (data[group.key] || []).filter((card) => Date.parse(card.expires_at) > now)
+      .slice().sort((a, b) => Date.parse(a.expires_at) - Date.parse(b.expires_at)),
+  }));
+  return (
+    <div className="mt-1 flex flex-col gap-1.5">
+      <div className="text-[10.5px] font-medium uppercase tracking-wide text-oai-gray-400 dark:text-oai-gray-500">
+        {copy("limits.zcode.reset_bank.title")}
+      </div>
+      {data.error ? (
+        <StatusLine tone="error">{copy("shared.error.prefix", { error: data.error })}</StatusLine>
+      ) : groups.map((group) => (
+        <div key={group.key} className="flex items-center gap-2 text-[11px]">
+          <span
+            data-limit-label=""
+            className="shrink-0 whitespace-nowrap text-oai-gray-500 dark:text-oai-gray-400"
+            style={{ width: "var(--tt-limits-label-w)" }}
+          >
+            {group.label}
+          </span>
+          <span className="rounded-full bg-oai-gray-100 px-2 py-0.5 tabular-nums text-oai-gray-600 dark:bg-oai-gray-800 dark:text-oai-gray-300">
+            {copy("limits.zcode.reset_bank.count", { count: group.cards.length })}
+          </span>
+          {group.cards.length ? (
+            <span
+              className="ml-auto text-right text-[10px] tabular-nums text-oai-gray-400 dark:text-oai-gray-500"
+              title={group.cards.map((card) => formatExactReset(Date.parse(card.expires_at))).join("\n")}
+            >
+              {copy("limits.zcode.reset_bank.earliest", { time: formatExactReset(Date.parse(group.cards[0].expires_at)) })}
+            </span>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function renderProviderExtra(kind, data) {
+  if (kind === "zcode_reset_bank") {
+    return data.reset_credits ? <ZcodeResetBankSection data={data.reset_credits} /> : null;
+  }
   if (kind === "codex_meta") {
     // Credit amounts show on hover (LimitBar's title) instead of an
     // always-visible line, matching the compact menu-bar popover.
@@ -601,6 +664,57 @@ function renderProviderExtra(kind, data) {
   return null;
 }
 
+function ZcodeStartPlanSection({ data, mode, now }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef(null);
+  const labelWidth = useWidestLabelWidth(containerRef);
+  const planNames = [...new Set((data.buckets || []).map((bucket) => bucket.plan_name).filter(Boolean))];
+  const title = planNames.length ? planNames.join(" · ") : copy("limits.zcode.start_grants");
+  const rows = PROVIDER_LIMIT_SPECS.zcode.windows(data)
+    .filter((s) => s.window)
+    .map((s) => ({ spec: s, pace: paceForSpec(s, mode, now) }));
+  return (
+    <div className="mt-2 border-t border-oai-gray-200/60 pt-2 dark:border-oai-gray-800">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={(event) => { event.stopPropagation(); setOpen((value) => !value); }}
+        onKeyDown={(event) => event.stopPropagation()}
+        className="flex w-full items-center gap-1.5 rounded text-xs text-oai-gray-500 transition-colors hover:text-oai-gray-800 dark:text-oai-gray-400 dark:hover:text-oai-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500"
+      >
+        <Gift size={13} aria-hidden />
+        <span className="min-w-0 truncate" title={title}>{title}</span>
+        <ChevronDown size={13} aria-hidden className={`ml-auto transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open ? (
+        <div
+          ref={containerRef}
+          data-limit-label-group=""
+          className="mt-2 flex flex-col gap-1.5"
+          style={labelWidth > 0 ? { "--tt-limits-label-w": `${labelWidth}px` } : undefined}
+        >
+          {data.error ? (
+            <StatusLine tone="error">{copy("shared.error.prefix", { error: data.error })}</StatusLine>
+          ) : (
+            <>
+              <LimitWindowSection rows={rows} mode={mode} />
+              <LimitDetail rows={rows} mode={mode} now={now} />
+              {(data.buckets || []).filter((bucket) => Number.isFinite(bucket.remaining_units) && Number.isFinite(bucket.total_units)).map((bucket, index) => (
+                <div key={bucket.entitlement_id || index} className="text-[10px] text-oai-gray-400 dark:text-oai-gray-500">
+                  {copy("limits.zcode.grant_amount", {
+                    remaining: bucket.remaining_units.toLocaleString(getCopyLocale()),
+                    total: bucket.total_units.toLocaleString(getCopyLocale()),
+                  })}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, badge = null, subscription = null, now = Date.now()) {
   const spec = PROVIDER_LIMIT_SPECS[id];
   if (!spec) return null;
@@ -620,12 +734,16 @@ function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, bad
       onToggle={onToggle}
       badge={badge}
       rightAdornment={subscription ? <SubscriptionRightBadge subscription={subscription} /> : null}
+      toggleOnHeader={id === "zcode"}
     >
       <LimitWindowSection mode={mode} rows={rows} extra={extra} />
       {subscription ? <SubscriptionBar subscription={subscription} now={now} mode={mode} /> : null}
       {expanded ? <LimitDetail rows={rows} mode={mode} now={now} /> : null}
       {expanded && subscription ? (
         <SubscriptionDetail subscription={subscription} now={now} />
+      ) : null}
+      {id === "zcode" && data.start_plan?.configured ? (
+        <ZcodeStartPlanSection data={data.start_plan} mode={mode} now={now} />
       ) : null}
     </ToolGroup>
   );
@@ -1147,7 +1265,8 @@ function useWidestLabelWidth(containerRef) {
   useLayoutEffect(() => {
     const root = containerRef.current;
     if (!root) return;
-    const labels = root.querySelectorAll("[data-limit-label]");
+    const labels = [...root.querySelectorAll("[data-limit-label]")]
+      .filter((label) => label.closest("[data-limit-label-group]") === root);
     let max = 0;
     let ctx = null;
     if (labels.length > 0) {
@@ -1241,6 +1360,7 @@ export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, gr
       <Card>
         <div
           ref={containerRef}
+          data-limit-label-group=""
           className="flex flex-col gap-3"
           style={labelWidth > 0 ? { "--tt-limits-label-w": `${labelWidth}px` } : undefined}
         >

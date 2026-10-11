@@ -66,6 +66,7 @@ const CommunityStatsModal = lazy(() =>
   })),
 );
 import { LeaderboardSkeleton } from "../components/LeaderboardSkeleton.jsx";
+import { LeaderboardTableScroll } from "../components/LeaderboardTableScroll.jsx";
 import { SortableColumnHeader } from "../components/SortableColumnHeader.jsx";
 import { useColumnOrder } from "../hooks/use-column-order.js";
 import { LeaderboardMeChip } from "../components/LeaderboardSummaryCard.jsx";
@@ -800,7 +801,7 @@ export function LeaderboardPage({
         modifiers={[restrictToHorizontalAxis]}
         onDragEnd={handleDragEnd}
       >
-      <div className="hidden w-full overflow-x-auto sm:block">
+      <LeaderboardTableScroll>
         <table className="min-w-full w-full text-left text-sm sm:min-w-max">
           <thead className="border-b border-oai-gray-200 dark:border-oai-gray-800">
             <tr>
@@ -983,7 +984,7 @@ export function LeaderboardPage({
             })}
           </tbody>
         </table>
-      </div>
+      </LeaderboardTableScroll>
       <div className="flex flex-col py-1.5 sm:hidden">
         {displayEntries.map((entry, entryIdx) => {
           const rawName = normalizeName(entry?.display_name);

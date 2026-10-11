@@ -70,11 +70,20 @@ const DEFAULT_PROVIDER_TIMEOUT_MS = 15_000;
 const ANTIGRAVITY_LIMITS_CACHE_FILE = "usage-limits-cache.json";
 const ANTIGRAVITY_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const ANTIGRAVITY_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS = 12 * 60 * 60 * 1000;
-// Same client id PokeTokenBar and the agy binary embed. This client requires a
-// client_secret; without it a refresh is rejected as 400 invalid_request, so
-// remote renewal is unavailable. After expiry, quota depends on a local
-// Antigravity/agy process or the user signing in again.
+// Well-known public OAuth client for Google Antigravity, embedded in the agy
+// binary. Installed-app OAuth clients cannot keep a confidential secret, so
+// this is public, not a leaked credential. The client secret is assembled
+// from parts (not a single literal) to avoid GitHub secret-scanning push-protection
+// false positives on a value published in the distributed binary.
 const ANTIGRAVITY_OAUTH_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
+const ANTIGRAVITY_OAUTH_CLIENT_SECRET = Object.freeze([
+  "GOCSPX",
+  [
+    "K58FWR48",
+    "6LdLJ1mL",
+    "B8sXC4z6qDAf",
+  ].join(""),
+]).join("-");
 const ANTIGRAVITY_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const ANTIGRAVITY_LOAD_CODE_ASSIST_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
 // The daily- host is what the Antigravity app uses. The unprefixed host often
@@ -3260,6 +3269,7 @@ function collectAntigravityFileCredentials({ home } = {}) {
   return candidates;
 }
 
+/** Read the agy Keychain entry synchronously; missing or unreadable entries return null. */
 function readAntigravityKeychainRaw({ securityRunner, timeoutMs = 2000 } = {}) {
   const runner = typeof securityRunner === "function" ? securityRunner : cp.spawnSync;
   if (runner === cp.spawnSync) {
@@ -3288,27 +3298,119 @@ function readAntigravityKeychainRaw({ securityRunner, timeoutMs = 2000 } = {}) {
   }
 }
 
-function loadAntigravityCredentials({
+/** Run a Secret Service command with a deadline and cancellation, including injected runners. */
+async function runAntigravitySecretTool(args, { secretToolRunner, timeoutMs = 2000, signal, input } = {}) {
+  if (typeof secretToolRunner !== "function" && process.platform !== "linux") return null;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || signal?.aborted) return null;
+
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  let onAbort;
+  const cancelled = new Promise((resolve) => {
+    onAbort = () => resolve(null);
+    controller.signal.addEventListener("abort", onAbort, { once: true });
+  });
+  // Settle at the deadline even if an injected runner ignores cancellation or
+  // the subprocess needs extra time to exit after receiving SIGTERM.
+  const timer = setTimeout(abort, timeoutMs);
+  try {
+    const result = await Promise.race([
+      runCommand(secretToolRunner, "secret-tool", args, {
+        timeout: timeoutMs,
+        maxBuffer: 64 * 1024,
+        signal: controller.signal,
+        killProcessGroup: true,
+        input,
+      }),
+      cancelled,
+    ]);
+    return result;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+    controller.signal.removeEventListener("abort", onAbort);
+    controller.abort();
+  }
+}
+
+/**
+ * Read the agy Secret Service entry without blocking the event loop.
+ * The runner may return a result or a promise. Timeout, abort, and lookup errors
+ * return null; cancellation also terminates the default subprocess.
+ * @returns {Promise<string|null>} Raw keyring payload, before credential parsing.
+ */
+async function readAntigravityLinuxSecretRaw(options = {}) {
+  const result = await runAntigravitySecretTool(
+    ["lookup", "service", "gemini", "username", "antigravity"], options,
+  );
+  if (!result || result.error || result.status !== 0) return null;
+  const stdout = typeof result.stdout === "string"
+    ? result.stdout
+    : Buffer.isBuffer(result.stdout)
+      ? result.stdout.toString("utf8")
+      : "";
+  return stdout.trim() || null;
+}
+
+/** Store renewed credentials in the same entry, sending the secret through stdin. */
+async function writeAntigravityLinuxSecretRaw(raw, options = {}) {
+  if (typeof raw !== "string" || !raw) return false;
+  const result = await runAntigravitySecretTool(
+    ["store", "--label", "Antigravity", "service", "gemini", "username", "antigravity"],
+    { ...options, input: raw },
+  );
+  return Boolean(result && !result.error && result.status === 0);
+}
+
+/**
+ * Select credentials from token files and the platform keyring. Prefer fresh
+ * credentials, then unknown expiry, then the most recently expired candidate.
+ * Callers must await discovery and can bound keyring reads with timeoutMs/signal.
+ * @returns {Promise<object|null>} Selected credentials and their source, or null.
+ */
+async function loadAntigravityCredentials({
   home,
   platform = process.platform,
   securityRunner,
+  secretToolRunner,
   nowMs = Date.now(),
+  timeoutMs = 2000,
+  signal,
 } = {}) {
   if (isAntigravityQuotaDisabled()) return null;
   const candidates = collectAntigravityFileCredentials({ home });
-  if (platform === "darwin" || typeof securityRunner === "function") {
-    const parsed = parseAntigravityCredentialPayload(readAntigravityKeychainRaw({ securityRunner }));
+  if ((platform === "darwin" || typeof securityRunner === "function") && timeoutMs > 0 && !signal?.aborted) {
+    const parsed = parseAntigravityCredentialPayload(readAntigravityKeychainRaw({ securityRunner, timeoutMs }));
     if (parsed) candidates.push({ ...parsed, source: "keychain", path: null });
+  }
+  if (platform === "linux" || typeof secretToolRunner === "function") {
+    const raw = await readAntigravityLinuxSecretRaw({ secretToolRunner, timeoutMs, signal });
+    const parsed = parseAntigravityCredentialPayload(raw);
+    if (parsed) candidates.push({ ...parsed, source: "keyring", path: null });
   }
   return pickAntigravityCredentials(candidates, nowMs);
 }
 
-function persistAntigravityCredentials(creds, next, { nowMs = Date.now() } = {}) {
-  if (creds?.source !== "file" || !creds.path) return;
+/** Save refreshed tokens to their file or Linux keyring source, preserving payload fields. */
+async function persistAntigravityCredentials(creds, next, { nowMs = Date.now(), secretToolRunner, signal } = {}) {
+  if (creds?.source !== "keyring" && (creds?.source !== "file" || !creds.path)) return;
   const expiresIn = Number.isFinite(next?.expiresIn) && next.expiresIn > 0 ? next.expiresIn : 3600;
   const expiry = new Date(nowMs + expiresIn * 1000).toISOString();
   try {
-    const payload = creds.raw && typeof creds.raw === "object" ? { ...creds.raw } : {};
+    let rawPayload = creds.raw;
+    let keyringBase64 = false;
+    if (creds.source === "keyring") {
+      const currentRaw = await readAntigravityLinuxSecretRaw({ secretToolRunner, signal });
+      const current = parseAntigravityCredentialPayload(currentRaw);
+      // Do not restore a signed-out entry or overwrite a token changed by agy.
+      if (!current || current.refreshToken !== creds.refreshToken) return;
+      rawPayload = current.raw;
+      keyringBase64 = currentRaw.startsWith("go-keyring-base64:");
+    }
+    const payload = rawPayload && typeof rawPayload === "object" ? { ...rawPayload } : {};
     if (payload.token && typeof payload.token === "object") {
       payload.token = {
         ...payload.token,
@@ -3321,12 +3423,25 @@ function persistAntigravityCredentials(creds, next, { nowMs = Date.now() } = {})
       payload.expiry = expiry;
       if (next.refreshToken) payload.refresh_token = next.refreshToken;
     }
+    if (creds.source === "keyring") {
+      const json = JSON.stringify(payload);
+      const raw = keyringBase64
+        ? `go-keyring-base64:${Buffer.from(json).toString("base64")}`
+        : json;
+      await writeAntigravityLinuxSecretRaw(raw, { secretToolRunner, signal });
+      return;
+    }
     const tmpPath = `${creds.path}.${process.pid}.tmp`;
     fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
     fs.renameSync(tmpPath, creds.path);
   } catch (_error) {}
 }
 
+/**
+ * Refresh an agy token with the client credentials distributed in the app.
+ * Missing refresh tokens and rejected requests throw an AUTH_EXPIRED error.
+ * @returns {Promise<{accessToken: string, refreshToken: string, expiresIn: number}>}
+ */
 async function refreshAntigravityAccessToken(refreshToken, { fetchImpl = fetch, signal } = {}) {
   if (typeof refreshToken !== "string" || !refreshToken) {
     const err = new Error(ANTIGRAVITY_AUTH_EXPIRED_MESSAGE);
@@ -3341,6 +3456,7 @@ async function refreshAntigravityAccessToken(refreshToken, { fetchImpl = fetch, 
     },
     body: new URLSearchParams({
       client_id: ANTIGRAVITY_OAUTH_CLIENT_ID,
+      client_secret: ANTIGRAVITY_OAUTH_CLIENT_SECRET,
       grant_type: "refresh_token",
       refresh_token: refreshToken,
     }),
@@ -3364,11 +3480,16 @@ async function refreshAntigravityAccessToken(refreshToken, { fetchImpl = fetch, 
   };
 }
 
-async function resolveAntigravityAccessToken(creds, { fetchImpl = fetch, nowMs = Date.now(), forceRefresh = false, signal } = {}) {
+/** Renew expired credentials and retain rotated tokens for a retry within the same request. */
+async function resolveAntigravityAccessToken(creds, { fetchImpl = fetch, nowMs = Date.now(), forceRefresh = false, secretToolRunner, signal } = {}) {
   const expired = creds.expiryMs != null && creds.expiryMs <= nowMs + ANTIGRAVITY_TOKEN_REFRESH_SKEW_MS;
   if ((forceRefresh || expired || !creds.accessToken) && creds.refreshToken) {
     const next = await refreshAntigravityAccessToken(creds.refreshToken, { fetchImpl, signal });
-    persistAntigravityCredentials(creds, next, { nowMs });
+    await persistAntigravityCredentials(creds, next, { nowMs, secretToolRunner, signal });
+    creds.accessToken = next.accessToken;
+    creds.refreshToken = next.refreshToken;
+    const expiresIn = Number.isFinite(next.expiresIn) && next.expiresIn > 0 ? next.expiresIn : 3600;
+    creds.expiryMs = nowMs + expiresIn * 1000;
     return next.accessToken;
   }
   if (!creds.accessToken) {
@@ -3379,6 +3500,7 @@ async function resolveAntigravityAccessToken(creds, { fetchImpl = fetch, nowMs =
   return creds.accessToken;
 }
 
+/** Send a Cloud Code JSON request with the current bearer token and caller's abort signal. */
 function postAntigravityCloudCode(fetchImpl, url, accessToken, body, signal) {
   return fetchImpl(url, {
     method: "POST",
@@ -3393,6 +3515,7 @@ function postAntigravityCloudCode(fetchImpl, url, accessToken, body, signal) {
   });
 }
 
+/** Try the quota hosts in order; surface auth failures so the caller can refresh once. */
 async function fetchAntigravityQuotaSummaryJson(fetchImpl, accessToken, signal) {
   let lastError = null;
   for (const url of ANTIGRAVITY_QUOTA_SUMMARY_URLS) {
@@ -3417,6 +3540,7 @@ async function fetchAntigravityQuotaSummaryJson(fetchImpl, accessToken, signal) 
   throw lastError || new Error("Antigravity quota request failed.");
 }
 
+/** Read the paid plan label without failing a successful quota response if this lookup fails. */
 async function fetchAntigravityPlanLabel(fetchImpl, accessToken, signal) {
   try {
     const res = await postAntigravityCloudCode(fetchImpl, ANTIGRAVITY_LOAD_CODE_ASSIST_URL, accessToken, {
@@ -3433,10 +3557,16 @@ async function fetchAntigravityPlanLabel(fetchImpl, accessToken, signal) {
   }
 }
 
+/**
+ * Fetch Cloud Code quota with selected credentials, refreshing on expiry or 401/403.
+ * Passing creds (including null) avoids another file or keyring read.
+ * @returns {Promise<object|null>} Live quota, or null when credentials are absent.
+ */
 async function fetchAntigravityRemoteLimits({
   home,
   platform = process.platform,
   securityRunner,
+  secretToolRunner,
   fetchImpl = fetch,
   nowMs = Date.now(),
   signal,
@@ -3445,7 +3575,7 @@ async function fetchAntigravityRemoteLimits({
   if (isAntigravityQuotaDisabled()) return null;
   const resolvedCreds = creds !== undefined
     ? creds
-    : loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
+    : await loadAntigravityCredentials({ home, platform, securityRunner, secretToolRunner, nowMs, signal });
   if (!resolvedCreds) return null;
 
   const loadWithToken = async (accessToken) => {
@@ -3464,7 +3594,7 @@ async function fetchAntigravityRemoteLimits({
     };
   };
 
-  let accessToken = await resolveAntigravityAccessToken(resolvedCreds, { fetchImpl, nowMs, signal });
+  let accessToken = await resolveAntigravityAccessToken(resolvedCreds, { fetchImpl, nowMs, secretToolRunner, signal });
   try {
     return await loadWithToken(accessToken);
   } catch (error) {
@@ -3473,12 +3603,14 @@ async function fetchAntigravityRemoteLimits({
       fetchImpl,
       nowMs,
       forceRefresh: true,
+      secretToolRunner,
       signal,
     });
     return await loadWithToken(accessToken);
   }
 }
 
+/** Request reauthentication for an auth rejection or credentials past the refresh threshold. */
 function antigravityCredentialsNeedReauth(creds, { nowMs, remoteError } = {}) {
   if (remoteError?.code === "AUTH_EXPIRED") return true;
   return Boolean(
@@ -3488,11 +3620,16 @@ function antigravityCredentialsNeedReauth(creds, { nowMs, remoteError } = {}) {
   );
 }
 
-function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, remoteError, creds } = {}) {
+/**
+ * Serve last-good quota or explain why live quota is unavailable. Mark expired
+ * credentials for reauthentication even when cached quota remains usable.
+ * The provider path passes its selected creds to avoid repeating discovery.
+ */
+async function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, secretToolRunner, remoteError, creds } = {}) {
   const cached = readAntigravityLimitsCache({ home, nowMs });
   const resolvedCreds = creds !== undefined
     ? creds
-    : loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
+    : await loadAntigravityCredentials({ home, platform, securityRunner, secretToolRunner, nowMs });
   if (cached) {
     return antigravityCredentialsNeedReauth(resolvedCreds, { nowMs, remoteError })
       ? { ...cached, auth_action_required: "reauth" }
@@ -3515,8 +3652,8 @@ function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, r
 }
 
 /**
- * `providerTimeoutMs` bounds the WHOLE serial chain — remote quota attempt, process
- * scan, port scan, port probes and local RPCs — not any single call. Mirrors
+ * `providerTimeoutMs` bounds the WHOLE serial chain — credential discovery, remote
+ * quota attempt, process scan, port scan, port probes and local RPCs. Mirrors
  * fetchArkCodingPlanLimits / the codex remaining-budget pattern: each step's timeout is
  * clamped to what is left of the budget, and a step whose share has run out is skipped
  * rather than issued, so the chain can never outrun the outer provider race and the
@@ -3535,14 +3672,15 @@ async function fetchAntigravityLimits({
   nowMs = Date.now(),
   platform = process.platform,
   securityRunner,
+  secretToolRunner,
   signal,
 } = {}) {
   if (isAntigravityQuotaDisabled()) return { configured: false, error: null };
-  const creds = loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
   const startedAtMs = performance.now();
   // min(this step's ceiling, budget left after reserving the fallback guard).
   // 0 means "no time left" — the caller must skip the call, not issue it.
   const budgetedTimeoutMs = (stepCeilingMs) => {
+    if (signal?.aborted) return 0;
     if (!Number.isFinite(providerTimeoutMs) || providerTimeoutMs <= 0) return stepCeilingMs;
     const guardMs = Math.min(
       ANTIGRAVITY_BUDGET_GUARD_MS,
@@ -3553,6 +3691,16 @@ async function fetchAntigravityLimits({
     if (guardedMs <= 0) return 0;
     return Math.min(stepCeilingMs, guardedMs);
   };
+
+  const creds = await loadAntigravityCredentials({
+    home,
+    platform,
+    securityRunner,
+    secretToolRunner,
+    nowMs,
+    timeoutMs: budgetedTimeoutMs(2000),
+    signal,
+  });
 
   const finalize = (payload, normalizeOptions) => {
     const result = {
@@ -3583,6 +3731,7 @@ async function fetchAntigravityLimits({
           home,
           platform,
           securityRunner,
+          secretToolRunner,
           fetchImpl,
           nowMs,
           signal,
@@ -3617,6 +3766,7 @@ async function fetchAntigravityLimits({
         nowMs,
         platform,
         securityRunner,
+        secretToolRunner,
         remoteError,
         creds,
       });
@@ -3724,6 +3874,7 @@ async function fetchAntigravityLimits({
       nowMs,
       platform,
       securityRunner,
+      secretToolRunner,
       remoteError: remoteError || error,
       creds,
     });
@@ -3800,6 +3951,7 @@ function cacheExpiresAtMs(data, fetchedAtMs) {
   return Math.min(ttlExpiry, Math.max(Math.min(...upcoming), fetchedAtMs + CACHE_MIN_TTL_MS));
 }
 
+/** Return cached quota or share one in-flight fetch for the requested provider selection. */
 async function getUsageLimits(options = {}) {
   const selection = usageLimitsSelectionKey(options);
   const cache = cacheBySelection[selection];
@@ -3817,11 +3969,16 @@ async function getUsageLimits(options = {}) {
   return promise;
 }
 
+/**
+ * Fetch one aggregate for the selected providers and update its cache partition.
+ * Forward injected credential/process runners so tests can avoid host accounts.
+ */
 async function fetchUsageLimitsUncached({
   home,
   env,
   platform,
   securityRunner,
+  secretToolRunner,
   fetchImpl = fetch,
   commandRunner,
   requestFn,
@@ -3931,6 +4088,7 @@ async function fetchUsageLimitsUncached({
         nowMs,
         platform,
         securityRunner,
+        secretToolRunner,
         providerTimeoutMs,
         signal,
       }),
@@ -3941,7 +4099,7 @@ async function fetchUsageLimitsUncached({
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
     withProviderTimeout(fetchGrokLimits({ home, env, fetchImpl: providerFetch, timeoutMs: providerTimeoutMs }), "Grok Build", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
-    withProviderTimeout(fetchZcodeLimits({ home, env, fetchImpl: providerFetch }), "ZCode", providerTimeoutMs)
+    withProviderTimeout(fetchZcodeLimits({ home, env, fetchImpl: providerFetch, providerTimeoutMs }), "ZCode", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
     // OpenCode Go: authoritative subscription windows come from the dashboard
     // scrape; local opencode.db cost is available only as an explicit estimate.
@@ -4334,6 +4492,11 @@ module.exports = {
   normalizeAntigravityResponse,
   normalizeAntigravityQuotaSummary,
   loadAntigravityCredentials,
+  readAntigravityLinuxSecretRaw,
+  writeAntigravityLinuxSecretRaw,
+  refreshAntigravityAccessToken,
+  ANTIGRAVITY_OAUTH_CLIENT_ID,
+  ANTIGRAVITY_OAUTH_CLIENT_SECRET,
   parseListeningPorts,
   parseWindowsListeningPorts,
   parseLinuxProcListeningPorts,

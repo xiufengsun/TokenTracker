@@ -10,7 +10,7 @@ const { fetchDevinLimits } = require("../src/lib/devin-limits");
 const {
   getUsageLimits,
   resetUsageLimitsCache,
-} = require("../src/lib/usage-limits");
+} = require("./helpers/usage-limits");
 
 const TEST_TOKEN = "devin-test-session-token";
 

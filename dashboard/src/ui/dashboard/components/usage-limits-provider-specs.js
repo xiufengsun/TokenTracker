@@ -140,6 +140,7 @@ export const PROVIDER_LIMIT_SPECS = {
     },
   },
   zcode: {
+    extra: "zcode_reset_bank",
     /** Limit rows for ZCode: fixed coding-plan windows, or one row per labelled start-plan bucket. */
     windows(data) {
       // Coding plans expose 5h / weekly / tools windows (ZCode 3.3.x).
@@ -154,7 +155,12 @@ export const PROVIDER_LIMIT_SPECS = {
       }
       const labeled = Array.isArray(data.buckets) ? data.buckets.filter((b) => b?.label && b.window) : [];
       if (labeled.length) {
-        return labeled.map((b, i) => ({ key: `bucket-${b.entitlement_id || i}`, label: b.label, window: b.window }));
+        return labeled.map((b, i) => ({
+          key: `bucket-${b.entitlement_id || i}`,
+          label: b.label,
+          window: b.window,
+          ...(b.period === "one_time" ? { timeKind: "expiry" } : {}),
+        }));
       }
       // Payloads from older servers carry no bucket labels.
       return [

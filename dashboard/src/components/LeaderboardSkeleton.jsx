@@ -1,4 +1,5 @@
 import React from "react";
+import { LeaderboardTableScroll } from "./LeaderboardTableScroll.jsx";
 import { cn } from "../lib/cn";
 import {
   LB_STICKY_TH_RANK,
@@ -99,7 +100,7 @@ function MobileSkeletonRow({ index }) {
 export function LeaderboardSkeleton({ rows = 10 }) {
   return (
     <>
-    <div className="hidden w-full overflow-x-auto sm:block">
+    <LeaderboardTableScroll>
       <table className="min-w-max w-full text-left text-sm">
         <thead className="border-b border-oai-gray-200 dark:border-oai-gray-800">
           <tr>
@@ -138,7 +139,7 @@ export function LeaderboardSkeleton({ rows = 10 }) {
           ))}
         </tbody>
       </table>
-    </div>
+    </LeaderboardTableScroll>
     <div className="flex flex-col py-1 sm:hidden">
       {Array.from({ length: rows }, (_, i) => (
         <MobileSkeletonRow key={i} index={i} />

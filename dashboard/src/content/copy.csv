@@ -275,6 +275,16 @@ leaderboard.profile.nav.back,dashboard,LeaderboardProfilePage,Header,nav_back,"L
 leaderboard.profile.nav.download,dashboard,LeaderboardProfilePage,Header,nav_download,"Download",Shown only to browser visitors without the app,active
 leaderboard.profile.hero.rank_label,dashboard,LeaderboardProfilePage,Hero,rank_label,"Rank",,active
 leaderboard.title,dashboard,LeaderboardPage,LeaderboardPage,title,"Leaderboard",,active
+leaderboard.horizontal_scroll,dashboard,LeaderboardPage,LeaderboardTableScroll,aria_label,"Scroll leaderboard columns horizontally",,active
+limits.settings.enable_all,dashboard,SettingsPage,LimitsSettingsPanel,action,"Enable all",,active
+limits.settings.disable_all,dashboard,SettingsPage,LimitsSettingsPanel,action,"Disable all",,active
+limits.settings.bulk_visibility,dashboard,SettingsPage,LimitsSettingsPanel,label,"Provider visibility",,active
+limits.settings.enabled_count,dashboard,SettingsPage,LimitsSettingsPanel,detail,"{{enabled}} / {{total}} providers enabled",,active
+limits.zcode.start_grants,dashboard,LimitsPage,UsageLimitsPanel,label,"Start Plan",,active
+limits.zcode.grant_amount,dashboard,LimitsPage,UsageLimitsPanel,detail,"{{remaining}} / {{total}} tokens remaining",,active
+limits.zcode.reset_bank.title,dashboard,LimitsPage,UsageLimitsPanel,label,"Quota resets",,active
+limits.zcode.reset_bank.count,dashboard,LimitsPage,UsageLimitsPanel,detail,"{{count}} available",,active
+limits.zcode.reset_bank.earliest,dashboard,LimitsPage,UsageLimitsPanel,detail,"Earliest expiry: {{time}}",,active
 leaderboard.range,dashboard,LeaderboardPage,LeaderboardPage,range,"UTC {{period}} · {{from}} – {{to}}",,active
 leaderboard.range_loading,dashboard,LeaderboardPage,LeaderboardPage,range_loading,"UTC {{period}} · …",,active
 leaderboard.range.total,dashboard,LeaderboardPage,LeaderboardPage,range_total,"All time",,active
@@ -1568,6 +1578,12 @@ subscriptions.form.provider_required,ui,LimitsPage,SubscriptionSettingsCard,form
 subscriptions.form.provider_taken,ui,LimitsPage,SubscriptionSettingsCard,form_provider_taken,"This tool already has a subscription. Edit the existing record instead.",,active
 subscriptions.form.provider_taken_suffix,ui,LimitsPage,SubscriptionSettingsCard,form_provider_taken_suffix,"(already subscribed)",,active
 limits.page.openSubscriptions,ui,LimitsPage,LimitsPage,open_subscriptions,"Subscriptions",,active
+limits.page.refresh,ui,LimitsPage,LimitsPage,refresh,"Refresh limits",,active
+limits.page.refresh_loading,ui,LimitsPage,LimitsPage,refresh_loading,"Refreshing limits…",,active
+limits.page.refreshed_at,ui,LimitsPage,LimitsPage,refreshed_at,"Limits updated {{time}}",,active
+limits.page.refresh_failed,ui,LimitsPage,LimitsPage,refresh_failed,"Couldn't refresh limits.",,active
+limits.page.refresh_partial,ui,LimitsPage,LimitsPage,refresh_partial,"Limits refreshed {{time}}, but some data still comes from cache or failed to update.",,active
+limits.page.refresh_stale,ui,LimitsPage,LimitsPage,refresh_stale,"Refresh finished, but every provider still reports cached or failed data.",,active
 limits.provider.ark_coding_plan,ui,LimitsPage,UsageLimitsPanel,provider_ark_coding_plan,"Ark Coding Plan",,active
 limits.label.ark_coding_plan_5h,ui,LimitsPage,UsageLimitsPanel,ark_coding_plan_5h,"5h",,active
 limits.label.ark_coding_plan_weekly,ui,LimitsPage,UsageLimitsPanel,ark_coding_plan_weekly,"Weekly",,active

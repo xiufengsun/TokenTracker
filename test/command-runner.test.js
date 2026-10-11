@@ -7,6 +7,23 @@ const test = require("node:test");
 
 const { runCommand } = require("../src/lib/command-runner");
 
+test("runCommand handles a stdin pipe failure without an unhandled error", async (t) => {
+  const child = new EventEmitter();
+  let killed = false;
+  child.stdout = Object.assign(new EventEmitter(), { setEncoding() {} });
+  child.stderr = Object.assign(new EventEmitter(), { setEncoding() {} });
+  child.stdin = new EventEmitter();
+  child.stdin.end = () => queueMicrotask(() => {
+    child.stdin.emit("error", Object.assign(new Error("broken pipe"), { code: "EPIPE" }));
+  });
+  child.kill = () => { killed = true; return true; };
+  t.mock.method(cp, "spawn", () => child);
+  const result = await runCommand(null, "fixture-command", [], { input: "fixture", timeout: 1000 });
+  assert.equal(result.error.code, "EPIPE");
+  assert.equal(result.status, null);
+  assert.equal(killed, true);
+});
+
 // These tests stub cp.spawn itself. Injecting a mock commandRunner cannot
 // reach the real spawn branch: runCommand early-returns for function
 // runners, so options assertions on a mock only prove what the *caller*

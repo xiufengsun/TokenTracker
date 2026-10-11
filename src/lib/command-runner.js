@@ -15,6 +15,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
+/** Run a command without a shell by default, optionally piping options.input to stdin. */
 function runCommand(commandRunner, command, args, options = {}) {
   const merged = {
     encoding: "utf8",
@@ -29,6 +30,7 @@ function runCommand(commandRunner, command, args, options = {}) {
   const {
     timeout,
     maxBuffer,
+    input,
     completeWhen,
     completionGraceMs = 250,
     killProcessGroup = false,
@@ -64,7 +66,7 @@ function runCommand(commandRunner, command, args, options = {}) {
         ...spawnOptions,
         detached: useProcessGroup || spawnOptions.detached,
         shell: useShell,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       });
     } catch (error) {
       resolve({ status: null, stdout: "", stderr: "", error });
@@ -167,6 +169,18 @@ function runCommand(commandRunner, command, args, options = {}) {
     }
     if (Number.isFinite(timeout) && timeout > 0) {
       timer = setTimeout(() => stopChild({ timeoutExpired: true }), timeout);
+    }
+    if (input !== undefined) {
+      child.stdin?.on("error", (error) => {
+        signalChild("SIGKILL");
+        settle({ error });
+      });
+      try {
+        child.stdin?.end(input);
+      } catch (error) {
+        signalChild("SIGKILL");
+        settle({ error });
+      }
     }
   });
 }

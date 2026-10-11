@@ -1,11 +1,11 @@
 import React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { motion, useReducedMotion } from "motion/react";
-import { Bell, BellOff, CalendarClock, Settings as SettingsIcon } from "lucide-react";
+import { Bell, BellOff, CalendarClock, RefreshCw, Settings as SettingsIcon } from "lucide-react";
 import { Popover } from "@base-ui/react/popover";
 import { useUsageLimits } from "../hooks/use-usage-limits";
 import { useLimitsDisplayPrefs } from "../hooks/use-limits-display-prefs.js";
-import { copy } from "../lib/copy";
+import { copy, getCopyLocale } from "../lib/copy";
 import { LimitsPageSkeleton } from "../components/LimitsPageSkeleton.jsx";
 import { UsageLimitsPanel } from "../ui/dashboard/components/UsageLimitsPanel.jsx";
 import { SubscriptionSettingsCard } from "../ui/dashboard/components/SubscriptionSettingsCard.jsx";
@@ -22,6 +22,54 @@ const IS_LOCAL_HOST =
   (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 
 const MACOS_NOTIFICATION_SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.notifications";
+
+// Compact absolute stamp for the manual-refresh feedback line, in the copy
+// locale — same shape as the panel's exact reset-time formatting.
+function formatRefreshedAt(iso) {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return String(iso);
+  return new Intl.DateTimeFormat(getCopyLocale(), {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(ms));
+}
+
+/**
+ * A forced refresh always comes back stamped with a fresh fetched_at, even
+ * when the backend served cached rows or a provider errored, so the notice
+ * grades the payload instead of trusting the timestamp: "updated" only when
+ * every provider row is fresh and error-free, "partial" when any row still
+ * reports an error, a stale cache, a disk-cache source, or a failed ZCode
+ * extras endpoint (reset cards / Start Plan).
+ */
+function describeRefreshOutcome(data) {
+  const providers = Object.entries(data || {}).filter(
+    ([key, value]) => key !== "fetched_at" && value && typeof value === "object"
+      && value.configured !== false,
+  );
+  const errored = providers.filter(([, provider]) => Boolean(provider.error));
+  // ZCode folds reset cards and Start Plan grants into its row from separate
+  // endpoints; their failures don't set the row-level error but the refresh
+  // still didn't bring every quota up to date.
+  const extrasErrored = providers.some(([, provider]) =>
+    Boolean(provider.start_plan?.error) || Boolean(provider.reset_credits?.error));
+  const cached = providers.filter(([, provider]) =>
+    provider.provenance?.stale === true
+    || provider.provenance?.source === "disk-cache",
+  );
+  // Every row served from cache with no provider errors means the refresh
+  // never reached live data at all; any error row is a partial outcome.
+  if (providers.length && errored.length === 0 && !extrasErrored && cached.length === providers.length) {
+    return { kind: "stale" };
+  }
+  if (errored.length || cached.length || extrasErrored) {
+    return { kind: "partial", at: data.fetched_at };
+  }
+  return { kind: "updated", at: data.fetched_at };
+}
 
 /**
  * Speech-bubble nudge anchored to the bell: alerts are on, but the system
@@ -65,7 +113,7 @@ function NotificationBlockedBubble() {
 
 export function LimitsPage() {
   const preloadedUsageLimits = readUsageLimitsPreloadState();
-  const { data: usageLimits, error, isLoading } = useUsageLimits(
+  const { data: usageLimits, error, isLoading, refresh } = useUsageLimits(
     preloadedUsageLimits
       ? { initialRefresh: true, initialState: preloadedUsageLimits, publishToPreloadCache: true }
       : { initialRefresh: true, publishToPreloadCache: true },
@@ -77,6 +125,29 @@ export function LimitsPage() {
   const [subscriptionsOpen, setSubscriptionsOpen] = React.useState(false);
   const [searchParams] = useSearchParams();
   const subscriptionRefreshRef = React.useRef(0);
+  // Manual refresh bookkeeping: a ref guard (not state) blocks a fast second
+  // click before the re-render commits, mirroring SkillsPage's
+  // operationInFlight pattern; `isRefreshing` only drives the disabled/spin UI.
+  const refreshInFlightRef = React.useRef(false);
+  const [isRefreshing, setIsRefreshing] = React.useState(false);
+  const [refreshNotice, setRefreshNotice] = React.useState(null);
+
+  const handleManualRefresh = React.useCallback(async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    setIsRefreshing(true);
+    setRefreshNotice(null);
+    try {
+      // The hook's forced refresh keeps stale rows on screen while it runs and
+      // resolves with the payload it applied (null when it could not refresh),
+      // so the notice never fakes "up to date".
+      const next = await refresh();
+      setRefreshNotice(next ? describeRefreshOutcome(next) : { kind: "failed" });
+    } finally {
+      refreshInFlightRef.current = false;
+      setIsRefreshing(false);
+    }
+  }, [refresh]);
 
   const refreshSubscriptions = React.useCallback(async () => {
     // The subscription store only exists on the local CLI; skip the fetch on
@@ -138,6 +209,16 @@ export function LimitsPage() {
             </div>
             <div className="flex items-center gap-2 shrink-0">
               {alerts.enabled && alerts.permissionBlocked ? <NotificationBlockedBubble /> : null}
+              <button
+                type="button"
+                onClick={() => void handleManualRefresh()}
+                disabled={isRefreshing}
+                aria-label={copy("limits.page.refresh")}
+                title={copy("limits.page.refresh")}
+                className="shrink-0 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-oai-gray-200 dark:border-oai-gray-800 text-oai-gray-600 dark:text-oai-gray-400 hover:bg-oai-gray-100 dark:hover:bg-oai-gray-800 hover:text-oai-black dark:hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500 disabled:opacity-50"
+              >
+                <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} aria-hidden />
+              </button>
               <Popover.Root open={subscriptionsOpen} onOpenChange={setSubscriptionsOpen}>
                 <Popover.Trigger
                   aria-label={copy("limits.page.openSubscriptions")}
@@ -180,6 +261,30 @@ export function LimitsPage() {
               </Link>
             </div>
           </div>
+
+          <span role="status" className="sr-only">
+            {isRefreshing ? copy("limits.page.refresh_loading") : ""}
+          </span>
+          {refreshNotice?.kind === "updated" ? (
+            <p role="status" className="mb-4 text-sm text-emerald-700 dark:text-emerald-300">
+              {copy("limits.page.refreshed_at", { time: formatRefreshedAt(refreshNotice.at) })}
+            </p>
+          ) : null}
+          {refreshNotice?.kind === "partial" ? (
+            <p role="status" className="mb-4 text-sm text-amber-600 dark:text-amber-400">
+              {copy("limits.page.refresh_partial", { time: formatRefreshedAt(refreshNotice.at) })}
+            </p>
+          ) : null}
+          {refreshNotice?.kind === "stale" ? (
+            <p role="status" className="mb-4 text-sm text-amber-600 dark:text-amber-400">
+              {copy("limits.page.refresh_stale")}
+            </p>
+          ) : null}
+          {refreshNotice?.kind === "failed" ? (
+            <p role="status" className="mb-4 text-sm text-amber-600 dark:text-amber-400">
+              {copy("limits.page.refresh_failed")}
+            </p>
+          ) : null}
 
           {isLoading ? (
             <LimitsPageSkeleton />

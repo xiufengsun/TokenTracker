@@ -16,7 +16,7 @@ const {
 const {
   getUsageLimits,
   resetUsageLimitsCache,
-} = require("../src/lib/usage-limits");
+} = require("./helpers/usage-limits");
 
 function jsonResponse(status, body) {
   return {

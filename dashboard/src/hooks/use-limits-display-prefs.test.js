@@ -184,6 +184,35 @@ describe("useLimitsDisplayPrefs", () => {
     });
   });
 
+  it("enables or disables all providers in one snapshot without changing other preferences", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const messages = installNativeBridge();
+    const initial = {
+      ...defaultSnapshot(100),
+      displayMode: LIMIT_DISPLAY_MODES.REMAINING,
+      providerOrder: [...LIMIT_PROVIDER_IDS].reverse(),
+      showSubscriptions: false,
+    };
+    setStoredSnapshot(initial);
+    const { result } = renderHook(() => useLimitsDisplayPrefs());
+    messages.length = 0;
+
+    for (const visible of [false, true]) {
+      act(() => result.current.setAllVisible(visible));
+      const expectedVisibility = Object.fromEntries(LIMIT_PROVIDER_IDS.map((id) => [id, visible]));
+      expect(result.current.visibility).toEqual(expectedVisibility);
+      expect(readStoredSnapshot().providerVisibility).toEqual(expectedVisibility);
+      expect(result.current.order).toEqual(initial.providerOrder);
+      expect(result.current.displayMode).toBe(initial.displayMode);
+      expect(result.current.showSubscriptions).toBe(false);
+      expect(bridgeWrites(messages)).toHaveLength(1);
+      expect(bridgeWrites(messages)[0].value.providerVisibility).toEqual(expectedVisibility);
+      messages.length = 0;
+      act(() => result.current.setAllVisible(visible));
+      expect(bridgeWrites(messages)).toHaveLength(0);
+    }
+  });
+
   it("warns when localStorage cannot persist a Dashboard change", () => {
     vi.spyOn(Date, "now").mockReturnValue(1000);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

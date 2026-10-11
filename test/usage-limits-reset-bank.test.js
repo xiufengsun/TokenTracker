@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { performance } = require("node:perf_hooks");
 
-const { getUsageLimits, resetUsageLimitsCache } = require("../src/lib/usage-limits");
+const { getUsageLimits, resetUsageLimitsCache } = require("./helpers/usage-limits");
 
 const WHAM_URL = "https://chatgpt.com/backend-api/wham/usage";
 const RESET_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";

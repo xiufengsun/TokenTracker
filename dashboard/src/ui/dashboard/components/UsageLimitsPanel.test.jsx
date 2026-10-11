@@ -46,6 +46,89 @@ describe("UsageLimitsPanel", () => {
     setCopyLocale(EN_LOCALE);
   });
 
+  it("keeps Start grants collapsed inside the Pro row and expands them independently", () => {
+    render(
+      <UsageLimitsPanel
+        order={["zcode"]}
+        displayMode="remaining"
+        zcode={{
+          configured: true, plan_label: "Pro", plan_kind: "coding-plan",
+          primary_window: { used_percent: 2 },
+          secondary_window: { used_percent: 30 },
+          tertiary_window: { used_percent: 15 },
+          start_plan: {
+            configured: true, plan_label: "Start",
+            buckets: [{
+              label: "GLM-5.3-Flash · ZCode Trust Build", plan_name: "ZCode Trust Build", period: "one_time",
+              remaining_units: 100000000, total_units: 100000000,
+              window: { used_percent: 0, reset_at: "2030-10-07T16:00:00.000Z" },
+            }],
+          },
+        }}
+      />,
+    );
+    const main = screen.getByRole("button", { name: /^ZCode Pro/ });
+    const grants = screen.getByRole("button", { name: "ZCode Trust Build" });
+    expect(grants).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("GLM-5.3-Flash · ZCode Trust Build")).not.toBeInTheDocument();
+    expect(screen.getByText("98%")).toBeInTheDocument();
+
+    fireEvent.click(grants);
+    expect(grants).toHaveAttribute("aria-expanded", "true");
+    expect(main).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("GLM-5.3-Flash · ZCode Trust Build")).toBeInTheDocument();
+    expect(screen.getByText("100%")).toBeInTheDocument();
+    expect(screen.getByText(copy("limits.zcode.grant_amount", { remaining: "100,000,000", total: "100,000,000" }))).toBeInTheDocument();
+    expect(main.parentElement).toHaveTextContent(copy("limits.hover.expires_at", { time: formatExpiry("2030-10-07T16:00:00.000Z") }));
+    fireEvent.click(screen.getByText("GLM-5.3-Flash · ZCode Trust Build"));
+    expect(main).toHaveAttribute("aria-expanded", "false");
+    fireEvent.keyDown(grants, { key: "Enter" });
+    expect(main).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(main);
+    expect(main).toHaveAttribute("aria-expanded", "true");
+    expect(grants).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(grants);
+    expect(main).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByText("GLM-5.3-Flash · ZCode Trust Build")).not.toBeInTheDocument();
+    expect(screen.getByText("98%")).toBeInTheDocument();
+  });
+
+  it("shows separate usable 5h and weekly reset counts with their earliest expiries", () => {
+    render(<UsageLimitsPanel order={["zcode"]} zcode={{
+      configured: true, plan_label: "Pro", plan_kind: "coding-plan",
+      primary_window: { used_percent: 2 },
+      reset_credits: {
+        five_hour: [
+          { expires_at: "2030-10-19T10:00:00Z" }, { expires_at: "2030-10-18T10:00:00Z" },
+          { expires_at: "2000-01-01T00:00:00Z" },
+        ],
+        weekly: [{ expires_at: "2030-10-20T09:00:00Z" }],
+      },
+    }} />);
+    expect(screen.getByText(copy("limits.zcode.reset_bank.title"))).toBeInTheDocument();
+    expect(screen.getByText(copy("limits.zcode.reset_bank.count", { count: 2 }))).toBeInTheDocument();
+    expect(screen.getByText(copy("limits.zcode.reset_bank.count", { count: 1 }))).toBeInTheDocument();
+    expect(screen.getByText(copy("limits.zcode.reset_bank.earliest", {
+      time: formatExpiry("2030-10-18T10:00:00Z"),
+    }))).toBeInTheDocument();
+    expect(screen.getByText(copy("limits.zcode.reset_bank.earliest", {
+      time: formatExpiry("2030-10-20T09:00:00Z"),
+    }))).toBeInTheDocument();
+    expect(screen.getByText("2%")).toBeInTheDocument();
+  });
+
+  it("keeps reset inventory failures separate from normal Pro quota bars", () => {
+    render(<UsageLimitsPanel order={["zcode"]} zcode={{
+      configured: true, plan_label: "Pro", plan_kind: "coding-plan",
+      primary_window: { used_percent: 2 },
+      reset_credits: { error: "Reset status unavailable" },
+    }} />);
+    expect(screen.getByText("2%")).toBeInTheDocument();
+    expect(screen.getByText(/Reset status unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText(copy("limits.zcode.reset_bank.count", { count: 0 }))).not.toBeInTheDocument();
+  });
+
   it("shows provider status rows instead of hiding configured providers with errors", () => {
     render(
       <UsageLimitsPanel

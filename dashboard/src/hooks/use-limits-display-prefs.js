@@ -415,6 +415,13 @@ export function useLimitsDisplayPrefs() {
     }));
   }, [commitUserChange]);
 
+  const setAllVisible = useCallback((visible) => {
+    commitUserChange((current) => ({
+      ...current,
+      providerVisibility: Object.fromEntries(ALL_LIMIT_PROVIDERS.map((id) => [id, Boolean(visible)])),
+    }));
+  }, [commitUserChange]);
+
   const moveUp = useCallback((id) => {
     commitUserChange((current) => {
       const idx = current.providerOrder.indexOf(id);
@@ -485,6 +492,7 @@ export function useLimitsDisplayPrefs() {
     setShowSubscriptions,
     visibleOrdered,
     toggle,
+    setAllVisible,
     moveUp,
     moveDown,
     moveToward,

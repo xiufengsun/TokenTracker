@@ -19,6 +19,7 @@ export interface LimitsDisplayPrefs {
   setDisplayMode(mode: string): void;
   setShowSubscriptions(value: boolean): void;
   toggle(id: string): void;
+  setAllVisible(visible: boolean): void;
   moveUp(id: string): void;
   moveDown(id: string): void;
   moveToward(sourceId: string, targetId: string): void;

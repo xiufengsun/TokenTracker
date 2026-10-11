@@ -186,6 +186,51 @@ describe("useUsageLimits", () => {
     });
   });
 
+  it("resolves a manual refresh with the payload it applied", async () => {
+    vi.mocked(getUsageLimits).mockResolvedValue(freshLimits);
+
+    const { result } = renderHook(() =>
+      useUsageLimits({
+        initialRefresh: false,
+        initialState: { data: existingLimits },
+        publishToPreloadCache: true,
+      }),
+    );
+
+    let refreshed: unknown;
+    await act(async () => {
+      refreshed = await result.current.refresh();
+    });
+
+    // The applied payload — with fetched_at — is what lets the UI report the
+    // data update time instead of guessing.
+    expect(refreshed).toEqual(freshLimits);
+    expect((refreshed as { fetched_at?: string }).fetched_at).toBe(freshLimits.fetched_at);
+  });
+
+  it("returns null and keeps the previous data when the manual refresh fails", async () => {
+    vi.mocked(getUsageLimits).mockRejectedValue(new Error("upstream down"));
+
+    const { result } = renderHook(() =>
+      useUsageLimits({
+        initialRefresh: false,
+        initialState: { data: existingLimits },
+        publishToPreloadCache: true,
+      }),
+    );
+
+    let refreshed: unknown = "unset";
+    await act(async () => {
+      refreshed = await result.current.refresh();
+    });
+
+    // Null means "nothing new was applied" — the caller must not report success.
+    expect(refreshed).toBeNull();
+    expect(result.current.data).toBe(existingLimits);
+    expect(result.current.error).toBe("upstream down");
+    expect(publishUsageLimitsPreloadState).not.toHaveBeenCalled();
+  });
+
   it("does not let a slow mount read overwrite a newer manual refresh", async () => {
     let resolveMount: ((value: any) => void) | null = null;
     let resolveManual: ((value: any) => void) | null = null;
@@ -201,7 +246,9 @@ describe("useUsageLimits", () => {
     );
     await waitFor(() => expect(getUsageLimits).toHaveBeenCalledTimes(1));
 
-    let manualRefresh: Promise<void>;
+    // refresh() resolves with the applied payload since the manual-refresh
+    // feedback landed; this test only tracks the promise itself.
+    let manualRefresh: Promise<unknown>;
     await act(async () => {
       manualRefresh = result.current.refresh();
     });

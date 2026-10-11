@@ -9,7 +9,7 @@ const {
   resetProviderStatusCache,
   STATUS_PAGE_SPECS,
 } = require("../src/lib/provider-status");
-const { getUsageLimits, resetUsageLimitsCache } = require("../src/lib/usage-limits");
+const { getUsageLimits, resetUsageLimitsCache } = require("./helpers/usage-limits");
 
 function statuspageResponse(indicator, description, { ok = true } = {}) {
   return {
