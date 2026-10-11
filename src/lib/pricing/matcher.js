@@ -238,7 +238,13 @@ function lookupContainedExactCaseInsensitive(table, model) {
   const lower = model.toLowerCase();
   const keys = Object.keys(table).sort((a, b) => b.length - a.length);
   for (const key of keys) {
-    if (lower.includes(key.toLowerCase())) return table[key];
+    const start = lower.indexOf(key.toLowerCase());
+    if (start < 0) continue;
+    // A model generation must not match a later numeric version (Opus 5.5
+    // is a separate SKU from Opus 5). Dated and provider suffixes still work.
+    const suffix = lower.slice(start + key.length);
+    if (/^[.\d]/.test(suffix)) continue;
+    return table[key];
   }
   return null;
 }
@@ -289,10 +295,6 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
   if (curatedDotExact) {
     return { hit: true, source: "curated:exact-dot", value: curatedDotExact };
   }
-  const curatedDotContainedExact = lookupContainedExactCaseInsensitive(curated.exact, dotForm);
-  if (curatedDotContainedExact) {
-    return { hit: true, source: "curated:exact-dot", value: curatedDotContainedExact };
-  }
 
   // 2. LiteLLM exact
   if (litellm && litellm[lookupModel]) {
@@ -301,6 +303,10 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
   const litellmDotExact = lookupExactCaseInsensitive(litellm, dotForm);
   if (litellmDotExact) {
     return { hit: true, source: "litellm:exact-dot", value: litellmDotExact };
+  }
+  const curatedDotContainedExact = lookupContainedExactCaseInsensitive(curated.exact, dotForm);
+  if (curatedDotContainedExact) {
+    return { hit: true, source: "curated:exact-dot", value: curatedDotContainedExact };
   }
 
   // 3. CURATED alias (literal mapping like "auto" -> "composer-1")

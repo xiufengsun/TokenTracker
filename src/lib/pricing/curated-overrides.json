@@ -6,6 +6,40 @@
     "iflytek_maas_pricing_note": "iFlytek MaaS inference prices supplied for AStudio on 2026-08-31. AStudio homepage: https://agent.xfyun.cn/. Official pricing source: https://maas.xfyun.cn/modelSquare. Source values are RMB per million tokens, converted at 7.2 RMB/USD, then rounded to two decimal places for billing. Models without a dedicated cache-hit price use the normal input rate; cache writes also use the normal input rate. iFlytek MaaS prices are source-scoped and do not inherit DeepSeek time-of-use discounts. Spark-X2.5 entries (spark-x2.5, spark-x2.5-4b, spark-x2.5-1.7b) were read from the model square on 2026-10-08; spark-x2.5 is listed at a limited-time 30% rate (0.96 / 3.6 / 0.14 RMB input / output / cache-hit, list price 3.2 / 12 / 0.48), and the two small models are free."
   },
   "exact": {
+    "claude-opus-5-5": {
+      "input": 4,
+      "output": 20,
+      "cache_read": 0.2,
+      "cache_write": 5,
+      "note": "Official Anthropic pricing verified 2026-10-11: https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    "claude-opus-5.5": {
+      "input": 4,
+      "output": 20,
+      "cache_read": 0.2,
+      "cache_write": 5,
+      "note": "Official Anthropic pricing verified 2026-10-11: https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    "claude-sonnet-5-5": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 2.5,
+      "note": "Official Anthropic pricing verified 2026-10-11: https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    "claude-sonnet-5.5": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 2.5,
+      "note": "Official Anthropic pricing verified 2026-10-11: https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    "k3-256k": {
+      "input": 3,
+      "output": 15,
+      "cache_read": 0.3,
+      "note": "Bare alias emitted by Kimi Code (modelAlias \"kimi-code/k3\" -> \"k3\"). Same rates as kimi-k3."
+    },
     "cline-gateway-models": {
       "input": 0,
       "output": 0,
@@ -42,10 +76,10 @@
       "note": "Opus 4.8 not yet in LiteLLM. Pin to the standard Opus tier (same as 4.6/4.7); remove once LiteLLM carries it."
     },
     "claude-sonnet-5": {
-      "input": 3,
-      "output": 15,
-      "cache_read": 0.3,
-      "cache_write": 3.75,
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.2,
+      "cache_write": 2.5,
       "note": "Sonnet 5. LiteLLM added this model on ~2026-06-30 with matching rates, but pin explicitly so pricing is correct immediately rather than depending on the 24h local pricing-cache refresh cycle."
     },
     "claude-haiku-4-5": {

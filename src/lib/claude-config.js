@@ -2,6 +2,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 
 const { ensureDir, readJson, writeJson } = require("./fs");
+const { buildNotifyCommand, notifyIdentity } = require("./notify-command");
 
 const DEFAULT_EVENT = "SessionEnd";
 const CLAUDE_USAGE_EVENTS = ["Stop", DEFAULT_EVENT];
@@ -106,14 +107,14 @@ async function areClaudeHooksConfigured({ settingsPath, hookCommand, events }) {
 // Generic Session-hook command builder. CodeBuddy CLI is a Claude-Code fork
 // and uses the exact same settings.json hook schema, so this function works
 // for any source that accepts the `node notify.cjs --source=<name>` contract.
-function buildHookCommand(notifyPath, source) {
+function buildHookCommand(notifyPath, source, options) {
   const cmd = typeof notifyPath === "string" ? notifyPath : "";
   const src = typeof source === "string" && source ? source : "claude";
-  return `/usr/bin/env node ${quoteArg(cmd)} --source=${src}`;
+  return buildNotifyCommand(cmd, src, options);
 }
 
-function buildClaudeHookCommand(notifyPath) {
-  return buildHookCommand(notifyPath, "claude");
+function buildClaudeHookCommand(notifyPath, options) {
+  return buildHookCommand(notifyPath, "claude", options);
 }
 
 function normalizeSettings(raw) {
@@ -174,9 +175,9 @@ function normalizeEntriesForCommand(entries, hookCommand) {
   const nextEntries = entries.map((entry) => {
     if (!entry || typeof entry !== "object") return entry;
     if (entry.command && commandsEqual(entry.command, hookCommand)) {
-      if (entry.type !== "command") {
+      if (entry.type !== "command" || entry.command !== hookCommand) {
         changed = true;
-        return { ...entry, type: "command" };
+        return { ...entry, type: "command", command: hookCommand };
       }
       return entry;
     }
@@ -184,9 +185,9 @@ function normalizeEntriesForCommand(entries, hookCommand) {
     let hooksChanged = false;
     const nextHooks = entry.hooks.map((hook) => {
       if (hook && commandsEqual(hook.command, hookCommand)) {
-        if (hook.type !== "command") {
+        if (hook.type !== "command" || hook.command !== hookCommand) {
           hooksChanged = true;
-          return { ...hook, type: "command" };
+          return { ...hook, type: "command", command: hookCommand };
         }
       }
       return hook;
@@ -195,13 +196,29 @@ function normalizeEntriesForCommand(entries, hookCommand) {
     changed = true;
     return { ...entry, hooks: nextHooks };
   });
-  return { entries: nextEntries, changed };
+  const seen = new Set();
+  const deduplicated = nextEntries.map((entry) => {
+    const scope = JSON.stringify(entry?.matcher ?? null);
+    const keep = (hook) => {
+      if (!commandsEqual(hook?.command, hookCommand)) return true;
+      if (seen.has(scope)) { changed = true; return false; }
+      seen.add(scope);
+      return true;
+    };
+    if (entry?.command) return keep(entry) ? entry : null;
+    if (!Array.isArray(entry?.hooks)) return entry;
+    const hooks = entry.hooks.filter(keep);
+    if (!hooks.length) return null;
+    return hooks.length === entry.hooks.length ? entry : { ...entry, hooks };
+  }).filter(Boolean);
+  return { entries: deduplicated, changed };
 }
 
 function commandsEqual(a, b) {
   const left = normalizeCommand(a);
   const right = normalizeCommand(b);
-  return Boolean(left && right && left === right);
+  return Boolean(left && right && (left === right ||
+    (notifyIdentity(left) && notifyIdentity(left) === notifyIdentity(right))));
 }
 
 function quoteArg(value) {

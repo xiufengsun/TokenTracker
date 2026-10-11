@@ -8,8 +8,8 @@ const { buildGeminiHookCommand } = require("../src/lib/gemini-config");
 // backslash (`C:\foo\`) would otherwise render as `"...\"` — the trailing
 // backslash escapes the closing quote and corrupts the whole hook command.
 const BUILDERS = [
-  ["claude-config buildHookCommand", (p) => buildHookCommand(p, "claude")],
-  ["gemini-config buildGeminiHookCommand", (p) => buildGeminiHookCommand(p)],
+  ["claude-config buildHookCommand", (p) => buildHookCommand(p, "claude", { platform: "linux" })],
+  ["gemini-config buildGeminiHookCommand", (p) => buildGeminiHookCommand(p, { platform: "linux" })],
 ];
 
 for (const [name, build] of BUILDERS) {
