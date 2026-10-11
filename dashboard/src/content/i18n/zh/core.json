@@ -1,4 +1,5 @@
 {
+  "provider.display.workbuddy_ai": "WorkBuddy AI",
   "header.auth.sign_in_aria": "登录",
   "login.back_home": "返回首页",
   "login.cloud_only": "未配置云端登录。请使用 localhost 上的本地仪表盘。",

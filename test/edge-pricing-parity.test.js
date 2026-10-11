@@ -362,6 +362,19 @@ test("all cloud cost paths keep Cline :free models at zero", () => {
   }
 });
 
+test("WorkBuddy AI auto routing stays unpriced across local and cloud paths", () => {
+  const { getModelPricing: localPricing } = require("../src/lib/pricing");
+  for (const name of [CANONICAL, ...MIRRORS]) {
+    const { code } = transformSync(extractBlock(name), { loader: "ts", target: "es2020" });
+    const edgePricing = vm.runInNewContext(`${code}\ngetModelPricing;`);
+    for (const model of ["auto", " AUTO "]) {
+      assert.equal(localPricing(model, { source: "workbuddy-ai" }).input, 0);
+      assert.equal(edgePricing(model, "workbuddy-ai").input, 0, name);
+    }
+    assert.equal(edgePricing("gpt-6-astra", "workbuddy-ai").input, 10, name);
+  }
+});
+
 test("all cloud cost paths retain DeepSeek V4 peak/off-peak pricing tiers", () => {
   for (const name of [CANONICAL, ...MIRRORS]) {
     const source = readEdge(name);

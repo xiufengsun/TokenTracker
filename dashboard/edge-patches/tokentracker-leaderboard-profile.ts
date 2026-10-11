@@ -366,6 +366,7 @@ function normalizeIFlytekMaasModel(model: string) {
 
 function getModelPricing(model: string, source = "") {
   if (!model) return ZERO_PRICING;
+  if (source.toLowerCase() === "workbuddy-ai" && model.trim().toLowerCase() === "auto") return ZERO_PRICING;
   if (source.toLowerCase() === "acode") {
     const normalized = normalizeIFlytekMaasModel(model);
     // Undisclosed routing must not inherit generic aliases or fuzzy prices.

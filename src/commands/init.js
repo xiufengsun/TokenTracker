@@ -13,6 +13,7 @@ const {
   chmod600IfPossible,
 } = require("../lib/fs");
 const { resolveMimoNativeDbPath } = require("../lib/install-resolver");
+const { expandHome } = require("../lib/scan-roots");
 const { prompt, promptHidden } = require("../lib/prompt");
 const {
   upsertCodexNotify,
@@ -130,6 +131,7 @@ const SUPPORTED_PROVIDERS = [
   "Kimi Code",
   "CodeBuddy",
   "WorkBuddy",
+  "WorkBuddy AI",
   "Grok Build",
   "oh-my-pi",
   "OmO",
@@ -578,6 +580,10 @@ async function repairRuntimeIntegrations({
       settingsPath: context.workbuddySettingsPath,
       hookCommand: context.workbuddyHookCommand,
     })],
+    ["workbuddy-ai", context.workbuddyAiDir, () => upsertClaudeHook({
+      settingsPath: context.workbuddyAiSettingsPath,
+      hookCommand: context.workbuddyAiHookCommand,
+    })],
   ];
   for (const [key, configDir, repair] of hookRepairs) {
     if (await isDir(configDir)) await attempt(key, repair);
@@ -622,6 +628,12 @@ function buildIntegrationTargets({ home, trackerDir, notifyPath }) {
   const workbuddyDir = process.env.WORKBUDDY_HOME || path.join(home, ".workbuddy");
   const workbuddySettingsPath = path.join(workbuddyDir, "settings.json");
   const workbuddyHookCommand = buildHookCommand(notifyPath, "workbuddy");
+  // WorkBuddy AI is the international build of the very same CLI. It keeps its
+  // data in a sibling home (~/.workbuddy-ai), so it needs its own hook install
+  // and its own --source token to be attributed separately from the CN build.
+  const workbuddyAiDir = expandHome(process.env.WORKBUDDY_AI_HOME, home) || path.join(home, ".workbuddy-ai");
+  const workbuddyAiSettingsPath = path.join(workbuddyAiDir, "settings.json");
+  const workbuddyAiHookCommand = buildHookCommand(notifyPath, "workbuddy-ai");
   const geminiConfigDir = resolveGeminiConfigDir({ home, env: process.env });
   const geminiSettingsPath = resolveGeminiSettingsPath({ configDir: geminiConfigDir });
   const geminiHookCommand = buildGeminiHookCommand(notifyPath);
@@ -647,6 +659,9 @@ function buildIntegrationTargets({ home, trackerDir, notifyPath }) {
     workbuddyDir,
     workbuddySettingsPath,
     workbuddyHookCommand,
+    workbuddyAiDir,
+    workbuddyAiSettingsPath,
+    workbuddyAiHookCommand,
     geminiConfigDir,
     geminiSettingsPath,
     geminiHookCommand,
@@ -1034,6 +1049,18 @@ async function applyIntegrationSetup({
     summary.push({ label: "WorkBuddy", status: "skipped", detail: "Config not found" });
   }
 
+  // WorkBuddy AI: international build, same hook schema, sibling home.
+  const workbuddyAiDirExists = await isDir(context.workbuddyAiDir);
+  if (workbuddyAiDirExists) {
+    await upsertClaudeHook({
+      settingsPath: context.workbuddyAiSettingsPath,
+      hookCommand: context.workbuddyAiHookCommand,
+    });
+    summary.push({ label: "WorkBuddy AI", status: "installed", detail: "Hooks installed" });
+  } else {
+    summary.push({ label: "WorkBuddy AI", status: "skipped", detail: "Config not found" });
+  }
+
   const openclawBefore = await probeOpenclawSessionPluginState({
     home,
     trackerDir,
@@ -1185,6 +1212,21 @@ async function previewIntegrations({ context }) {
     });
   } else {
     summary.push({ label: "WorkBuddy", status: "skipped", detail: "Config not found" });
+  }
+
+  const workbuddyAiDirExists = await isDir(context.workbuddyAiDir);
+  if (workbuddyAiDirExists) {
+    const configured = await isClaudeHookConfigured({
+      settingsPath: context.workbuddyAiSettingsPath,
+      hookCommand: context.workbuddyAiHookCommand,
+    });
+    summary.push({
+      label: "WorkBuddy AI",
+      status: "installed",
+      detail: configured ? "Hooks already installed" : "Will install hooks",
+    });
+  } else {
+    summary.push({ label: "WorkBuddy AI", status: "skipped", detail: "Config not found" });
   }
 
   const geminiConfigExists = await isDir(context.geminiConfigDir);
@@ -1491,7 +1533,7 @@ try {
       ? codeOriginalPath
       : source === 'acode'
         ? acodeOriginalPath
-        : source === 'claude' || source === 'opencode' || source === 'gemini' || source === 'codebuddy' || source === 'workbuddy'
+        : source === 'claude' || source === 'opencode' || source === 'gemini' || source === 'codebuddy' || source === 'workbuddy' || source === 'workbuddy-ai'
           ? null
           : codexOriginalPath;
   if (originalPath) {

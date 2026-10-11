@@ -1664,6 +1664,8 @@ quota.percent,ui,QuotaWidget,QuotaWidget,percent,"%",,active
 quota.reset_in,ui,QuotaWidget,QuotaWidget,reset_in,"Resets in {{time}}",,active
 quota.close,ui,QuotaWidget,QuotaWidget,close,"Close widget",,active
 quota.close_hint,ui,QuotaWidget,QuotaWidget,close_hint,"Close widget; reopen from the tray menu",,active
+provider.display.workbuddy_ai,shared,*,*,name,"WorkBuddy AI",,active
+
 trend.monitor.pin_hint,dashboard,DashboardPage,TrendMonitor,hint,"Click a bar to pin and scroll details",,active
 cloud.nav,cloud,*,Cloud,text,"Cloud",,active
 cloud.page.eyebrow,cloud,*,Cloud,text,"TokenTracker Cloud",,active

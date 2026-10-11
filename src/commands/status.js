@@ -221,6 +221,11 @@ async function cmdStatus(argv = []) {
     resolveWorkbuddyHome(process.env) || path.join(home, ".workbuddy"),
     "settings.json",
   );
+  // WorkBuddy AI — international build, sibling home (~/.workbuddy-ai).
+  const workbuddyAiSettingsPath = path.join(
+    resolveWorkbuddyHome(process.env, "workbuddy-ai") || path.join(home, ".workbuddy-ai"),
+    "settings.json",
+  );
   const geminiConfigDir = resolveGeminiConfigDir({ home, env: process.env });
   const geminiSettingsPath = resolveGeminiSettingsPath({
     configDir: geminiConfigDir,
@@ -235,6 +240,7 @@ async function cmdStatus(argv = []) {
   const claudeHookCommand = buildClaudeHookCommand(notifyPath);
   const codebuddyHookCommand = buildHookCommand(notifyPath, "codebuddy");
   const workbuddyHookCommand = buildHookCommand(notifyPath, "workbuddy");
+  const workbuddyAiHookCommand = buildHookCommand(notifyPath, "workbuddy-ai");
   const geminiHookCommand = buildGeminiHookCommand(notifyPath);
 
   const config = await readJson(configPath);
@@ -307,6 +313,10 @@ async function cmdStatus(argv = []) {
   const workbuddyHookConfigured = await isClaudeHookConfigured({
     settingsPath: workbuddySettingsPath,
     hookCommand: workbuddyHookCommand,
+  });
+  const workbuddyAiHookConfigured = await isClaudeHookConfigured({
+    settingsPath: workbuddyAiSettingsPath,
+    hookCommand: workbuddyAiHookCommand,
   });
   const geminiHookConfigured = await isGeminiHookConfigured({
     settingsPath: geminiSettingsPath,
@@ -491,6 +501,15 @@ async function cmdStatus(argv = []) {
     : [];
   const workbuddyDbExists = workbuddyInstalled
     ? fssync.existsSync(path.join(workbuddyHome, "workbuddy.db"))
+    : false;
+
+  const workbuddyAiHome = resolveWorkbuddyHome(process.env, "workbuddy-ai");
+  const workbuddyAiInstalled = Boolean(workbuddyAiHome && fssync.existsSync(workbuddyAiHome));
+  const workbuddyAiFiles = workbuddyAiInstalled
+    ? resolveWorkbuddyProjectFiles(process.env, "workbuddy-ai")
+    : [];
+  const workbuddyAiDbExists = workbuddyAiInstalled
+    ? fssync.existsSync(path.join(workbuddyAiHome, "workbuddy.db"))
     : false;
 
   // oh-my-pi — passive scan + optional notify extension.
@@ -1003,6 +1022,7 @@ async function cmdStatus(argv = []) {
       openclaw_session_plugin: Boolean(openclawSessionPluginState?.configured),
       codebuddy: Boolean(codebuddyHookConfigured),
       workbuddy: Boolean(workbuddyHookConfigured),
+      "workbuddy-ai": Boolean(workbuddyAiHookConfigured),
       grok: Boolean(grokHookState?.configured),
     },
   });
@@ -1046,6 +1066,7 @@ async function cmdStatus(argv = []) {
         openclaw_legacy: Boolean(openclawHookState?.configured),
         codebuddy: codebuddyInstalled ? Boolean(codebuddyHookConfigured) : null,
         workbuddy: workbuddyInstalled ? Boolean(workbuddyHookConfigured) : null,
+        "workbuddy-ai": workbuddyAiInstalled ? Boolean(workbuddyAiHookConfigured) : null,
         grok: grokInstalled ? Boolean(grokHookState?.configured) : null,
       },
       providers: {
@@ -1076,6 +1097,9 @@ async function cmdStatus(argv = []) {
           : { installed: false },
         workbuddy: workbuddyInstalled
           ? { installed: true, files: workbuddyFiles.length }
+          : { installed: false },
+        workbuddy_ai: workbuddyAiInstalled
+          ? { installed: true, files: workbuddyAiFiles.length }
           : { installed: false },
         omp: ompInstalled || ompHookState.ompPresent
           ? {
@@ -1274,6 +1298,9 @@ async function cmdStatus(argv = []) {
         : null,
       workbuddyInstalled
         ? `- WorkBuddy hooks: ${workbuddyHookConfigured ? "set" : "unset"} (${workbuddyFiles.length} session jsonl file${workbuddyFiles.length !== 1 ? "s" : ""} found, SQLite DB ${workbuddyDbExists ? "found" : "not found"})`
+        : null,
+      workbuddyAiInstalled
+        ? `- WorkBuddy AI hooks: ${workbuddyAiHookConfigured ? "set" : "unset"} (${workbuddyAiFiles.length} session jsonl file${workbuddyAiFiles.length !== 1 ? "s" : ""} found, SQLite DB ${workbuddyAiDbExists ? "found" : "not found"})`
         : null,
       ompInstalled || ompHookState.ompPresent
         ? `- oh-my-pi: passive reader (${ompFiles.length} session jsonl file${ompFiles.length !== 1 ? "s" : ""} found${ompHookState.configured ? ", notify extension: yes" : ", notify extension: no"})`
