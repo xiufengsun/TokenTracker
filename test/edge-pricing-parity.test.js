@@ -332,6 +332,11 @@ for (const name of [CANONICAL, ...MIRRORS]) {
     const { computeRowCost: localCost } = require("../src/lib/pricing");
     for (const [model, expected] of [
       ["claude-sonnet-4-6", 0.0009675],
+      ["claude-opus-5-5", 0.00117],
+      ["claude-opus-5.5", 0.00117],
+      ["claude-sonnet-5", 0.000645],
+      ["claude-sonnet-5-5", 0.000585],
+      ["k3-256k", 0.00078],
       ["glm-4.7-flash", 0],
       ["zzzz-fixture-unknown-123xyz", 0],
     ]) {

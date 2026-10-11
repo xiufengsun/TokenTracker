@@ -919,6 +919,7 @@ export default async function (req: Request): Promise<Response> {
   const periodByDayCost = new Map<string, number>();
   const periodByProvider = new Map<string, { tokens: number; cost: number }>();
   const periodByModel = new Map<string, number>();
+  const modelBreakdown = new Map<string, Record<string, number | string>>();
   let periodTotalTokens = 0;
   let periodTotalCost = 0;
 
@@ -947,6 +948,17 @@ export default async function (req: Request): Promise<Response> {
       provider.cost += cost;
       periodByProvider.set(src, provider);
       if (row.model) periodByModel.set(row.model, (periodByModel.get(row.model) || 0) + tokens);
+      if (row.model) {
+        const detail = modelBreakdown.get(row.model) || { model_name: row.model,
+          total_tokens: 0, estimated_cost_usd: 0, input_tokens: 0, output_tokens: 0,
+          cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0 };
+        detail.total_tokens = Number(detail.total_tokens) + tokens;
+        detail.estimated_cost_usd = Number(detail.estimated_cost_usd) + cost;
+        for (const key of ["input_tokens", "output_tokens", "cached_input_tokens", "cache_creation_input_tokens", "reasoning_output_tokens"] as const) {
+          detail[key] = Number(detail[key]) + (Number(row[key]) || 0);
+        }
+        modelBreakdown.set(row.model, detail);
+      }
       periodTotalTokens += tokens;
       periodTotalCost += cost;
     }
@@ -1051,6 +1063,7 @@ export default async function (req: Request): Promise<Response> {
     models: {
       count: periodByModel.size,
       favorite: favoriteModel,
+      breakdown: [...modelBreakdown.values()].sort((a, b) => Number(b.total_tokens) - Number(a.total_tokens)),
     },
     by_provider: byProvider,
     heatmap,
