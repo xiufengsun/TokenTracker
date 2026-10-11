@@ -133,6 +133,13 @@ function emptyTotals() {
   return tokenTotals({});
 }
 
+function mergeUsageMetadata(target, usage) {
+  for (const field of ["selected_models", "reroute_reasons"]) {
+    if (Array.isArray(usage[field])) target[field] = [...new Set([...(target[field] || []), ...usage[field]])];
+  }
+  if (usage.model_attribution === "effective") target.model_attribution = "effective";
+}
+
 const MODEL_USAGE_SUM_FIELDS = [
   "input_tokens",
   "cached_input_tokens",
@@ -778,6 +785,7 @@ async function scanCodexSession(filePath) {
       const key = `${timestamp}\u0000${event.model}`;
       const bucket = usageBuckets.get(key) || { timestamp, model: event.model || "unknown", ...emptyTotals() };
       addTotals(bucket, event.delta);
+      mergeUsageMetadata(bucket, event.delta);
       usageBuckets.set(key, bucket);
     },
   });
@@ -1689,6 +1697,7 @@ function scopeSessionUsage(row, from, to, context) {
     addTotals(tokens, bucket);
     const model = byModel.get(bucket.model) || { model: bucket.model, ...emptyTotals(), usage_events: 0 };
     addTotals(model, bucket);
+    mergeUsageMetadata(model, bucket);
     if (!bucket.usage_events) model.usage_events += 1;
     byModel.set(bucket.model, model);
   }

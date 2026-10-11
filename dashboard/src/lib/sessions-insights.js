@@ -20,6 +20,7 @@ export function scopeSessionsToRange(sessions, startMs = 0, endMs = Infinity) {
       const row = models.get(bucket.model) || {
         ...(session.model_usage || []).find((model) => model.model === bucket.model),
         model: bucket.model, ...Object.fromEntries([...USAGE_FIELDS, ...PRICING_FIELDS].map((key) => [key, 0])), cost_usd: 0,
+        selected_models: [], reroute_reasons: [], model_attribution: "selected",
       };
       for (const key of [...USAGE_FIELDS, ...PRICING_FIELDS]) {
         const value = finiteValue(bucket[key]);
@@ -27,6 +28,10 @@ export function scopeSessionsToRange(sessions, startMs = 0, endMs = Infinity) {
         row[key] += value;
       }
       row.cost_usd += finiteValue(bucket.cost_usd);
+      for (const field of ["selected_models", "reroute_reasons"]) {
+        if (Array.isArray(bucket[field])) row[field] = [...new Set([...row[field], ...bucket[field]])];
+      }
+      if (bucket.model_attribution === "effective") row.model_attribution = "effective";
       models.set(bucket.model, row);
     }
     return { ...session, ...totals, total_tokens: tokens, own_total_tokens: tokens,

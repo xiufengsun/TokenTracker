@@ -760,7 +760,10 @@ async function parseCodexRolloutFile(filePath, {
         row.priority_long_context_reasoning_output_tokens += delta.reasoning_output_tokens;
       }
     }
-    return { ...delta, ...Object.fromEntries(subsetKeys.map((key) => [key, row[key] - before[key]])) };
+    return { ...delta, ...Object.fromEntries(subsetKeys.map((key) => [key, row[key] - before[key]])),
+      selected_models: attribution.selectedModel ? [attribution.selectedModel] : [],
+      reroute_reasons: attribution.rerouteReason ? [attribution.rerouteReason] : [],
+      model_attribution: attribution.rerouted ? "effective" : "selected" };
   }
 
   function ensureTool(name) {
