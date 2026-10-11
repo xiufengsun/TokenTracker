@@ -2620,7 +2620,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         const sessions = await buildSessionAnalytics({ force: refresh });
         const wantsCsv = url.searchParams.get("format") === "csv";
         const includeSessions = wantsCsv || ["1", "true"].includes(url.searchParams.get("include_sessions"));
-        const result = summarizeSessions(sessions, { from, to, includeSessions });
+        const result = summarizeSessions(sessions, { from, to, includeSessions, ...getTimeZoneContext(url) });
         if (wantsCsv) {
           const content = sessionsToCsv(result.sessions);
           res.statusCode = 200;
@@ -2655,7 +2655,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       try {
         const { buildSessionAnalytics, listSessionsForBrowser } = require("./session-analytics");
         const sessions = await buildSessionAnalytics({ force: refresh });
-        const result = listSessionsForBrowser(sessions, { from, to, limit });
+        const result = listSessionsForBrowser(sessions, { from, to, limit, ...getTimeZoneContext(url) });
         json(res, { from, to, ...result });
       } catch (error) {
         // Node fs errors embed the absolute path ("EACCES ... open '/Users/…'").

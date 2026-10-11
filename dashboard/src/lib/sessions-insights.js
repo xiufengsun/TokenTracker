@@ -2,6 +2,56 @@ export function sessionOwnTokens(session) {
   return finiteValue(session?.own_total_tokens ?? session?.total_tokens);
 }
 
+export function scopeSessionsToRange(sessions, startMs = 0, endMs = Infinity) {
+  if (!startMs && endMs === Infinity) return sessions;
+  const rows = sessions.map((session) => {
+    if (!Array.isArray(session.usage_buckets)) return { ...session };
+    const buckets = session.usage_buckets.filter((bucket) => {
+      const ms = Date.parse(bucket.timestamp);
+      return ms >= startMs && ms <= endMs;
+    });
+    const models = new Map();
+    let tokens = 0;
+    let cost = 0;
+    for (const bucket of buckets) {
+      tokens += finiteValue(bucket.total_tokens);
+      cost += finiteValue(bucket.cost_usd);
+      const row = models.get(bucket.model) || { model: bucket.model, total_tokens: 0, cost_usd: 0 };
+      row.total_tokens += finiteValue(bucket.total_tokens);
+      row.cost_usd += finiteValue(bucket.cost_usd);
+      models.set(bucket.model, row);
+    }
+    return { ...session, total_tokens: tokens, own_total_tokens: tokens,
+      cost_usd: cost, own_cost_usd: cost, model_usage: [...models.values()] };
+  });
+  const children = new Map();
+  for (const row of rows) {
+    if (!row.parent_session_hash) continue;
+    const group = children.get(row.parent_session_hash) || [];
+    group.push(row);
+    children.set(row.parent_session_hash, group);
+  }
+  const sum = (row, seen = new Set()) => {
+    if (seen.has(row.session_hash)) return { tokens: 0, cost: 0 };
+    const next = new Set(seen).add(row.session_hash);
+    let tokens = sessionOwnTokens(row), cost = sessionOwnCost(row);
+    for (const child of children.get(row.session_hash) || []) {
+      const nested = sum(child, next);
+      tokens += nested.tokens;
+      cost += nested.cost;
+    }
+    return { tokens, cost };
+  };
+  for (const row of rows) {
+    const total = sum(row);
+    row.combined_total_tokens = total.tokens;
+    row.combined_cost_usd = total.cost;
+    row.subagent_total_tokens = total.tokens - sessionOwnTokens(row);
+    row.subagent_cost_usd = total.cost - sessionOwnCost(row);
+  }
+  return rows;
+}
+
 export function sessionOwnCost(session) {
   return finiteValue(session?.own_cost_usd ?? session?.cost_usd);
 }

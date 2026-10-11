@@ -1023,5 +1023,9 @@
   "cloud.login.purchase_context": "登录后继续开通云服务，已保留你的方案选择。",
   "cloud.membership.payment_due": "续费付款需要处理，请在账单中检查付款状态或更新支付方式。",
   "cloud.plan.trial_setup_hint": "开始试用后，在电脑上开启云同步。",
-  "cloud.trial.used_hint": "你已使用过免费试用，选择 Cloud 方案继续使用。"
+  "cloud.trial.used_hint": "你已使用过免费试用，选择 Cloud 方案继续使用。",
+  "sessions.storage.label": "转录文件：{{size}}",
+  "sessions.storage.tooltip": "仅会话文件 · {{metric}} · 每千个历史 token {{ratio}} 字节。不含共享数据库、缓存和项目文件。",
+  "sessions.storage.allocated": "分配空间",
+  "sessions.storage.logical": "逻辑文件大小"
 }

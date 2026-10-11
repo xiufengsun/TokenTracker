@@ -2077,3 +2077,7 @@ cloud.action.setup_sync,cloud,*,Cloud,action,"Set up Cloud sync",,active
 cloud.login.trial_context,cloud,*,Cloud,text,"Sign in to start your Cloud trial. Your plan selection is saved.",,active
 cloud.login.purchase_context,cloud,*,Cloud,text,"Sign in to continue your Cloud purchase. Your plan selection is saved.",,active
 cloud.plan.trial_setup_hint,cloud,CloudPage,CloudPage,text,"Start your trial, then set up sync on your computers.",,active
+sessions.storage.label,dashboard,SessionsPage,SessionRow,storage,"Transcript: {{size}}",,active
+sessions.storage.tooltip,dashboard,SessionsPage,SessionRow,storage,"Session files only · {{metric}} · {{ratio}} bytes per 1K lifetime tokens. Shared databases, caches and project files are excluded.",,active
+sessions.storage.allocated,dashboard,SessionsPage,SessionRow,storage,"allocated bytes",,active
+sessions.storage.logical,dashboard,SessionsPage,SessionRow,storage,"logical file size",,active

@@ -1082,5 +1082,9 @@
   "cloud.login.purchase_context": "登入後繼續開通雲端服務，已保留你的方案選擇。",
   "cloud.membership.payment_due": "續費付款需要處理，請在帳單中檢查付款狀態或更新付款方式。",
   "cloud.plan.trial_setup_hint": "開始試用後，在電腦上開啟雲端同步。",
-  "cloud.trial.used_hint": "你已使用過免費試用，選擇 Cloud 方案繼續使用。"
+  "cloud.trial.used_hint": "你已使用過免費試用，選擇 Cloud 方案繼續使用。",
+  "sessions.storage.label": "轉錄檔案：{{size}}",
+  "sessions.storage.tooltip": "僅會話檔案 · {{metric}} · 每千個歷史 token {{ratio}} 位元組。不含共用資料庫、快取和專案檔案。",
+  "sessions.storage.allocated": "配置空間",
+  "sessions.storage.logical": "邏輯檔案大小"
 }

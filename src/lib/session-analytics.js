@@ -70,7 +70,7 @@ const {
 // long-context subset) and folds delivery signals into the token parser's
 // single pass instead of parsing every Codex file twice.
 // v14 adds request-level estimated performance and Claude model usage.
-const SIDECAR_VERSION = 14;
+const SIDECAR_VERSION = 15;
 const EDIT_TOOLS = new Set([
   "apply_patch",
   "edit",
@@ -241,6 +241,11 @@ function serializeSessionRecord(row) {
 }
 
 function repriceSessionRecord(record) {
+  if (Array.isArray(record.usage_buckets)) {
+    record.usage_buckets = record.usage_buckets.map((bucket) => ({
+      ...bucket, cost_usd: computeRowCost({ source: record.source, ...bucket }),
+    }));
+  }
   const modelUsage = normalizeModelUsageRows(record?.model_usage);
   if (modelUsage.length > 0) {
     let hasUnpricedUsage = false;
@@ -469,6 +474,19 @@ function finalizeRecord(record) {
   return record;
 }
 
+function sessionStorageUsage(filePaths) {
+  let bytes = 0;
+  const allocated = process.platform !== "win32";
+  for (const file of new Set(filePaths)) {
+    try {
+      const stat = fs.statSync(file);
+      if (!stat.isFile()) continue;
+      bytes += allocated && Number.isFinite(stat.blocks) ? stat.blocks * 512 : stat.size;
+    } catch { /* deleted or unreadable while scanning */ }
+  }
+  return { session_store_bytes: bytes, session_store_metric: allocated ? "allocated" : "logical" };
+}
+
 function readableSessionPaths(filePath) {
   const candidates = (Array.isArray(filePath) ? filePath : [filePath]).filter(Boolean);
   const readable = candidates.filter((value) => sessionFileStatKey(value));
@@ -623,6 +641,7 @@ async function scanClaudeSession(filePath) {
     // wrote one — the UI then falls back to the project name.
     title: aiTitle,
     source: "claude",
+    ...sessionStorageUsage(filePaths),
     project_key: projectKey(cwd, primaryFilePath),
     project_ref: cwd || null,
     model,
@@ -735,6 +754,7 @@ async function scanCodexSession(filePath) {
   const primaryFilePath = filePaths[0] || String(filePath || "");
   const signalCollector = createCodexDeliverySignalCollector();
   const performanceCollector = createCodexPerformanceCollector();
+  const usageBuckets = new Map();
   const parsed = await parseCodexRolloutFile(filePaths, {
     seenTokenEvents: new Set(),
     collectBreakdowns: false,
@@ -743,7 +763,17 @@ async function scanCodexSession(filePath) {
       signalCollector.consume(obj, model);
       performanceCollector.consume(obj, model);
     },
-    onUsage: performanceCollector.consumeUsage,
+    onUsage(event) {
+      performanceCollector.consumeUsage(event);
+      if (!event.delta || event.delta.total_tokens <= 0) return;
+      const ms = Date.parse(event.timestamp);
+      if (!Number.isFinite(ms)) return;
+      const timestamp = new Date(Math.floor(ms / 1_800_000) * 1_800_000).toISOString();
+      const key = `${timestamp}\u0000${event.model}`;
+      const bucket = usageBuckets.get(key) || { timestamp, model: event.model || "unknown", ...emptyTotals() };
+      addTotals(bucket, event.delta);
+      usageBuckets.set(key, bucket);
+    },
   });
   const signals = signalCollector.finish();
   const performance = performanceCollector.finish();
@@ -798,10 +828,12 @@ async function scanCodexSession(filePath) {
     // Local-only: stripped in summarizeSessions before any cloud/CSV export.
     title,
     source: "codex",
+    ...sessionStorageUsage(filePaths),
     project_key: projectKey(parsed.cwd, primaryFilePath),
     project_ref: parsed.cwd || null,
     model,
     model_usage: modelUsage,
+    usage_buckets: [...usageBuckets.values()],
     performance: performance.performance,
     ...signals.bounds,
     turns: signals.turns || finite(parsed.turnCount),
@@ -1079,6 +1111,7 @@ async function scanGrokSession(filePath) {
     // Local-only: stripped in summarizeSessions before any cloud/CSV export.
     title,
     source: "grok",
+    ...sessionStorageUsage([filePath, grokSummaryPathFor(filePath), grokSignalsPathFor(filePath)]),
     project_key: projectKey(cwd, filePath),
     project_ref: cwd || null,
     model: model || "unknown",
@@ -1617,18 +1650,51 @@ function buildSessionAnalytics(options = {}) {
 // exactly the long/resumed ones, which also sort to the top because the sort
 // key is ended_at. On real data a 7-day window lost 6 sessions, the largest
 // 224M tokens. Treat the window as an interval intersection instead.
-function withinDayRange(row, from, to) {
-  const startDay = String(row?.started_at || row?.ended_at || "").slice(0, 10);
-  const endDay = String(row?.ended_at || row?.started_at || "").slice(0, 10);
+function sessionUsageDay(timestamp, { timeZone, offsetMinutes } = {}) {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return "";
+  if (timeZone) {
+    try {
+      const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
+      const part = (name) => parts.find((p) => p.type === name)?.value;
+      return `${part("year")}-${part("month")}-${part("day")}`;
+    } catch { /* fall back to the caller's offset or UTC */ }
+  }
+  return new Date(date.getTime() + (Number.isFinite(offsetMinutes) ? offsetMinutes * 60_000 : 0)).toISOString().slice(0, 10);
+}
+
+function withinDayRange(row, from, to, context) {
+  const startDay = sessionUsageDay(row?.started_at || row?.ended_at || "", context);
+  const endDay = sessionUsageDay(row?.ended_at || row?.started_at || "", context);
   if (from && (!endDay || endDay < from)) return false;
   if (to && (!startDay || startDay > to)) return false;
   return true;
 }
 
-function summarizeSessions(sessions, { from = "", to = "", includeSessions = true } = {}) {
+function scopeSessionUsage(row, from, to, context) {
+  if ((!from && !to) || !Array.isArray(row.usage_buckets)) return { ...row };
+  const buckets = row.usage_buckets.filter((bucket) => {
+    const day = sessionUsageDay(bucket.timestamp, context);
+    return (!from || day >= from) && (!to || day <= to);
+  });
+  const tokens = emptyTotals();
+  const byModel = new Map();
+  for (const bucket of buckets) {
+    addTotals(tokens, bucket);
+    const model = byModel.get(bucket.model) || { model: bucket.model, ...emptyTotals(), usage_events: 0 };
+    addTotals(model, bucket);
+    byModel.set(bucket.model, model);
+  }
+  return repriceSessionRecord({ ...row, tokens, total_tokens: tokens.total_tokens,
+    model_usage: [...byModel.values()], usage_buckets: buckets, cost_usd: 0,
+    lifetime_total_tokens: row.total_tokens, lifetime_cost_usd: row.cost_usd });
+}
+
+function summarizeSessions(sessions, { from = "", to = "", includeSessions = true, timeZone, offsetMinutes } = {}) {
+  const context = { timeZone, offsetMinutes };
   const filtered = annotateCodexThreadUsage((sessions || [])
-    .filter((row) => withinDayRange(row, from, to))
-    .map((row) => ({ ...row })));
+    .filter((row) => withinDayRange(row, from, to, context))
+    .map((row) => scopeSessionUsage(row, from, to, context)));
   const byModel = new Map();
   const subagents = new Map();
   const totals = {
@@ -1838,12 +1904,19 @@ function toSessionBrowserRow(row) {
     parent_link_conflict: Boolean(row.parent_link_conflict),
     title: row.title || null,
     source: row.source,
+    ...(Number.isFinite(row.session_store_bytes) ? {
+      session_store_bytes: row.session_store_bytes,
+      session_store_metric: row.session_store_metric,
+      bytes_per_1k_tokens: (row.lifetime_total_tokens ?? row.total_tokens) > 0
+        ? row.session_store_bytes * 1000 / (row.lifetime_total_tokens ?? row.total_tokens) : null,
+    } : {}),
     project_key: row.project_key,
     // project_ref (the local cwd) only ever travels over the local API so the
     // browser can show where a session ran and compose a resume command.
     project_ref: row.project_ref || null,
     model: row.model,
     model_usage: modelUsageForAggregation(row),
+    ...(Array.isArray(row.usage_buckets) ? { usage_buckets: row.usage_buckets } : {}),
     performance: normalizePerformance(row.performance),
     started_at: row.started_at || null,
     ended_at: row.ended_at || null,
@@ -1914,11 +1987,15 @@ function mergeSessionFragments(rows) {
     cur.performance = mergePerformance(cur.performance, row.performance);
     cur.subagent_calls = finite(cur.subagent_calls) + finite(row.subagent_calls);
     addTotals(cur.tokens, row.tokens);
+    if (Array.isArray(row.usage_buckets)) {
+      cur.usage_buckets = [...(cur.usage_buckets || []), ...row.usage_buckets];
+    }
     cur.model_usage = normalizeModelUsageRows([
       ...(cur.model_usage || []),
       ...(row.model_usage || []),
     ]);
     cur.total_tokens = finite(cur.total_tokens) + finite(row.total_tokens);
+    if (Number.isFinite(row.session_store_bytes)) cur.session_store_bytes = finite(cur.session_store_bytes) + row.session_store_bytes;
     cur.cost_usd = finite(cur.cost_usd) + finite(row.cost_usd);
     cur.provider_cost_usd = finite(cur.provider_cost_usd) + finite(row.provider_cost_usd);
     cur.usage_events = finite(cur.usage_events) + finite(row.usage_events);
@@ -2095,7 +2172,8 @@ function annotateCodexThreadUsage(rows) {
 // summarizeSessions (cloud/CSV safe), this retains session_id + project_ref so
 // the UI can offer one-click resume. Callers must only expose it over the
 // local API.
-function listSessionsForBrowser(sessions, { from = "", to = "", limit = 0 } = {}) {
+function listSessionsForBrowser(sessions, { from = "", to = "", limit = 0, timeZone, offsetMinutes } = {}) {
+  const context = { timeZone, offsetMinutes };
   const filtered = annotateCodexThreadUsage(mergeSessionFragments(sessions)
     // Only sessions that actually spent tokens are worth listing. This drops
     // two kinds of noise: non-session logs under ~/.claude/projects
@@ -2103,7 +2181,8 @@ function listSessionsForBrowser(sessions, { from = "", to = "", limit = 0 } = {}
     // the model replied. Both render as "unknown · 0 tokens · $0.00" rows with
     // no model, no cost and nothing to analyze.
     .filter((row) => finite(row.total_tokens) > 0)
-    .filter((row) => withinDayRange(row, from, to)));
+    .filter((row) => withinDayRange(row, from, to, context))
+    .map((row) => scopeSessionUsage(row, from, to, context)));
   filtered.sort((a, b) => String(b.ended_at || "").localeCompare(String(a.ended_at || "")));
   const cap = Number(limit) > 0 ? Number(limit) : 0;
   const limited = cap > 0 ? filtered.slice(0, cap) : filtered;
