@@ -262,6 +262,9 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
   // 0. CURATED source exact. Source-specific prices apply only to their source,
   // preventing collisions with public prices for same-named models from other CLIs.
   const sourceKey = typeof source === "string" ? source.toLowerCase() : "";
+  if (sourceKey === "workbuddy-ai" && lower.trim() === "auto") {
+    return { hit: false, source: "miss", value: null };
+  }
   if (sourceKey === "cline" && lower.endsWith(":free")) {
     return {
       hit: true,
