@@ -38,7 +38,7 @@ targets:
         PRODUCT_NAME: TokenTracker
         INFOPLIST_VALUES: |
           LSUIElement = YES
-        MARKETING_VERSION: "1.3.4"
+        MARKETING_VERSION: "1.3.5"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_EMIT_LOC_STRINGS: "YES"
         CODE_SIGN_STYLE: Automatic
@@ -136,7 +136,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tokentracker.bar.widget
         PRODUCT_NAME: TokenTrackerWidget
-        MARKETING_VERSION: "1.3.4"
+        MARKETING_VERSION: "1.3.5"
         CURRENT_PROJECT_VERSION: "1"
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         SWIFT_EMIT_LOC_STRINGS: "YES"
