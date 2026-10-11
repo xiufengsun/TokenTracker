@@ -713,6 +713,8 @@ async function parseCodexRolloutFile(filePath, {
       };
       byModel.set(effectiveModel, row);
     }
+    const subsetKeys = Object.keys(row).filter((key) => /^(?:long_context_|priority_)|^(?:usage_events|rerouted_usage_events)$/.test(key));
+    const before = Object.fromEntries(subsetKeys.map((key) => [key, row[key]]));
     addInto(row, delta);
     row.usage_events += 1;
     if (attribution.selectedModel) {
@@ -758,6 +760,7 @@ async function parseCodexRolloutFile(filePath, {
         row.priority_long_context_reasoning_output_tokens += delta.reasoning_output_tokens;
       }
     }
+    return { ...delta, ...Object.fromEntries(subsetKeys.map((key) => [key, row[key] - before[key]])) };
   }
 
   function ensureTool(name) {
@@ -927,7 +930,9 @@ async function parseCodexRolloutFile(filePath, {
     if (compactionResponseIds.has(record.responseId)) return;
     compactionResponseIds.add(record.responseId);
     if (!record.inRequestedRange) return;
-    recordModelUsage(record.delta, record.rawUsage, record.attribution);
+    const pricedDelta = recordModelUsage(record.delta, record.rawUsage, record.attribution);
+    if (typeof onUsage === "function") onUsage({ timestamp: record.timestamp,
+      delta: pricedDelta || record.delta, rawUsage: record.rawUsage, model: record.attribution.model, origin: "compaction" });
     attributeTurn(record.delta);
   }
 
@@ -1098,8 +1103,8 @@ async function parseCodexRolloutFile(filePath, {
           attributeTurn(null);
         } else {
           if (seenTokenEvents && delta?.total_tokens > 0) seenTokenEvents.add(eventKey);
-          recordModelUsage(delta, lastUsage || rawDelta);
-          if (typeof onUsage === "function") onUsage({ timestamp: ts, delta, rawUsage: lastUsage || rawDelta, model: attributedModel });
+          const pricedDelta = recordModelUsage(delta, lastUsage || rawDelta);
+          if (typeof onUsage === "function") onUsage({ timestamp: ts, delta: pricedDelta || delta, rawUsage: lastUsage || rawDelta, model: attributedModel });
           attributeTurn(delta);
         }
       } else {

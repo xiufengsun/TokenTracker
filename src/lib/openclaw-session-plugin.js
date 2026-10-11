@@ -468,14 +468,17 @@ function buildSessionPluginIndex({ trackerDir, packageName = "tokentracker-cli",
     `  const sqliteModule = await importSqliteSync();\n` +
     `  if (!sqliteModule) return null;\n` +
     `  const { DatabaseSync } = sqliteModule;\n` +
-    `  const sessionQuery = "SELECT session_id FROM session_windows WHERE session_key = ? ORDER BY updated_at DESC LIMIT 1";\n` +
+    `  const currentSessionQuery = "SELECT w.session_id FROM session_nodes n JOIN session_windows w ON w.session_id = n.current_session_id WHERE n.session_key = ? AND COALESCE(w.reason, '') != 'compaction'";\n` +
+    `  const sessionQuery = "SELECT session_id FROM session_windows WHERE session_key = ? AND COALESCE(reason, '') != 'compaction' ORDER BY updated_at DESC LIMIT 1";\n` +
     `  const dbCandidates = [path.join(openclawHome, 'agents', agentId, 'agent', 'openclaw-agent.sqlite'), path.join(openclawHome, 'agents', agentId, 'openclaw-agent.sqlite')];\n` +
     `  for (const dbPath of dbCandidates) {\n` +
     `    if (!fs.existsSync(dbPath)) continue;\n` +
     `    let db;\n` +
     `    try { db = new DatabaseSync(dbPath, { readOnly: true }); } catch (_) { continue; }\n` +
     `    try {\n` +
-    `      const row = db.prepare(sessionQuery).get(sessionKey);\n` +
+    `      let row;\n` +
+    `      try { row = db.prepare(currentSessionQuery).get(sessionKey); } catch (_) {}\n` +
+    `      if (!row || !row.session_id) row = db.prepare(sessionQuery).get(sessionKey);\n` +
     `      if (!row || !row.session_id) continue;\n` +
     `      // The passive SQLite reader owns per-event accounting; never synthesize lifetime sums.\n` +
     `      return { sessionKey, sessionId: row.session_id, entry: {} };\n` +

@@ -70,7 +70,7 @@ const {
 // long-context subset) and folds delivery signals into the token parser's
 // single pass instead of parsing every Codex file twice.
 // v14 adds request-level estimated performance and Claude model usage.
-const SIDECAR_VERSION = 15;
+const SIDECAR_VERSION = 16;
 const EDIT_TOOLS = new Set([
   "apply_patch",
   "edit",
@@ -122,6 +122,10 @@ function tokenTotals(usage) {
 function addTotals(target, delta) {
   for (const key of ["input_tokens", "cached_input_tokens", "cache_creation_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens"]) {
     target[key] = finite(target[key]) + finite(delta?.[key]);
+  }
+  for (const key of MODEL_USAGE_SUM_FIELDS) {
+    if (!/^(?:long_context_|priority_)|^(?:usage_events|rerouted_usage_events)$/.test(key)) continue;
+    if (delta?.[key]) target[key] = finite(target[key]) + finite(delta[key]);
   }
 }
 
@@ -764,11 +768,13 @@ async function scanCodexSession(filePath) {
       performanceCollector.consume(obj, model);
     },
     onUsage(event) {
-      performanceCollector.consumeUsage(event);
+      if (event.origin !== "compaction") performanceCollector.consumeUsage(event);
       if (!event.delta || event.delta.total_tokens <= 0) return;
       const ms = Date.parse(event.timestamp);
       if (!Number.isFinite(ms)) return;
-      const timestamp = new Date(Math.floor(ms / 1_800_000) * 1_800_000).toISOString();
+      // Minute buckets preserve every current IANA local-midnight boundary
+      // and every integer tz_offset_minutes accepted by the local API.
+      const timestamp = new Date(Math.floor(ms / 60_000) * 60_000).toISOString();
       const key = `${timestamp}\u0000${event.model}`;
       const bucket = usageBuckets.get(key) || { timestamp, model: event.model || "unknown", ...emptyTotals() };
       addTotals(bucket, event.delta);
@@ -1683,6 +1689,7 @@ function scopeSessionUsage(row, from, to, context) {
     addTotals(tokens, bucket);
     const model = byModel.get(bucket.model) || { model: bucket.model, ...emptyTotals(), usage_events: 0 };
     addTotals(model, bucket);
+    if (!bucket.usage_events) model.usage_events += 1;
     byModel.set(bucket.model, model);
   }
   return repriceSessionRecord({ ...row, tokens, total_tokens: tokens.total_tokens,
@@ -2185,7 +2192,8 @@ function listSessionsForBrowser(sessions, { from = "", to = "", limit = 0, timeZ
     // no model, no cost and nothing to analyze.
     .filter((row) => finite(row.total_tokens) > 0)
     .filter((row) => withinDayRange(row, from, to, context))
-    .map((row) => scopeSessionUsage(row, from, to, context)));
+    .map((row) => scopeSessionUsage(row, from, to, context))
+    .filter((row) => !Array.isArray(row.usage_buckets) || finite(row.total_tokens) > 0));
   filtered.sort((a, b) => String(b.ended_at || "").localeCompare(String(a.ended_at || "")));
   const cap = Number(limit) > 0 ? Number(limit) : 0;
   const limited = cap > 0 ? filtered.slice(0, cap) : filtered;

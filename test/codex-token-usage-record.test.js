@@ -12,6 +12,7 @@ const { test } = require("node:test");
 
 const { parseRolloutIncremental } = require("../src/lib/rollout");
 const { parseCodexRolloutFile } = require("../src/lib/codex-rollout-parser");
+const { scanCodexSession, listSessionsForBrowser } = require("../src/lib/session-analytics");
 
 const SESSION = "019f0000-0000-7000-8000-000000000652";
 const FORK = "019f0000-0000-7000-8000-00000000f652";
@@ -123,6 +124,17 @@ async function withTmp(fn) {
     await fs.rm(tmp, { recursive: true, force: true });
   }
 }
+
+test("session date buckets include a counted compaction exactly once", async () => {
+  await withTmp(async (ctx) => {
+    await fs.writeFile(ctx.rolloutPath, compactionLines({ advances: false }).join("\n") + "\n");
+    const session = await scanCodexSession(ctx.rolloutPath);
+    assert.equal(session.usage_buckets.reduce((sum, bucket) => sum + bucket.total_tokens, 0), session.total_tokens);
+    const scoped = listSessionsForBrowser([session], { from: "2026-09-20", to: "2026-09-20" }).sessions[0];
+    assert.equal(scoped.total_tokens, session.total_tokens);
+    assert.ok(Math.abs(scoped.cost_usd - session.cost_usd) < 1e-12);
+  });
+});
 
 async function queueTotals(queuePath) {
   let raw = "";

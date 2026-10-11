@@ -24,10 +24,10 @@ async function upsertClaudeHooks({ settingsPath, hookCommand, events }) {
 
   for (const event of normalizeEventList(events)) {
     const entries = normalizeEntries(hooks[event]);
-    const normalized = normalizeEntriesForCommand(entries, hookCommand);
+    const normalized = normalizeEntriesForCommand(entries, hookCommand, event);
     let nextEntries = normalized.entries;
     if (!hasHook(nextEntries, hookCommand)) {
-      nextEntries = nextEntries.concat([{ hooks: [{ type: "command", command: hookCommand }] }]);
+      nextEntries = nextEntries.concat([{ hooks: [{ type: "command", command: hookCommand, ...hookShell(hookCommand) }] }]);
       changed = true;
     }
     if (normalized.changed) changed = true;
@@ -141,12 +141,15 @@ function normalizeCommand(cmd) {
 }
 
 function hasHook(entries, hookCommand) {
+  const shell = hookShell(hookCommand).shell;
+  const configured = (hook) => normalizeCommand(hook?.command) === normalizeCommand(hookCommand) &&
+    (!shell || (hook.shell === shell && !Object.hasOwn(hook, "args")));
   for (const entry of entries) {
     if (!entry || typeof entry !== "object") continue;
-    if (entry.command && commandsEqual(entry.command, hookCommand)) return true;
+    if (entry.command && configured(entry)) return true;
     const hooks = Array.isArray(entry.hooks) ? entry.hooks : [];
     for (const hook of hooks) {
-      if (hook && commandsEqual(hook.command, hookCommand)) return true;
+      if (hook && configured(hook)) return true;
     }
   }
   return false;
@@ -170,14 +173,25 @@ function stripHookFromEntry(entry, hookCommand) {
   return { entry: { ...entry, hooks: nextHooks }, removed: true };
 }
 
-function normalizeEntriesForCommand(entries, hookCommand) {
+function hookShell(command) {
+  return typeof command === "string" && command.trimStart().startsWith("& '")
+    ? { shell: "powershell" } : {};
+}
+
+function normalizeEntriesForCommand(entries, hookCommand, event) {
+  const shell = hookShell(hookCommand);
+  const repair = (hook) => {
+    const next = { ...hook, type: "command", command: hookCommand, ...shell };
+    if (shell.shell) delete next.args;
+    return next;
+  };
   let changed = false;
   const nextEntries = entries.map((entry) => {
     if (!entry || typeof entry !== "object") return entry;
     if (entry.command && commandsEqual(entry.command, hookCommand)) {
-      if (entry.type !== "command" || entry.command !== hookCommand) {
+      if (entry.type !== "command" || entry.command !== hookCommand || (shell.shell && (entry.shell !== shell.shell || Object.hasOwn(entry, "args")))) {
         changed = true;
-        return { ...entry, type: "command", command: hookCommand };
+        return repair(entry);
       }
       return entry;
     }
@@ -185,9 +199,9 @@ function normalizeEntriesForCommand(entries, hookCommand) {
     let hooksChanged = false;
     const nextHooks = entry.hooks.map((hook) => {
       if (hook && commandsEqual(hook.command, hookCommand)) {
-        if (hook.type !== "command" || hook.command !== hookCommand) {
+        if (hook.type !== "command" || hook.command !== hookCommand || (shell.shell && (hook.shell !== shell.shell || Object.hasOwn(hook, "args")))) {
           hooksChanged = true;
-          return { ...hook, type: "command", command: hookCommand };
+          return repair(hook);
         }
       }
       return hook;
@@ -198,7 +212,8 @@ function normalizeEntriesForCommand(entries, hookCommand) {
   });
   const seen = new Set();
   const deduplicated = nextEntries.map((entry) => {
-    const scope = JSON.stringify(entry?.matcher ?? null);
+    const matcher = entry?.matcher;
+    const scope = JSON.stringify(event === "Stop" || matcher == null || ["", "*", ".*"].includes(matcher) ? null : matcher);
     const keep = (hook) => {
       if (!commandsEqual(hook?.command, hookCommand)) return true;
       if (seen.has(scope)) { changed = true; return false; }

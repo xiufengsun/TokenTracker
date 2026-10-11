@@ -51,7 +51,7 @@ internal sealed class PetWindow : Window
     private bool _rage;
     private bool _coreReady;
     private bool _contextQueued;
-    private string? _lastContextScript;
+    private readonly DocumentScriptCache _contextCache = new();
     private bool _exiting;
     private nint _hwnd;
     private string _curSymbol = "$";
@@ -334,7 +334,8 @@ internal sealed class PetWindow : Window
 
         // Re-push currency + locale after every (re)load so the bubble + quips match
         // the app's unit/language even across navigations.
-        core.NavigationCompleted += (_, _) => { _lastContextScript = null; PushContext(); };
+        core.NavigationStarting += (_, _) => _contextCache.Invalidate();
+        core.NavigationCompleted += (_, _) => { _contextCache.Invalidate(); PushContext(); };
 
         NavigateWhenServerReady();
     }
@@ -817,9 +818,13 @@ internal sealed class PetWindow : Window
                 "window.dispatchEvent(new Event('pet:minimode'));";
             // One tray tick updates several fields. Send one complete snapshot,
             // and let an unchanged snapshot leave the renderer idle.
-            if (script == _lastContextScript) return;
-            await _webView.CoreWebView2.ExecuteScriptAsync(script);
-            _lastContextScript = script;
+            if (!_contextCache.TryStart(script, out var ticket)) return;
+            try
+            {
+                await _webView.CoreWebView2.ExecuteScriptAsync(script);
+                _contextCache.Complete(ticket, true);
+            }
+            catch { _contextCache.Complete(ticket, false); }
         }
         catch { /* page mid-navigation */ }
     }

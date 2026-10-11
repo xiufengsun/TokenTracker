@@ -979,7 +979,7 @@
   "sessions.sort.cost": "費用最多",
   "sessions.sort.tokens": "Tokens 最多",
   "sessions.summary.count": "相符會話",
-  "sessions.summary.scope": "統計涵蓋相符會話的完整歷史用量，相符的子代理僅計一次。日期篩選與範圍重疊的會話，模型篩選保留整個會話。",
+  "sessions.summary.scope": "有時間用量記錄的會話按所選日期彙總 token 和成本；沒有用量時間桶的會話保留完整歷史。輪數、時長和效能指標仍描述整個會話。每個會話和子代理僅計一次。",
   "sessions.summary.speed": "估算速度",
   "sessions.performance.speed": "約 {{speed}} tok/s",
   "sessions.performance.samples": "{{count}} 個有效計時請求",
@@ -1086,5 +1086,6 @@
   "sessions.storage.label": "轉錄檔案：{{size}}",
   "sessions.storage.tooltip": "僅會話檔案 · {{metric}} · 每千個歷史 token {{ratio}} 位元組。不含共用資料庫、快取和專案檔案。",
   "sessions.storage.allocated": "配置空間",
-  "sessions.storage.logical": "邏輯檔案大小"
+  "sessions.storage.logical": "邏輯檔案大小",
+  "sessions.storage.size": "{{value}} MiB"
 }

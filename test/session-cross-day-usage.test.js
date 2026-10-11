@@ -36,3 +36,24 @@ test("Codex session ranges count each day's appended usage once rather than its 
   assert.equal(browser.session_store_bytes, process.platform === "win32" ? fs.statSync(file).size : fs.statSync(file).blocks * 512);
   assert.equal(browser.bytes_per_1k_tokens, browser.session_store_bytes * 1000 / 180);
 });
+
+test("Session ranges retain priority/long-context overlap and quarter-hour timezone boundaries", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-session-premium-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "rollout.jsonl");
+  const usage = { input_tokens: 300000, cached_input_tokens: 250000, output_tokens: 10000, reasoning_output_tokens: 2000, total_tokens: 310000 };
+  fs.writeFileSync(file, [
+    { timestamp: "2026-10-09T18:19:00Z", type: "session_meta", payload: { id: "premium", cwd: dir, model_provider: "openai" } },
+    { timestamp: "2026-10-09T18:19:01Z", type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: { service_tier: "priority" } } },
+    { timestamp: "2026-10-09T18:19:02Z", type: "turn_context", payload: { model: "gpt-6-astra" } },
+    { timestamp: "2026-10-09T18:20:00Z", type: "event_msg", payload: { type: "token_count", info: { last_token_usage: usage, total_token_usage: usage } } },
+  ].map(JSON.stringify).join("\n") + "\n");
+  const session = await scanCodexSession(file);
+  const scoped = listSessionsForBrowser([session], { from: "2026-10-10", to: "2026-10-10", timeZone: "Asia/Kathmandu" });
+  assert.equal(scoped.sessions.length, 1);
+  const row = scoped.sessions[0];
+  assert.equal(row.model_usage[0].priority_long_context_input_tokens, 50000);
+  assert.equal(row.model_usage[0].priority_cached_input_tokens, 250000);
+  assert.ok(Math.abs(row.cost_usd - session.cost_usd) < 1e-12);
+  assert.equal(listSessionsForBrowser([session], { from: "2026-10-09", to: "2026-10-09", timeZone: "Asia/Kathmandu" }).session_count, 0);
+});

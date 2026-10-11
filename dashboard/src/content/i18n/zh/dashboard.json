@@ -920,7 +920,7 @@
   "sessions.sort.cost": "费用最多",
   "sessions.sort.tokens": "Tokens 最多",
   "sessions.summary.count": "匹配会话",
-  "sessions.summary.scope": "统计涵盖匹配会话的全部历史用量，匹配的子代理只计一次。日期筛选与范围重叠的会话，模型筛选保留整个会话。",
+  "sessions.summary.scope": "有时间用量记录的会话按所选日期汇总 token 和成本；没有用量时间桶的会话保留完整历史。轮数、时长和性能指标仍描述整个会话。每个会话和子代理仅计一次。",
   "sessions.summary.speed": "估算速度",
   "sessions.performance.speed": "约 {{speed}} tok/s",
   "sessions.performance.samples": "{{count}} 个有效计时请求",
@@ -1027,5 +1027,6 @@
   "sessions.storage.label": "转录文件：{{size}}",
   "sessions.storage.tooltip": "仅会话文件 · {{metric}} · 每千个历史 token {{ratio}} 字节。不含共享数据库、缓存和项目文件。",
   "sessions.storage.allocated": "分配空间",
-  "sessions.storage.logical": "逻辑文件大小"
+  "sessions.storage.logical": "逻辑文件大小",
+  "sessions.storage.size": "{{value}} MiB"
 }

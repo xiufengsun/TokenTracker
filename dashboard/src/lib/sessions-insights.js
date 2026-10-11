@@ -11,19 +11,27 @@ export function scopeSessionsToRange(sessions, startMs = 0, endMs = Infinity) {
       return ms >= startMs && ms <= endMs;
     });
     const models = new Map();
+    const totals = Object.fromEntries([...USAGE_FIELDS, ...PRICING_FIELDS].map((key) => [key, 0]));
     let tokens = 0;
     let cost = 0;
     for (const bucket of buckets) {
       tokens += finiteValue(bucket.total_tokens);
       cost += finiteValue(bucket.cost_usd);
-      const row = models.get(bucket.model) || { model: bucket.model, total_tokens: 0, cost_usd: 0 };
-      row.total_tokens += finiteValue(bucket.total_tokens);
+      const row = models.get(bucket.model) || {
+        ...(session.model_usage || []).find((model) => model.model === bucket.model),
+        model: bucket.model, ...Object.fromEntries([...USAGE_FIELDS, ...PRICING_FIELDS].map((key) => [key, 0])), cost_usd: 0,
+      };
+      for (const key of [...USAGE_FIELDS, ...PRICING_FIELDS]) {
+        const value = finiteValue(bucket[key]);
+        totals[key] += value;
+        row[key] += value;
+      }
       row.cost_usd += finiteValue(bucket.cost_usd);
       models.set(bucket.model, row);
     }
-    return { ...session, total_tokens: tokens, own_total_tokens: tokens,
+    return { ...session, ...totals, total_tokens: tokens, own_total_tokens: tokens,
       cost_usd: cost, own_cost_usd: cost, model_usage: [...models.values()] };
-  });
+  }).filter((row) => !Array.isArray(row.usage_buckets) || sessionOwnTokens(row) > 0);
   const children = new Map();
   for (const row of rows) {
     if (!row.parent_session_hash) continue;
@@ -60,6 +68,9 @@ function finiteValue(value) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : 0;
 }
+
+const USAGE_FIELDS = ["input_tokens", "output_tokens", "cached_input_tokens", "cache_creation_input_tokens", "reasoning_output_tokens", "total_tokens"];
+const PRICING_FIELDS = ["long_context_", "priority_", "priority_long_context_"].flatMap((prefix) => USAGE_FIELDS.filter((field) => field !== "total_tokens").map((field) => prefix + field));
 
 export function sessionModels(session) {
   const observed = Array.isArray(session?.model_usage)

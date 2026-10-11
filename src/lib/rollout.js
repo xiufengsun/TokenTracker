@@ -1711,6 +1711,8 @@ async function parseOpenclawIncremental({
     let accepted = null;
     let openedRegularFile = false;
     if (filePath.endsWith(".sqlite")) {
+      const sessionFilter = typeof entry?.sessionId === "string"
+        ? ` AND e.session_id = '${entry.sessionId.replace(/'/g, "''")}'` : "";
       const rows = await readSqliteJsonRowsAsync(filePath, `
         SELECT e.session_id, json_object(
           'type', json_extract(e.event_json, '$.type'),
@@ -1729,6 +1731,7 @@ async function parseOpenclawIncremental({
         WHERE json_valid(e.event_json) AND COALESCE(w.reason, '') != 'compaction'
           AND json_extract(e.event_json, '$.message.role') = 'assistant'
           AND json_extract(e.event_json, '$.message.usage') IS NOT NULL
+          ${sessionFilter}
         ORDER BY e.session_id, e.seq
       `, { readOnly: true, throwOnReadFailure: true, label: "OpenClaw" });
       const sessions = new Map();
@@ -1740,7 +1743,7 @@ async function parseOpenclawIncremental({
         const sessionCursorKey = `${key}#${sessionId}`;
         const prior = { ...(stagedFiles[sessionCursorKey]?.usageEvents || {}) };
         const dbDir = path.dirname(filePath);
-        const agentDir = path.basename(dbDir) === "agent" && path.basename(path.dirname(dbDir)) !== "agents"
+        const agentDir = path.basename(dbDir) === "agent" && path.basename(path.dirname(path.dirname(dbDir))) === "agents"
           ? path.dirname(dbDir) : dbDir;
         const agentPrefix = openclawCursorKey(`${agentDir}${path.sep}`);
         // SQLite imports retain transcript identities. Carry forward counts

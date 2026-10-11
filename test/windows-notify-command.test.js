@@ -4,7 +4,7 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const cp = require("node:child_process");
-const { buildHookCommand, upsertClaudeUsageHooks } = require("../src/lib/claude-config");
+const { buildHookCommand, upsertClaudeUsageHooks, areClaudeUsageHooksConfigured } = require("../src/lib/claude-config");
 const { buildGeminiHookCommand } = require("../src/lib/gemini-config");
 
 test("Windows notify commands quote PowerShell literals and repair duplicate legacy hooks", async (t) => {
@@ -20,13 +20,16 @@ test("Windows notify commands quote PowerShell literals and repair duplicate leg
   const old = '"E:\\\\Token Tracker\\\\node.exe" "C:\\\\Users\\\\O\'Brien $user\\\\notify.cjs" --source=claude';
   const unrelated = { type: "command", command: 'node "C:\\other\\notify.cjs" --source=claude' };
   await fs.writeFile(settingsPath, JSON.stringify({ hooks: {
-    Stop: [{ hooks: [{ type: "command", command: legacy }, unrelated] }, { hooks: [{ type: "command", command: old }] }],
-    SessionEnd: [{ hooks: [{ type: "command", command: old }] }],
+    Stop: [{ hooks: [{ type: "command", command: legacy }, unrelated] }, { matcher: "*", hooks: [{ type: "command", command: old }] },
+      { matcher: "ignored-by-stop", hooks: [{ type: "command", command }] }],
+    SessionEnd: [{ hooks: [{ type: "command", command: old, args: [], shell: "bash" }] }, { matcher: "*", hooks: [{ type: "command", command: old }] }],
   } }));
+  assert.equal(await areClaudeUsageHooksConfigured({ settingsPath, hookCommand: command }), false);
   assert.equal((await upsertClaudeUsageHooks({ settingsPath, hookCommand: command })).changed, true);
   const settings = JSON.parse(await fs.readFile(settingsPath));
-  assert.deepEqual(settings.hooks.Stop.flatMap(e => e.hooks), [{ type: "command", command }, unrelated]);
-  assert.deepEqual(settings.hooks.SessionEnd.flatMap(e => e.hooks), [{ type: "command", command }]);
+  assert.deepEqual(settings.hooks.Stop.flatMap(e => e.hooks), [{ type: "command", command, shell: "powershell" }, unrelated]);
+  assert.deepEqual(settings.hooks.SessionEnd.flatMap(e => e.hooks), [{ type: "command", command, shell: "powershell" }]);
+  assert.equal(await areClaudeUsageHooksConfigured({ settingsPath, hookCommand: command }), true);
   assert.equal((await upsertClaudeUsageHooks({ settingsPath, hookCommand: command })).changed, false);
 });
 

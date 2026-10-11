@@ -985,8 +985,9 @@ async function cmdSync(argv, context = {}) {
     // Plugin-triggered sync points at one specific session file; a normal full
     // sync also passively scans every on-disk OpenClaw transcript so usage is
     // captured even when the session plugin never fires (issue #264). The scan
-    // is gated to full syncs so a scoped `--from-openclaw` hook still only
-    // touches its own file and the 5-minute background tick stays cheap. The
+    // is gated to full syncs except for gateway lifecycle signals. A scoped
+    // agent_end reads only its transcript or its session in the agent database,
+    // and the ordinary background tick stays cheap. The
     // event-identity dedup makes the plugin and passive paths idempotent, so
     // overlap on the same file is safe.
     //
@@ -1000,12 +1001,22 @@ async function cmdSync(argv, context = {}) {
         path: openclawSignal.sessionFile,
         source: "openclaw",
       });
+      for (const dbPath of [
+        path.join(openclawSignal.openclawHome, "agents", openclawSignal.agentId, "agent", "openclaw-agent.sqlite"),
+        path.join(openclawSignal.openclawHome, "agents", openclawSignal.agentId, "openclaw-agent.sqlite"),
+      ]) {
+        if (!(await fs.stat(dbPath).catch(() => null))?.isFile()) continue;
+        openclawSessionFiles.set(openclawCursorKey(dbPath), {
+          path: dbPath, source: "openclaw", sessionId: openclawSignal.sessionId,
+        });
+        break;
+      }
     }
-    if (isFullSourceScan && sourceAllowed("openclaw")) {
+    if ((isFullSourceScan || (opts.fromOpenclaw && !openclawSignal)) && sourceAllowed("openclaw")) {
       try {
         for (const f of await resolveOpenclawSessionFiles(process.env)) {
           const key = openclawCursorKey(f);
-          if (!openclawSessionFiles.has(key)) {
+          if (!openclawSessionFiles.has(key) || f.endsWith(".sqlite")) {
             openclawSessionFiles.set(key, { path: f, source: "openclaw" });
           }
         }

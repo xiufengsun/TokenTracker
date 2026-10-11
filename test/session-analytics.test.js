@@ -269,6 +269,9 @@ test("Codex session analytics preserves the exact GPT-5.6 Sol long-context reque
   assert.equal(modelUsage.long_context_output_tokens, 10_000);
   assert.equal(modelUsage.long_context_usage_events, 1);
   assert.ok(Math.abs(session.cost_usd - 0.9) < 1e-12);
+  const scoped = listSessionsForBrowser([session], { from: "2026-07-18", to: "2026-07-18" }).sessions[0];
+  assert.equal(scoped.model_usage[0].long_context_input_tokens, 50_000);
+  assert.equal(scoped.cost_usd, session.cost_usd);
 });
 
 test("efficiency denominators only use sessions that contain edits", () => {

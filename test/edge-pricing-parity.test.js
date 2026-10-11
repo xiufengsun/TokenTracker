@@ -348,6 +348,10 @@ for (const name of [CANONICAL, ...MIRRORS]) {
         };
         assert.equal(edgeCost(row), expected, `${name}: ${model} ignores CLI display estimates`);
         assert.equal(localCost(row), expected, `local: ${model} matches edge pricing`);
+        const omo = { ...row, source: "omo", reasoning_output_tokens: 10 };
+        assert.equal(edgeCost(omo), localCost(omo), `${name}: OmO reasoning remains a subset`);
+        const claude = { ...row, source: "claude", output_tokens: 10, reasoning_output_tokens: 10 };
+        assert.equal(edgeCost(claude), localCost(claude), `${name}: Claude reasoning remains disjoint`);
       }
     }
   });

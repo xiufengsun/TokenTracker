@@ -227,7 +227,9 @@ const SessionRow = React.memo(function SessionRow({
                 metric: copy(session.session_store_metric === "allocated" ? "sessions.storage.allocated" : "sessions.storage.logical"),
                 ratio: Math.round(session.bytes_per_1k_tokens || 0).toLocaleString(locale),
               })}>
-                {copy("sessions.storage.label", { size: `${(session.session_store_bytes / 1024 / 1024).toLocaleString(locale, { maximumFractionDigits: 2 })} MB` })}
+                {copy("sessions.storage.label", { size: copy("sessions.storage.size", {
+                  value: (session.session_store_bytes / 1024 / 1024).toLocaleString(locale, { maximumFractionDigits: 2 }),
+                }) })}
               </span>
             ) : null}
             {isSubagent ? <span className="sessions-meta-item">{copy("sessions.badge.subagent")}{session.agent_role ? ` · ${session.agent_role}` : ""}</span> : null}
@@ -432,8 +434,7 @@ export function SessionsPage() {
   // copy of the query, so keystrokes paint before the list re-filters.
   const deferredQuery = useDeferredValue(searchQuery);
 
-  const filtered = useMemo(() => {
-    const q = deferredQuery.trim().toLowerCase();
+  const scopedSessions = useMemo(() => {
     const startMs = rangeStartMs(rangeFilter);
     let fromMs = startMs, toMs = Infinity;
     if (rangeFilter === "custom") {
@@ -444,7 +445,13 @@ export function SessionsPage() {
         toMs = new Date(`${customFrom}T23:59:59.999`).getTime();
       }
     }
-    return scopeSessionsToRange(allSessions, fromMs, toMs).filter((row) => {
+    return scopeSessionsToRange(allSessions, fromMs, toMs);
+  }, [allSessions, rangeFilter, customFrom, customTo]);
+
+  const filtered = useMemo(() => {
+    const q = deferredQuery.trim().toLowerCase();
+    const startMs = rangeStartMs(rangeFilter);
+    return scopedSessions.filter((row) => {
       if (sourceFilter !== "all" && row.source !== sourceFilter) return false;
       if (projectFilter !== "all" && row.project_key !== projectFilter) return false;
       if (modelFilter !== "all" && !sessionModels(row).some((usage) => usage.model === modelFilter)) return false;
@@ -456,7 +463,7 @@ export function SessionsPage() {
       const haystack = `${row.title || ""} ${row.project_key || ""} ${models} ${row.agent_nickname || ""} ${row.agent_role || ""} ${row.project_ref || ""} ${row.session_id || ""}`.toLowerCase();
       return haystack.includes(q);
     });
-  }, [allSessions, sourceFilter, projectFilter, modelFilter, rangeFilter, customFrom, customTo, deferredQuery]);
+  }, [scopedSessions, sourceFilter, projectFilter, modelFilter, rangeFilter, customFrom, customTo, deferredQuery]);
 
   const summary = useMemo(() => summarizeSessions(filtered), [filtered]);
 
@@ -498,9 +505,9 @@ export function SessionsPage() {
   const visible = useMemo(() => grouped.roots.slice(0, visibleCount), [grouped.roots, visibleCount]);
   const visibleGroups = useMemo(() => groupSessions(visible, groupMode), [visible, groupMode]);
   const detailSubagents = useMemo(() => detailSession
-    ? allSessions.filter((session) => session.session_hash !== detailSession.session_hash
+    ? scopedSessions.filter((session) => session.session_hash !== detailSession.session_hash
       && (session.root_session_hash === detailSession.session_hash || session.parent_session_hash === detailSession.session_hash))
-    : NO_SESSIONS, [allSessions, detailSession]);
+    : NO_SESSIONS, [scopedSessions, detailSession]);
   const closeDetail = useCallback(() => setDetailSession(null), []);
   const setDateRange = useCallback((range) => {
     setRangeFilter(range);

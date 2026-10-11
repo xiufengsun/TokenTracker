@@ -31,6 +31,7 @@
     <Compile Include="../TokenTrackerWin/UpdateIntegrity.cs" Link="UpdateIntegrity.cs" />
     <Compile Include="../TokenTrackerWin/NativeReturnUri.cs" Link="NativeReturnUri.cs" />
     <Compile Include="../TokenTrackerWin/CloudUsageExport.cs" Link="CloudUsageExport.cs" />
+    <Compile Include="../TokenTrackerWin/DocumentScriptCache.cs" Link="DocumentScriptCache.cs" />
   </ItemGroup>
 
 </Project>

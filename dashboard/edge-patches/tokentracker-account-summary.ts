@@ -746,7 +746,7 @@ function computeRowCost(row: GroupedRow): number {
   // tokentracker-leaderboard-refresh.ts (both guard on source).
   const reasoningCost =
     row.source === "codex" || row.source === "acode" || row.source === "every-code" ||
-      row.source === "cline"
+      row.source === "cline" || row.source === "omo"
       ? 0
       : (Number(row.reasoning_output_tokens) || 0) * (p.output || 0);
   return (

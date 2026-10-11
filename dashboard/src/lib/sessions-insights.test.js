@@ -4,13 +4,16 @@ import { aggregateSessionPerformance, overlapsSessionDates, parseSessionFilters,
 describe("session statistics", () => {
   it("scopes cross-day tokens, cost and descendant totals using local calendar boundaries", () => {
     const rows = [{ session_hash: "parent", own_total_tokens: 180, total_tokens: 180,
-      usage_buckets: [{ timestamp: "2026-10-09T15:30:00Z", model: "gpt-5.4", total_tokens: 120, cost_usd: .12 },
-        { timestamp: "2026-10-09T16:30:00Z", model: "gpt-5.4", total_tokens: 60, cost_usd: .06 }] },
+      input_tokens: 150, output_tokens: 30,
+      usage_buckets: [{ timestamp: "2026-10-09T15:30:00Z", model: "gpt-5.4", total_tokens: 120, input_tokens: 100, output_tokens: 20, cost_usd: .12 },
+        { timestamp: "2026-10-09T16:30:00Z", model: "gpt-5.4", total_tokens: 60, input_tokens: 50, output_tokens: 10, priority_input_tokens: 50, cost_usd: .06 }] },
       { session_hash: "child", parent_session_hash: "parent", own_total_tokens: 30,
         usage_buckets: [{ timestamp: "2026-10-09T16:30:00Z", model: "gpt-5.4", total_tokens: 30, cost_usd: .03 }] }];
     const scoped = scopeSessionsToRange(rows, Date.parse("2026-10-10T00:00:00+08:00"), Date.parse("2026-10-10T23:59:59+08:00"));
     expect(summarizeSessions(scoped)).toMatchObject({ tokens: 90, cost: .09 });
     expect(scoped[0]).toMatchObject({ own_total_tokens: 60, combined_total_tokens: 90, subagent_total_tokens: 30 });
+    expect(scoped[0]).toMatchObject({ input_tokens: 50, output_tokens: 10, priority_input_tokens: 50 });
+    expect(scoped[0].model_usage[0]).toMatchObject({ input_tokens: 50, output_tokens: 10, priority_input_tokens: 50 });
     expect(rows[0].own_total_tokens).toBe(180);
     expect(scopeSessionsToRange(rows)).toBe(rows);
   });
