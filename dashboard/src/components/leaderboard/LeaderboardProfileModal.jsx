@@ -549,7 +549,7 @@ export function ProfileContent({ data, currency, rate, onClose, variant = "modal
           </FactRow>
         </dl>
 
-        {Array.isArray(models?.breakdown) && models.breakdown.length > 0 && (
+        {Array.isArray(models?.breakdown) && Boolean(models.breakdown.length) && (
           <section className="border-t border-oai-gray-200/70 dark:border-oai-gray-800/60 pt-5">
             <SectionLabel>{copy("usage.overview.all_models")}</SectionLabel>
             {models.breakdown.map((model) => (
