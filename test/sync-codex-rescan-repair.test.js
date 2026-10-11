@@ -90,6 +90,8 @@ async function withTempSyncEnv(fn) {
     // os.homedir() reads USERPROFILE on Windows, so isolate it too or the test
     // writes into the developer's real ~/.tokentracker.
     USERPROFILE: process.env.USERPROFILE,
+    APPDATA: process.env.APPDATA,
+    LOCALAPPDATA: process.env.LOCALAPPDATA,
     CODEX_HOME: process.env.CODEX_HOME,
     CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
     CODE_HOME: process.env.CODE_HOME,
@@ -105,6 +107,8 @@ async function withTempSyncEnv(fn) {
   try {
     process.env.HOME = home;
     process.env.USERPROFILE = home;
+    process.env.APPDATA = path.join(home, "AppData", "Roaming");
+    process.env.LOCALAPPDATA = path.join(home, "AppData", "Local");
     process.env.CODEX_HOME = path.join(home, ".codex");
     delete process.env.CLAUDE_CONFIG_DIR;
     process.env.CODE_HOME = path.join(home, ".code");

@@ -332,6 +332,11 @@ for (const name of [CANONICAL, ...MIRRORS]) {
     const { computeRowCost: localCost } = require("../src/lib/pricing");
     for (const [model, expected] of [
       ["claude-sonnet-4-6", 0.0009675],
+      ["claude-opus-5-5", 0.00117],
+      ["claude-opus-5.5", 0.00117],
+      ["claude-sonnet-5", 0.000645],
+      ["claude-sonnet-5-5", 0.000585],
+      ["k3-256k", 0.00078],
       ["glm-4.7-flash", 0],
       ["zzzz-fixture-unknown-123xyz", 0],
     ]) {
@@ -343,6 +348,10 @@ for (const name of [CANONICAL, ...MIRRORS]) {
         };
         assert.equal(edgeCost(row), expected, `${name}: ${model} ignores CLI display estimates`);
         assert.equal(localCost(row), expected, `local: ${model} matches edge pricing`);
+        const omo = { ...row, source: "omo", reasoning_output_tokens: 10 };
+        assert.equal(edgeCost(omo), localCost(omo), `${name}: OmO reasoning remains a subset`);
+        const claude = { ...row, source: "claude", output_tokens: 10, reasoning_output_tokens: 10 };
+        assert.equal(edgeCost(claude), localCost(claude), `${name}: Claude reasoning remains disjoint`);
       }
     }
   });

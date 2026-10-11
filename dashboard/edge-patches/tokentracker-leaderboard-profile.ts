@@ -105,7 +105,10 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "claude-opus-5-fast": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
   "claude-opus-4-6": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
   "claude-opus-4-5-20250414": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
-  "claude-sonnet-5": { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
+  "claude-sonnet-5": { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
+  "claude-opus-5-5": { input: 4, output: 20, cache_read: 0.2, cache_write: 5 },
+  "claude-sonnet-5-5": { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
+  "k3-256k": { input: 3, output: 15, cache_read: 0.3 },
   "claude-sonnet-4-6": { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
   "claude-sonnet-4-5-20250514": { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
   "claude-sonnet-4-20250514": { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
@@ -389,6 +392,9 @@ function getModelPricing(model: string, source = "") {
   if (lower.includes("fable")) return MODEL_PRICING["claude-fable-5"];
   // Opus 5 fast mode bills at 2x the standard Opus tier ($10/$50), so the
   // -fast matcher must precede both the opus-5 and the generic opus fallback.
+  if (/opus-5[.-]5(?:$|[^0-9.])/.test(lower)) return MODEL_PRICING["claude-opus-5-5"];
+  if (/sonnet-5[.-]5(?:$|[^0-9.])/.test(lower)) return MODEL_PRICING["claude-sonnet-5-5"];
+  if (/sonnet-5(?:$|[^0-9.-])/.test(lower)) return MODEL_PRICING["claude-sonnet-5"];
   if (lower.includes("opus-5-fast")) return MODEL_PRICING["claude-opus-5-fast"];
   if (lower.includes("opus-5")) return MODEL_PRICING["claude-opus-5"];
   if (lower.includes("opus")) return MODEL_PRICING["claude-opus-4-6"];
@@ -565,7 +571,7 @@ function computeRowCost(row: UsageRow): number {
   const p = getRowPricing({ ...row, model: modelForPricing });
   const reasoningIncludedInOutput =
     row.source === "codex" || row.source === "acode" || row.source === "every-code" ||
-    row.source === "cline";
+    row.source === "cline" || row.source === "omo";
   const reasoningCost = reasoningIncludedInOutput
     ? 0
     : (row.reasoning_output_tokens || 0) * (p.output || 0);
@@ -913,6 +919,7 @@ export default async function (req: Request): Promise<Response> {
   const periodByDayCost = new Map<string, number>();
   const periodByProvider = new Map<string, { tokens: number; cost: number }>();
   const periodByModel = new Map<string, number>();
+  const modelBreakdown = new Map<string, Record<string, number | string>>();
   let periodTotalTokens = 0;
   let periodTotalCost = 0;
 
@@ -941,6 +948,17 @@ export default async function (req: Request): Promise<Response> {
       provider.cost += cost;
       periodByProvider.set(src, provider);
       if (row.model) periodByModel.set(row.model, (periodByModel.get(row.model) || 0) + tokens);
+      if (row.model) {
+        const detail = modelBreakdown.get(row.model) || { model_name: row.model,
+          total_tokens: 0, estimated_cost_usd: 0, input_tokens: 0, output_tokens: 0,
+          cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0 };
+        detail.total_tokens = Number(detail.total_tokens) + tokens;
+        detail.estimated_cost_usd = Number(detail.estimated_cost_usd) + cost;
+        for (const key of ["input_tokens", "output_tokens", "cached_input_tokens", "cache_creation_input_tokens", "reasoning_output_tokens"] as const) {
+          detail[key] = Number(detail[key]) + (Number(row[key]) || 0);
+        }
+        modelBreakdown.set(row.model, detail);
+      }
       periodTotalTokens += tokens;
       periodTotalCost += cost;
     }
@@ -1045,6 +1063,7 @@ export default async function (req: Request): Promise<Response> {
     models: {
       count: periodByModel.size,
       favorite: favoriteModel,
+      breakdown: [...modelBreakdown.values()].sort((a, b) => Number(b.total_tokens) - Number(a.total_tokens)),
     },
     by_provider: byProvider,
     heatmap,

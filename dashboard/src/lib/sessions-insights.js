@@ -2,6 +2,69 @@ export function sessionOwnTokens(session) {
   return finiteValue(session?.own_total_tokens ?? session?.total_tokens);
 }
 
+export function scopeSessionsToRange(sessions, startMs = 0, endMs = Infinity) {
+  if (!startMs && endMs === Infinity) return sessions;
+  const rows = sessions.map((session) => {
+    if (!Array.isArray(session.usage_buckets)) return { ...session };
+    const buckets = session.usage_buckets.filter((bucket) => {
+      const ms = Date.parse(bucket.timestamp);
+      return ms >= startMs && ms <= endMs;
+    });
+    const models = new Map();
+    const totals = Object.fromEntries([...USAGE_FIELDS, ...PRICING_FIELDS].map((key) => [key, 0]));
+    let tokens = 0;
+    let cost = 0;
+    for (const bucket of buckets) {
+      tokens += finiteValue(bucket.total_tokens);
+      cost += finiteValue(bucket.cost_usd);
+      const row = models.get(bucket.model) || {
+        ...(session.model_usage || []).find((model) => model.model === bucket.model),
+        model: bucket.model, ...Object.fromEntries([...USAGE_FIELDS, ...PRICING_FIELDS].map((key) => [key, 0])), cost_usd: 0,
+        selected_models: [], reroute_reasons: [], model_attribution: "selected",
+      };
+      for (const key of [...USAGE_FIELDS, ...PRICING_FIELDS]) {
+        const value = finiteValue(bucket[key]);
+        totals[key] += value;
+        row[key] += value;
+      }
+      row.cost_usd += finiteValue(bucket.cost_usd);
+      for (const field of ["selected_models", "reroute_reasons"]) {
+        if (Array.isArray(bucket[field])) row[field] = [...new Set([...row[field], ...bucket[field]])];
+      }
+      if (bucket.model_attribution === "effective") row.model_attribution = "effective";
+      models.set(bucket.model, row);
+    }
+    return { ...session, ...totals, total_tokens: tokens, own_total_tokens: tokens,
+      cost_usd: cost, own_cost_usd: cost, model_usage: [...models.values()] };
+  }).filter((row) => !Array.isArray(row.usage_buckets) || sessionOwnTokens(row) > 0);
+  const children = new Map();
+  for (const row of rows) {
+    if (!row.parent_session_hash) continue;
+    const group = children.get(row.parent_session_hash) || [];
+    group.push(row);
+    children.set(row.parent_session_hash, group);
+  }
+  const sum = (row, seen = new Set()) => {
+    if (seen.has(row.session_hash)) return { tokens: 0, cost: 0 };
+    const next = new Set(seen).add(row.session_hash);
+    let tokens = sessionOwnTokens(row), cost = sessionOwnCost(row);
+    for (const child of children.get(row.session_hash) || []) {
+      const nested = sum(child, next);
+      tokens += nested.tokens;
+      cost += nested.cost;
+    }
+    return { tokens, cost };
+  };
+  for (const row of rows) {
+    const total = sum(row);
+    row.combined_total_tokens = total.tokens;
+    row.combined_cost_usd = total.cost;
+    row.subagent_total_tokens = total.tokens - sessionOwnTokens(row);
+    row.subagent_cost_usd = total.cost - sessionOwnCost(row);
+  }
+  return rows;
+}
+
 export function sessionOwnCost(session) {
   return finiteValue(session?.own_cost_usd ?? session?.cost_usd);
 }
@@ -10,6 +73,9 @@ function finiteValue(value) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : 0;
 }
+
+const USAGE_FIELDS = ["input_tokens", "output_tokens", "cached_input_tokens", "cache_creation_input_tokens", "reasoning_output_tokens", "total_tokens"];
+const PRICING_FIELDS = ["long_context_", "priority_", "priority_long_context_"].flatMap((prefix) => USAGE_FIELDS.filter((field) => field !== "total_tokens").map((field) => prefix + field));
 
 export function sessionModels(session) {
   const observed = Array.isArray(session?.model_usage)

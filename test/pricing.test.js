@@ -15,6 +15,24 @@ const fetcher = require("../src/lib/pricing/litellm-fetcher");
 const pricing = require("../src/lib/pricing");
 const curatedPricing = require("../src/lib/pricing/curated-overrides.json");
 
+test("Claude 5.5 SKUs use official rates and Claude thinking is already billed in output (#762)", () => {
+  pricing.resetPricingForTests();
+  for (const [model, expected] of [
+    ["claude-opus-5-5", 29.2], ["claude-opus-5.5", 29.2],
+    ["claude-sonnet-5", 14.7], ["claude-sonnet-5-5", 14.6],
+  ]) {
+    const row = { source: "claude", model, input_tokens: 1e6, output_tokens: 5e5,
+      cached_input_tokens: 1e6, cache_creation_input_tokens: 1e6, reasoning_output_tokens: 5e5 };
+    assert.ok(Math.abs(pricing.computeRowCost(row) - expected) < 1e-9, model);
+    assert.equal(pricing.computeRowCost(row), pricing.computeRowCost({ ...row, output_tokens: 1e6, reasoning_output_tokens: 0 }));
+  }
+  const litellm = { "claude-opus-5-5": { input: 4, output: 20 } };
+  const result = matcher.lookupPricing("claude-opus-5-5", { curated: { exact: { "claude-opus-5": { input: 5, output: 25 } } }, litellm });
+  assert.equal(result.source, "litellm:exact");
+  assert.equal(matcher.lookupPricing("anthropic/claude-opus-5-5", { curated: { exact: { "claude-opus-5": { input: 5, output: 25 } } }, litellm: {} }).hit, false);
+  assert.deepEqual(pricing.getModelPricing("k3-256k"), pricing.getModelPricing("k3"));
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 

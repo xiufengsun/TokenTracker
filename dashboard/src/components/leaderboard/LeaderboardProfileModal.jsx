@@ -549,6 +549,32 @@ export function ProfileContent({ data, currency, rate, onClose, variant = "modal
           </FactRow>
         </dl>
 
+        {Array.isArray(models?.breakdown) && Boolean(models.breakdown.length) && (
+          <section className="border-t border-oai-gray-200/70 dark:border-oai-gray-800/60 pt-5">
+            <SectionLabel>{copy("usage.overview.all_models")}</SectionLabel>
+            {models.breakdown.map((model) => (
+              <details key={model.model_name} className="border-b border-oai-gray-100 py-2 text-xs dark:border-oai-gray-800">
+                <summary className="cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500">
+                  <span className="font-medium">{model.model_name}</span>
+                  <span className="ml-3 tabular-nums" title={formatTokensTooltip(model.total_tokens)}>{formatTokens(model.total_tokens)}</span>
+                  <span className="ml-3 tabular-nums">{formatUsdCurrency(model.estimated_cost_usd, { currency, rate })}</span>
+                </summary>
+                <dl className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-oai-gray-500">
+                  {[
+                    ["input_tokens", "dashboard.projects.detail.comp_input"],
+                    ["cached_input_tokens", "dashboard.projects.detail.comp_cached"],
+                    ["cache_creation_input_tokens", "dashboard.projects.detail.comp_cache_write"],
+                    ["output_tokens", "dashboard.projects.detail.comp_output"],
+                    ["reasoning_output_tokens", "dashboard.projects.detail.comp_reasoning"],
+                  ].map(([field, label]) => (
+                    <div key={field} className="flex gap-1"><dt>{copy(label)}</dt><dd title={formatTokensTooltip(model[field])}>{formatTokens(model[field])}</dd></div>
+                  ))}
+                </dl>
+              </details>
+            ))}
+          </section>
+        )}
+
         {/* Achievements. The modal is space-constrained: one overlapping
             coin strip (click a coin for details). The standalone /u/ page has
             room for the full grid with names, tiers, and (own view) progress. */}

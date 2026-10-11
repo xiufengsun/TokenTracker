@@ -48,6 +48,7 @@ internal sealed class DashboardWindow : Window
     private WebView2CompositionControl _webView = CreateWebViewControl();
     private readonly ServerManager _server;
     private bool _coreReady;
+    private bool _backdropEnabled;
     private bool _exiting;
     private bool _oauthInFlight;
     private CancellationTokenSource? _oauthTimeout;
@@ -237,7 +238,7 @@ internal sealed class DashboardWindow : Window
     private void ApplyBackdrop(int type)
     {
         if (_hwnd == 0) return;
-        DwmSetWindowAttribute(_hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref type, sizeof(int));
+        _backdropEnabled = DwmSetWindowAttribute(_hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref type, sizeof(int)) == 0;
     }
 
     // ── Tilt wheel (horizontal scroll) ─────────────────────────────────
@@ -766,7 +767,7 @@ internal sealed class DashboardWindow : Window
         // specific (html.native-windows-app …) and force the shells fully transparent.
         // The frosted tint lives only on the body's ::before overlay at low alpha, so
         // the window's DWM acrylic shows through. Solid cards keep their own bg.
-        const string css = """
+        var css = """
             ::-webkit-scrollbar{display:none!important}
             *{-webkit-user-select:none;user-select:none}
             input,textarea{-webkit-user-select:text;user-select:text}
@@ -795,9 +796,9 @@ internal sealed class DashboardWindow : Window
               z-index:0!important;
               pointer-events:none!important;
               border-radius:10px!important;
-              /* Frosted blur restored — this is the glass/translucent texture. */
-              backdrop-filter:blur(40px) saturate(135%)!important;
-              -webkit-backdrop-filter:blur(40px) saturate(135%)!important;
+              /* Older Windows keeps one CSS fallback when DWM cannot supply acrylic. */
+              backdrop-filter:blur(28px) saturate(135%)!important;
+              -webkit-backdrop-filter:blur(28px) saturate(135%)!important;
             }
             html.native-windows-app.dark body.tt-native-glass-shell::before{
               background:
@@ -850,6 +851,8 @@ internal sealed class DashboardWindow : Window
             }
             #tt-titlebar{background:transparent!important}
             """;
+        if (_backdropEnabled)
+            css += "html.native-windows-app.dark body.tt-native-glass-shell::before,html.native-windows-app:not(.dark) body.tt-native-glass-shell::before{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}";
         var js =
             "document.documentElement.classList.add('native-app','native-windows-app');" +
             "document.body&&document.body.classList.add('tt-native-glass-shell');" +

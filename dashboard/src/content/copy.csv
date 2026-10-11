@@ -1975,7 +1975,7 @@ sessions.sort.recent,ui,SessionsPage,SessionInsights,recent,Recent,,active
 sessions.sort.cost,ui,SessionsPage,SessionInsights,cost,Highest cost,,active
 sessions.sort.tokens,ui,SessionsPage,SessionInsights,tokens,Most tokens,,active
 sessions.summary.count,ui,SessionsPage,SessionInsights,count,Matching sessions,,active
-sessions.summary.scope,ui,SessionsPage,SessionInsights,scope,"Full-session usage for matched sessions and subagents, each counted once. Dates select overlapping sessions; models select whole sessions.",,active
+sessions.summary.scope,ui,SessionsPage,SessionInsights,scope,"Token and cost totals use the selected dates for sessions with timestamped usage. Sessions without usage buckets retain lifetime totals. Turn, duration and performance metrics describe the full session. Each session and subagent is counted once.",,active
 sessions.summary.speed,ui,SessionsPage,SessionInsights,speed,Estimated speed,,active
 sessions.performance.speed,ui,SessionsPage,SessionInsights,speed,≈{{speed}} tok/s,,active
 sessions.performance.samples,ui,SessionsPage,SessionInsights,samples,{{count}} timed requests,,active
@@ -2077,3 +2077,8 @@ cloud.action.setup_sync,cloud,*,Cloud,action,"Set up Cloud sync",,active
 cloud.login.trial_context,cloud,*,Cloud,text,"Sign in to start your Cloud trial. Your plan selection is saved.",,active
 cloud.login.purchase_context,cloud,*,Cloud,text,"Sign in to continue your Cloud purchase. Your plan selection is saved.",,active
 cloud.plan.trial_setup_hint,cloud,CloudPage,CloudPage,text,"Start your trial, then set up sync on your computers.",,active
+sessions.storage.label,dashboard,SessionsPage,SessionRow,storage,"Transcript: {{size}}",,active
+sessions.storage.tooltip,dashboard,SessionsPage,SessionRow,storage,"Session files only · {{metric}} · {{ratio}} bytes per 1K lifetime tokens. Shared databases, caches and project files are excluded.",,active
+sessions.storage.allocated,dashboard,SessionsPage,SessionRow,storage,"allocated bytes",,active
+sessions.storage.logical,dashboard,SessionsPage,SessionRow,storage,"logical file size",,active
+sessions.storage.size,dashboard,SessionsPage,SessionRow,storage_size,"{{value}} MiB",,active

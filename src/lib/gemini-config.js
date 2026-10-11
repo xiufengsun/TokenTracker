@@ -3,6 +3,7 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 
 const { ensureDir, readJson, writeJson } = require("./fs");
+const { buildNotifyCommand } = require("./notify-command");
 
 const DEFAULT_EVENT = "SessionEnd";
 const DEFAULT_HOOK_NAME = "tokentracker";
@@ -99,9 +100,9 @@ async function isGeminiHookConfigured({
   return hasHook(entries, { hookCommand, hookName });
 }
 
-function buildGeminiHookCommand(notifyPath) {
+function buildGeminiHookCommand(notifyPath, options) {
   const cmd = typeof notifyPath === "string" ? notifyPath : "";
-  return `/usr/bin/env node ${quoteArg(cmd)} --source=gemini`;
+  return buildNotifyCommand(cmd, "gemini", options);
 }
 
 function buildHookEntry({ hookCommand, hookName, matcher }) {

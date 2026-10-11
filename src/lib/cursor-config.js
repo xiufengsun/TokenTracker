@@ -15,7 +15,8 @@ function resolveCursorPaths({ home, platform = process.platform, env = process.e
     appDir = pathForPlatform.join(h, "Library", "Application Support", "Cursor");
   } else if (platform === "win32") {
     const appData =
-      (typeof env.APPDATA === "string" && env.APPDATA.trim()) ||
+      ((!home || h === os.homedir() || env !== process.env) &&
+        typeof env.APPDATA === "string" && env.APPDATA.trim()) ||
       pathForPlatform.join(h, "AppData", "Roaming");
     appDir = pathForPlatform.join(appData, "Cursor");
   } else {

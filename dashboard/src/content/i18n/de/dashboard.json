@@ -529,7 +529,7 @@
   "sessions.sort.cost": "Höchste Kosten",
   "sessions.sort.tokens": "Meiste Tokens",
   "sessions.summary.count": "Passende Sitzungen",
-  "sessions.summary.scope": "Gesamte Nutzung passender Sitzungen und Unteragenten, jeweils einmal gezählt. Datumsfilter wählen überlappende Sitzungen; Modellfilter wählen ganze Sitzungen.",
+  "sessions.summary.scope": "Token- und Kostensummen verwenden die gewählten Daten, wenn zeitgestempelte Nutzung vorliegt. Ohne Nutzungsintervalle bleibt die Gesamtnutzung erhalten. Runden, Dauer und Leistung beziehen sich auf die gesamte Sitzung. Jede Sitzung und jeder Unteragent wird einmal gezählt.",
   "sessions.summary.speed": "Geschätzte Geschwindigkeit",
   "sessions.performance.speed": "Ca. {{speed}} tok/s",
   "sessions.performance.samples": "{{count}} gemessene Anfragen",

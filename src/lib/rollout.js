@@ -1639,7 +1639,10 @@ async function resolveOpenclawSessionFiles(env = process.env, deps = {}) {
         path.join(agentsDir, agent.name, "agent", "openclaw-agent.sqlite"),
         path.join(agentsDir, agent.name, "openclaw-agent.sqlite"),
       ]) {
-        if ((await fs.stat(dbPath).catch(() => null))?.isFile()) out.push(dbPath);
+        if ((await fs.stat(dbPath).catch(() => null))?.isFile()) {
+          out.push(dbPath);
+          break; // alternate layouts of one agent database, not two sources
+        }
       }
     }
   }
@@ -1708,6 +1711,8 @@ async function parseOpenclawIncremental({
     let accepted = null;
     let openedRegularFile = false;
     if (filePath.endsWith(".sqlite")) {
+      const sessionFilter = typeof entry?.sessionId === "string"
+        ? ` AND e.session_id = '${entry.sessionId.replace(/'/g, "''")}'` : "";
       const rows = await readSqliteJsonRowsAsync(filePath, `
         SELECT e.session_id, json_object(
           'type', json_extract(e.event_json, '$.type'),
@@ -1726,6 +1731,7 @@ async function parseOpenclawIncremental({
         WHERE json_valid(e.event_json) AND COALESCE(w.reason, '') != 'compaction'
           AND json_extract(e.event_json, '$.message.role') = 'assistant'
           AND json_extract(e.event_json, '$.message.usage') IS NOT NULL
+          ${sessionFilter}
         ORDER BY e.session_id, e.seq
       `, { readOnly: true, throwOnReadFailure: true, label: "OpenClaw" });
       const sessions = new Map();
@@ -1736,11 +1742,17 @@ async function parseOpenclawIncremental({
       for (const [sessionId, lines] of sessions) {
         const sessionCursorKey = `${key}#${sessionId}`;
         const prior = { ...(stagedFiles[sessionCursorKey]?.usageEvents || {}) };
+        const dbDir = path.dirname(filePath);
+        const agentDir = path.basename(dbDir) === "agent" && path.basename(path.dirname(path.dirname(dbDir))) === "agents"
+          ? path.dirname(dbDir) : dbDir;
+        const agentPrefix = openclawCursorKey(`${agentDir}${path.sep}`);
         // SQLite imports retain transcript identities. Carry forward counts
         // from this session's legacy transcript, including reset archives.
         for (const [legacyPath, cursor] of Object.entries(stagedFiles)) {
           const basename = path.basename(legacyPath);
-          if (cursor.provider !== "openclaw" || !basename.startsWith(`${sessionId}.jsonl`)) continue;
+          if (cursor.provider !== "openclaw" || !openclawCursorKey(legacyPath).startsWith(agentPrefix)) continue;
+          if (!basename.startsWith(`${sessionId}.jsonl`) &&
+              !(basename.startsWith(`${sessionId}-topic-`) && basename.includes(".jsonl"))) continue;
           for (const [identity, count] of Object.entries(cursor.usageEvents || {})) {
             prior[identity] = Math.max(prior[identity] || 0, count);
           }

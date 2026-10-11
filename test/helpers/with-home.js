@@ -13,12 +13,18 @@ function withHome(dir) {
   const prev = {
     HOME: process.env.HOME,
     USERPROFILE: process.env.USERPROFILE,
+    APPDATA: process.env.APPDATA,
+    LOCALAPPDATA: process.env.LOCALAPPDATA,
     DSH_HOME: process.env.DSH_HOME,
     TOKENTRACKER_DSH_HOME: process.env.TOKENTRACKER_DSH_HOME,
     CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
   };
   process.env.HOME = dir;
   process.env.USERPROFILE = dir;
+  // Windows providers resolve their databases from AppData, independently of
+  // os.homedir(). Keep test syncs away from installed editors' real history.
+  process.env.APPDATA = require("node:path").join(dir, "AppData", "Roaming");
+  process.env.LOCALAPPDATA = require("node:path").join(dir, "AppData", "Local");
   // The DeepSeek Harness exports DSH_HOME to every child process, so running
   // the suite inside a dsh session would otherwise leak the real ~/.dsh past
   // this isolation. Clear both harness-home overrides so the dsh parser
@@ -31,7 +37,7 @@ function withHome(dir) {
   // way; a test that wants it sets it explicitly after withHome().
   delete process.env.CLAUDE_CONFIG_DIR;
   return function restoreHome() {
-    for (const key of ["HOME", "USERPROFILE", "DSH_HOME", "TOKENTRACKER_DSH_HOME", "CLAUDE_CONFIG_DIR"]) {
+    for (const key of ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "DSH_HOME", "TOKENTRACKER_DSH_HOME", "CLAUDE_CONFIG_DIR"]) {
       if (prev[key] === undefined) delete process.env[key];
       else process.env[key] = prev[key];
     }
