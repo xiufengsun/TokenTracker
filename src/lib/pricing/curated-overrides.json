@@ -3,7 +3,7 @@
     "note": "Curated price overrides. Always wins over LiteLLM. Two reasons to live here: (1) self-defined alias names that LiteLLM will never carry (kiro-*, hy3-*, composer-*, kimi-for-coding, free-tier OpenRouter routes); (2) prices we want to pin even if LiteLLM has the model (e.g. cache_write fields LiteLLM often omits). Units: USD per million tokens. Edit this file to override pricing without redeploying.",
     "units": "usd_per_million_tokens",
     "deepseek_v4_pricing_note": "Official DeepSeek V4 pricing verified on 2026-08-21. Peak hours are 01:00-04:00 and 06:00-10:00 UTC; all other hours are off-peak at half price. Exact entries store peak rates. computeRowCost applies the time-of-use discount from each row's UTC hour_start.",
-    "iflytek_maas_pricing_note": "iFlytek MaaS inference prices supplied for AStudio on 2026-08-31. AStudio homepage: https://agent.xfyun.cn/. Official pricing source: https://maas.xfyun.cn/modelSquare. Source values are RMB per million tokens, converted at 7.2 RMB/USD, then rounded to two decimal places for billing. Models without a dedicated cache-hit price use the normal input rate; cache writes also use the normal input rate. iFlytek MaaS prices are source-scoped and do not inherit DeepSeek time-of-use discounts."
+    "iflytek_maas_pricing_note": "iFlytek MaaS inference prices supplied for AStudio on 2026-08-31. AStudio homepage: https://agent.xfyun.cn/. Official pricing source: https://maas.xfyun.cn/modelSquare. Source values are RMB per million tokens, converted at 7.2 RMB/USD, then rounded to two decimal places for billing. Models without a dedicated cache-hit price use the normal input rate; cache writes also use the normal input rate. iFlytek MaaS prices are source-scoped and do not inherit DeepSeek time-of-use discounts. Spark-X2.5 entries (spark-x2.5, spark-x2.5-4b, spark-x2.5-1.7b) were read from the model square on 2026-10-08; spark-x2.5 is listed at a limited-time 30% rate (0.96 / 3.6 / 0.14 RMB input / output / cache-hit, list price 3.2 / 12 / 0.48), and the two small models are free."
   },
   "exact": {
     "cline-gateway-models": {
@@ -482,6 +482,9 @@
   },
   "source_exact": {
     "acode": {
+      "spark-x2.5": { "input": 0.13, "output": 0.50, "cache_read": 0.02, "cache_write": 0.13 },
+      "spark-x2.5-4b": { "input": 0.00, "output": 0.00, "cache_read": 0.00, "cache_write": 0.00 },
+      "spark-x2.5-1.7b": { "input": 0.00, "output": 0.00, "cache_read": 0.00, "cache_write": 0.00 },
       "xopglm53": { "input": 1.11, "output": 3.89, "cache_read": 0.28, "cache_write": 1.11 },
       "xopdeepseekv4pro0813": { "input": 1.25, "output": 3.75, "cache_read": 0.04, "cache_write": 1.25 },
       "xopdeepseekv4flash0731": { "input": 0.14, "output": 0.28, "cache_read": 0.03, "cache_write": 0.14 },

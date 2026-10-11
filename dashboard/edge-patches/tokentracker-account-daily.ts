@@ -335,6 +335,9 @@ const ZERO_PRICING = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
 // AStudio homepage: https://agent.xfyun.cn/
 // Official pricing source: https://maas.xfyun.cn/modelSquare
 const IFLYTEK_MAAS_MODEL_PRICING: Record<string, { input: number; output: number; cache_read: number; cache_write?: number }> = {
+  "spark-x2.5": { input: 0.13, output: 0.50, cache_read: 0.02, cache_write: 0.13 },
+  "spark-x2.5-4b": { input: 0.00, output: 0.00, cache_read: 0.00, cache_write: 0.00 },
+  "spark-x2.5-1.7b": { input: 0.00, output: 0.00, cache_read: 0.00, cache_write: 0.00 },
   "xopglm53": { input: 1.11, output: 3.89, cache_read: 0.28, cache_write: 1.11 },
   "xopdeepseekv4pro0813": { input: 1.25, output: 3.75, cache_read: 0.04, cache_write: 1.25 },
   "xopdeepseekv4flash0731": { input: 0.14, output: 0.28, cache_read: 0.03, cache_write: 0.14 },
