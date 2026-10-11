@@ -526,8 +526,7 @@ function buildSessionPluginIndex({ trackerDir, packageName = "tokentracker-cli",
     `  const sqliteModule = await importSqliteSync();\n` +
     `  if (!sqliteModule) return null;\n` +
     `  const { DatabaseSync } = sqliteModule;\n` +
-    `  const sessionQuery = "SELECT session_id, session_key, model, updated_at FROM session_windows WHERE session_key = ? ORDER BY updated_at DESC LIMIT 1";\n` +
-    `  const aggQuery = "SELECT COALESCE(SUM(json_extract(event_json, '$.message.usage.input')), 0) AS input, COALESCE(SUM(json_extract(event_json, '$.message.usage.output')), 0) AS output, COALESCE(SUM(json_extract(event_json, '$.message.usage.totalTokens')), 0) AS total, MAX(created_at) AS updated_at FROM transcript_events WHERE session_id = ? AND json_extract(event_json, '$.message.role') = 'assistant' AND json_extract(event_json, '$.message.usage') IS NOT NULL";\n` +
+    `  const sessionQuery = "SELECT session_id FROM session_windows WHERE session_key = ? ORDER BY updated_at DESC LIMIT 1";\n` +
     `  const dbCandidates = [path.join(openclawHome, 'agents', agentId, 'agent', 'openclaw-agent.sqlite'), path.join(openclawHome, 'agents', agentId, 'openclaw-agent.sqlite')];\n` +
     `  for (const dbPath of dbCandidates) {\n` +
     `    if (!fs.existsSync(dbPath)) continue;\n` +
@@ -536,9 +535,8 @@ function buildSessionPluginIndex({ trackerDir, packageName = "tokentracker-cli",
     `    try {\n` +
     `      const row = db.prepare(sessionQuery).get(sessionKey);\n` +
     `      if (!row || !row.session_id) continue;\n` +
-    `      const agg = db.prepare(aggQuery).get(row.session_id);\n` +
-    `      if (!agg) continue;\n` +
-    `      return { sessionKey, sessionId: row.session_id, entry: { totalTokens: toNonNegativeInt(agg.total) ?? 0, inputTokens: toNonNegativeInt(agg.input) ?? 0, outputTokens: toNonNegativeInt(agg.output) ?? 0, model: normalize(row.model), updatedAt: row.updated_at || agg.updated_at } };\n` +
+    `      // The passive SQLite reader owns per-event accounting; never synthesize lifetime sums.\n` +
+    `      return { sessionKey, sessionId: row.session_id, entry: {} };\n` +
     `    } catch (_) {}\n` +
     `    finally { try { db.close(); } catch (_) {} }\n` +
     `  }\n` +

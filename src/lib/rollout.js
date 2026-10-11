@@ -1634,9 +1634,16 @@ async function resolveOpenclawSessionFiles(env = process.env, deps = {}) {
           out.push(full);
         }
       }
+      for (const dbPath of [
+        path.join(agentsDir, agent.name, "agent", "openclaw-agent.sqlite"),
+        path.join(agentsDir, agent.name, "openclaw-agent.sqlite"),
+      ]) {
+        if ((await fs.stat(dbPath).catch(() => null))?.isFile()) out.push(dbPath);
+      }
     }
   }
-  out.sort((a, b) => a.localeCompare(b));
+  // Import archives must seed dedup before the corresponding SQLite history.
+  out.sort((a, b) => Number(a.endsWith(".sqlite")) - Number(b.endsWith(".sqlite")) || a.localeCompare(b));
   return out;
 }
 
@@ -1699,6 +1706,58 @@ async function parseOpenclawIncremental({
     const previousOffset = Number(prev?.offset || 0);
     let accepted = null;
     let openedRegularFile = false;
+    if (filePath.endsWith(".sqlite")) {
+      const rows = await readSqliteJsonRowsAsync(filePath, `
+        SELECT e.session_id, json_object(
+          'type', json_extract(e.event_json, '$.type'),
+          'id', json_extract(e.event_json, '$.id'),
+          'timestamp', json_extract(e.event_json, '$.timestamp'),
+          'message', json_object(
+            'role', json_extract(e.event_json, '$.message.role'),
+            'model', json_extract(e.event_json, '$.message.model'),
+            'provider', json_extract(e.event_json, '$.message.provider'),
+            'api', json_extract(e.event_json, '$.message.api'),
+            'timestamp', json_extract(e.event_json, '$.message.timestamp'),
+            'responseId', json_extract(e.event_json, '$.message.responseId'),
+            'usage', json_extract(e.event_json, '$.message.usage')
+          )) AS event
+        FROM transcript_events e JOIN session_windows w ON w.session_id = e.session_id
+        WHERE json_valid(e.event_json) AND COALESCE(w.reason, '') != 'compaction'
+          AND json_extract(e.event_json, '$.message.role') = 'assistant'
+          AND json_extract(e.event_json, '$.message.usage') IS NOT NULL
+        ORDER BY e.session_id, e.seq
+      `, { readOnly: true, throwOnReadFailure: true, label: "OpenClaw" });
+      const sessions = new Map();
+      for (const row of rows) {
+        if (!sessions.has(row.session_id)) sessions.set(row.session_id, []);
+        sessions.get(row.session_id).push(row.event);
+      }
+      for (const [sessionId, lines] of sessions) {
+        const sessionCursorKey = `${key}#${sessionId}`;
+        const prior = { ...(stagedFiles[sessionCursorKey]?.usageEvents || {}) };
+        // SQLite imports retain transcript identities. Carry forward counts
+        // from this session's legacy transcript, including reset archives.
+        for (const [legacyPath, cursor] of Object.entries(stagedFiles)) {
+          const basename = path.basename(legacyPath);
+          if (cursor.provider !== "openclaw" || !basename.startsWith(`${sessionId}.jsonl`)) continue;
+          for (const [identity, count] of Object.entries(cursor.usageEvents || {})) {
+            prior[identity] = Math.max(prior[identity] || 0, count);
+          }
+        }
+        const result = await parseOpenclawSessionFile({
+          lines, previousUsageEvents: prior, appendOnly: false,
+          hourlyState, touchedBuckets, source: fileSource,
+        });
+        stagedFiles[sessionCursorKey] = {
+          provider: "openclaw", usageEvents: result.usageEvents,
+          hasRealUsage: Object.keys(result.usageEvents).length > 0,
+          updatedAt: new Date().toISOString(),
+        };
+        eventsAggregated += result.eventsAggregated;
+      }
+      filesProcessed += 1;
+      continue;
+    }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const fileHandle = await fs.open(filePath, "r").catch(() => null);
       if (!fileHandle) break;
@@ -1913,6 +1972,7 @@ function mergeOpenclawAttemptBuckets(
 }
 
 async function parseOpenclawSessionFile({
+  lines,
   filePath,
   fileHandle,
   startOffset,
@@ -1928,7 +1988,8 @@ async function parseOpenclawSessionFile({
   projectState,
   projectTouchedBuckets,
 }) {
-  const st = fileHandle ? await fileHandle.stat() : await fs.stat(filePath);
+  const st = lines ? { size: lines.length } : fileHandle ? await fileHandle.stat() : await fs.stat(filePath);
+  startOffset = startOffset || 0;
   const endOffset =
     Number.isFinite(endOffsetLimit) && endOffsetLimit >= 0
       ? Math.min(st.size, endOffsetLimit)
@@ -1963,14 +2024,14 @@ async function parseOpenclawSessionFile({
     };
   }
 
-  const stream = fssync.createReadStream(filePath, {
+  const stream = lines ? null : fssync.createReadStream(filePath, {
     fd: fileHandle?.fd,
     autoClose: !fileHandle,
     encoding: "utf8",
     start: startOffset,
     end: endOffset - 1,
   });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const rl = lines || readline.createInterface({ input: stream, crlfDelay: Infinity });
 
   let eventsAggregated = 0;
   const scanCounts = appendOnly ? { ...priorCounts } : {};
@@ -2069,8 +2130,8 @@ async function parseOpenclawSessionFile({
     if (!collectOnly) eventsAggregated += 1;
   }
 
-  rl.close();
-  if (!fileHandle) stream.close?.();
+  if (!lines) rl.close();
+  if (!fileHandle) stream?.close?.();
   return {
     endOffset,
     eventsAggregated,
