@@ -72,11 +72,12 @@ The review started with 35 open issues and nine open PRs. Seven existing PRs wer
 
 ## Validation and rollout
 
-- CLI suite: 3,934 passed, zero failed, 57 platform/precondition skips (3,991 total). SQLite test tools were verified with the CI-pinned SHA3-256. Host AppData isolation was repaired; Cursor alternate-home credential reads no longer cross into the default Windows profile.
-- Windows Release build: zero warnings/errors. Native unit tests: 119 passed, one platform skip.
+- CLI suite: the final Linux CI run passed 3,983 tests with zero failures and nine platform/precondition skips (3,992 total). SQLite test tools were verified with the CI-pinned SHA3-256. Host AppData isolation was repaired; Cursor alternate-home credential reads no longer cross into the default Windows profile.
+- Windows Release build: zero warnings/errors. Native unit tests: 122 passed, one platform skip, including navigation-generation and out-of-order script completion regressions.
 - Focused session analytics: 44 passed, including repeated usage events, cross-day deltas, Shanghai date boundaries, footprint size and lifetime preservation. Real PowerShell execution passed.
 - Full dashboard suite initially had 1,527 passes and one five-second timeout under concurrent build/test load; the affected leaderboard suite passed all 18 tests on isolated rerun. The bounded-worker full rerun passed all 152 test files and all 1,528 tests with zero failures.
 - Copy registry, Chinese coverage, UI string guard, architecture guard, managed versions and generated bot-frame validation passed. The missing retrospective index was restored with this review and the validator is run again.
+- The final review repaired scoped OpenClaw lifecycle sync, canonical SQLite session identity, archive dedup for an agent named `agents`, Claude's PowerShell shell selection and equivalent matcher scopes, minute-precise local-day boundaries, Codex premium subsets and compaction callbacks, scoped modal token categories/descendants, and consistent OmO reasoning costs in every cloud path. The `MiB` unit is explicitly allowed as language-neutral in the Chinese coverage validator.
 - Five pricing/account/profile edge functions were built, deployed and read back byte-for-byte. Private recovery snapshots are under the ignored worktree `.tmp/edge-recovery/`; no production schema, customer usage or payment configuration was changed.
 
 Official rates: [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing), [iFlytek model square](https://maas.xfyun.cn/modelSquare?ch=MaaS-jgkol-6B2D). No guarantee of universal perfection is inferred from tests or CI; unreproduced environments and held PRs remain explicit above.
