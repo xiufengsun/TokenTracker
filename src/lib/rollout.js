@@ -1639,7 +1639,10 @@ async function resolveOpenclawSessionFiles(env = process.env, deps = {}) {
         path.join(agentsDir, agent.name, "agent", "openclaw-agent.sqlite"),
         path.join(agentsDir, agent.name, "openclaw-agent.sqlite"),
       ]) {
-        if ((await fs.stat(dbPath).catch(() => null))?.isFile()) out.push(dbPath);
+        if ((await fs.stat(dbPath).catch(() => null))?.isFile()) {
+          out.push(dbPath);
+          break; // alternate layouts of one agent database, not two sources
+        }
       }
     }
   }
@@ -1736,11 +1739,17 @@ async function parseOpenclawIncremental({
       for (const [sessionId, lines] of sessions) {
         const sessionCursorKey = `${key}#${sessionId}`;
         const prior = { ...(stagedFiles[sessionCursorKey]?.usageEvents || {}) };
+        const dbDir = path.dirname(filePath);
+        const agentDir = path.basename(dbDir) === "agent" && path.basename(path.dirname(dbDir)) !== "agents"
+          ? path.dirname(dbDir) : dbDir;
+        const agentPrefix = openclawCursorKey(`${agentDir}${path.sep}`);
         // SQLite imports retain transcript identities. Carry forward counts
         // from this session's legacy transcript, including reset archives.
         for (const [legacyPath, cursor] of Object.entries(stagedFiles)) {
           const basename = path.basename(legacyPath);
-          if (cursor.provider !== "openclaw" || !basename.startsWith(`${sessionId}.jsonl`)) continue;
+          if (cursor.provider !== "openclaw" || !openclawCursorKey(legacyPath).startsWith(agentPrefix)) continue;
+          if (!basename.startsWith(`${sessionId}.jsonl`) &&
+              !(basename.startsWith(`${sessionId}-topic-`) && basename.includes(".jsonl"))) continue;
           for (const [identity, count] of Object.entries(cursor.usageEvents || {})) {
             prior[identity] = Math.max(prior[identity] || 0, count);
           }

@@ -30,7 +30,7 @@ test("OpenClaw SQLite imports preserve event buckets, caches and archive dedup a
   const insert = db.prepare("INSERT INTO transcript_events VALUES (?, ?, ?, 1)");
   insert.run("s1", 0, JSON.stringify(first));
   insert.run("checkpoint", 0, JSON.stringify(event("checkpoint-copy", "2026-10-09T23:45:00Z", "gpt-5.4")));
-  fs.writeFileSync(path.join(agent, "session-sqlite-import-archive", "s1.jsonl"), JSON.stringify(first) + "\n");
+  fs.writeFileSync(path.join(agent, "session-sqlite-import-archive", "s1-topic-42.jsonl"), JSON.stringify(first) + "\n");
   const queuePath = path.join(root, "queue.jsonl");
   const cursors = { files: {} };
   const files = await resolveOpenclawSessionFiles({ TOKENTRACKER_OPENCLAW_HOME: home });
