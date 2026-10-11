@@ -28,7 +28,8 @@ test("Codex session ranges count each day's appended usage once rather than its 
   assert.equal(first.sessions[0].total_tokens, 120);
   assert.equal(second.sessions[0].total_tokens, 60);
   assert.ok(Math.abs(first.sessions[0].cost_usd + second.sessions[0].cost_usd - row.cost_usd) < 1e-12);
-  assert.equal(summarizeSessions([row], { from: "2026-10-10", to: "2026-10-10" }).summary.total_tokens, 60);
+  assert.equal(summarizeSessions([row], { from: "2026-10-10", to: "2026-10-10" }).summary.total_tokens, 180,
+    "efficiency keeps lifetime tokens and edit counts in the same population");
   assert.equal(listSessionsForBrowser([row]).sessions[0].total_tokens, 180);
   assert.equal(listSessionsForBrowser([row], { from: "2026-10-10", to: "2026-10-10", timeZone: "Asia/Shanghai" }).sessions[0].total_tokens, 180);
   const browser = listSessionsForBrowser([row]).sessions[0];

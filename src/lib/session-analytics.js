@@ -1694,7 +1694,10 @@ function summarizeSessions(sessions, { from = "", to = "", includeSessions = tru
   const context = { timeZone, offsetMinutes };
   const filtered = annotateCodexThreadUsage((sessions || [])
     .filter((row) => withinDayRange(row, from, to, context))
-    .map((row) => scopeSessionUsage(row, from, to, context)));
+    // Efficiency is a session-lifetime metric: both tokens and edit turns
+    // must describe that same population. The browser scopes consumption
+    // separately; do not divide in-range tokens by lifetime edit counts here.
+    .map((row) => ({ ...row })));
   const byModel = new Map();
   const subagents = new Map();
   const totals = {
