@@ -635,7 +635,7 @@ test("index: getModelPricing resolves GLM-5.2 from CURATED for ZCode rows", asyn
 test("index: iFlytek MaaS 使用附件中的完整来源级价格表", () => {
   pricing.resetPricingForTests();
   const iFlytekMaasPricing = curatedPricing.source_exact.acode;
-  assert.equal(Object.keys(iFlytekMaasPricing).length, 61);
+  assert.equal(Object.keys(iFlytekMaasPricing).length, 64);
   assert.equal(curatedPricing.source_alias?.acode, undefined);
   for (const [model, value] of Object.entries(iFlytekMaasPricing)) {
     for (const field of ["input", "output", "cache_read", "cache_write"]) {
@@ -653,6 +653,9 @@ test("index: iFlytek MaaS 使用附件中的完整来源级价格表", () => {
     ["xopdeepseekv4flash0731", { input: 0.14, output: 0.28, cache_read: 0.03, cache_write: 0.14 }],
     ["xopqwen36v35b", { input: 0.15, output: 0.9, cache_read: 0.15, cache_write: 0.15 }],
     ["Spark Mini", { input: 0.28, output: 1.11, cache_read: 0.28, cache_write: 0.28 }],
+    ["spark-x2.5", { input: 0.13, output: 0.5, cache_read: 0.02, cache_write: 0.13 }],
+    ["Spark-X2.5", { input: 0.13, output: 0.5, cache_read: 0.02, cache_write: 0.13 }],
+    ["spark-x2.5-4b", { input: 0, output: 0, cache_read: 0, cache_write: 0 }],
   ];
   for (const [model, expected] of cases) {
     assert.deepEqual(pricing.getModelPricing(model, { source: "acode" }), expected);
