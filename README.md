@@ -338,7 +338,7 @@ flowchart LR
 
 ---
 
-Local features remain free and open source. Optional official Cloud hosts cross-device analytics and is in development; see the [proposed plans and transition rules](docs/cloud-guide.md). The Waffo test pricing draft uses the same worldwide USD base price for recurring and fixed-term access, USD 4.99/month or USD 39.99/year before checkout tax. Self-hosted software is free with infrastructure and maintenance handled by its owner; the complete installation is currently a [technical preview](docs/self-hosting.md).
+Local features remain free and open source. Optional [TokenTracker Cloud](https://www.tokentracker.cc/cloud) is the officially hosted cross-device analytics service; see the [Cloud guide](docs/cloud-guide.md) for plans, trial, and transition rules. Purchases are live at the same worldwide USD base price for recurring and fixed-term access: USD 4.99/month or USD 39.99/year before checkout tax (final amount shown by Waffo). Self-hosted software is free with infrastructure and maintenance handled by its owner; the complete installation is currently a [technical preview](docs/self-hosting.md).
 
 ## 🛡️ Privacy
 
