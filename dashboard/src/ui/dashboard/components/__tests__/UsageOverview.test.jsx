@@ -558,6 +558,39 @@ describe("UsageOverview", () => {
     expect(screen.queryByText(copy("usage.overview.week_cross_month_hint"))).toBeNull();
   });
 
+  it("omits the covered date range when the selected period is a single day", () => {
+    render(
+      <UsageOverview
+        period="day"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="123"
+        fleetData={[]}
+        from="2026-10-13"
+        to="2026-10-13"
+      />,
+    );
+
+    expect(screen.queryByText("Oct 13 — Oct 13")).toBeNull();
+  });
+
+  it("still shows the covered date range for month", () => {
+    render(
+      <UsageOverview
+        period="month"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="123"
+        fleetData={[]}
+        from="2026-10-01"
+        to="2026-10-31"
+      />,
+    );
+
+    expect(screen.getByText("Oct 1 — Oct 31")).toBeTruthy();
+  });
+
+
   it("keeps the TRAE partial-cost notice visible beside combined totals in collapsed and expanded views", async () => {
     const user = userEvent.setup();
     render(

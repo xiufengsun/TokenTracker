@@ -238,14 +238,15 @@ export function UsageOverview({
   // Weeks run Monday–Sunday, so a week selected near a month boundary can
   // hold more usage than the month-to-date it overlaps. Spell out the covered
   // dates and flag the straddle so the week/month totals read as different
-  // windows, not as a miscount.
+  // windows, not as a miscount. Day is a single calendar date, so a
+  // "Oct 13 — Oct 13" range under the summary is redundant — hide it.
   const showCrossMonthHint =
     period === "week" &&
     typeof from === "string" &&
     typeof to === "string" &&
     from.slice(0, 7) !== to.slice(0, 7);
   const periodRangeLabel =
-    from && to
+    period !== "day" && from && to
       ? `${formatDateShort(from, dateLocale)} — ${formatDateShort(to, dateLocale)}`
       : null;
   // The digit-by-digit Counter renders at a fixed 72px and would clip on
