@@ -51,7 +51,7 @@
     "version": "node scripts/sync-versions.cjs && git add TokenTrackerBar/project.yml TokenTrackerWin/TokenTrackerWin.csproj TokenTrackerLinux/package.json TokenTrackerLinux/package-lock.json TokenTrackerLinux/src-tauri/Cargo.toml TokenTrackerLinux/src-tauri/Cargo.lock TokenTrackerLinux/src-tauri/tauri.conf.json TokenTrackerLinux/packaging/arch/tokentracker-linux/PKGBUILD"
   },
   "dependencies": {
-    "@journeyapps/wa-sqlite": "2.0.6",
+    "@journeyapps/wa-sqlite": "2.0.7",
     "@mongodb-js/zstd": "^2.0.1",
     "smol-toml": "^1.9.0",
     "undici": "8.11.2",
