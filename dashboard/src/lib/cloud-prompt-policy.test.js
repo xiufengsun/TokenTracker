@@ -208,4 +208,15 @@ describe("passive response and intent reuse", () => {
     unsubscribe();
     expect(listener).toHaveBeenCalled();
   });
+
+  it("uses machine_count from the ordinary account billing response for multi-device targeting", () => {
+    const value = input({ machineCount: undefined });
+    policy.publishCloudPromptBilling("catalog", catalog, null, now);
+    policy.publishCloudPromptBilling("account", { membership: free, machine_count: 2 }, value.userId, now);
+    const state = policy.readCloudPromptState(value.userId);
+    expect(state.machineCount).toBe(2);
+    expect(policy.cloudContextualPromptDecision({ ...value, ...state, intentional: true, scene: "sync" })).toMatchObject({
+      kind: "promotion", reason: "multi_device",
+    });
+  });
 });

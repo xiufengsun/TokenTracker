@@ -97,7 +97,7 @@ export default async function billing(req: Request): Promise<Response> {
       return object(result.data) as unknown as CloudOrder;
     }
     if (action === "account" && req.method === "GET") {
-      const [membership, payments, subscriptions, orders, conflicts, gifts] = await Promise.all([
+      const [membership, payments, subscriptions, orders, conflicts, gifts, machines] = await Promise.all([
         rpc(client, "cloud_membership", {
           p_user_id: userId,
           p_environment: environment,
@@ -128,13 +128,22 @@ export default async function billing(req: Request): Promise<Response> {
           .not("retry_payment_conflict_at", "is", null)
           .order("created_at", { ascending: false }).limit(20),
         giftAccount(client, userId, environment),
+        // Reuse list_machines so Cloud CTAs can target multi-device accounts
+        // from the same account response the dashboard already loads.
+        rpc(client, "cloud_list_machines", {
+          p_user_id: userId,
+          p_environment: environment,
+          p_current_machine_id: null,
+        }),
       ]);
       if (payments.error || subscriptions.error || orders.error || conflicts.error) {
         throw new BillingError("billing_operation_failed", 503);
       }
+      const machineCount = Number((machines as { machine_count?: unknown })?.machine_count);
       return json({
         environment,
         membership,
+        machine_count: Number.isFinite(machineCount) ? machineCount : undefined,
         payments: payments.data,
         subscriptions: subscriptions.data,
         pending_orders: orders.data,

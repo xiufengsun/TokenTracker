@@ -71,6 +71,8 @@ export type CloudGift = {
 export type CloudAccount = {
   environment?: "sandbox" | "live";
   membership: CloudMembership;
+  /** Active registered sync devices; used for targeted Cloud sales CTAs. */
+  machine_count?: number;
   gift_redemption_available?: boolean;
   redemption_restriction?: string | null;
   gifts?: CloudGift[];

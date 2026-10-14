@@ -85,7 +85,7 @@ A verified checkout receipt is different from payout settlement. The sandbox rec
 
 ### Contextual membership reminders
 
-Reminders reuse existing catalog, membership and denied-access responses without new API requests, polling or telemetry. Nothing appears on initial dashboard opening or the free leaderboard. A user's sync toggle, private history selection or device action can show a dismissible explanation in that panel. Free local use and daily community uploads remain available.
+Reminders reuse existing catalog, membership, account `machine_count`, and denied-access responses without new API requests, polling or telemetry. Nothing appears on initial dashboard opening or the free leaderboard. A user's sync toggle, private history selection or device action can show a dismissible explanation in that panel. Free local use and daily community uploads remain available.
 
 Sales and trial CTAs require a fresh catalog with `environment=live`, reached active launch policy, configured Waffo and `checkout_verified=true`, plus a matching active/live membership response. The server's gate also requires explicit `TOKENTRACKER_WAFFO_LIVE_CHECKOUT_VERIFIED=true`. Merchant approval, product setup or sandbox success alone does not justify that switch. It was enabled with the Owner's explicit launch request on 2026-10-10; if policy returns to preview or verification is disabled, reminders cannot promote a live purchase.
 
