@@ -23,7 +23,7 @@ function PromptPanel({ userId, decision, onContinueLocal, localHost, onTrialClic
   if (!decision) return null;
   const deadline = decision.kind === "deadline";
   return (
-    <section className="tt-cloud-theme rounded-lg border border-oai-gray-200 bg-oai-gray-50 p-4 dark:border-oai-gray-800 dark:bg-oai-gray-900" aria-label={copy("cloud.prompt.label")}>
+    <section className="tt-cloud-theme rounded-lg border border-oai-gray-200 bg-oai-gray-50 p-4 dark:border-oai-gray-800 dark:bg-oai-gray-900" aria-label={copy("cloud.prompt.label")} data-prompt-kind={decision.kind} data-prompt-reason={decision.reason || undefined}>
       <div className="flex items-start gap-3">
         <Cloud size={17} className="mt-0.5 shrink-0 text-oai-gray-600 dark:text-oai-gray-300" aria-hidden />
         <div className="min-w-0 flex-1">

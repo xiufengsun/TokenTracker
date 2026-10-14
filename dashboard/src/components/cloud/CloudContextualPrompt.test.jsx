@@ -30,7 +30,7 @@ beforeEach(() => {
   sessionStorage.clear();
   userId = `component-user-${++counter}`;
   publishCloudPromptBilling("catalog", catalog, null, now);
-  publishCloudPromptBilling("account", { membership }, userId, now);
+  publishCloudPromptBilling("account", { membership, machine_count: 2 }, userId, now);
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -39,6 +39,13 @@ describe("contextual Cloud panels", () => {
     show();
     expect(screen.queryByRole("region", { name: "Cloud options" })).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+  it("shows learn-more instead of trial for a single-device free sync action", () => {
+    publishCloudPromptBilling("account", { membership, machine_count: 1 }, userId, now);
+    recordCloudPromptIntent(userId, "sync");
+    show();
+    expect(screen.getByRole("link", { name: "Learn about Cloud" })).toHaveAttribute("href", "/cloud");
+    expect(screen.queryByRole("link", { name: "Try Cloud free" })).not.toBeInTheDocument();
   });
   it("offers the relevant trial inline after an action, keeps free use visible, and performs no request", async () => {
     const request = vi.spyOn(globalThis, "fetch");
@@ -94,7 +101,7 @@ describe("contextual Cloud panels", () => {
     });
     expect(screen.queryByRole("link", { name: "Try Cloud free" })).not.toBeInTheDocument();
     const next = `${userId}-other`;
-    act(() => { publishCloudPromptBilling("account", { membership }, next, now); recordCloudPromptIntent(next, "sync"); });
+    act(() => { publishCloudPromptBilling("account", { membership, machine_count: 2 }, next, now); recordCloudPromptIntent(next, "sync"); });
     view.rerender(<MemoryRouter><CloudContextualPrompt userId={next} /></MemoryRouter>);
     expect(screen.getByRole("link", { name: "Try Cloud free" })).toBeInTheDocument();
   });

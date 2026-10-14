@@ -59,18 +59,22 @@ export function publishCloudPromptBilling(action, value, userId, now = Date.now(
     changed();
     return;
   }
-  if (!userId || !value?.membership) return;
+  if (!userId || !value || typeof value !== "object") return;
   const previous = accounts.get(accountKey(userId)) || {};
-  accounts.set(accountKey(userId), {
-    ...previous,
-    membership: value.membership,
-    subscriptions: value.subscriptions || previous.subscriptions,
-    paymentConflict: "conflict_orders" in value || "pending_orders" in value
+  const next = { ...previous };
+  if (Number.isFinite(value.machine_count)) next.machineCount = value.machine_count;
+  if (value.membership) {
+    next.membership = value.membership;
+    next.subscriptions = value.subscriptions || previous.subscriptions;
+    next.paymentConflict = "conflict_orders" in value || "pending_orders" in value
       ? [...(value.conflict_orders || []), ...(value.pending_orders || [])].some((order) => order.retry_payment_conflict_at)
-      : Boolean(value.order?.retry_payment_conflict_at || previous.paymentConflict),
-    failure: value.membership.can_read_cloud && value.membership.can_upload_cloud &&
-      previous.membership?.status !== value.membership.status ? null : previous.failure,
-  });
+      : Boolean(value.order?.retry_payment_conflict_at || previous.paymentConflict);
+    next.failure = value.membership.can_read_cloud && value.membership.can_upload_cloud &&
+      previous.membership?.status !== value.membership.status ? null : previous.failure;
+  } else if (!Number.isFinite(value.machine_count)) {
+    return;
+  }
+  accounts.set(accountKey(userId), next);
   changed();
 }
 export function recordCloudPromptIntent(userId, scene) {
@@ -84,11 +88,13 @@ export function clearCloudPromptIntent(userId) {
   accounts.set(accountKey(userId), { ...accounts.get(accountKey(userId)), intent: null, failure: null });
   changed();
 }
-export function recordCloudPromptFailure(userId, code, membership, source) {
+export function recordCloudPromptFailure(userId, code, membership, source, details = {}) {
   if (!userId || !accessCodes.has(code)) return;
   const previous = accounts.get(accountKey(userId)) || {};
-  accounts.set(accountKey(userId), { ...previous, membership: membership || previous.membership,
-    failure: { code, source } });
+  const next = { ...previous, membership: membership || previous.membership,
+    failure: { code, source } };
+  if (Number.isFinite(details?.machineCount)) next.machineCount = details.machineCount;
+  accounts.set(accountKey(userId), next);
   changed();
 }
 export function clearCloudPromptFailure(userId, source) {
@@ -148,8 +154,37 @@ function canOfferCloud(catalog, at, now) {
     Number.isFinite(at) && now >= at && now - at <= CATALOG_FRESH_MS;
 }
 
+/** Trial, transition, and fixed paid-term reminders share a final 7-day window. */
+export const CLOUD_DEADLINE_WINDOW_DAYS = 7;
+
+function membershipDeadlineEnd(membership) {
+  const status = membership?.status;
+  if (status === "trial") return membership.trial_ends_at;
+  if (status === "transition") return membership.transition_ends_at;
+  if (status === "active") return membership.expires_at;
+  return null;
+}
+
+function withinCloudDeadlineWindow(membership, subscriptions = [], now = Date.now()) {
+  if (!membership) return false;
+  const status = membership.status;
+  if (!["active", "trial", "transition"].includes(status)) return false;
+  if (status === "active" && subscriptions.some((item) =>
+    ["active", "trialing"].includes(item.status) && !item.cancel_at_period_end)) return false;
+  const remaining = Date.parse(membershipDeadlineEnd(membership) || "") - now;
+  return Number.isFinite(remaining) && remaining > 0 && remaining <= CLOUD_DEADLINE_WINDOW_DAYS * DAY;
+}
+
+/** Sales CTAs only for multi-device accounts or an approaching trial/transition/paid end. */
+export function cloudPromotionTargetReason(machineCount, membership, subscriptions = [], now = Date.now()) {
+  if (withinCloudDeadlineWindow(membership, subscriptions, now)) return "deadline";
+  if (Number(machineCount) >= 2) return "multi_device";
+  return null;
+}
+
 export function cloudContextualPromptDecision({ userId, intentional = false, scene, membership,
-  failure, subscriptions = [], catalog, catalogObservedAt, paymentConflict = false, now = Date.now(), storage = browserStorage() }) {
+  failure, subscriptions = [], catalog, catalogObservedAt, paymentConflict = false, machineCount,
+  now = Date.now(), storage = browserStorage() }) {
   if (!userId || !intentional || !scenes.has(scene) || paymentConflict ||
     membership?.status === "self_hosted" || membership?.hosting_mode === "self_hosted" ||
     catalog?.policy?.hosting_mode === "self_hosted") return null;
@@ -180,10 +215,19 @@ export function cloudContextualPromptDecision({ userId, intentional = false, sce
   if (cooldown.hidden) return null;
   const ready = cooldown.usable && membership?.environment === "live" && membership?.phase === "active" &&
     canOfferCloud(catalog, catalogObservedAt, now);
-  return { scene: promptScene, kind: ready ? "promotion" : "explanation",
+  const reason = ready
+    ? cloudPromotionTargetReason(machineCount, membership, subscriptions, now)
+    : null;
+  // Single-device free users keep learn-more explanations, not trial/purchase CTAs.
+  if (ready && reason) {
+    return { scene: promptScene, kind: "promotion", reason,
+      bodyKey: `cloud.prompt.${promptScene}`,
+      ctaKey: membership?.trial_available ? "cloud.prompt.try" : "cloud.action.view_plans",
+      href: membership?.trial_available ? "/billing/checkout?intent=trial" : "/cloud" };
+  }
+  return { scene: promptScene, kind: "explanation",
     bodyKey: ready ? `cloud.prompt.${promptScene}` : "cloud.prompt.unconfirmed",
-    ctaKey: ready ? membership?.trial_available ? "cloud.prompt.try" : "cloud.action.view_plans" : "cloud.prompt.learn",
-    href: ready && membership?.trial_available ? "/billing/checkout?intent=trial" : "/cloud" };
+    ctaKey: "cloud.prompt.learn", href: "/cloud" };
 }
 
 export function cloudDeadlinePromptDecision({ userId, membership, subscriptions = [], now = Date.now(), storage = browserStorage() }) {
@@ -192,13 +236,11 @@ export function cloudDeadlinePromptDecision({ userId, membership, subscriptions 
   if (!["active", "trial", "transition"].includes(status)) return null;
   if (status === "active" && subscriptions.some((item) =>
     ["active", "trialing"].includes(item.status) && !item.cancel_at_period_end)) return null;
-  const end = status === "trial" ? membership.trial_ends_at
-    : status === "transition" ? membership.transition_ends_at : membership.expires_at;
-  const remaining = Date.parse(end || "") - now;
-  if (!Number.isFinite(remaining) || remaining <= 0 || remaining > (status === "trial" ? 2 : 7) * DAY) return null;
+  const end = membershipDeadlineEnd(membership);
+  if (!withinCloudDeadlineWindow(membership, subscriptions, now)) return null;
   const giftOnly = status === "active" && membership.access_source === "gift";
   const scene = giftOnly ? "deadline_gift" : `deadline_${status}`;
   const cooldown = cooling(userId, scene, false, now, storage);
   if (cooldown.hidden || !cooldown.usable) return null;
-  return { scene, kind: "deadline", bodyKey: `cloud.prompt.${scene}`, date: end };
+  return { scene, kind: "deadline", reason: "deadline", bodyKey: `cloud.prompt.${scene}`, date: end };
 }

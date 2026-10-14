@@ -43,7 +43,7 @@ beforeEach(() => {
   publishCloudPromptBilling("catalog", { environment: "live", checkout_verified: true,
     policy: { phase: "active", launch_at: "2020-01-01" }, providers: { waffo: true } }, null);
   publishCloudPromptBilling("account", { membership: { status: "free", environment: "live", phase: "active",
-    trial_available: true, can_read_cloud: false, can_upload_cloud: false } }, values.userId);
+    trial_available: true, can_read_cloud: false, can_upload_cloud: false }, machine_count: 2 }, values.userId);
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -64,4 +64,13 @@ it("waits for the user's sync action and keeps the existing free-sync operation 
   await act(async () => { await userEvent.click(screen.getByRole("button", { name: "Use local data" })); });
   expect(values.toggle).toHaveBeenCalledTimes(2);
   expect(screen.queryByRole("region", { name: "Cloud options" })).not.toBeInTheDocument();
+});
+
+it("does not sell a trial after sync when the account only has one registered device", async () => {
+  publishCloudPromptBilling("account", { membership: { status: "free", environment: "live", phase: "active",
+    trial_available: true, can_read_cloud: false, can_upload_cloud: false }, machine_count: 1 }, values.userId);
+  render(<MemoryRouter><SharedSettingsSections /></MemoryRouter>);
+  await act(async () => { await userEvent.click(screen.getByRole("switch", { name: copy("settings.account.cloudSync") })); });
+  expect(screen.getByRole("link", { name: "Learn about Cloud" })).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Try Cloud free" })).not.toBeInTheDocument();
 });

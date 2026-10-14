@@ -901,7 +901,9 @@ async function fetchAccountFunction(
       if (typeof denied?.code === "string") {
         err.code = denied.code;
         if (baseUrl === getInsforgeRemoteUrl())
-          recordCloudPromptFailure(accountIdentity(accessToken), denied.code, denied.membership, slug);
+          recordCloudPromptFailure(accountIdentity(accessToken), denied.code, denied.membership, slug, {
+            machineCount: Number.isFinite(denied.machine_count) ? denied.machine_count : undefined,
+          });
       }
       throw err;
     }

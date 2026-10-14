@@ -201,7 +201,7 @@ describe("Settings sync feedback", () => {
   it("shows the existing trial or device guidance instead of duplicate sync error text", async () => {
     const membership = { status: "free", environment: "live", phase: "active", trial_available: true, can_upload_cloud: false, can_read_cloud: false };
     publishCloudPromptBilling("catalog", { environment: "live", checkout_verified: true, policy: { phase: "active", launch_at: "2000-01-01" }, providers: { waffo: true } }, null);
-    publishCloudPromptBilling("account", { membership }, state.ownerId);
+    publishCloudPromptBilling("account", { membership, machine_count: 2 }, state.ownerId);
     state.sync.mockRejectedValueOnce({ code: "cloud_membership_required", membership });
     render(<MemoryRouter><CloudSection /></MemoryRouter>);
     await act(async () => { await userEvent.click(screen.getByRole("switch", { name: copy("settings.account.cloudSync") })); });

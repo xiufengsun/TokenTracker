@@ -24,5 +24,5 @@ it("does not borrow membership, catalog or dismissed promotion from another inst
   expect(readCloudPromptState(owner).membership).toBeUndefined();
   expect(readCloudPromptState(owner).catalog).toBeUndefined();
   expect(cloudContextualPromptDecision({ userId: owner, scene: "sync", intentional: true, membership, catalog,
-    catalogObservedAt: now, now }).kind).toBe("promotion");
+    catalogObservedAt: now, machineCount: 2, now }).kind).toBe("promotion");
 });
