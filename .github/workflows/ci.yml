@@ -270,7 +270,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Windows review artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: windows-review-${{ github.event.pull_request.head.sha || github.sha }}
           retention-days: 7
