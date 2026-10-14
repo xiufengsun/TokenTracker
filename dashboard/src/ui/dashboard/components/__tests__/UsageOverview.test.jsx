@@ -242,6 +242,11 @@ describe("UsageOverview", () => {
 
     const rowButton = screen.getByRole("button", { name: /gpt-6\.1-sol-fast/i });
     expect(rowButton).toHaveAttribute("aria-expanded", "false");
+    // Expand/collapse is a chevron affordance; the word stays screen-reader-only.
+    expect(rowButton.querySelector("svg.lucide-chevron-down")).not.toBeNull();
+    expect(rowButton.querySelector("svg.lucide-chevron-down")).not.toHaveClass("rotate-180");
+    expect(screen.getByText(copy("usage.overview.expand"))).toHaveClass("sr-only");
+    expect(screen.queryByText(copy("usage.overview.collapse"))).toBeNull();
 
     // Rows without backend splits stay non-interactive.
     expect(screen.getByText("plain-model").parentElement.tagName).toBe("DIV");
@@ -253,6 +258,8 @@ describe("UsageOverview", () => {
       await user.click(rowButton);
     });
     expect(rowButton).toHaveAttribute("aria-expanded", "true");
+    expect(rowButton.querySelector("svg.lucide-chevron-down")).toHaveClass("rotate-180");
+    expect(screen.getByText(copy("usage.overview.collapse"))).toHaveClass("sr-only");
     for (const label of ["Input", "Cached input", "Cache write", "Output", "Reasoning"]) {
       expect(screen.getByText(label)).toBeVisible();
     }
@@ -261,6 +268,7 @@ describe("UsageOverview", () => {
       await user.click(rowButton);
     });
     expect(rowButton).toHaveAttribute("aria-expanded", "false");
+    expect(rowButton.querySelector("svg.lucide-chevron-down")).not.toHaveClass("rotate-180");
     expect(container.querySelectorAll("[data-model-rank-row]")).toHaveLength(2);
     expect(screen.queryByText("Cached input")).toBeNull();
   });
@@ -404,7 +412,7 @@ describe("UsageOverview", () => {
     expect(row).toHaveClass(
       "grid",
       "grid-cols-[minmax(0,1fr)_auto_auto_auto]",
-      "sm:grid-cols-[minmax(0,1fr)_minmax(8rem,max-content)_minmax(5.5rem,max-content)_minmax(7rem,max-content)]",
+      "sm:grid-cols-[minmax(0,1fr)_minmax(8rem,max-content)_minmax(5.5rem,max-content)_minmax(4.5rem,max-content)]",
     );
     expect(row.children[1]).toHaveClass("whitespace-nowrap");
     expect(row.children[2]).toHaveClass("whitespace-nowrap");
