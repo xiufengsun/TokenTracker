@@ -6957,6 +6957,17 @@ function normalizeQoderNewTokens(usage) {
   return null;
 }
 
+// Subagent transcripts are internal turns of the same conversation, so they
+// must not add to conversation activity — same rule the Claude branch enforces
+// with isMainSession (#307) and Claude Science encodes with `isRoot ? 1 : 0`.
+// A row that carries neither tokens nor activity is still tracked in the cursor:
+// its credits belong to the sidecar, and a streamed rewrite can hand it real
+// tokens later. It must not touch an hourly or project bucket though, because
+// getHourlyBucket() creates buckets on demand and would publish an all-zero row.
+function qoderRowCountsAsUsage(totals) {
+  return (totals?.total_tokens || 0) > 0 || (totals?.conversation_count || 0) > 0;
+}
+
 async function parseQoderNewIncremental({
   sessionFiles,
   cursors,
@@ -7017,6 +7028,9 @@ async function parseQoderNewIncremental({
     } catch (_e) {
       continue;
     }
+    // Separator-agnostic: WSL installs are walked over \\wsl$ UNC paths where
+    // path.join emits backslashes (#307).
+    const isMainSession = !/[\\/]subagents[\\/]/.test(filePath);
     const lines = raw.split("\n");
     for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
       const line = lines[lineIdx];
@@ -7064,7 +7078,7 @@ async function parseQoderNewIncremental({
         billable_total_tokens: base.billable_total_tokens,
         total_cost_usd: 0,
         usage_precision: base.usage_precision || undefined,
-        conversation_count: 1,
+        conversation_count: isMainSession ? 1 : 0,
       } : {
         input_tokens: 0,
         cached_input_tokens: 0,
@@ -7074,7 +7088,7 @@ async function parseQoderNewIncremental({
         total_tokens: 0,
         billable_total_tokens: 0,
         total_cost_usd: 0,
-        conversation_count: 1,
+        conversation_count: isMainSession ? 1 : 0,
       };
       let projectKey = null;
       let projectRef = null;
@@ -7127,7 +7141,7 @@ async function parseQoderNewIncremental({
       && (prev.projectKey || null) === (cur.projectKey || null)
       && (prev.totals?.total_cost_usd || 0) === (cur.totals.total_cost_usd || 0);
     if (unchanged) continue;
-    if (prev.totals && prev.bucketStart && prev.model) {
+    if (prev.totals && prev.bucketStart && prev.model && qoderRowCountsAsUsage(prev.totals)) {
       const oldBucket = getHourlyBucket(hourlyState, sourceKey, prev.model, prev.bucketStart);
       subtractTotals(oldBucket.totals, prev.totals);
       touchedBuckets.add(bucketKey(sourceKey, prev.model, prev.bucketStart));
@@ -7138,16 +7152,17 @@ async function parseQoderNewIncremental({
       }
     }
     if (cur) {
-      const bucket = getHourlyBucket(hourlyState, sourceKey, cur.model, cur.bucketStart);
-      addTotals(bucket.totals, cur.totals);
-      if (cur.totals.usage_precision) bucket.usage_precision = cur.totals.usage_precision;
-      // addTotals handles total_cost_usd via USD_TICKS, but credits cost is small; ensure it accumulates
-      touchedBuckets.add(bucketKey(sourceKey, cur.model, cur.bucketStart));
-      if (projectEnabled && cur.projectKey) {
-        const projectBucket = getProjectBucket(projectState, cur.projectKey, sourceKey, cur.bucketStart, cur.projectRef);
-        addTotals(projectBucket.totals, cur.totals);
-        if (cur.totals.usage_precision) projectBucket.usage_precision = cur.totals.usage_precision;
-        projectTouchedBuckets.add(projectBucketKey(cur.projectKey, sourceKey, cur.bucketStart));
+      if (qoderRowCountsAsUsage(cur.totals)) {
+        const bucket = getHourlyBucket(hourlyState, sourceKey, cur.model, cur.bucketStart);
+        addTotals(bucket.totals, cur.totals);
+        if (cur.totals.usage_precision) bucket.usage_precision = cur.totals.usage_precision;
+        touchedBuckets.add(bucketKey(sourceKey, cur.model, cur.bucketStart));
+        if (projectEnabled && cur.projectKey) {
+          const projectBucket = getProjectBucket(projectState, cur.projectKey, sourceKey, cur.bucketStart, cur.projectRef);
+          addTotals(projectBucket.totals, cur.totals);
+          if (cur.totals.usage_precision) projectBucket.usage_precision = cur.totals.usage_precision;
+          projectTouchedBuckets.add(projectBucketKey(cur.projectKey, sourceKey, cur.bucketStart));
+        }
       }
       qoderState.messages[key] = {
         totals: cur.totals,
@@ -7168,15 +7183,17 @@ async function parseQoderNewIncremental({
   // Add brand-new keys
   for (const [key, cur] of currentByKey.entries()) {
     if (qoderState.messages[key]) continue;
-    const bucket = getHourlyBucket(hourlyState, sourceKey, cur.model, cur.bucketStart);
-    addTotals(bucket.totals, cur.totals);
-    if (cur.totals.usage_precision) bucket.usage_precision = cur.totals.usage_precision;
-    touchedBuckets.add(bucketKey(sourceKey, cur.model, cur.bucketStart));
-    if (projectEnabled && cur.projectKey) {
-      const projectBucket = getProjectBucket(projectState, cur.projectKey, sourceKey, cur.bucketStart, cur.projectRef);
-      addTotals(projectBucket.totals, cur.totals);
-      if (cur.totals.usage_precision) projectBucket.usage_precision = cur.totals.usage_precision;
-      projectTouchedBuckets.add(projectBucketKey(cur.projectKey, sourceKey, cur.bucketStart));
+    if (qoderRowCountsAsUsage(cur.totals)) {
+      const bucket = getHourlyBucket(hourlyState, sourceKey, cur.model, cur.bucketStart);
+      addTotals(bucket.totals, cur.totals);
+      if (cur.totals.usage_precision) bucket.usage_precision = cur.totals.usage_precision;
+      touchedBuckets.add(bucketKey(sourceKey, cur.model, cur.bucketStart));
+      if (projectEnabled && cur.projectKey) {
+        const projectBucket = getProjectBucket(projectState, cur.projectKey, sourceKey, cur.bucketStart, cur.projectRef);
+        addTotals(projectBucket.totals, cur.totals);
+        if (cur.totals.usage_precision) projectBucket.usage_precision = cur.totals.usage_precision;
+        projectTouchedBuckets.add(projectBucketKey(cur.projectKey, sourceKey, cur.bucketStart));
+      }
     }
     qoderState.messages[key] = {
       totals: cur.totals,

@@ -592,7 +592,7 @@ test("subagent transcript sharing a sessionId does not clobber or double-count",
   assert.equal(second.eventsAggregated, 0);
 });
 
-test("distinct subagent message ids across main and subagent files both count", async (t) => {
+test("subagent rows are tracked but add no conversation activity", async (t) => {
   const tmp = tempDir();
   const { queuePath } = tempQueue();
   t.after(() => {
@@ -602,11 +602,97 @@ test("distinct subagent message ids across main and subagent files both count", 
   const main = path.join(tmp, "proj", "sess-1.jsonl");
   const sub = path.join(tmp, "proj", "sess-1", "subagents", "agent-1.jsonl");
   writeJsonl(main, [qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "m1", sessionId: "sess-1" })]);
-  writeJsonl(sub, [qRec({ credits: 2, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "s1", sessionId: "sess-1" })]);
+  writeJsonl(sub, [
+    qRec({ credits: 2, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "s1", sessionId: "sess-1" }),
+    qRec({ credits: 3, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "s2", sessionId: "sess-1" }),
+  ]);
+  const cursors = {};
   const res = await parseQoderNewIncremental({
-    sessionFiles: [main, sub], cursors: {}, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+    sessionFiles: [main, sub], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
   });
-  assert.equal(res.messagesProcessed, 2);
+  // All three stay tracked (their credits and any later token rewrite need it)
+  // but only the main-transcript row counts as conversation activity.
+  assert.equal(res.messagesProcessed, 3);
+  assert.equal(Object.keys(cursors.qoderNew.messages).length, 3);
+  const rows = queueRows(queuePath).filter((r) => r.source === "qoder");
+  assert.equal(rows.reduce((s, r) => s + r.conversation_count, 0), 1);
+  assert.equal(rows.reduce((s, r) => s + (r.total_tokens || 0), 0), 0);
+  for (const row of rows) {
+    assert.ok(row.conversation_count > 0 || row.total_tokens > 0,
+      "subagent rows must not publish all-zero buckets");
+  }
+});
+
+test("subagent detection is separator-agnostic (UNC backslashes)", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => { fs.rmSync(path.dirname(queuePath), { recursive: true, force: true }); });
+  // Simulate a WSL UNC walk where path.join emits backslashes.
+  const uncFile = `C:\\\\wsl$\\\\Ubuntu\\\\home\\\\u\\\\.qoder-cn\\\\proj\\\\sess\\\\subagents\\\\agent-1.jsonl`;
+  const cursors = {};
+  const res = await parseQoderNewIncremental({
+    sessionFiles: [uncFile], cursors, queuePath, sourceKey: "qoder-cn", cursorKey: "qoderCnNew",
+  });
+  assert.equal(res.messagesProcessed, 0, "unreadable path is skipped, not crashed on");
+});
+
+test("a subagent row that later gains real tokens is bucketed exactly once", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  const sub = path.join(tmp, "proj", "sess-1", "subagents", "agent-1.jsonl");
+  writeJsonl(sub, [qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "s1", sessionId: "sess-1" })]);
+  const cursors = {};
+  const first = await parseQoderNewIncremental({
+    sessionFiles: [sub], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  assert.equal(first.eventsAggregated, 1);
+  assert.equal(queueRows(queuePath).filter((r) => r.source === "qoder").length, 0, "no all-zero row published");
+  // Upstream rewrites the row with authoritative tokens.
+  writeJsonl(sub, [qRec({ credits: 1, billable: false, input_tokens: 1000, output_tokens: 40 }, { id: "s1", sessionId: "sess-1" })]);
+  const second = await parseQoderNewIncremental({
+    sessionFiles: [sub], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  assert.equal(second.eventsAggregated, 1);
+  const rows = queueRows(queuePath).filter((r) => r.source === "qoder");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].total_tokens, 1040, "tokens arrive exactly once, not doubled");
+  assert.equal(rows[0].conversation_count, 0, "still no conversation activity for a subagent turn");
+});
+
+test("deleting a main row retracts its activity without leaving a phantom bucket", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  const file = path.join(tmp, "proj", "sess1.jsonl");
+  writeJsonl(file, [
+    qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "a", ts: "2026-09-10T08:00:00.000Z" }),
+    qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "b", ts: "2026-09-10T08:05:00.000Z" }),
+  ]);
+  const cursors = {};
+  await parseQoderNewIncremental({
+    sessionFiles: [file], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  const before = queueRows(queuePath).filter((r) => r.source === "qoder");
+  assert.equal(before.reduce((s, r) => s + r.conversation_count, 0), 2);
+  writeJsonl(file, [
+    qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "a", ts: "2026-09-10T08:00:00.000Z" }),
+  ]);
+  await parseQoderNewIncremental({
+    sessionFiles: [file], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  const after = queueRows(queuePath).filter((r) => r.source === "qoder");
+  const latest = after[after.length - 1];
+  assert.equal(latest.conversation_count, 1, "retraction must land on the real activity count");
+  for (const row of after) {
+    assert.ok(row.conversation_count > 0 || row.total_tokens > 0, "no all-zero bucket rows");
+  }
 });
 
 test("streamed rewrites of one message id count once and restate on change", async (t) => {
