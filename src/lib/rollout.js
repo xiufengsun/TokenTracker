@@ -6770,13 +6770,33 @@ async function parseQoderDbIncremental({
 //
 // Qoder 2026-08 (app 0.1.2+) migrated from SharedClientCache/cache/db/local.db
 // to Electron main.sqlite + ~/.qoder/projects/<slug>/<sessionId>.jsonl.
-// The new transcript's message.usage no longer carries prompt_tokens — it is a
-// credit-billed SDK: {input_tokens:0, output_tokens:0, credits:3.2, billable:true}.
-// Only rows with authoritative token fields are counted: credit-only usage
-// without tokens is intentionally not counted (usage stays unsupported, no
-// token delta) because there is no first-party evidence for a credit→token
-// rate. Cost was never estimated — no authoritative credit→USD rate is
-// published, so total_cost_usd stays 0.
+//
+// The transcript's message.usage shape has drifted at least once, and BOTH
+// shapes occur in real user history:
+//   - app 0.1.8 / agent 1.1.44: Anthropic-style precise token fields, on the
+//     main transcript AND on subagent transcripts
+//     (see test/qoder-new-parser.test.js "Real CN record shape").
+//   - app 0.4.x, model "qfmodel": every row is
+//     {input_tokens:0, output_tokens:0, cache_*:0, credits:>0, billable:false}.
+// The old comment here claimed the credit-billed shape was `{credits, billable:
+// true}`; that assumption is what made the gate below drop 100% of modern Qoder
+// rows, so Qoder vanished from the dashboard instead of showing up as
+// "0 tokens / N requests". `billable` means "charged to the account", NOT
+// "a call happened" — free-tier models report false while still reporting
+// credits. Admission therefore needs all three signals, and dropping any of
+// them regresses a shape that used to count.
+//
+// Non-goals: credit→token conversion stays out. There is no first-party credit
+// → token (or → USD) rate, so fabricating one would push an invented number
+// into totals, trends, achievements and the cloud leaderboard. Rows without
+// authoritative tokens contribute conversation activity only, and
+// total_cost_usd stays 0. Transcript `usage.credits` is surfaced separately
+// (qoder-credits sidecar) rather than as a token estimate.
+//
+// conversation_count here follows this provider's existing per-response
+// convention (`: 1` per admitted assistant row). That field is NOT comparable
+// across providers — see the note in the Craft branch.
+//
 // Old local.db is kept as a legacy fallback; both sources now use distinct
 // cursor namespaces (qoder vs qoderNew) via disjoint messageKey prefixes
 // (row: vs jsonl:) but upload under the same source="qoder".
@@ -6878,9 +6898,29 @@ function qoderNewTimestampMs(record) {
     || 0;
 }
 
+// Nominal credits for one transcript row. `credits` and `original_credits`
+// coexist (the latter is the pre-discount value), and either alone can be 0,
+// so take the larger instead of `credits ?? original_credits` — `??` does not
+// skip a present-but-zero `credits`, which would drop real activity.
+//
+// The epsilon floor is load-bearing: the activity gate below only needs "some
+// credits were reported", and upstream float noise like 1e-9 would otherwise
+// admit rows that carry no usage at all. Real Qoder credits observed in the
+// wild start around 0.099, so 1e-6 never suppresses genuine activity.
+const MIN_QODER_CREDIT_ACTIVITY = 1e-6;
+
+function readQoderNominalCredits(usage) {
+  let max = 0;
+  for (const raw of [usage?.credits, usage?.original_credits]) {
+    if (typeof raw !== "number" || !Number.isFinite(raw)) continue;
+    if (raw > max) max = raw;
+  }
+  return max >= MIN_QODER_CREDIT_ACTIVITY ? max : 0;
+}
+
 function normalizeQoderNewTokens(usage) {
   if (!usage || typeof usage !== "object") return null;
-  const credits = Number(usage.credits ?? usage.original_credits ?? 0);
+  const credits = readQoderNominalCredits(usage);
   let input = Number(usage.input_tokens ?? 0);
   let cached = Number(usage.cache_read_input_tokens ?? usage.cached_tokens ?? 0);
   let cacheCreation = Number(usage.cache_creation_input_tokens ?? 0);
@@ -6910,10 +6950,10 @@ function normalizeQoderNewTokens(usage) {
       usage_precision: null,
     };
   }
-  // Credit-only usage without authoritative token fields is intentionally
-  // not counted (no token delta): there is no first-party evidence for a
-  // credit→token rate. The caller still counts billable messages as
-  // conversation activity.
+  // Credit-only usage without authoritative token fields yields null: no token
+  // delta, because there is no first-party credit→token rate. The caller still
+  // counts it as conversation activity when nominal credits prove the call
+  // really happened.
   return null;
 }
 
@@ -6994,9 +7034,19 @@ async function parseQoderNewIncremental({
       const usage = msg.usage;
       if (!usage || typeof usage !== "object") continue;
       const base = normalizeQoderNewTokens(usage);
-      // Allow billable zero-token messages to still count conversation (no token delta)
+      // Three independent admission signals, kept as a superset of the previous
+      // behaviour — dropping any one regresses rows that used to count:
+      //   base            authoritative tokens (app 0.1.8 / agent 1.1.44 shape)
+      //   isBillable      billable is absent or true (the older credit-billed shape)
+      //   nominalCredits  credits > 0 even though billable is false: Qoder 0.4.x
+      //                   reports billable=false for its free model while still
+      //                   reporting real credits, and gate-on-billable alone
+      //                   discarded every row so the whole source vanished.
+      // Rows that are not billable AND carry no credits stay dropped: that is
+      // the synthetic / cancelled / empty-call case we must not count.
       const isBillable = usage.billable !== false;
-      if (!base && !isBillable) continue;
+      const nominalCredits = readQoderNominalCredits(usage);
+      if (!base && !isBillable && nominalCredits <= 0) continue;
       const timestampMs = qoderNewTimestampMs(record);
       if (!timestampMs) continue;
       const bucketStart = toUtcHalfHourStart(new Date(timestampMs).toISOString());
