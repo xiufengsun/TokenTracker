@@ -10966,6 +10966,7 @@ async function parseWorkbuddyIncremental({
       ? { ...workbuddyState.projectFileOffsets }
       : {};
   let projectBucketsQueued = 0;
+  let projectCursorUpdated = false;
 
   const allFiles = Array.isArray(projectFiles)
     ? projectFiles
@@ -10992,7 +10993,7 @@ async function parseWorkbuddyIncremental({
       detailedSessions,
       updatedAt: new Date().toISOString(),
     };
-    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
+    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0, projectCursorUpdated: false };
   }
 
   const hourlyState = normalizeHourlyState(cursors?.hourly);
@@ -11141,13 +11142,19 @@ async function parseWorkbuddyIncremental({
       const prevSize = Number(prevEntry.size) || 0;
       const prevIno = prevEntry.ino;
       const inodeChanged = typeof prevIno === "number" && prevIno !== stat.ino;
-      const startOffset = stat.size < prevSize || inodeChanged ? 0 : prevSize;
+      const truncated = stat.size < prevSize;
+      const startOffset = truncated || inodeChanged ? 0 : prevSize;
       if (stat.size <= startOffset) continue;
 
       // cwd is fixed for a session file's lifetime. Reuse the resolved value
       // while it is the same file, otherwise read it from the file head — not
       // from the incremental window, which may hold only appends that omit it.
-      let cwd = !inodeChanged && typeof prevEntry.cwd === "string" ? prevEntry.cwd : null;
+      // Truncation (same inode, smaller size) must drop the cached cwd: the
+      // replacement transcript may belong to a different checkout.
+      let cwd =
+        !inodeChanged && !truncated && typeof prevEntry.cwd === "string"
+          ? prevEntry.cwd
+          : null;
 
       // No recoverable cwd yet: do not advance past history. A later append
       // may stamp cwd, and early records must still be attributable then.
@@ -11163,6 +11170,7 @@ async function parseWorkbuddyIncremental({
       }
       if (!cwd) cwd = await resolveWorkbuddyFileCwd(filePath);
       if (!cwd) {
+        projectCursorUpdated = true;
         projectFileOffsets[filePath] = {
           size: startOffset,
           mtimeMs: stat.mtimeMs,
@@ -11189,6 +11197,7 @@ async function parseWorkbuddyIncremental({
       // do not JSON-parse the transcript on every pass — there is nothing to
       // attribute until both identifiers exist.
       if (!projectKey || !projectRef) {
+        projectCursorUpdated = true;
         projectFileOffsets[filePath] = {
           size: startOffset,
           mtimeMs: stat.mtimeMs,
@@ -11266,6 +11275,7 @@ async function parseWorkbuddyIncremental({
       // Commit only past records that were read in full: a record appended
       // while this pass was running, or an unfinished tail line, has to stay
       // visible to the next sync. Only advance after successful attribution.
+      projectCursorUpdated = true;
       projectFileOffsets[filePath] = {
         size: committedEndOffset,
         mtimeMs: stat.mtimeMs,
@@ -11579,7 +11589,13 @@ async function parseWorkbuddyIncremental({
     updatedAt,
   };
 
-  return { recordsProcessed, eventsAggregated, bucketsQueued, projectBucketsQueued };
+  return {
+    recordsProcessed,
+    eventsAggregated,
+    bucketsQueued,
+    projectBucketsQueued,
+    projectCursorUpdated: projectEnabled && projectCursorUpdated,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

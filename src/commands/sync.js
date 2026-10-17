@@ -2634,7 +2634,7 @@ async function cmdSync(argv, context = {}) {
     // usage rides on function_call records too (not only assistant messages) and
     // sub-agent logs nest one level deeper, so the resolver recurses. See the
     // parser comment in rollout.js for the cache-aware token math.
-    let workbuddyResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
+    let workbuddyResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0, projectCursorUpdated: false };
     const workbuddyFiles = sourceAllowed("workbuddy")
       ? mergeBothFileSources({ resolveFiles: resolveWorkbuddyProjectFiles, env: process.env })
       : [];
@@ -2680,7 +2680,7 @@ async function cmdSync(argv, context = {}) {
     // only the home directory differs, so it reuses the WorkBuddy parser and
     // gets its own source key (and cursor namespace) so the two builds stay
     // separable instead of merging into one provider row.
-    let workbuddyAiResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
+    let workbuddyAiResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0, projectCursorUpdated: false };
     const workbuddyAiFiles = sourceAllowed("workbuddy-ai")
       ? mergeBothFileSources({
           resolveFiles: (resolveEnv) => resolveWorkbuddyProjectFiles(resolveEnv, "workbuddy-ai"),
@@ -3473,6 +3473,8 @@ async function cmdSync(argv, context = {}) {
       totalBuckets === 0 &&
       !(workbuddyResult.projectBucketsQueued > 0) &&
       !(workbuddyAiResult.projectBucketsQueued > 0) &&
+      !workbuddyResult.projectCursorUpdated &&
+      !workbuddyAiResult.projectCursorUpdated &&
       !(grokResult.projectBucketsQueued > 0) &&
       !(commandCodeResult.projectBucketsQueued > 0) &&
       !commandCodeResult.schemaMigrated &&
