@@ -515,6 +515,59 @@ test("listRolloutFilesDeep finds flat archived_sessions files the strict scanner
   }
 });
 
+test("compressed Codex archives are discovered and counted once (issue #817)", async () => {
+  // Newer Codex compresses older sessions to rollout-*.jsonl.zst, both under
+  // sessions/** and flat in archived_sessions/. The scanner must discover
+  // them, decode via the shared DSH zstd machinery, and dedup by
+  // sessionUUID:timestamp so a re-sync is a no-op.
+  const zlib = require("node:zlib");
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-817-"));
+  try {
+    const uuid = "019c26ca-e6bb-7e00-b33a-2ac67a11ddb9";
+    const usage = { input_tokens: 100, cached_input_tokens: 0, output_tokens: 50, reasoning_output_tokens: 0, total_tokens: 150 };
+    const lines = [
+      JSON.stringify({ timestamp: "2026-06-09T10:00:00.000Z", type: "session_meta", payload: { id: uuid, cwd: "/tmp/proj" } }),
+      buildTokenCountLine({ ts: "2026-06-09T10:01:00.000Z", last: usage, total: usage }),
+    ];
+    const text = lines.join("\n") + "\n";
+    const compressed = zlib.zstdCompressSync(Buffer.from(text, "utf8"));
+
+    const archiveDir = path.join(tmp, "archived_sessions");
+    await fs.mkdir(archiveDir, { recursive: true });
+    const zstPath = path.join(archiveDir, `rollout-2026-06-09T10-00-00-${uuid}.jsonl.zst`);
+    await fs.writeFile(zstPath, compressed);
+
+    const found = await listRolloutFilesDeep(archiveDir);
+    assert.ok(found.includes(zstPath), `compressed archive must be discovered, got ${JSON.stringify(found)}`);
+
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+    const first = await parseRolloutIncremental({ rolloutFiles: [zstPath], cursors, queuePath, source: "codex" });
+    assert.equal(first.eventsAggregated, 1, "compressed archive must contribute its token_count event");
+    assert.equal(cursors.files[zstPath].offset, (await fs.stat(zstPath)).size, "cursor pins the compressed size");
+
+    const second = await parseRolloutIncremental({ rolloutFiles: [zstPath], cursors, queuePath, source: "codex" });
+    assert.equal(second.eventsAggregated, 0, "unchanged archive must not re-count");
+    assert.equal(second.filesProcessed, 0, "unchanged archive must be skipped");
+
+    // Multi-frame archives (concatenated zstd frames) must decode fully.
+    const multiPath = path.join(archiveDir, `rollout-2026-06-10T10-00-00-${uuid}.jsonl.zst`);
+    await fs.writeFile(multiPath, Buffer.concat([
+      zlib.zstdCompressSync(Buffer.from(text.slice(0, 40), "utf8")),
+      zlib.zstdCompressSync(Buffer.from(text.slice(40), "utf8")),
+    ]));
+    const foundMulti = await listRolloutFilesDeep(archiveDir);
+    assert.ok(foundMulti.includes(multiPath), "multi-frame archive must be discovered");
+    const cursors2 = { version: 1, files: {}, updatedAt: null };
+    const multi = await parseRolloutIncremental({
+      rolloutFiles: [multiPath], cursors: cursors2, queuePath: path.join(tmp, "queue2.jsonl"), source: "codex",
+    });
+    assert.equal(multi.eventsAggregated, 1, "multi-frame archive must decode all events");
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("parseRolloutIncremental does not double-count a session moved sessions/ -> archived_sessions/ (issue #187)", async () => {
   // When Codex-Manager archives a session, the same rollout file (same session
   // UUID + event timestamps) reappears at a different path. Now that sync scans
