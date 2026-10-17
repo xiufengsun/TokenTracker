@@ -11229,12 +11229,28 @@ async function parseWorkbuddyIncremental({
       // Commit only past records that were read in full: a record appended
       // while this pass was running, or an unfinished tail line, has to stay
       // visible to the next sync.
-      projectFileOffsets[filePath] = {
-        size: committedEndOffset,
-        mtimeMs: stat.mtimeMs,
-        ino: stat.ino,
-        ...(cwd ? { cwd } : {}),
-      };
+      //
+      // Mirror Grok's project-cursor contract: advance only when attribution
+      // succeeded, or when there is no recoverable cwd (nothing to retry). A
+      // non-public_verified resolution must leave the offset alone so a later
+      // sync can retry after the repository becomes public_verified.
+      if (!cwd || (projectKey && projectRef)) {
+        projectFileOffsets[filePath] = {
+          size: committedEndOffset,
+          mtimeMs: stat.mtimeMs,
+          ino: stat.ino,
+          ...(cwd ? { cwd } : {}),
+        };
+      } else {
+        // Cache cwd so the next attempt skips the head scan, but keep size at
+        // the start of this window so the unread records stay visible.
+        projectFileOffsets[filePath] = {
+          size: startOffset,
+          mtimeMs: stat.mtimeMs,
+          ino: stat.ino,
+          cwd,
+        };
+      }
     }
   }
 
