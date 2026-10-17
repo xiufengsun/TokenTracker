@@ -11149,18 +11149,52 @@ async function parseWorkbuddyIncremental({
       // from the incremental window, which may hold only appends that omit it.
       let cwd = !inodeChanged && typeof prevEntry.cwd === "string" ? prevEntry.cwd : null;
       if (!cwd) cwd = await resolveWorkbuddyFileCwd(filePath);
+
+      // No recoverable cwd yet: do not advance past history. A later append
+      // may stamp cwd, and early records must still be attributable then.
+      // Remember the probed size so an unchanged no-cwd file is not head-scanned
+      // on every automatic sync.
+      if (!cwd) {
+        if (
+          Number(prevEntry.noCwdProbedSize) === stat.size &&
+          prevEntry.ino === stat.ino &&
+          Number(prevEntry.size) === startOffset
+        ) {
+          continue;
+        }
+        projectFileOffsets[filePath] = {
+          size: startOffset,
+          mtimeMs: stat.mtimeMs,
+          ino: stat.ino,
+          noCwdProbedSize: stat.size,
+        };
+        continue;
+      }
+
       let projectRef = null;
       let projectKey = null;
-      if (cwd) {
-        const projectContext = await resolveProjectContextForPath({
-          startDir: wsl.mapWslCwdToUnc(cwd, filePath),
-          projectMetaCache,
-          publicRepoCache,
-          publicRepoResolver,
-          projectState,
-        });
-        projectRef = projectContext?.projectRef || null;
-        projectKey = projectContext?.projectKey || null;
+      const projectContext = await resolveProjectContextForPath({
+        startDir: wsl.mapWslCwdToUnc(cwd, filePath),
+        projectMetaCache,
+        publicRepoCache,
+        publicRepoResolver,
+        projectState,
+      });
+      projectRef = projectContext?.projectRef || null;
+      projectKey = projectContext?.projectKey || null;
+
+      // cwd resolved but the repo is not yet public_verified (or has no git
+      // checkout): keep the offset unadvanced so a later sync can retry, but
+      // do not JSON-parse the transcript on every pass — there is nothing to
+      // attribute until both identifiers exist.
+      if (!projectKey || !projectRef) {
+        projectFileOffsets[filePath] = {
+          size: startOffset,
+          mtimeMs: stat.mtimeMs,
+          ino: stat.ino,
+          cwd,
+        };
+        continue;
       }
 
       const committedEndOffset = await scanOmpLikeTranscript(
@@ -11168,7 +11202,9 @@ async function parseWorkbuddyIncremental({
         startOffset,
         OMP_LIKE_MAX_RECORD_BYTES,
         (entry) => {
-          if (!projectKey || !projectRef) return;
+          // Mirror the totals pass: a JSON null / non-object line must not
+          // abort the whole WorkBuddy parse (and strand both cursors).
+          if (!entry || typeof entry !== "object") return;
 
           const provider = entry.providerData;
           const rawUsage = provider && typeof provider === "object" ? provider.rawUsage : null;
@@ -11228,29 +11264,13 @@ async function parseWorkbuddyIncremental({
 
       // Commit only past records that were read in full: a record appended
       // while this pass was running, or an unfinished tail line, has to stay
-      // visible to the next sync.
-      //
-      // Mirror Grok's project-cursor contract: advance only when attribution
-      // succeeded, or when there is no recoverable cwd (nothing to retry). A
-      // non-public_verified resolution must leave the offset alone so a later
-      // sync can retry after the repository becomes public_verified.
-      if (!cwd || (projectKey && projectRef)) {
-        projectFileOffsets[filePath] = {
-          size: committedEndOffset,
-          mtimeMs: stat.mtimeMs,
-          ino: stat.ino,
-          ...(cwd ? { cwd } : {}),
-        };
-      } else {
-        // Cache cwd so the next attempt skips the head scan, but keep size at
-        // the start of this window so the unread records stay visible.
-        projectFileOffsets[filePath] = {
-          size: startOffset,
-          mtimeMs: stat.mtimeMs,
-          ino: stat.ino,
-          cwd,
-        };
-      }
+      // visible to the next sync. Only advance after successful attribution.
+      projectFileOffsets[filePath] = {
+        size: committedEndOffset,
+        mtimeMs: stat.mtimeMs,
+        ino: stat.ino,
+        cwd,
+      };
     }
   }
 

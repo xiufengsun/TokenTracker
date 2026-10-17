@@ -210,3 +210,34 @@ test("WorkBuddy AI variant keeps its own source in project buckets", async (t) =
   await parseWorkbuddyIncremental({ ...f, source: "workbuddy-ai" });
   assert.equal((await rows(f.projectQueuePath)).at(-1).source, "workbuddy-ai");
 });
+
+test("WorkBuddy project history stays replayable until cwd appears", async (t) => {
+  const f = await fixture(t);
+  // First sync sees usage with no cwd yet — totals count it, project does not,
+  // and the project cursor must NOT advance past that history.
+  await fs.appendFile(f.file, record("early", 100, { cwd: null }) + "\n");
+  const first = await parseWorkbuddyIncremental(f);
+  assert.equal(first.recordsProcessed, 1);
+  assert.equal(first.projectBucketsQueued, 0);
+  assert.equal((await rows(f.queuePath)).at(-1).total_tokens, 120);
+  await assert.rejects(fs.access(f.projectQueuePath), { code: "ENOENT" });
+
+  // A later append stamps cwd. Both the early record and the new one must
+  // land in project usage (240 project tokens for two 120-token rounds).
+  await fs.appendFile(f.file, record("late", 100, { cwd: f.project }) + "\n");
+  f.cursors = JSON.parse(JSON.stringify(f.cursors));
+  await parseWorkbuddyIncremental(f);
+  assert.equal((await rows(f.projectQueuePath)).at(-1).total_tokens, 240);
+  assert.equal((await rows(f.queuePath)).at(-1).total_tokens, 240);
+});
+
+test("WorkBuddy project pass tolerates a JSON null line without aborting", async (t) => {
+  const f = await fixture(t);
+  await fs.appendFile(
+    f.file,
+    [record("a", 100, { cwd: f.project }), "null", record("b", 200, { cwd: f.project }), ""].join("\n"),
+  );
+  await parseWorkbuddyIncremental(f);
+  assert.equal((await rows(f.queuePath)).at(-1).total_tokens, 340);
+  assert.equal((await rows(f.projectQueuePath)).at(-1).total_tokens, 340);
+});
