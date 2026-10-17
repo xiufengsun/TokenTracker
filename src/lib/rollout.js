@@ -11148,20 +11148,21 @@ async function parseWorkbuddyIncremental({
       // while it is the same file, otherwise read it from the file head — not
       // from the incremental window, which may hold only appends that omit it.
       let cwd = !inodeChanged && typeof prevEntry.cwd === "string" ? prevEntry.cwd : null;
-      if (!cwd) cwd = await resolveWorkbuddyFileCwd(filePath);
 
       // No recoverable cwd yet: do not advance past history. A later append
       // may stamp cwd, and early records must still be attributable then.
-      // Remember the probed size so an unchanged no-cwd file is not head-scanned
-      // on every automatic sync.
+      // Check the unchanged-probe cache BEFORE the head scan so idle syncs do
+      // not re-read up to 8 MiB of JSONL on every pass.
+      if (
+        !cwd &&
+        Number(prevEntry.noCwdProbedSize) === stat.size &&
+        prevEntry.ino === stat.ino &&
+        Number(prevEntry.size) === startOffset
+      ) {
+        continue;
+      }
+      if (!cwd) cwd = await resolveWorkbuddyFileCwd(filePath);
       if (!cwd) {
-        if (
-          Number(prevEntry.noCwdProbedSize) === stat.size &&
-          prevEntry.ino === stat.ino &&
-          Number(prevEntry.size) === startOffset
-        ) {
-          continue;
-        }
         projectFileOffsets[filePath] = {
           size: startOffset,
           mtimeMs: stat.mtimeMs,
