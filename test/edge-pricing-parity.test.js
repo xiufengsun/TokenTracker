@@ -390,6 +390,19 @@ test("all cloud cost paths keep Cline :free models at zero", () => {
   }
 });
 
+test("all cloud cost paths keep OpenCode -free models at zero", () => {
+  for (const name of [CANONICAL, ...MIRRORS]) {
+    const { code } = transformSync(extractBlock(name), { loader: "ts", target: "es2020" });
+    const getModelPricing = vm.runInNewContext(`${code}\ngetModelPricing;`);
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(getModelPricing("deepseek-v4.1-flash-free", "opencode"))),
+      { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+      name,
+    );
+    assert.ok(getModelPricing("deepseek-v4.1-flash", "opencode").input > 0, name);
+  }
+});
+
 test("WorkBuddy AI auto routing stays unpriced across local and cloud paths", () => {
   const { getModelPricing: localPricing } = require("../src/lib/pricing");
   for (const name of [CANONICAL, ...MIRRORS]) {

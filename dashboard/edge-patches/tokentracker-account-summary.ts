@@ -417,6 +417,9 @@ function getModelPricing(model: string, source = "") {
   if (exact) return exact;
   const lower = model.toLowerCase();
   if (source === "cline" && lower.endsWith(":free")) return ZERO_PRICING;
+  // OpenCode Zen free models append `-free` to the paid id
+  // (deepseek-v4.1-flash-free); the base-name matchers must not bill them.
+  if (source === "opencode" && lower.endsWith("-free")) return ZERO_PRICING;
   // Cline's own gateway namespaces (`cline-free/*` free tier, `cline-pass/*`
   // flat-rate Cline Pass) bill nothing per token, and the model id after the
   // slash must not inherit a public rate — cline-pass/glm-5.3 is not GLM-5.3

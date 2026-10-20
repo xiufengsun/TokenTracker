@@ -1239,6 +1239,20 @@ test("index: Cline free-suffixed models remain zero-cost", () => {
   }), 0);
 });
 
+test("index: OpenCode -free models stay zero-cost while the paid base model is billed", () => {
+  const row = {
+    source: "opencode",
+    model: "deepseek-v4.1-flash-free",
+    input_tokens: 1_000_000,
+    output_tokens: 1_000_000,
+    cached_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+    reasoning_output_tokens: 0,
+  };
+  assert.equal(pricing.computeRowCost(row), 0);
+  assert.ok(pricing.computeRowCost({ ...row, model: "deepseek-v4.1-flash" }) > 0);
+});
+
 test("index: computeRowCost ignores reported costs from non-authoritative sources", () => {
   const row = {
     source: "claude",
