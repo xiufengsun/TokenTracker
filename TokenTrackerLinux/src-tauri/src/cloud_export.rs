@@ -34,7 +34,11 @@ impl ExportMessage {
         let local = self.kind == "saveLocalUsageExport";
         let Some(stem) = self
             .filename
-            .strip_prefix(if local { "tokentracker-local-" } else { "tokentracker-cloud-" })
+            .strip_prefix(if local {
+                "tokentracker-local-"
+            } else {
+                "tokentracker-cloud-"
+            })
             .and_then(|name| name.strip_suffix(&format!(".{}", self.format)))
         else {
             return false;

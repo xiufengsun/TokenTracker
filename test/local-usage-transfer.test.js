@@ -118,6 +118,23 @@ test("removing an import preserves own data; re-opening the service retains impo
   assert.equal(total(await reopened.view([row(200)])), 200);
 });
 
+test("ledger reads enforce the byte limit even if an earlier size observation is stale", async (t) => {
+  const machineB = await machine(t, "machine-bbbb", [row(200)]);
+  const ledgerPath = path.join(machineB.home, "local-usage.json");
+  await fs.writeFile(ledgerPath, JSON.stringify({ version: 1, revision: 0, sequence: 0, imports: {} }));
+  const padding = " ".repeat(1024 * 1024);
+  for (let i = 0; i < 64; i++) await fs.appendFile(ledgerPath, padding);
+  const stat = fs.stat;
+  // Model metadata obtained before a concurrent grow. The read itself must
+  // still be bounded, even though the padded file remains valid JSON.
+  t.mock.method(fs, "stat", async (file, ...args) => {
+    const value = await stat(file, ...args);
+    if (file === ledgerPath) value.size = 1;
+    return value;
+  });
+  await assert.rejects(machineB.service.view([row(200)]), { code: "invalid_state", status: 503 });
+});
+
 test("exports strip private fields and refuse malformed or previously synthesized queues", async (t) => {
   const a = await machine(t, "machine-aaaa", [row(100, { prompt: "private", cwd: "private", secret: "private" })]);
   assert.equal(JSON.stringify(await a.service.exportSnapshot()).includes("private"), false);

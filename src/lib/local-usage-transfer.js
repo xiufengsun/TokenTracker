@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("node:fs/promises");
+const { createReadStream } = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { openLock, writeFileAtomic } = require("./fs");
@@ -8,6 +9,7 @@ const { isAccountLevelSource } = require("./source-metadata");
 
 const SCHEMA = "tokentracker.local-usage.v1";
 const MAX_BYTES = 5 * 1024 * 1024;
+const MAX_STATE_BYTES = 64 * 1024 * 1024;
 const MAX_DEVICES = 32;
 const TOKEN_FIELDS = ["input_tokens", "output_tokens", "cached_input_tokens", "cache_creation_input_tokens",
   "reasoning_output_tokens", "total_tokens", "billable_total_tokens", "conversation_count",
@@ -79,8 +81,16 @@ function createLocalUsageTransfer({ queuePath, normalizeRow, identity }) {
   const importedCache = new WeakMap();
   async function state() {
     try {
-      if ((await fs.stat(statePath)).size > 64 * 1024 * 1024) fail("invalid_state", 503);
-      const raw = await fs.readFile(statePath, "utf8");
+      const chunks = [];
+      let size = 0;
+      // Open once and bound the actual read, including a possible growth or
+      // replacement since another process last observed the ledger's size.
+      for await (const chunk of createReadStream(statePath, { end: MAX_STATE_BYTES })) {
+        size += chunk.length;
+        if (size > MAX_STATE_BYTES) fail("invalid_state", 503);
+        chunks.push(chunk);
+      }
+      const raw = Buffer.concat(chunks, size).toString("utf8");
       if (raw === cachedRaw) return cachedState;
       const value = JSON.parse(raw);
       if (value.version !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 0 ||
@@ -130,7 +140,7 @@ function createLocalUsageTransfer({ queuePath, normalizeRow, identity }) {
     value.revision++;
     if (!Number.isSafeInteger(value.revision)) fail("invalid_state", 503);
     const contents = JSON.stringify(value) + "\n";
-    if (Buffer.byteLength(contents) > 64 * 1024 * 1024) fail("too_many_devices");
+    if (Buffer.byteLength(contents) > MAX_STATE_BYTES) fail("too_many_devices");
     await writeFileAtomic(statePath, contents, { mode: 0o600 });
     cachedRaw = undefined;
     cachedState = undefined;
