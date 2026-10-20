@@ -47,9 +47,9 @@ export function DeviceUsageCard({ devices = [], accountSources = [], currentDevi
   const ranked = useMemo(
     () =>
       devices
-        .filter((d) => (Number(d.total_tokens) || 0) > 0)
+        .filter((d) => (Number(d.total_tokens) || 0) > 0 || d.id === selectedDeviceId)
         .sort((a, b) => (Number(b.total_tokens) || 0) - (Number(a.total_tokens) || 0)),
-    [devices],
+    [devices, selectedDeviceId],
   );
 
   function beginEdit(d) {
@@ -224,6 +224,10 @@ export function DeviceUsageCard({ devices = [], accountSources = [], currentDevi
                             {copy("dashboard.device_card.current")}
                           </span>
                         )}
+                        {d.imported_at && <span className="shrink-0 whitespace-nowrap text-xs text-oai-gray-500"
+                          title={copy("settings.local_data.snapshot_time", { time: new Date(d.exported_at).toLocaleString() })}>
+                          {copy("settings.local_data.imported_label")}
+                        </span>}
                       </div>
                       <span
                         title={formatTokensTooltip(tokens)}

@@ -487,7 +487,7 @@ internal sealed class DashboardWindow : Window
                 {
                     using var doc = JsonDocument.Parse(msg);
                     if (!doc.RootElement.TryGetProperty("type", out var t)) return;
-                    if (t.GetString() == "saveCloudUsageExport")
+                    if (t.GetString() is "saveCloudUsageExport" or "saveLocalUsageExport")
                     {
                         // Core.WebMessageReceived is emitted by the top-level document;
                         // iframe messages use the separate CoreWebView2Frame event.
@@ -620,6 +620,7 @@ internal sealed class DashboardWindow : Window
         //  3. Wrap localStorage.setItem to notify native when tray-facing settings change.
         await core.AddScriptToExecuteOnDocumentCreatedAsync(
             "window.__TOKENTRACKER_CLOUD_EXPORT__=true;" +
+            "window.__TOKENTRACKER_LOCAL_EXPORT__=true;" +
             "try{if(!localStorage.getItem('tokentracker-theme')){" +
             "localStorage.setItem('tokentracker-theme','dark');" +
             "document.documentElement.classList.add('dark');}" +

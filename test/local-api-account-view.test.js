@@ -421,6 +421,16 @@ test("HTTP account fan-out shares a healthy read while manual refresh supersedes
 test("usage-summary?account=1 serves the cross-device aggregate when signed in + cloud sync on", async () => {
   const queuePath = path.join(tmpHome, "queue.jsonl");
   writeQueue(queuePath, [SAMPLE_ROW]);
+  // Offline snapshots affect local reads only; a cloud result is authoritative.
+  fs.writeFileSync(path.join(tmpHome, "local-usage.json"), JSON.stringify({
+    version: 1, revision: 1, sequence: 0, imports: {
+      "offline-machine": { imported_at: "2026-04-20T12:00:00.000Z", snapshot: {
+        schema: "tokentracker.local-usage.v1", scope: "device-history",
+        machine: { id: "offline-machine", name: "Laptop", platform: "linux" },
+        sequence: 1, exported_at: "2026-04-20T12:00:00.000Z", rows: [SAMPLE_ROW],
+      } },
+    },
+  }));
 
   const trackerDir = path.join(tmpHome, ".tokentracker", "tracker");
   fs.mkdirSync(trackerDir, { recursive: true });
@@ -459,6 +469,8 @@ test("usage-summary?account=1 serves the cross-device aggregate when signed in +
 
   try {
     const handler = freshHandler(queuePath);
+    const local = await call(handler, { endpoint: "/functions/tokentracker-usage-summary?from=2026-04-20&to=2026-04-20&tz=UTC" });
+    assert.equal(local.json().totals.total_tokens, SAMPLE_ROW.total_tokens * 2);
     const res = await call(handler, {
       endpoint: "/functions/tokentracker-usage-summary?from=2026-04-20&to=2026-04-20&tz=UTC&account=1",
     });

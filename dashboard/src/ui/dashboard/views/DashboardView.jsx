@@ -190,6 +190,8 @@ export function DashboardView(props) {
     selectedDevice,
     onDeviceChange,
     deviceUsageBlock,
+    localHistoryOnly,
+    localHistoryRevision,
     leftCardOrder,
     onLeftReorder,
     rightCardOrder,
@@ -337,6 +339,7 @@ export function DashboardView(props) {
               to={usageTo}
               deviceOptions={deviceOptions}
               selectedDevice={selectedDevice}
+              dataRevision={localHistoryRevision}
               onDeviceChange={onDeviceChange}
             />
           </FadeIn>
@@ -487,6 +490,7 @@ export function DashboardView(props) {
         )}
         {!showAuthGate && !showExpiredGate && !initialDashboardLoading && (
           <>
+            {localHistoryOnly && <p className="mb-3 text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("settings.local_data.local_history_only")}</p>}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
               <div className="lg:col-span-4 flex flex-col gap-4 min-w-0 order-2 lg:order-1">
                 {leftColumnContent}

@@ -80,8 +80,8 @@ export function useActivityHeatmap({
   const storageKey = useMemo(() => {
     if (!cacheKey) return null;
     const tzKey = getTimeZoneCacheKey({ timeZone, offsetMinutes: tzOffsetMinutes });
-    return `tokentracker.heatmap.${cacheKey}.${scopeKey}.${weeks}.${weekStartsOn}.${tzKey}.${deviceId || "all"}`;
-  }, [cacheKey, deviceId, scopeKey, timeZone, tzOffsetMinutes, weeks, weekStartsOn]);
+    return `tokentracker.heatmap.${cacheKey}.${scopeKey}.${weeks}.${weekStartsOn}.${tzKey}.${deviceId || "all"}${useCloud || !accountRevision ? "" : `.r${accountRevision}`}`;
+  }, [cacheKey, deviceId, scopeKey, timeZone, tzOffsetMinutes, weeks, weekStartsOn, useCloud, accountRevision]);
 
   const readCache = useCallback(() => {
     if (!storageKey || typeof window === "undefined") return null;

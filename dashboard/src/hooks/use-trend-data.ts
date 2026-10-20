@@ -75,7 +75,7 @@ export function useTrendData({
     if (!cacheKey) return null;
     const host = safeHost(baseUrl) || "default";
     const tzKey = getTimeZoneCacheKey({ timeZone, offsetMinutes: tzOffsetMinutes });
-    const deviceScope = deviceId || "all";
+    const deviceScope = `${deviceId || "all"}${useCloud || !accountRevision ? "" : `.r${accountRevision}`}`;
     if (mode === "hourly") {
       const dayKey = to || from || "day";
       return `tokentracker.trend.${cacheKey}.${scopeKey}.${host}.hourly.${dayKey}.${tzKey}.${deviceScope}`;

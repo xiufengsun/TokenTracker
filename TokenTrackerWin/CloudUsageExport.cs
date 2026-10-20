@@ -17,6 +17,7 @@ internal static class CloudUsageExport
 {
     internal const int MaximumBytes = 5 * 1024 * 1024;
     private static readonly Regex FilenamePattern = new("\\Atokentracker-cloud-[A-Za-z0-9][A-Za-z0-9_-]{0,150}\\.(csv|json)\\z");
+    private static readonly Regex LocalFilenamePattern = new("\\Atokentracker-local-[A-Za-z0-9][A-Za-z0-9_-]{0,150}\\.json\\z");
     private static readonly UTF8Encoding Utf8 = new(false, true);
     private static readonly Guid DownloadsFolder = new("374DE290-123F-4565-9164-39C4925E467B");
 
@@ -53,12 +54,13 @@ internal static class CloudUsageExport
             var fields = message.EnumerateObject().Select(item => item.Name).ToArray();
             if (fields.Length != 5 || !fields.ToHashSet().SetEquals(new[] { "type", "requestId", "filename", "format", "content" })
                 || !Guid.TryParseExact(requestId, "D", out _)
-                || message.GetProperty("type").GetString() != "saveCloudUsageExport")
+                || message.GetProperty("type").GetString() is not ("saveCloudUsageExport" or "saveLocalUsageExport"))
                 return new(requestId, false, ErrorCode: "invalid_export");
             var filename = message.GetProperty("filename").GetString() ?? "";
             var format = message.GetProperty("format").GetString() ?? "";
             var content = message.GetProperty("content").GetString() ?? "";
-            if (format is not ("csv" or "json") || !FilenamePattern.IsMatch(filename)
+            var local = message.GetProperty("type").GetString() == "saveLocalUsageExport";
+            if (format is not ("csv" or "json") || (local ? format != "json" || !LocalFilenamePattern.IsMatch(filename) : !FilenamePattern.IsMatch(filename))
                 || !filename.EndsWith("." + format, StringComparison.Ordinal)
                 || content.Length == 0 || content.Contains('\0') || Utf8.GetByteCount(content) > MaximumBytes)
                 return new(requestId, false, ErrorCode: "invalid_export");

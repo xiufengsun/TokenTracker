@@ -15,6 +15,8 @@ import {
 } from "../components/settings/Controls.jsx";
 import { MenuBarSection, NativeAppFooter } from "../components/settings/MenuBarSection.jsx";
 import { NetworkSection } from "../components/settings/NetworkSection.jsx";
+import { LocalDataSection } from "../components/settings/LocalDataSection.jsx";
+import { isLocalDashboardHost } from "../lib/host-mode";
 import { LIMIT_DISPLAY_MODES, useLimitsDisplayPrefs } from "../hooks/use-limits-display-prefs.js";
 import { useNativeSettings } from "../hooks/use-native-settings.js";
 import { useProxySettings } from "../hooks/use-proxy-settings.js";
@@ -27,6 +29,7 @@ const SETTINGS_SECTION_IDS = {
   APPEARANCE: "appearance",
   NATIVE_APP: "native-app",
   NETWORK: "network",
+  LOCAL_DATA: "local-data",
   ACCOUNT: "account",
   CLOUD: "cloud",
   LIMITS: "limits",
@@ -72,7 +75,8 @@ export function SettingsPage() {
   const requestedSectionAvailable =
     Object.values(SETTINGS_SECTION_IDS).includes(requestedSection) &&
     (requestedSection !== SETTINGS_SECTION_IDS.NATIVE_APP || nativeSettingsAvailable) &&
-    (requestedSection !== SETTINGS_SECTION_IDS.NETWORK || proxySettingsAvailable);
+    (requestedSection !== SETTINGS_SECTION_IDS.NETWORK || proxySettingsAvailable) &&
+    (requestedSection !== SETTINGS_SECTION_IDS.LOCAL_DATA || isLocalDashboardHost());
   const activeSection = requestedSectionAvailable
     ? requestedSection
     : SETTINGS_SECTION_IDS.APPEARANCE;
@@ -203,6 +207,13 @@ export function SettingsPage() {
         </div>
       ),
     },
+    ...(isLocalDashboardHost() ? [{
+      id: SETTINGS_SECTION_IDS.LOCAL_DATA,
+      label: copy("settings.local_data.title"),
+      group: SETTINGS_GROUP_IDS.APP,
+      Icon: Monitor,
+      content: <LocalDataSection active={activeSection === SETTINGS_SECTION_IDS.LOCAL_DATA} />,
+    }] : []),
     {
       id: SETTINGS_SECTION_IDS.LABS,
       label: copy("settings.section.labs"),

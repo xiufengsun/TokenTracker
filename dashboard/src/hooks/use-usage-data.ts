@@ -56,7 +56,7 @@ export function useUsageData({
       ? includeSummary ? "daily-summary" : "daily-only"
       : "summary";
     const tzKey = getTimeZoneCacheKey({ timeZone, offsetMinutes: tzOffsetMinutes });
-    return `tokentracker.usage.${cacheKey}.${scopeKey}.${host}.${from}.${to}.${dataKey}.${tzKey}.${deviceScope}`;
+    return `tokentracker.usage.${cacheKey}.${scopeKey}.${host}.${from}.${to}.${dataKey}.${tzKey}.${deviceScope}${useCloud || !accountRevision ? "" : `.r${accountRevision}`}`;
   })();
 
   // Wipe state when the scope flips so the previously-rendered local data

@@ -52,6 +52,7 @@ import { DashboardView } from "../ui/dashboard/views/DashboardView.jsx";
 import { useAccountDevices } from "../hooks/use-account-devices.js";
 import { DeviceUsageCard } from "../ui/dashboard/components/DeviceUsageCard.jsx";
 import { formatDeviceLabel } from "../lib/device-label.js";
+import { localDeviceUsage } from "../lib/local-usage-transfer";
 import { CLOUD_USAGE_SYNCED_EVENT, getCurrentDeviceId } from "../lib/cloud-sync-prefs";
 import { recordCloudPromptIntent } from "../lib/cloud-prompt-policy.js";
 import { ShareModal } from "../ui/share/ShareModal";
@@ -177,7 +178,7 @@ export function DashboardPage({
   // publicMode (shared link) opts out of account view entirely.
   const {
     accountView: accountViewBase,
-    revision: accountRevision,
+    revision: cloudAccountRevision,
     resolving: accountResolvingBase,
   } = useAccountView();
   const accountView = accountViewBase && !publicMode;
@@ -364,7 +365,8 @@ export function DashboardPage({
   const from = range.from;
   const to = range.to;
 
-  const [selectedDevice, setSelectedDevice] = useState(null);
+  const [storedDevice, setSelectedDevice] = useState(null);
+  const selectedDevice = storedDevice && (storedDevice.startsWith("local:") !== accountView) ? storedDevice : null;
   const [currentDeviceId, setCurrentDeviceId] = useState(() => getCurrentDeviceId());
   useEffect(() => {
     const refreshCurrentDevice = () => setCurrentDeviceId(getCurrentDeviceId());
@@ -375,35 +377,38 @@ export function DashboardPage({
       window.removeEventListener("storage", refreshCurrentDevice);
     };
   }, []);
-  const { devices: accountDevices, accountSources: accountDeviceSources, refresh: refreshAccountDevices } = useAccountDevices({
+  const { devices: accountDevices, accountSources: accountDeviceSources, refresh: refreshAccountDevices,
+    loading: devicesLoading, revision: localUsageRevision } = useAccountDevices({
     from,
     to,
     timeZone,
     tzOffsetMinutes,
     accountView,
     accountAccessToken,
-    accountRevision,
+    accountRevision: cloudAccountRevision,
+    localView: !publicMode && !mockEnabled,
   });
-  // Only devices with usage in the selected range are shown anywhere — a
-  // zero-usage registration (typically a stale fingerprint-drift duplicate) is
-  // noise in both the filter dropdown and the breakdown card.
+  const accountRevision = accountView ? cloudAccountRevision : localUsageRevision;
+  // Hide idle cloud registrations, but keep local snapshots selectable even
+  // when the chosen period has no usage.
   const activeDevices = useMemo(
     () => accountDevices
-      .filter((d) => (Number(d.total_tokens) || 0) > 0)
-      .map((d) => ({ ...d, isCurrent: d.id === currentDeviceId })),
-    [accountDevices, currentDeviceId],
+      .filter((d) => !accountView || (Number(d.total_tokens) || 0) > 0)
+      .map((d) => ({ ...d, isCurrent: d.isCurrent || d.id === currentDeviceId })),
+    [accountDevices, currentDeviceId, accountView],
   );
   const accountSourceRows = useMemo(
     () => accountDeviceSources.filter((s) => (Number(s.total_tokens) || 0) > 0),
     [accountDeviceSources],
   );
   // Dropdown filter: choosing between devices needs 2+ of them.
-  const showDeviceFilter = accountView && activeDevices.length >= 2;
+  const showDeviceFilter = activeDevices.length >= 2;
   // Breakdown card: needs 2+ rows; account-level sources count as rows.
-  const showDeviceCard = accountView && activeDevices.length + accountSourceRows.length >= 2;
+  const showDeviceCard = (accountView || activeDevices.length >= 2) && activeDevices.length + accountSourceRows.length >= 2;
   // Reset the filter when no selector is visible, or when the selected device
   // disappears (revoked / idle in the new range / not in the latest list).
   useEffect(() => {
+    if (devicesLoading) return;
     if (!showDeviceFilter && !showDeviceCard) {
       if (selectedDevice !== null) setSelectedDevice(null);
       return;
@@ -411,7 +416,7 @@ export function DashboardPage({
     if (selectedDevice && !activeDevices.some((d) => d.id === selectedDevice)) {
       setSelectedDevice(null);
     }
-  }, [showDeviceFilter, showDeviceCard, activeDevices, selectedDevice]);
+  }, [showDeviceFilter, showDeviceCard, activeDevices, selectedDevice, devicesLoading]);
 
   const deviceOptions = useMemo(() => {
     if (!showDeviceFilter) return [];
@@ -425,18 +430,20 @@ export function DashboardPage({
     ];
   }, [showDeviceFilter, activeDevices, resolvedLocale]);
 
+  const deviceUsageData = accountView ? { devices: activeDevices, accountSources: accountSourceRows }
+    : localDeviceUsage(activeDevices, accountSourceRows, selectedDevice);
   const deviceUsageBlock = showDeviceCard ? (
     <DeviceUsageCard
-      devices={activeDevices}
-      accountSources={accountSourceRows}
+      devices={deviceUsageData.devices}
+      accountSources={deviceUsageData.accountSources}
       currentDeviceId={currentDeviceId}
       selectedDeviceId={selectedDevice || ""}
       onSelectDevice={(id) => setSelectedDevice(id || null)}
-      onRenameDevice={async (id, name) => {
+      onRenameDevice={accountView ? async (id, name) => {
         const token = await resolveAuthAccessToken(accountAccessToken);
         await renameAccountDevice({ deviceId: id, name, accessToken: token });
         await refreshAccountDevices();
-      }}
+      } : undefined}
     />
   ) : null;
 
@@ -928,11 +935,13 @@ export function DashboardPage({
         refreshModelBreakdown(),
         refreshProjectUsage(),
         refreshDailyBreakdown(),
+        ...(!accountView ? [refreshAccountDevices()] : []),
       ]);
     });
   }, [
     accountView,
     refreshDailyBreakdown,
+    refreshAccountDevices,
     refreshHeatmap,
     refreshModelBreakdown,
     refreshProjectUsage,
@@ -1484,6 +1493,8 @@ export function DashboardPage({
         setSelectedDevice(v || null);
       }}
       deviceUsageBlock={deviceUsageBlock}
+      localHistoryOnly={!accountView && activeDevices.some((device) => device.imported_at)}
+      localHistoryRevision={accountView ? 0 : localUsageRevision}
       leftCardOrder={dashboardCardOrder.left.order}
       onLeftReorder={dashboardCardOrder.left.reorder}
       rightCardOrder={dashboardCardOrder.right.order}

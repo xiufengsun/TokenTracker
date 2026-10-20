@@ -18,6 +18,16 @@ vi.mock("../../../../hooks/useTheme.js", () => ({
 }));
 
 describe("UsageOverview", () => {
+  it("closes stale session details when the local import ledger changes", async () => {
+    const props = { period: "month", periods: [], summaryValue: "100", from: "2026-10-01", to: "2026-10-31",
+      fleetData: [{ source: "codex", label: "CODEX", usage: 100, totalPercent: "100", usd: 0,
+        models: [{ id: "gpt-5.5", name: "gpt-5.5", share: 100, usage: 100, cost: 0 }] }] };
+    const { rerender } = render(<UsageOverview {...props} dataRevision={0} />);
+    await userEvent.click(screen.getByRole("button", { name: /CODEX/i }));
+    expect(screen.getByTestId("context-breakdown")).toBeVisible();
+    rerender(<UsageOverview {...props} dataRevision={1} />);
+    expect(screen.queryByTestId("context-breakdown")).toBeNull();
+  });
   it("shows stable hero and provider skeletons while a new range has no matching data", () => {
     render(
       <UsageOverview
@@ -342,6 +352,7 @@ describe("UsageOverview", () => {
         periods={[]}
         summaryLabel="Total"
         summaryValue="123"
+        selectedDevice="local:machine-a"
         fleetData={[
           {
             source: "codex",
@@ -369,6 +380,7 @@ describe("UsageOverview", () => {
       from: "2026-05-01",
       to: "2026-05-31",
       referenceTotalTokens: 123,
+      deviceId: "local:machine-a",
     });
   });
 

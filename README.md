@@ -386,6 +386,14 @@ Most users never need this — defaults are sensible. For advanced setups:
 | `TOKENTRACKER_MINIMAX_HOME` | Override the MiniMax Code data directory used by the passive usage reader | `~/.minimax` |
 | `TOKENTRACKER_COMMANDCODE_HOME` | Override the Command Code (`cmd`) data directory used by the passive session reader | `~/.commandcode` |
 
+### Offline usage transfer
+
+In the local dashboard, open **Settings → App → Local data**. Export usage on one computer, then select that JSON file on another computer, review the preview and confirm the merge. Imported computers appear in the dashboard's existing device selector and device distribution card. You can remove an imported source from the same settings page.
+
+Preview totals and device contributions follow the dashboard's current display metric; the original counters remain in the snapshot. Context breakdown is available with this device selected. Project, session and outcome analyses remain local to this computer, with a scope notice when offline sources are present.
+
+A newer complete snapshot replaces that computer's previous snapshot; importing the same file again does not add usage. Exports contain only this computer's retained device-level history, including token counts, tools, models, time buckets and its device label. They exclude imported sources, credentials, prompts, project/session data, and account-level Cursor/TRAE CN usage. Imported snapshots stay local and never enter the cloud upload queue. Transfer files only between computers with independent histories: copied sessions cannot be deduplicated from aggregated usage. Legacy `tokentracker-sync` synthetic queues require separate migration. Files are limited to 5 MiB, with up to 32 imported computers.
+
 ### 🐧 Windows Subsystem for Linux (WSL) Auto-Discovery
 
 If you run AI coding agents inside WSL on Windows, TokenTracker can auto-discover and aggregate metrics from both native Windows and WSL installations.

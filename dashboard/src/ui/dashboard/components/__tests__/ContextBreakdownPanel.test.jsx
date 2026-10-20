@@ -14,6 +14,15 @@ vi.mock("../../../../lib/timezone", () => ({
 }));
 
 describe("ContextBreakdownPanel", () => {
+  it("forwards the selected device and explains missing imported session history", async () => {
+    getUsageCategoryBreakdown.mockResolvedValueOnce({ scope: "unsupported", reason: "local_history_only" });
+    const { rerender } = render(<ContextBreakdownPanel from="2026-10-19" to="2026-10-19" source="codex" deviceId="local:a" />);
+    expect(await screen.findByText(copy("settings.local_data.local_history_only"))).toBeVisible();
+    expect(getUsageCategoryBreakdown).toHaveBeenLastCalledWith(expect.objectContaining({ device: "local:a" }));
+    getUsageCategoryBreakdown.mockResolvedValueOnce({ scope: "unsupported" });
+    rerender(<ContextBreakdownPanel from="2026-10-19" to="2026-10-19" source="codex" deviceId="local:b" />);
+    await waitFor(() => expect(getUsageCategoryBreakdown).toHaveBeenLastCalledWith(expect.objectContaining({ device: "local:b" })));
+  });
   it("uses generic loading copy while session logs are being scanned", async () => {
     getUsageCategoryBreakdown.mockReturnValueOnce(new Promise(() => {}));
 

@@ -719,6 +719,7 @@ export async function getUsageCategoryBreakdown({
   from,
   to,
   source = "claude",
+  device,
   timeZone,
   tzOffsetMinutes,
 }: AnyRecord = {}) {
@@ -726,7 +727,7 @@ export async function getUsageCategoryBreakdown({
     return getMockUsageCategoryBreakdown({ from, to, source });
   }
   const tzParams = buildTimeZoneParams({ timeZone, tzOffsetMinutes });
-  return fetchLocalJson(PATHS.usageCategoryBreakdown, { from, to, source, ...tzParams });
+  return fetchLocalJson(PATHS.usageCategoryBreakdown, { from, to, source, ...buildFilterParams({ device }), ...tzParams });
 }
 
 export async function getUsageDaily({

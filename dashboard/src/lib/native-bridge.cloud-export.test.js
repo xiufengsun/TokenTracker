@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { saveCloudUsageExport } from "./native-bridge.js";
+import { saveCloudUsageExport, saveLocalUsageExport } from "./native-bridge.js";
 
 const payload = { filename: "tokentracker-cloud-usage-2026-10-10.csv", content: "date,tokens\n2026-10-10,4\n", format: "csv" };
 const acknowledge = (detail) => window.dispatchEvent(new CustomEvent("tokentracker:cloud-export-result", { detail }));
@@ -14,10 +14,24 @@ describe("saveCloudUsageExport IPC", () => {
     delete window.chrome;
     delete window.__TAURI_INTERNALS__;
     delete window.__TOKENTRACKER_CLOUD_EXPORT__;
+    delete window.__TOKENTRACKER_LOCAL_EXPORT__;
     window.localStorage.clear();
     vi.useRealTimers();
   });
   const mac = (handler) => { window.webkit = { messageHandlers: { nativeBridge: { postMessage: handler } } }; };
+
+  it("saves local JSON through the same bounded writer without accepting cloud filenames", async () => {
+    window.__TOKENTRACKER_LOCAL_EXPORT__ = true;
+    const post = vi.fn((message) => acknowledge({ requestId: message.requestId, saved: true, filename: message.filename }));
+    mac(post);
+    const local = { filename: "tokentracker-local-device-1.json", format: "json", content: "{}" };
+    expect(await saveLocalUsageExport(local)).toEqual({ saved: true, filename: local.filename });
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "saveLocalUsageExport" }));
+    post.mockClear();
+    await expect(saveLocalUsageExport({ ...local, filename: payload.filename, format: "csv" })).rejects.toMatchObject({ code: "invalid_export" });
+    await expect(saveCloudUsageExport(local)).rejects.toMatchObject({ code: "invalid_export" });
+    expect(post).not.toHaveBeenCalled();
+  });
 
   it("returns null only for an ordinary browser", async () => {
     expect(await saveCloudUsageExport(payload)).toBeNull();

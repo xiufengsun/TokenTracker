@@ -103,6 +103,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         let transparencyBootstrap = """
         (function(){
           window.__TOKENTRACKER_CLOUD_EXPORT__ = true;
+          window.__TOKENTRACKER_LOCAL_EXPORT__ = true;
           document.documentElement.classList.add('native-app');
           var s=document.createElement('style');
           s.textContent='html,html.dark{background:transparent!important}body{background:transparent!important}';
@@ -555,7 +556,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
 
     private func handleScriptMessage(name: String, body: Any, sourceURL: URL?, mainFrame: Bool, sender: WKWebView?) {
         if name == "nativeBridge", let message = body as? [String: Any],
-           message["type"] as? String == "saveCloudUsageExport", let sender {
+           ["saveCloudUsageExport", "saveLocalUsageExport"].contains(message["type"] as? String ?? ""), let sender {
             let expected = NativeQAProfile.current?.baseURL ?? URL(string: Constants.serverBaseURL)!
             let permitted = CloudUsageExport.permitsSource(sourceURL, current: webView?.url, expected: expected,
                                                           mainFrame: mainFrame, ownWebView: sender === webView)

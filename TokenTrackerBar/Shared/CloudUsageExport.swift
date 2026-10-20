@@ -11,12 +11,14 @@ struct CloudUsageExport {
     let bytes: Data
 
     init(message: [String: Any]) throws {
+        let local = message["type"] as? String == "saveLocalUsageExport"
         guard Set(message.keys) == ["type", "requestId", "filename", "format", "content"],
-              message["type"] as? String == "saveCloudUsageExport",
+              message["type"] as? String == (local ? "saveLocalUsageExport" : "saveCloudUsageExport"),
               let requestID = message["requestId"] as? String, UUID(uuidString: requestID) != nil,
               let filename = message["filename"] as? String,
-              filename.range(of: "^tokentracker-cloud-[A-Za-z0-9][A-Za-z0-9_-]{0,150}\\.(csv|json)$", options: .regularExpression) != nil,
+              filename.range(of: local ? "^tokentracker-local-[A-Za-z0-9][A-Za-z0-9_-]{0,150}\\.json$" : "^tokentracker-cloud-[A-Za-z0-9][A-Za-z0-9_-]{0,150}\\.(csv|json)$", options: .regularExpression) != nil,
               let format = message["format"] as? String, ["csv", "json"].contains(format),
+              !local || format == "json",
               filename.hasSuffix("." + format),
               let content = message["content"] as? String, !content.isEmpty, !content.contains("\0"),
               content.utf8.count <= Self.maximumBytes else {

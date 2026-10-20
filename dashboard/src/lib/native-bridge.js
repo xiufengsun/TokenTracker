@@ -163,13 +163,21 @@ function cloudExportError(code) {
 
 /** Native saves acknowledge the actual write. Browser callers use their Blob fallback. */
 export function saveCloudUsageExport({ filename, content, format, signal }) {
+  return saveUsageExport({ filename, content, format, signal }, false);
+}
+
+export function saveLocalUsageExport({ filename, content, format, signal }) {
+  return saveUsageExport({ filename, content, format, signal }, true);
+}
+
+function saveUsageExport({ filename, content, format, signal }, local) {
   const native = typeof window !== "undefined" && (
     isNativeEmbed() || isNativeWindowsApp() || isNativeLinuxApp() || isNativeApp()
   );
   if (!native) return Promise.resolve(null);
   if (signal?.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
   if ((format !== "csv" && format !== "json") || typeof filename !== "string"
-    || !CLOUD_EXPORT_NAME.test(filename) || !filename.endsWith(`.${format}`)
+    || !(local ? /^tokentracker-local-[A-Za-z0-9][A-Za-z0-9_-]{0,150}\.json$/.test(filename) && format === "json" : CLOUD_EXPORT_NAME.test(filename)) || !filename.endsWith(`.${format}`)
     || typeof content !== "string" || !content || content.includes("\0")
     || new TextEncoder().encode(content).byteLength > CLOUD_EXPORT_MAX_BYTES) {
     return Promise.reject(cloudExportError("invalid_export"));
@@ -178,14 +186,14 @@ export function saveCloudUsageExport({ filename, content, format, signal }) {
   const mac = window.webkit?.messageHandlers?.nativeBridge;
   const win = window.chrome?.webview;
   const invoke = window.__TAURI_INTERNALS__?.invoke;
-  if (window.__TOKENTRACKER_CLOUD_EXPORT__ !== true
+  if (window[local ? "__TOKENTRACKER_LOCAL_EXPORT__" : "__TOKENTRACKER_CLOUD_EXPORT__"] !== true
     || !(typeof mac?.postMessage === "function" || typeof win?.postMessage === "function"
       || typeof invoke === "function")) {
     return Promise.reject(cloudExportError("unsupported"));
   }
   const requestId = crypto.randomUUID();
   const stem = filename.slice(0, -(format.length + 1));
-  const payload = { type: "saveCloudUsageExport", requestId, filename, content, format };
+  const payload = { type: local ? "saveLocalUsageExport" : "saveCloudUsageExport", requestId, filename, content, format };
   return new Promise((resolve, reject) => {
     let settled = false;
     let timer;

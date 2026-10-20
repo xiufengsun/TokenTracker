@@ -19,6 +19,7 @@ const { functionUrlFor, fetchFunctionResponse } = require("./function-url");
 const { createCloudDeviceTokenStore } = require("./cloud-device-token");
 const { parseBearerToken } = require("./bearer-token");
 const { writeJsonAtomicSync } = require("./atomic-json");
+const { createLocalUsageTransfer, MAX_BYTES: LOCAL_USAGE_MAX_BYTES } = require("./local-usage-transfer");
 
 const SYNC_TIMEOUT_MS = 120_000;
 // A failed account-view request should not stall every dashboard refresh
@@ -399,17 +400,6 @@ function buildCodexCategoryFallbackFromQueue(queueRows, { from, to, timeZoneCont
 function getRequestedUsageScope(url) {
   if (url.searchParams.get("include_account_level") === "1") return "all";
   return normalizeUsageScope(url.searchParams.get("scope"));
-}
-
-async function scopedQueueRows(queuePath, url) {
-  const scope = getRequestedUsageScope(url);
-  const allRows = await readQueueData(queuePath);
-  return {
-    scope,
-    allRows,
-    rows: filterRowsByUsageScope(allRows, scope),
-    excludedSources: listExcludedSources(allRows, scope),
-  };
 }
 
 // ── Local achievements ───────────────────────────────────────────────────────
@@ -1007,6 +997,17 @@ function buildProxyHeaders(headers) {
 
 function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir: isolatedTrackerDataDir = null, syncContext = null }) {
   const qp = queuePath || resolveQueuePath();
+  const localUsage = createLocalUsageTransfer({ queuePath: qp, normalizeRow: normalizeQueueRow,
+    identity: () => ({ id: getOrCreateMachineId(qp), name: getSystemDeviceName(), platform: process.platform }) });
+  async function scopedQueueRows(queuePath, url) {
+    const scope = getRequestedUsageScope(url);
+    const ownRows = await readQueueData(queuePath);
+    const selected = url.searchParams.get("device_id") || "";
+    // Only offline IDs select a snapshot; other IDs retain the local fallback.
+    const device = selected.startsWith("local:") ? selected : "";
+    const allRows = url.pathname.startsWith("/functions/tokentracker-usage-") ? await localUsage.view(ownRows, device) : ownRows;
+    return { scope, allRows, rows: filterRowsByUsageScope(allRows, scope), excludedSources: listExcludedSources(allRows, scope) };
+  }
   const normalizedServerVersion = typeof serverVersion === "string" ? serverVersion.trim() : "";
 
   // Server-side cookie relay: captures auth cookies from InsForge cloud responses
@@ -1639,6 +1640,32 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
 
   return async function handleLocalApi(req, res, url) {
     const p = url.pathname;
+    if (p === "/api/local-usage") {
+      if (!isAuthorizedLocalMutation(req)) { json(res, { code: "unauthorized" }, 401); return true; }
+      try {
+        if (req.method === "GET") {
+          const from = url.searchParams.get("from") || "";
+          const to = url.searchParams.get("to") || "";
+          const context = getTimeZoneContext(url);
+          const inRange = (row) => { const day = rowDayKey(row, context); return day && (!from || day >= from) && (!to || day <= to); };
+          json(res, await localUsage.devices(await readQueueData(qp), inRange));
+        } else if (req.method === "POST") {
+          const body = JSON.parse((await readBodyLimited(req, LOCAL_USAGE_MAX_BYTES + 4096)).toString("utf8"));
+          if (body.action === "export") json(res, { snapshot: await localUsage.exportSnapshot() });
+          else if (body.action === "preview") json(res, await localUsage.preview(body.snapshot));
+          else if (body.action === "import") json(res, await localUsage.importSnapshot(body.snapshot, body.token));
+          else if (body.action === "remove") { await localUsage.remove(body.machine_id); json(res, { ok: true }); }
+          else json(res, { code: "invalid_snapshot" }, 400);
+        } else json(res, { code: "method_not_allowed" }, 405);
+      } catch (error) {
+        json(res, { code: error.code && error.status ? error.code : "transfer_failed" }, error.status || 400);
+      }
+      return true;
+    }
+    if (p.startsWith("/functions/tokentracker-usage-") && url.searchParams.get("device_id")?.startsWith("local:")) {
+      try { await localUsage.view([], url.searchParams.get("device_id")); }
+      catch (error) { json(res, { code: error.code || "transfer_failed" }, error.status || 500); return true; }
+    }
     // Session recovery and the one-time native callback marker belong to local
     // clients. Reject foreign requests before consuming either, including preflights.
     const nativeMarkerRead = p === "/api/auth-bridge/verifier" && String(req.method).toUpperCase() === "GET";
@@ -2714,6 +2741,11 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       const from = url.searchParams.get("from") || "";
       const to = url.searchParams.get("to") || "";
       const requestedSource = (url.searchParams.get("source") || "claude").trim().toLowerCase();
+      const selected = url.searchParams.get("device_id") || "";
+      if (selected.startsWith("local:") ? selected !== `local:${getOrCreateMachineId(qp)}` : !selected && await localUsage.hasImports()) {
+        json(res, { from, to, ...unsupportedCategoryPayload(requestedSource), reason: "local_history_only" });
+        return true;
+      }
       if (requestedSource === "claude") {
         try {
           const result = await computeClaudeCategoryBreakdown({ from, to, projectDir: process.cwd() });

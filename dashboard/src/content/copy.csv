@@ -2099,3 +2099,37 @@ cloud.rebuild.error,cloud,SettingsPage,CloudRebuildControl,error,Rebuild did not
 cloud.rebuild.busy,cloud,SettingsPage,CloudRebuildControl,busy,"Sync is running. Wait for it to finish, then retry.",,active
 usage.overview.kiro_notice_title,dashboard,DashboardPage,UsageOverview,kiro_notice_title,CLI token estimates,,active
 usage.overview.kiro_notice_body,dashboard,DashboardPage,UsageOverview,kiro_notice_body,"When Kiro CLI does not report token counts, tokens are estimated from new user messages, tool outputs and assistant text at ~4 characters/token. Re-sent history, system context and cache usage are not measured. Dollar amounts use model rates and do not represent Kiro credit charges.",,active
+settings.local_data.title,settings,SettingsPage,LocalDataSection,title,Local data,,active
+settings.local_data.scope,settings,SettingsPage,LocalDataSection,scope,"Device usage only; excludes account-level usage, projects and sessions.",,active
+settings.local_data.export,settings,SettingsPage,LocalDataSection,export,Export this device,,active
+settings.local_data.import,settings,SettingsPage,LocalDataSection,import,Import another device,,active
+settings.local_data.choose,settings,SettingsPage,LocalDataSection,choose,Choose file,,active
+settings.local_data.preview,settings,SettingsPage,LocalDataSection,preview,Import preview,,active
+settings.local_data.snapshot_time,settings,SettingsPage,LocalDataSection,snapshot_time,Snapshot exported: {{time}},,active
+settings.local_data.change,settings,SettingsPage,LocalDataSection,change,Device usage: {{before}} → {{after}} tokens,,active
+settings.local_data.confirm,settings,SettingsPage,LocalDataSection,confirm,Confirm merge,,active
+settings.local_data.cancel,settings,SettingsPage,LocalDataSection,cancel,Cancel,,active
+settings.local_data.sources,settings,SettingsPage,LocalDataSection,sources,Imported devices,,active
+settings.local_data.empty,settings,SettingsPage,LocalDataSection,empty,No imported devices.,,active
+settings.local_data.remove,settings,SettingsPage,LocalDataSection,remove,Remove source,,active
+settings.local_data.confirm_remove,settings,SettingsPage,LocalDataSection,confirm_remove,Confirm removal,,active
+settings.local_data.removed,settings,SettingsPage,LocalDataSection,removed,Imported usage removed. This device’s original history is unchanged.,,active
+settings.local_data.imported,settings,SettingsPage,LocalDataSection,imported,Usage merged. Find the device in the existing dashboard device filter.,,active
+settings.local_data.imported_label,settings,SettingsPage,LocalDataSection,imported_label,Imported,,active
+settings.local_data.unchanged,settings,SettingsPage,LocalDataSection,unchanged,This snapshot is already imported. No changes are needed.,,active
+settings.local_data.outdated,settings,SettingsPage,LocalDataSection,outdated,A newer snapshot is already imported. This older file will not replace it.,,active
+settings.local_data.saved,settings,SettingsPage,LocalDataSection,saved,Saved to Downloads: {{filename}},,active
+settings.local_data.download_started,settings,SettingsPage,LocalDataSection,download_started,Download started. Check your browser’s downloads to confirm it was saved.,,active
+settings.local_data.error.invalid_snapshot,settings,SettingsPage,LocalDataSection,invalid_snapshot,"Unsupported, damaged or oversized file (maximum 5 MB).",,active
+settings.local_data.error.self_import,settings,SettingsPage,LocalDataSection,self_import,This file belongs to this device. It cannot be imported here.,,active
+settings.local_data.error.snapshot_conflict,settings,SettingsPage,LocalDataSection,snapshot_conflict,The snapshot version conflicts with an existing source. Check the source device.,,active
+settings.local_data.error.preview_changed,settings,SettingsPage,LocalDataSection,preview_changed,Usage changed after the preview. Choose the file again to refresh it.,,active
+settings.local_data.error.transfer_busy,settings,SettingsPage,LocalDataSection,transfer_busy,A sync or transfer is running. Try again shortly.,,active
+settings.local_data.error.legacy_imports,settings,SettingsPage,LocalDataSection,legacy_imports,Legacy merged data was found. It needs a separate migration before transferring.,,active
+settings.local_data.error.invalid_queue,settings,SettingsPage,LocalDataSection,invalid_queue,Local history could not be read completely. Nothing was imported.,,active
+settings.local_data.error.invalid_state,settings,SettingsPage,LocalDataSection,invalid_state,The local import ledger is unreadable. Keep the files and check them before retrying.,,active
+settings.local_data.error.identity_unavailable,settings,SettingsPage,LocalDataSection,identity_unavailable,This device’s identity could not be saved.,,active
+settings.local_data.error.too_many_devices,settings,SettingsPage,LocalDataSection,too_many_devices,The imported data limit has been reached. Remove an unused source first.,,active
+settings.local_data.error.unknown_device,settings,SettingsPage,LocalDataSection,unknown_device,This imported source is no longer available.,,active
+settings.local_data.error.transfer_failed,settings,SettingsPage,LocalDataSection,transfer_failed,"Transfer failed. Check the file and local app, then try again.",,active
+settings.local_data.local_history_only,dashboard,DashboardPage,LocalDataSection,local_history_only,"Offline snapshots omit session records. Select this device for context breakdown; project, session and outcome analyses always use this device's records.",,active

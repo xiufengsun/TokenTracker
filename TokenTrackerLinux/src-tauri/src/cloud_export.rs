@@ -31,15 +31,17 @@ pub struct ExportResult {
 
 impl ExportMessage {
     fn valid(&self) -> bool {
+        let local = self.kind == "saveLocalUsageExport";
         let Some(stem) = self
             .filename
-            .strip_prefix("tokentracker-cloud-")
+            .strip_prefix(if local { "tokentracker-local-" } else { "tokentracker-cloud-" })
             .and_then(|name| name.strip_suffix(&format!(".{}", self.format)))
         else {
             return false;
         };
         let request = self.request_id.as_bytes();
-        self.kind == "saveCloudUsageExport"
+        (local || self.kind == "saveCloudUsageExport")
+            && (!local || self.format == "json")
             && matches!(self.format.as_str(), "csv" | "json")
             && !stem.is_empty()
             && stem.len() <= 151
@@ -239,6 +241,20 @@ mod tests {
         let mut export = message();
         export.content = "a".repeat(MAXIMUM_BYTES);
         assert!(export.valid());
+    }
+
+    #[test]
+    fn local_snapshot_requires_its_own_type_and_filename() {
+        let directory = PrivateDirectory::new();
+        let mut export = message();
+        export.filename = "tokentracker-local-fixture-1.json".into();
+        export.format = "json".into();
+        export.content = "{\"synthetic\":true}".into();
+        assert!(!export.valid());
+        export.kind = "saveLocalUsageExport".into();
+        assert!(export.save(&directory.0).saved);
+        export.filename = "tokentracker-cloud-fixture.json".into();
+        assert!(!export.valid());
     }
 
     #[test]

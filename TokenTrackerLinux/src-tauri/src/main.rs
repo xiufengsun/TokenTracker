@@ -18,6 +18,7 @@ const NATIVE_OAUTH_BRIDGE: &str = r#"
   if (window.location.hostname !== '127.0.0.1') return;
   if (window !== window.top) return;
   window.__TOKENTRACKER_CLOUD_EXPORT__ = true;
+  window.__TOKENTRACKER_LOCAL_EXPORT__ = true;
   const handler = {
     postMessage(url) {
       return window.__TAURI_INTERNALS__.invoke('open_oauth', { url });

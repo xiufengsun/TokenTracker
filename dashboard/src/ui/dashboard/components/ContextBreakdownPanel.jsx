@@ -683,7 +683,7 @@ function ToolCallsExpanded({ toolSet, execDetails, source, codexQueueFallback })
 
 // Inline Context Breakdown for Claude Code only. Renders bare (no Card
 // wrapper) so it can drop into the UsageOverview expanded provider section.
-export function ContextBreakdownPanel({ from, to, source = "claude", referenceTotalTokens = null, onLoadingChange = null }) {
+export function ContextBreakdownPanel({ from, to, source = "claude", referenceTotalTokens = null, onLoadingChange = null, deviceId = null }) {
   const { formatTokens } = useTokenFormat();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -701,7 +701,7 @@ export function ContextBreakdownPanel({ from, to, source = "claude", referenceTo
 
   useEffect(() => {
     let cancelled = false;
-    const cacheKey = `${from || ""}|${to || ""}|${source || "claude"}`;
+    const cacheKey = `${from || ""}|${to || ""}|${source || "claude"}|${deviceId || ""}`;
     const cached = cacheRef.current[cacheKey];
     // On a cache miss, reset data so the previous source's payload never
     // renders under the new source's display branch while the fetch runs.
@@ -713,6 +713,7 @@ export function ContextBreakdownPanel({ from, to, source = "claude", referenceTo
       from,
       to,
       source,
+      device: deviceId,
       timeZone: getBrowserTimeZone(),
       tzOffsetMinutes: getBrowserTimeZoneOffsetMinutes(),
     })
@@ -735,7 +736,7 @@ export function ContextBreakdownPanel({ from, to, source = "claude", referenceTo
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to, source]);
+  }, [from, to, source, deviceId]);
 
   // No internal header — the parent (UsageOverview) renders the title and
   // receives loading state via onLoadingChange so the spinner sits inline
@@ -772,7 +773,7 @@ export function ContextBreakdownPanel({ from, to, source = "claude", referenceTo
   if (!data || data.scope !== "supported" || !data.totals?.total_tokens) {
     return (
       <p className="text-xs text-oai-gray-500 dark:text-oai-gray-400">
-        {copy(sourceEmptyCopyKey(source))}
+        {copy(data?.reason === "local_history_only" ? "settings.local_data.local_history_only" : sourceEmptyCopyKey(source))}
       </p>
     );
   }

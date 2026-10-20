@@ -25,6 +25,16 @@ final class CloudUsageExportTests: XCTestCase {
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
+    func testLocalSnapshotUsesItsOwnFilenameAndMessageType() throws {
+        var local = message(filename: "tokentracker-local-fixture-1.json", format: "json", content: "{\"synthetic\":true}")
+        XCTAssertThrowsError(try CloudUsageExport(message: local))
+        local["type"] = "saveLocalUsageExport"
+        let saved = try CloudUsageExport(message: local).save(in: directory)
+        XCTAssertEqual(saved, "tokentracker-local-fixture-1.json")
+        local["filename"] = "tokentracker-cloud-fixture.json"
+        XCTAssertThrowsError(try CloudUsageExport(message: local))
+    }
+
     func testCollisionDoesNotOverwriteAnExistingFile() throws {
         let existing = directory.appendingPathComponent(filename)
         try Data("keep".utf8).write(to: existing)

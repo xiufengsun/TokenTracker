@@ -2,11 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { resolveAuthAccessToken } from "../lib/auth-token";
 import { fetchAccountDevices } from "../lib/api";
 import { useLatestRequestGuard } from "./use-latest-request-guard";
+import { isLocalDashboardHost } from "../lib/host-mode";
+import { readLocalUsageDevices, LOCAL_USAGE_CHANGED_EVENT } from "../lib/local-usage-transfer";
 
 /**
- * Lists the signed-in account's active devices with per-device usage totals
- * for [from, to]. Only fetches in account view (cross-device cloud reads);
- * outside it the dashboard is single-device and there is nothing to compare.
+ * Lists range-bound device totals from the current cloud or local view.
+ * Offline imports are read only from the local server, without cloud auth.
  */
 export function useAccountDevices({
   from,
@@ -16,8 +17,11 @@ export function useAccountDevices({
   accountView = false,
   accountAccessToken = null,
   accountRevision = 0,
+  localView = false,
 }: any = {}) {
-  const enabled = Boolean(accountView && accountAccessToken);
+  const local = localView && !accountView && isLocalDashboardHost();
+  const enabled = Boolean(local || (accountView && accountAccessToken));
+  const [revision, setRevision] = useState(0);
   const [devices, setDevices] = useState<any[]>([]);
   // Account-level sources (e.g. Cursor) have no device attribution; the edge
   // returns their account-wide totals separately so the card can still show
@@ -27,6 +31,7 @@ export function useAccountDevices({
   const [error, setError] = useState<string | null>(null);
   const beginRequest = useLatestRequestGuard([
     enabled,
+    local,
     from,
     to,
     timeZone,
@@ -47,12 +52,15 @@ export function useAccountDevices({
     setLoading(true);
     setError(null);
     try {
-      const token = await resolveAuthAccessToken(accountAccessToken);
+      const token = local ? null : await resolveAuthAccessToken(accountAccessToken);
       if (!isCurrent()) return;
-      const res = await fetchAccountDevices({ from, to, timeZone, tzOffsetMinutes, accessToken: token });
+      const res = local
+        ? await readLocalUsageDevices({ from, to, timeZone, tzOffsetMinutes })
+        : await fetchAccountDevices({ from, to, timeZone, tzOffsetMinutes, accessToken: token });
       if (!isCurrent()) return;
       setDevices(Array.isArray(res?.devices) ? res.devices : []);
       setAccountSources(Array.isArray(res?.account_sources) ? res.account_sources : []);
+      setRevision(local ? Number(res?.revision) || 0 : 0);
     } catch (e: any) {
       if (!isCurrent()) return;
       setError(e?.message || String(e));
@@ -61,7 +69,13 @@ export function useAccountDevices({
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [enabled, accountAccessToken, from, to, timeZone, tzOffsetMinutes, accountRevision, beginRequest]);
+  }, [enabled, local, accountAccessToken, from, to, timeZone, tzOffsetMinutes, accountRevision, beginRequest]);
+
+  useEffect(() => {
+    if (!local) return;
+    window.addEventListener(LOCAL_USAGE_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(LOCAL_USAGE_CHANGED_EVENT, refresh);
+  }, [local, refresh]);
 
   useEffect(() => {
     // Device totals are range-bound; clear them before loading a new range so
@@ -73,5 +87,5 @@ export function useAccountDevices({
     refresh();
   }, [enabled, refresh]);
 
-  return { devices, accountSources, loading, error, refresh };
+  return { devices, accountSources, loading, error, refresh, revision };
 }

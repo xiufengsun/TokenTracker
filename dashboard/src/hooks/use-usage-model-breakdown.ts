@@ -34,8 +34,8 @@ export function useUsageModelBreakdown({
     if (!cacheKey) return null;
     const host = safeHost(baseUrl) || "default";
     const tzKey = getTimeZoneCacheKey({ timeZone, offsetMinutes: tzOffsetMinutes });
-    return `tokentracker.modelBreakdown.${cacheKey}.${scopeKey}.${host}.${from}.${to}.${tzKey}.${deviceId || "all"}`;
-  }, [baseUrl, cacheKey, deviceId, from, scopeKey, timeZone, to, tzOffsetMinutes]);
+    return `tokentracker.modelBreakdown.${cacheKey}.${scopeKey}.${host}.${from}.${to}.${tzKey}.${deviceId || "all"}${useCloud || !accountRevision ? "" : `.r${accountRevision}`}`;
+  }, [baseUrl, cacheKey, deviceId, from, scopeKey, timeZone, to, tzOffsetMinutes, useCloud, accountRevision]);
 
   const readCache = useCallback(() => {
     if (!storageKey || typeof window === "undefined") return null;

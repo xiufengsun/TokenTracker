@@ -7,6 +7,25 @@ namespace TokenTrackerWin;
 // These filesystem tests never load the desktop app or open a URI.
 public sealed class CloudUsageExportTests
 {
+    [Fact]
+    public void LocalJsonUsesTheSameWriterButCannotMasqueradeAsCloudExport()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "tokentracker-local-export-" + Guid.NewGuid());
+        Directory.CreateDirectory(directory);
+        try
+        {
+            JsonElement Local(string filename, string format = "json") => JsonSerializer.SerializeToElement(new {
+                type = "saveLocalUsageExport", requestId = RequestId, filename, format, content = "{}" });
+            var result = CloudUsageExport.Save(Local("tokentracker-local-device-1.json"), directory);
+            Assert.True(result.Saved);
+            Assert.Equal("{}", File.ReadAllText(Path.Combine(directory, result.Filename!)));
+            Assert.Equal("invalid_export", CloudUsageExport.Save(Local("tokentracker-cloud-device-1.json"), directory).ErrorCode);
+            Assert.Equal("invalid_export", CloudUsageExport.Save(Local("tokentracker-local-device-1.csv", "csv"), directory).ErrorCode);
+            Assert.Equal("invalid_export", CloudUsageExport.Save(Message("tokentracker-local-device-1.json", "json", "{}"), directory).ErrorCode);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     private static readonly string RequestId = "00112233-4455-4677-8899-aabbccddeeff";
     private static JsonElement Message(string filename = "tokentracker-cloud-usage.csv", string format = "csv", string content = "date,tokens\nsynthetic,4\n")
         => JsonSerializer.SerializeToElement(new { type = "saveCloudUsageExport", requestId = RequestId, filename, format, content });
