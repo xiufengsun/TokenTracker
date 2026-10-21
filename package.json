@@ -55,7 +55,7 @@
     "@mongodb-js/zstd": "^2.0.1",
     "@sentry/node": "^11.8.0",
     "smol-toml": "^1.9.0",
-    "undici": "8.11.2",
+    "undici": "8.12.2",
     "yauzl": "^3.4.0"
   },
   "devDependencies": {
