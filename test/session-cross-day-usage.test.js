@@ -57,3 +57,34 @@ test("Session ranges retain priority/long-context overlap and quarter-hour timez
   assert.ok(Math.abs(row.cost_usd - session.cost_usd) < 1e-12);
   assert.equal(listSessionsForBrowser([session], { from: "2026-10-09", to: "2026-10-09", timeZone: "Asia/Kathmandu" }).session_count, 0);
 });
+
+test("Session ranges retain Ultrafast subsets and 6x premium (#849)", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-session-ultrafast-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "rollout.jsonl");
+  const usage = {
+    input_tokens: 100000,
+    cached_input_tokens: 50000,
+    output_tokens: 10000,
+    reasoning_output_tokens: 0,
+    total_tokens: 110000,
+  };
+  fs.writeFileSync(file, [
+    { timestamp: "2026-10-21T00:00:00.000Z", type: "session_meta", payload: { id: "ultrafast", cwd: dir, model_provider: "openai" } },
+    { timestamp: "2026-10-21T00:00:01.000Z", type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: { model: "gpt-6.1-sol", service_tier: "ultrafast" } } },
+    { timestamp: "2026-10-21T00:00:02.000Z", type: "turn_context", payload: { model: "gpt-6.1-sol" } },
+    { timestamp: "2026-10-21T00:00:03.000Z", type: "event_msg", payload: { type: "token_count", info: { last_token_usage: usage, total_token_usage: usage } } },
+  ].map(JSON.stringify).join("\n") + "\n");
+  const session = await scanCodexSession(file);
+  assert.equal(session.model_usage[0].ultrafast_input_tokens, 50000);
+  assert.equal(session.model_usage[0].priority_input_tokens || 0, 0);
+  const scoped = listSessionsForBrowser([session], { from: "2026-10-21", to: "2026-10-21" });
+  assert.equal(scoped.sessions.length, 1);
+  const row = scoped.sessions[0];
+  assert.equal(row.model_usage[0].ultrafast_input_tokens, 50000);
+  assert.equal(row.model_usage[0].ultrafast_cached_input_tokens, 50000);
+  assert.ok(Math.abs(row.cost_usd - session.cost_usd) < 1e-12);
+  // Standard for the peeled columns would be 0.205; Ultrafast is 6x → 1.23
+  assert.ok(Math.abs(row.cost_usd - 1.23) < 1e-9, `cost ${row.cost_usd}`);
+});
+
