@@ -118,6 +118,51 @@ test("removing an import preserves own data; re-opening the service retains impo
   assert.equal(total(await reopened.view([row(200)])), 200);
 });
 
+test("preview rejects snapshots that only exceed MAX_BYTES after cleanRow normalization", async (t) => {
+  const { MAX_BYTES } = require("../src/lib/local-usage-transfer");
+  const b = await machine(t, "machine-bbbb", [row(200)]);
+  const beforeView = total(await b.service.view([row(200)]));
+  const makeRow = (i) => ({
+    source: "codex",
+    model: "m",
+    hour_start: new Date(Date.UTC(2026, 0, 1) + i * 1_800_000).toISOString(),
+    input_tokens: 1,
+    output_tokens: 0,
+    cached_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+    reasoning_output_tokens: 0,
+    total_tokens: 1,
+    conversation_count: 1,
+  });
+  const base = {
+    schema: "tokentracker.local-usage.v1",
+    scope: "device-history",
+    machine: { id: "machine-aaaa", name: "A", platform: "darwin" },
+    sequence: 1,
+    exported_at: "2026-10-18T12:00:00.000Z",
+  };
+  const growthPerRow = Buffer.byteLength(JSON.stringify({ billable_total_tokens: 1 })) - 2; // rough ,"billable_total_tokens":1
+  // Build just under the raw limit, then confirm normalization would exceed it.
+  let lo = 1;
+  let hi = 80_000;
+  while (lo + 1 < hi) {
+    const mid = (lo + hi) >> 1;
+    const raw = Buffer.byteLength(JSON.stringify({
+      ...base,
+      rows: Array.from({ length: mid }, (_, i) => makeRow(i)),
+    }));
+    if (raw <= MAX_BYTES) lo = mid;
+    else hi = mid;
+  }
+  const rows = Array.from({ length: lo }, (_, i) => makeRow(i));
+  const snapshot = { ...base, rows };
+  const raw = Buffer.byteLength(JSON.stringify(snapshot));
+  assert.ok(raw <= MAX_BYTES);
+  assert.ok(raw + lo * 20 > MAX_BYTES, "fixture must rely on post-clean growth to exceed the limit");
+  await assert.rejects(b.service.preview(snapshot), { code: "invalid_snapshot" });
+  assert.equal(total(await b.service.view([row(200)])), beforeView);
+});
+
 test("ledger reads enforce the byte limit even if an earlier size observation is stale", async (t) => {
   const machineB = await machine(t, "machine-bbbb", [row(200)]);
   const ledgerPath = path.join(machineB.home, "local-usage.json");

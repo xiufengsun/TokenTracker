@@ -66,7 +66,13 @@ function validateSnapshot(value) {
     keys.add(key);
   }
   count(rows);
-  return { ...value, machine: { ...value.machine }, rows };
+  // cleanRow may insert billable_total_tokens and drop omitted zeros, so the
+  // serialized size after normalization can exceed the pre-clean check above.
+  // Reject before commit: an accepted oversize snapshot would make later
+  // validateSnapshot reads fail and hide the import from Settings removal.
+  const normalized = { ...value, machine: { ...value.machine }, rows };
+  if (Buffer.byteLength(JSON.stringify(normalized)) > MAX_BYTES) fail("invalid_snapshot");
+  return normalized;
 }
 
 // Imported snapshots never enter the append-only queue or its cloud upload offset.
