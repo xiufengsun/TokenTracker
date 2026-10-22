@@ -30,7 +30,7 @@ const {
   currentCodexModel,
   snapshotCodexModelAttributionState,
 } = require("./codex-model-attribution");
-const { readCodexServiceTier, isPriorityServiceTier } = require("./codex-service-tier");
+const { readCodexServiceTier, isPriorityServiceTier, isUltrafastServiceTier } = require("./codex-service-tier");
 const {
   createUsageRecordState,
   extractTokenUsageRecord,
@@ -731,16 +731,27 @@ async function parseCodexRolloutFile(filePath, {
         priority_long_context_cache_creation_input_tokens: 0,
         priority_long_context_output_tokens: 0,
         priority_long_context_reasoning_output_tokens: 0,
+        ultrafast_input_tokens: 0,
+        ultrafast_cached_input_tokens: 0,
+        ultrafast_cache_creation_input_tokens: 0,
+        ultrafast_output_tokens: 0,
+        ultrafast_reasoning_output_tokens: 0,
+        ultrafast_long_context_input_tokens: 0,
+        ultrafast_long_context_cached_input_tokens: 0,
+        ultrafast_long_context_cache_creation_input_tokens: 0,
+        ultrafast_long_context_output_tokens: 0,
+        ultrafast_long_context_reasoning_output_tokens: 0,
         usage_events: 0,
         rerouted_usage_events: 0,
         long_context_usage_events: 0,
         priority_usage_events: 0,
+        ultrafast_usage_events: 0,
         selected_models: new Set(),
         reroute_reasons: new Set(),
       };
       byModel.set(effectiveModel, row);
     }
-    const subsetKeys = Object.keys(row).filter((key) => /^(?:long_context_|priority_)|^(?:usage_events|rerouted_usage_events)$/.test(key));
+    const subsetKeys = Object.keys(row).filter((key) => /^(?:long_context_|priority_|ultrafast_)|^(?:usage_events|rerouted_usage_events)$/.test(key));
     const before = Object.fromEntries(subsetKeys.map((key) => [key, row[key]]));
     addInto(row, delta);
     row.usage_events += 1;
@@ -785,6 +796,22 @@ async function parseCodexRolloutFile(filePath, {
           delta.cache_creation_input_tokens;
         row.priority_long_context_output_tokens += delta.output_tokens;
         row.priority_long_context_reasoning_output_tokens += delta.reasoning_output_tokens;
+      }
+    }
+    if (isUltrafastServiceTier(attribution.serviceTier)) {
+      row.ultrafast_usage_events += 1;
+      row.ultrafast_input_tokens += delta.input_tokens;
+      row.ultrafast_cached_input_tokens += delta.cached_input_tokens;
+      row.ultrafast_cache_creation_input_tokens += delta.cache_creation_input_tokens;
+      row.ultrafast_output_tokens += delta.output_tokens;
+      row.ultrafast_reasoning_output_tokens += delta.reasoning_output_tokens;
+      if (isLongContext) {
+        row.ultrafast_long_context_input_tokens += delta.input_tokens;
+        row.ultrafast_long_context_cached_input_tokens += delta.cached_input_tokens;
+        row.ultrafast_long_context_cache_creation_input_tokens +=
+          delta.cache_creation_input_tokens;
+        row.ultrafast_long_context_output_tokens += delta.output_tokens;
+        row.ultrafast_long_context_reasoning_output_tokens += delta.reasoning_output_tokens;
       }
     }
     return { ...delta, ...Object.fromEntries(subsetKeys.map((key) => [key, row[key] - before[key]])),

@@ -89,12 +89,27 @@
       "cache_write": 1.25,
       "note": "Canonical undated alias emitted by Cursor. Pin to the same rates as claude-haiku-4-5-20251001 so local cost does not depend on which dated LiteLLM aliases are present in the current cache."
     },
+    "claude-haiku-5-5": {
+      "input": 0.1,
+      "output": 0.5,
+      "cache_read": 0.01,
+      "cache_write": 0.125,
+      "note": "Official Anthropic Haiku 5.5 short-context (prompts <=100K) USD/MTok verified 2026-10-22: https://platform.claude.com/docs/en/about-claude/pricing. Prompts over 100K use 5x rates; computeRowCost does not yet split that long-prompt tier. Cache write is the 5-minute rate."
+    },
+    "claude-haiku-5.5": {
+      "input": 0.1,
+      "output": 0.5,
+      "cache_read": 0.01,
+      "cache_write": 0.125,
+      "note": "Dotted alias for claude-haiku-5-5. Same short-context rates."
+    },
     "gpt-6-astra": {
       "input": 10,
       "output": 50,
       "cache_read": 1,
       "cache_write": 12.5,
       "priority_multiplier": 2,
+      "ultrafast_multiplier": 6,
       "note": "Official Standard USD/MTok rates verified 2026-09-07: https://developers.openai.com/api/docs/models/gpt-6-astra. Requests above 272K input tokens use 2x input/cache and 1.5x output rates; computeRowCost applies this only to observed long-context request subsets. priority_multiplier is the Fast tier, whose published table (20/2/25/100 short, 40/4/50/150 long, verified 2026-09-12) is exactly 2x the Standard rate of the same context tier — it multiplies, it does not replace, the long-context premium. The 2.5x figure in the Codex speed docs is a subscription-credit rate and must not be used here. computeRowCost applies it only to observed priority request subsets; usage whose service tier the logs never recorded stays Standard. Cloud aggregates use Standard short-context estimates because they do not retain per-request context or service tier. Reasoning-effort suffixes use the same base rates."
     },
     "gpt-6.1-sol": {
@@ -103,6 +118,7 @@
       "cache_read": 0.1,
       "cache_write": 2.5,
       "priority_multiplier": 2,
+      "ultrafast_multiplier": 6,
       "note": "Official Standard USD/MTok rates verified 2026-10-02 (issue #737): https://developers.openai.com/api/docs/models/gpt-6.1-sol. Requests above 272K input use 2x input/cache and 1.5x output rates; Fast mode is 2x the applicable rates. Premiums apply only to observed request subsets. Cloud aggregates remain Standard short-context estimates."
     },
     "gpt-6-sol": {

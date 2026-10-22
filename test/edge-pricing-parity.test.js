@@ -128,6 +128,7 @@ test("canonical pricing block retains regression-prone entries and matcher order
     '"glm-5.3-flash"',
     '"deepseek-v4.1-flash"',
     '"deepseek-flash"',
+    '"claude-haiku-5-5"',
   ]) {
     assert.ok(block.includes(`${key}:`), `canonical table lost ${key}`);
   }
@@ -172,6 +173,7 @@ test("canonical pricing block retains regression-prone entries and matcher order
   order('lower.includes("grok-4.5"))', 'lower.includes("grok-4"))');
   order('lower.includes("gemini-4-argon")', 'lower.includes("gemini-3"))');
   order('lower.includes("composer-2.5") && lower.includes("fast")', 'lower.includes("composer"))');
+  order('/haiku-5[.-]5(?:$|[^0-9.])/', 'lower.includes("haiku"))');
   // GLM-5.3 Flash is a distinct cheap SKU ($0.15/$0.50 vs the flagship's
   // $1.4/$4.4); its matcher must precede the base glm-5.3 matcher (substring)
   // and glm-5.3 must precede glm-5, or flash rows bill at 6.7x.

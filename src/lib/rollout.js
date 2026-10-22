@@ -28,6 +28,7 @@ const {
   CODEX_SERVICE_TIER_MARKER,
   readCodexServiceTier,
   isPriorityServiceTier,
+  isUltrafastServiceTier,
 } = require("./codex-service-tier");
 const {
   awaitsCompactedLine,
@@ -2649,6 +2650,7 @@ async function parseRolloutRecords({
     const bucket = getHourlyBucket(hourlyState, source, event.model, event.bucketStart);
     addTotals(bucket.totals, event.delta);
     if (isPriorityServiceTier(event.serviceTier)) addPriorityUsage(bucket.totals, event.delta);
+    if (isUltrafastServiceTier(event.serviceTier)) addUltrafastUsage(bucket.totals, event.delta);
     touchedBuckets.add(bucketKey(source, event.model, event.bucketStart));
     if (event.projectKey && projectState && projectTouchedBuckets) {
       const projectBucket = getProjectBucket(
@@ -2903,6 +2905,7 @@ async function parseRolloutRecords({
     // Only the model bucket gets the subset: the project bucket below carries
     // no model, so no per-model rate can be applied to it anyway.
     if (isPriorityServiceTier(serviceTier)) addPriorityUsage(bucket.totals, delta);
+    if (isUltrafastServiceTier(serviceTier)) addUltrafastUsage(bucket.totals, delta);
     touchedBuckets.add(bucketKey(source, model, bucketStart));
     if (currentProjectKey && projectState && projectTouchedBuckets) {
       const projectBucket = getProjectBucket(
@@ -4422,6 +4425,16 @@ const PRIORITY_SUBSET_FIELDS = [
   ["priority_reasoning_output_tokens", "reasoning_output_tokens"],
 ];
 
+const ULTRAFAST_SUBSET_FIELDS = [
+  ["ultrafast_input_tokens", "input_tokens"],
+  ["ultrafast_cached_input_tokens", "cached_input_tokens"],
+  ["ultrafast_cache_creation_input_tokens", "cache_creation_input_tokens"],
+  ["ultrafast_output_tokens", "output_tokens"],
+  ["ultrafast_reasoning_output_tokens", "reasoning_output_tokens"],
+];
+
+const SPEED_TIER_SUBSET_FIELDS = [...PRIORITY_SUBSET_FIELDS, ...ULTRAFAST_SUBSET_FIELDS];
+
 // The whole delta belongs to a priority request, so every base column it
 // carries is priority usage.
 function addPriorityUsage(target, delta) {
@@ -4431,9 +4444,16 @@ function addPriorityUsage(target, delta) {
   }
 }
 
+function addUltrafastUsage(target, delta) {
+  for (const [field, base] of ULTRAFAST_SUBSET_FIELDS) {
+    const value = Number(delta?.[base] || 0);
+    if (value > 0) target[field] = (Number(target[field]) || 0) + value;
+  }
+}
+
 function prioritySubsetOf(totals) {
   const subset = {};
-  for (const [field] of PRIORITY_SUBSET_FIELDS) {
+  for (const [field] of SPEED_TIER_SUBSET_FIELDS) {
     const value = Number(totals?.[field]) || 0;
     if (value > 0) subset[field] = value;
   }
@@ -4441,7 +4461,7 @@ function prioritySubsetOf(totals) {
 }
 
 function addTotals(target, delta) {
-  for (const [field] of PRIORITY_SUBSET_FIELDS) {
+  for (const [field] of SPEED_TIER_SUBSET_FIELDS) {
     const value = Number(delta?.[field]) || 0;
     if (value > 0) target[field] = (Number(target[field]) || 0) + value;
   }
@@ -4511,7 +4531,11 @@ function totalsKey(totals) {
   // Appended only when a priority subset exists, so buckets that never see the
   // tier keep their previously persisted queuedKey and are not re-enqueued.
   const priority = PRIORITY_SUBSET_FIELDS.map(([field]) => Number(totals[field]) || 0);
-  return priority.some((value) => value > 0) ? `${base}|p:${priority.join(",")}` : base;
+  const ultrafast = ULTRAFAST_SUBSET_FIELDS.map(([field]) => Number(totals[field]) || 0);
+  let key = base;
+  if (priority.some((value) => value > 0)) key += `|p:${priority.join(",")}`;
+  if (ultrafast.some((value) => value > 0)) key += `|u:${ultrafast.join(",")}`;
+  return key;
 }
 
 function toUtcHalfHourStart(ts) {

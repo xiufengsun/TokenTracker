@@ -25,6 +25,13 @@ const CODEX_SERVICE_TIER_MARKER = '"thread_settings_applied"';
 // does not silently fall back to Standard.
 const PRIORITY_SERVICE_TIERS = new Set(["priority", "fast"]);
 
+// Ultrafast is a distinct paid speed tier (service_tier "ultrafast") for
+// gpt-6-astra and gpt-6.1-sol. It is NOT Fast: Fast uses priority_* subsets and
+// priority_multiplier (2x); Ultrafast uses ultrafast_* subsets and
+// ultrafast_multiplier (6x). Mixing them into the priority columns would
+// understate Ultrafast at 2x.
+const ULTRAFAST_SERVICE_TIERS = new Set(["ultrafast"]);
+
 function readCodexServiceTier(obj) {
   if (!obj || obj.type !== "event_msg") return null;
   const payload = obj.payload;
@@ -41,9 +48,15 @@ function isPriorityServiceTier(tier) {
   return typeof tier === "string" && PRIORITY_SERVICE_TIERS.has(tier);
 }
 
+function isUltrafastServiceTier(tier) {
+  return typeof tier === "string" && ULTRAFAST_SERVICE_TIERS.has(tier);
+}
+
 module.exports = {
   CODEX_SERVICE_TIER_MARKER,
   PRIORITY_SERVICE_TIERS,
+  ULTRAFAST_SERVICE_TIERS,
   readCodexServiceTier,
   isPriorityServiceTier,
+  isUltrafastServiceTier,
 };

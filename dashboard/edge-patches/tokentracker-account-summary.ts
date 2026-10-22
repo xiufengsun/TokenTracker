@@ -140,6 +140,8 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "claude-sonnet-4-6": { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
   "claude-sonnet-4-5-20250514": { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
   "claude-sonnet-4-20250514": { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
+  "claude-haiku-5-5": { input: 0.1, output: 0.5, cache_read: 0.01, cache_write: 0.125 },
+  "claude-haiku-5.5": { input: 0.1, output: 0.5, cache_read: 0.01, cache_write: 0.125 },
   "claude-haiku-4-5-20251001": { input: 1, output: 5, cache_read: 0.1, cache_write: 1.25 },
   "claude-3-5-sonnet-20241022": { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
   "claude-3-5-haiku-20241022": { input: 1, output: 5, cache_read: 0.1, cache_write: 1.25 },
@@ -437,6 +439,7 @@ function getModelPricing(model: string, source = "") {
   if (lower.includes("opus-5-fast")) return MODEL_PRICING["claude-opus-5-fast"];
   if (lower.includes("opus-5")) return MODEL_PRICING["claude-opus-5"];
   if (lower.includes("opus")) return MODEL_PRICING["claude-opus-4-6"];
+  if (/haiku-5[.-]5(?:$|[^0-9.])/.test(lower)) return MODEL_PRICING["claude-haiku-5-5"];
   if (lower.includes("haiku")) return MODEL_PRICING["claude-haiku-4-5-20251001"];
   if (lower.includes("sonnet")) return MODEL_PRICING["claude-sonnet-4-6"];
   if (lower.includes("gpt-6-astra")) return MODEL_PRICING["gpt-6-astra"];

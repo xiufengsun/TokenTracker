@@ -273,7 +273,9 @@ function computeRowCost(row) {
   // and inventing one is worse than reporting Standard.
   const priorityMultiplier = Number(pricing.priority_multiplier);
   const hasPriorityRates = Number.isFinite(priorityMultiplier) && priorityMultiplier > 1;
-  if (!usesOpenAILongContextTier && !hasPriorityRates) return baseCost;
+  const ultrafastMultiplierEarly = Number(pricing.ultrafast_multiplier);
+  const hasUltrafastRatesEarly = Number.isFinite(ultrafastMultiplierEarly) && ultrafastMultiplierEarly > 1;
+  if (!usesOpenAILongContextTier && !hasPriorityRates && !hasUltrafastRatesEarly) return baseCost;
 
   const bounded = (value, total) => Math.min(
     Math.max(0, Number(value) || 0),
@@ -306,7 +308,49 @@ function computeRowCost(row) {
     0.5 * longReasoning * (pricing.output || 0)
   ) / 1_000_000 : 0;
 
-  if (!hasPriorityRates) return baseCost + longContextPremium;
+  const ultrafastMultiplier = ultrafastMultiplierEarly;
+  const hasUltrafastRates = hasUltrafastRatesEarly;
+  if (!hasPriorityRates && !hasUltrafastRates) return baseCost + longContextPremium;
+
+  // Shared helper: premium for one observed speed-tier subset. Fast and Ultrafast
+  // are mutually exclusive per request; both can appear in one aggregated row.
+  function tierPremium(multiplier, prefix) {
+    if (!(Number.isFinite(multiplier) && multiplier > 1)) return 0;
+    const tierInput = bounded(row[`${prefix}input_tokens`], row.input_tokens);
+    const tierCached = bounded(row[`${prefix}cached_input_tokens`], row.cached_input_tokens);
+    const tierCacheWrite = bounded(
+      row[`${prefix}cache_creation_input_tokens`],
+      row.cache_creation_input_tokens,
+    );
+    const tierOutput = bounded(row[`${prefix}output_tokens`], row.output_tokens);
+    const tierReasoning = reasoningIncludedInOutput
+      ? 0
+      : bounded(row[`${prefix}reasoning_output_tokens`], row.reasoning_output_tokens);
+    const tierBase = (
+      tierInput * (pricing.input || 0) +
+      tierCached * (pricing.cache_read || 0) +
+      tierCacheWrite * (pricing.cache_write || 0) +
+      tierOutput * (pricing.output || 0) +
+      tierReasoning * (pricing.output || 0)
+    ) / 1_000_000;
+    const tierLong = usesOpenAILongContextTier ? (
+      bounded(row[`${prefix}long_context_input_tokens`], Math.min(tierInput, longInput)) *
+        (pricing.input || 0) +
+      bounded(row[`${prefix}long_context_cached_input_tokens`], Math.min(tierCached, longCached)) *
+        (pricing.cache_read || 0) +
+      bounded(
+        row[`${prefix}long_context_cache_creation_input_tokens`],
+        Math.min(tierCacheWrite, longCacheWrite),
+      ) * (pricing.cache_write || 0) +
+      0.5 * bounded(row[`${prefix}long_context_output_tokens`], Math.min(tierOutput, longOutput)) *
+        (pricing.output || 0) +
+      0.5 * bounded(
+        row[`${prefix}long_context_reasoning_output_tokens`],
+        Math.min(tierReasoning, longReasoning),
+      ) * (pricing.output || 0)
+    ) / 1_000_000 : 0;
+    return (multiplier - 1) * (tierBase + tierLong);
+  }
 
   // Astra Fast is a flat multiple of whichever context tier the request was on
   // (short 10/1/12.5/50 -> 20/2/25/100; long 20/2/25/75 -> 40/4/50/150), so the
@@ -316,43 +360,10 @@ function computeRowCost(row) {
   // priority_long_context_* alongside priority_*; without it (queue rows, which
   // carry no context-length subset at all) the overlap is 0 and the premium
   // falls back to the short-context multiple, matching the row's own base.
-  const priorityInput = bounded(row.priority_input_tokens, row.input_tokens);
-  const priorityCached = bounded(row.priority_cached_input_tokens, row.cached_input_tokens);
-  const priorityCacheWrite = bounded(
-    row.priority_cache_creation_input_tokens,
-    row.cache_creation_input_tokens,
-  );
-  const priorityOutput = bounded(row.priority_output_tokens, row.output_tokens);
-  const priorityReasoning = reasoningIncludedInOutput
-    ? 0
-    : bounded(row.priority_reasoning_output_tokens, row.reasoning_output_tokens);
-  const priorityBase = (
-    priorityInput * (pricing.input || 0) +
-    priorityCached * (pricing.cache_read || 0) +
-    priorityCacheWrite * (pricing.cache_write || 0) +
-    priorityOutput * (pricing.output || 0) +
-    priorityReasoning * (pricing.output || 0)
-  ) / 1_000_000;
-
-  const priorityLong = usesOpenAILongContextTier ? (
-    bounded(row.priority_long_context_input_tokens, Math.min(priorityInput, longInput)) *
-      (pricing.input || 0) +
-    bounded(row.priority_long_context_cached_input_tokens, Math.min(priorityCached, longCached)) *
-      (pricing.cache_read || 0) +
-    bounded(
-      row.priority_long_context_cache_creation_input_tokens,
-      Math.min(priorityCacheWrite, longCacheWrite),
-    ) * (pricing.cache_write || 0) +
-    0.5 * bounded(row.priority_long_context_output_tokens, Math.min(priorityOutput, longOutput)) *
-      (pricing.output || 0) +
-    0.5 * bounded(
-      row.priority_long_context_reasoning_output_tokens,
-      Math.min(priorityReasoning, longReasoning),
-    ) * (pricing.output || 0)
-  ) / 1_000_000 : 0;
-
-  const priorityPremium = (priorityMultiplier - 1) * (priorityBase + priorityLong);
-  return baseCost + longContextPremium + priorityPremium;
+  // Ultrafast mirrors the same shape with ultrafast_* / ultrafast_multiplier (6x).
+  const priorityPremium = tierPremium(priorityMultiplier, "priority_");
+  const ultrafastPremium = tierPremium(ultrafastMultiplier, "ultrafast_");
+  return baseCost + longContextPremium + priorityPremium + ultrafastPremium;
 }
 
 // Backwards-compatible MODEL_PRICING export. Test at
