@@ -14,10 +14,17 @@ test("claude-haiku-5-5 uses short-context Anthropic rates, not Haiku 4.5 (#848)"
     assert.equal(rates.cache_write, 0.125, model);
     assert.equal(curated.exact[model].input, 0.1);
   }
-  // Fuzzy / dotted variants that previously fell through to Haiku 4.5 ($1/$5).
-  const fuzzy = pricing.getModelPricing("anthropic/claude-haiku-5-5-20261007");
-  assert.equal(fuzzy.input, 0.1);
-  assert.equal(fuzzy.output, 0.5);
+  // Provider-prefixed / dated / dotted variants that previously fell through
+  // to Haiku 4.5 ($1/$5) on the edge, or to $0 locally without a source.
+  for (const model of [
+    "anthropic/claude-haiku-5-5-20261007",
+    "anthropic/claude-haiku-5.5-20261007",
+    "claude-haiku-5.5-20261007",
+  ]) {
+    const fuzzy = pricing.getModelPricing(model);
+    assert.equal(fuzzy.input, 0.1, model);
+    assert.equal(fuzzy.output, 0.5, model);
+  }
 
   const haiku45 = pricing.getModelPricing("claude-haiku-4-5");
   assert.equal(haiku45.input, 1);

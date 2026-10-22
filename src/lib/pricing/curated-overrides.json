@@ -699,6 +699,14 @@
       "ref": "composer-1"
     },
     {
+      "match": "haiku-5-5",
+      "ref": "claude-haiku-5-5"
+    },
+    {
+      "match": "haiku-5.5",
+      "ref": "claude-haiku-5.5"
+    },
+    {
       "match": "claude-opus-5-fast",
       "ref": "claude-opus-5-fast"
     },
