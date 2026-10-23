@@ -12,7 +12,8 @@ import { isNativeEmbed, isNativeLinuxApp, isNativeWindowsApp } from "./native-br
  *   PostHog analytics so TOKENTRACKER_NO_TELEMETRY / DO_NOT_TRACK /
  *   config `"telemetry": false` turn off error reporting too.
  * - Errors only — no Session Replay, no tracing sample by default.
- * - beforeSend scrubs common secret patterns.
+ * - beforeSend scrubs common secret patterns and drops empty-stack
+ *   Safari/browser fetch abort noise ("Load failed", etc.).
  */
 
 const SECRET_PATTERN =
@@ -88,6 +89,53 @@ export function scrubEvent(event) {
   return next;
 }
 
+
+/**
+ * Safari (and some other browsers) surface aborted / flaky fetches as
+ * unhandledrejection TypeErrors with empty stacks — "Load failed",
+ * "Cancelled", "NetworkError when attempting to fetch resource.", etc.
+ * Those are not actionable app bugs (TOKENTRACKER-DASHBOARD-2). Drop only
+ * when there are no frames; keep real fetch failures that have stacks.
+ */
+const BENIGN_NETWORK_NOISE_RE =
+  /^(Load failed|Cancelled|canceled|AbortError|The user aborted a request\.?|NetworkError when attempting to fetch resource\.?|Failed to fetch)$/i;
+
+function eventExceptionMessage(event) {
+  const fromException = event?.exception?.values?.[0]?.value;
+  if (typeof fromException === "string" && fromException.trim()) return fromException.trim();
+  if (typeof event?.message === "string" && event.message.trim()) return event.message.trim();
+  return "";
+}
+
+function eventHasStackFrames(event) {
+  const values = event?.exception?.values;
+  if (!Array.isArray(values)) return false;
+  return values.some((item) => {
+    const frames = item?.stacktrace?.frames;
+    return Array.isArray(frames) && frames.length > 0;
+  });
+}
+
+export function isBenignBrowserNetworkNoise(event) {
+  if (!event || typeof event !== "object") return false;
+  // Require a real exception value — do not drop manual message-only captures.
+  const values = event?.exception?.values;
+  if (!Array.isArray(values) || values.length === 0) return false;
+  const primary = values[0] || {};
+  const message = typeof primary.value === "string" ? primary.value.trim() : "";
+  if (!message || !BENIGN_NETWORK_NOISE_RE.test(message)) return false;
+  if (eventHasStackFrames(event)) return false;
+  // Browser fetch/abort noise is TypeError / AbortError / DOMException.
+  const type = typeof primary.type === "string" ? primary.type : "";
+  if (type && !/^(TypeError|AbortError|DOMException|Error)$/i.test(type)) return false;
+  // If Sentry attached a mechanism, only drop unhandled rejections / onerror.
+  const mechanism = primary.mechanism?.type || event?.mechanism?.type || "";
+  if (mechanism && !/unhandledrejection|onerror|auto\.browser/i.test(mechanism)) {
+    return false;
+  }
+  return true;
+}
+
 export function resolveSentryShell() {
   if (typeof window === "undefined") return "web";
   if (isNativeEmbed()) return "mac-app";
@@ -136,6 +184,9 @@ async function startSentry(shell) {
       });
     },
     beforeSend(event) {
+      // Prefer beforeSend over ignoreErrors so we only drop empty-stack
+      // network noise and keep real "Failed to fetch" bugs that have frames.
+      if (isBenignBrowserNetworkNoise(event)) return null;
       return scrubEvent(event);
     },
     initialScope: {

@@ -139,6 +139,52 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
       return undefined;
     }
 
+    // Shared teardown for unmount, context loss, and mid-frame WebGL failures
+    // (Safari can return null from createShader then throw in shaderSource
+    // during the first rAF compile — TOKENTRACKER-DASHBOARD-1).
+    let disposed = false;
+    let rafId = 0;
+    let rafResize = 0;
+    let scene;
+    let geometry;
+    let material;
+    let canvas;
+    let ro;
+    let io;
+    let supportsHover = false;
+    let onPointerMove = null;
+    let onVisibility = null;
+    let onContextLost = null;
+
+    const disposeGalaxy = () => {
+      if (disposed) return;
+      disposed = true;
+      cancelAnimationFrame(rafId);
+      cancelAnimationFrame(rafResize);
+      try { ro?.disconnect(); } catch { /* ignore */ }
+      try { io?.disconnect(); } catch { /* ignore */ }
+      if (onVisibility) document.removeEventListener("visibilitychange", onVisibility);
+      if (supportsHover && onPointerMove) {
+        window.removeEventListener("pointermove", onPointerMove);
+      }
+      if (canvas && onContextLost) {
+        canvas.removeEventListener("webglcontextlost", onContextLost);
+      }
+      try { scene?.clear(); } catch { /* ignore */ }
+      try { geometry?.dispose(); } catch { /* ignore */ }
+      try { material?.dispose(); } catch { /* ignore */ }
+      try { renderer?.dispose(); } catch { /* ignore */ }
+      try { renderer?.forceContextLoss(); } catch { /* ignore */ }
+      if (canvas && mount.contains(canvas)) mount.removeChild(canvas);
+    };
+
+    const failToStatic = (error) => {
+      console.warn("TokenGalaxy: WebGL runtime failure, using static fallback.", error);
+      disposeGalaxy();
+      setWebglFailed(true);
+    };
+
+    try {
     const lowPower = isLowPower();
     const compactViewport = window.matchMedia?.(COMPACT_GALAXY_QUERY)?.matches ?? false;
     const orbitSpeed = orbitSpeedForViewport({ compactViewport });
@@ -146,16 +192,16 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
     const dpr = Math.min(window.devicePixelRatio || 1, lowPower ? 1.5 : 2);
     renderer.setPixelRatio(dpr);
     renderer.setClearColor(0x000000, 0);
-    const canvas = renderer.domElement;
+    canvas = renderer.domElement;
     canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;display:block;";
     mount.appendChild(canvas);
 
-    const scene = new THREE.Scene();
+    scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(sceneConfig.cameraFov, 1, 0.1, 120);
     camera.position.set(0, 0, sceneConfig.cameraZ);
 
     const anchors = computeAnchors();
-    const geometry = buildGeometry(anchors, particleCounts({ lowPower }));
+    geometry = buildGeometry(anchors, particleCounts({ lowPower }));
     const uniforms = {
       uTime: { value: 0 },
       uPixelRatio: { value: dpr },
@@ -174,7 +220,7 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
       uColorB: { value: new THREE.Color(LV3_GL.accentSoft) },
       uColorC: { value: new THREE.Color(LV3_GL.glint) },
     };
-    const material = new THREE.ShaderMaterial({
+    material = new THREE.ShaderMaterial({
       vertexShader: GALAXY_VERTEX,
       fragmentShader: GALAXY_FRAGMENT,
       uniforms,
@@ -233,8 +279,7 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
         camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
       }
     }
-    let rafResize = 0;
-    const ro = new ResizeObserver(() => {
+    ro = new ResizeObserver(() => {
       cancelAnimationFrame(rafResize);
       rafResize = requestAnimationFrame(resize);
     });
@@ -244,14 +289,14 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
     // Pause when off-screen or tab hidden.
     const inView = { current: true };
     const paused = { current: false };
-    const io = new IntersectionObserver(
+    io = new IntersectionObserver(
       (entries) => {
         inView.current = entries[0]?.isIntersecting ?? true;
       },
       { threshold: 0 },
     );
     io.observe(mount);
-    const onVisibility = () => {
+    onVisibility = () => {
       paused.current = document.hidden;
     };
     document.addEventListener("visibilitychange", onVisibility, { passive: true });
@@ -259,14 +304,20 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
     // Pointer parallax (window-level so it works while content overlays the canvas).
     const pointerTarget = { x: 0, y: 0 };
     const pointerSmooth = { x: 0, y: 0 };
-    const onPointerMove = (e) => {
+    onPointerMove = (e) => {
       pointerTarget.x = (e.clientX / window.innerWidth) * 2 - 1;
       pointerTarget.y = (e.clientY / window.innerHeight) * 2 - 1;
     };
-    const supportsHover = window.matchMedia?.("(hover: hover)")?.matches;
+    supportsHover = window.matchMedia?.("(hover: hover)")?.matches;
     if (supportsHover) {
       window.addEventListener("pointermove", onPointerMove, { passive: true });
     }
+
+    onContextLost = (event) => {
+      event.preventDefault?.();
+      failToStatic(new Error("webglcontextlost"));
+    };
+    canvas.addEventListener("webglcontextlost", onContextLost, false);
 
     // THREE.Timer, not the deprecated THREE.Clock (issue 651). `import * as THREE`
     // is a namespace import, so the day three drops Clock this line would not
@@ -279,11 +330,12 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
     let fade = 0;
     let intro = 0;
     let prevT = 0;
-    let rafId = 0;
     let progressSmooth = 0;
 
     function animate() {
+      if (disposed) return;
       rafId = requestAnimationFrame(animate);
+      try {
       // Advance before the early return so elapsed time tracks the wall clock
       // the way getElapsedTime() did, rather than freezing while off-screen.
       timer.update();
@@ -390,22 +442,20 @@ export function TokenGalaxy({ mode = "full", progressRef, className = "" }) {
         const shadowOpacity = (0.3 + chipFlash * 0.6).toFixed(2);
         el.style.boxShadow = `0 0 ${shadowGlow}px rgba(168, 85, 247, ${shadowOpacity})`;
       }
+      } catch (error) {
+        // Stop the loop before React state flips to static — otherwise the
+        // next rAF would re-throw the same shaderSource TypeError.
+        cancelAnimationFrame(rafId);
+        failToStatic(error);
+      }
     }
     animate();
+    } catch (error) {
+      failToStatic(error);
+    }
 
     return () => {
-      cancelAnimationFrame(rafId);
-      cancelAnimationFrame(rafResize);
-      ro.disconnect();
-      io.disconnect();
-      document.removeEventListener("visibilitychange", onVisibility);
-      if (supportsHover) window.removeEventListener("pointermove", onPointerMove);
-      scene.clear();
-      geometry.dispose();
-      material.dispose();
-      renderer.dispose();
-      renderer.forceContextLoss();
-      if (mount.contains(canvas)) mount.removeChild(canvas);
+      disposeGalaxy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
