@@ -33,11 +33,22 @@ async function serveStaticFile(baseDir, pathname, res, { localRuntimeConfig = fa
   // prevent directory traversal
   if (!filePath.startsWith(baseDir)) return false;
 
+  // Watch for the client going away from the start: if the browser cancels the
+  // request during the awaits below, "close" fires before the stream exists and
+  // a listener added later never runs, leaking the FileHandle (fatal on Node 25+).
+  let clientGone = res.destroyed;
+  let stream = null;
+  res.once("close", () => {
+    clientGone = true;
+    if (stream) stream.destroy();
+  });
+
   let handle;
   try {
     handle = await fsPromises.open(filePath, "r");
     const stat = await handle.stat();
     if (!stat.isFile()) return false;
+    if (clientGone) return true; // finally closes the handle
 
     const ext = path.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || "application/octet-stream";
@@ -47,10 +58,13 @@ async function serveStaticFile(baseDir, pathname, res, { localRuntimeConfig = fa
       const source = await handle.readFile("utf8");
       const content = source.replace(/<head(?:\s[^>]*)?>/i,
         "$&\n<script>window.__TOKENTRACKER_RUNTIME_CONFIG__={configurationError:\"runtime_config_unavailable\"};</script>\n<script src=\"/api/runtime-config.js\"></script>");
+      if (clientGone) return true;
       res.writeHead(200, { "Content-Type": contentType, "Content-Length": Buffer.byteLength(content), "Cache-Control": "no-store" });
       res.end(content);
       return true;
     }
+
+    if (clientGone) return true;
 
     res.writeHead(200, {
       "Content-Type": contentType,
@@ -58,10 +72,9 @@ async function serveStaticFile(baseDir, pathname, res, { localRuntimeConfig = fa
       "Cache-Control": isHtml ? "no-cache" : "public, max-age=31536000, immutable",
     });
 
-    const stream = handle.createReadStream();
+    stream = handle.createReadStream();
     handle = null; // The stream owns and closes this descriptor.
     stream.on("error", (error) => res.destroy(error));
-    res.on("close", () => stream.destroy());
     stream.pipe(res);
     return true;
   } catch (_e) {

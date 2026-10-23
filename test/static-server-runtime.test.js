@@ -83,3 +83,74 @@ test("static bytes and content length stay bound to the checked file when its pa
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test("aborted requests close FileHandles opened during serveStaticFile awaits", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tt-static-abort-"));
+  const file = path.join(dir, "chunk.js");
+  await fs.writeFile(file, "export default 1;\n".repeat(2000));
+
+  const open = fs.open;
+  let opened = 0;
+  let closed = 0;
+  let releaseOpen = null;
+  let stallOpens = true;
+  fs.open = async (target, ...args) => {
+    const handle = await open(target, ...args);
+    if (target !== file) return handle;
+    opened += 1;
+    const originalClose = handle.close.bind(handle);
+    handle.close = async (...closeArgs) => {
+      closed += 1;
+      return originalClose(...closeArgs);
+    };
+    if (!stallOpens) return handle;
+    await new Promise((resolve) => {
+      releaseOpen = resolve;
+    });
+    return handle;
+  };
+
+  const server = http.createServer(async (_req, res) => {
+    if (!await serveStaticFile(dir, "/chunk.js", res)) {
+      if (!res.headersSent && !res.writableEnded) res.writeHead(404).end();
+    }
+  });
+
+  try {
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+    const rounds = 12;
+    for (let i = 0; i < rounds; i += 1) {
+      releaseOpen = null;
+      const ac = new AbortController();
+      const pending = fetch(`http://127.0.0.1:${port}/chunk.js`, { signal: ac.signal }).then(
+        async (response) => { await response.arrayBuffer(); },
+        () => {},
+      );
+      for (let j = 0; j < 400 && releaseOpen == null; j += 1) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      assert.ok(releaseOpen, "request should reach stalled open()");
+      ac.abort();
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      releaseOpen();
+      await pending;
+    }
+    for (let i = 0; i < 400 && closed < opened; i += 1) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    assert.equal(opened, rounds);
+    assert.equal(closed, opened, "every FileHandle opened for an aborted request must be closed");
+
+    stallOpens = false;
+    const ok = await fetch(`http://127.0.0.1:${port}/chunk.js`);
+    assert.equal(ok.status, 200);
+    assert.ok((await ok.text()).includes("export default 1"));
+  } finally {
+    fs.open = open;
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
