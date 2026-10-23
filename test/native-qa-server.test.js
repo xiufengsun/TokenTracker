@@ -5,11 +5,24 @@ const { spawnSync } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
-test("native QA server enforces isolated local HTTP, actor aliases and core file/process/network fences", () => {
+// Windows CI copies production node_modules into the smoke fixture and can
+// exceed the old 30s spawnSync budget under load. Keep spawnSync under the
+// Windows CLI --test-timeout=120000 so Node 22 file-level caps still fit.
+test("native QA server enforces isolated local HTTP, actor aliases and core file/process/network fences", { timeout: 120_000 }, () => {
   const child = spawnSync(process.execPath, [path.join(__dirname, "fixtures/native-qa-server-smoke.cjs")], {
-    cwd: path.join(__dirname, ".."), encoding: "utf8", timeout: 30000
+    cwd: path.join(__dirname, ".."), encoding: "utf8", timeout: 90_000
   });
-  assert.equal(child.status, 0, child.stderr || child.stdout);
+  assert.equal(
+    child.status,
+    0,
+    [
+      `status=${child.status}`,
+      `signal=${child.signal}`,
+      `error=${child.error && child.error.message}`,
+      `stderr=${child.stderr || ""}`,
+      `stdout=${child.stdout || ""}`,
+    ].join("\n"),
+  );
   const proof = JSON.parse(child.stdout.trim());
   assert.equal(proof.guiLaunched, false); assert.equal(proof.bodyReadFromOriginalCore, true);
   assert.equal(proof.remoteRequests, "fixture-only"); assert.equal(proof.personalFileReads, 0);
