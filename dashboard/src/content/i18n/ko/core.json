@@ -157,6 +157,7 @@
   "limits.label.grok_bot": "Grok 봇",
   "limits.label.grok_chat": "채팅",
   "limits.label.grok_imagine": "Imagine",
+  "limits.label.grok_voice": "음성",
   "limits.label.grok_cursor": "Cursor",
   "limits.provider.claude": "Claude",
   "limits.provider.codex": "Codex",

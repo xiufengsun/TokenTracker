@@ -157,6 +157,7 @@
   "limits.label.grok_bot": "Grokボット",
   "limits.label.grok_chat": "チャット",
   "limits.label.grok_imagine": "Imagine",
+  "limits.label.grok_voice": "ボイス",
   "limits.label.grok_cursor": "Cursor",
   "limits.provider.claude": "Claude",
   "limits.provider.codex": "Codex",

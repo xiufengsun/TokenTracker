@@ -749,13 +749,12 @@ function normalizeCursorUsageSummary(body) {
 }
 
 /**
- * Cursor's Sand "Grok Bot" RPC reports the shared Super weekly pool (same
- * reset and about the same percent as Grok billing's creditUsagePercent).
- * Once the Grok card lists a Grok Bot product share, that Sand bar would
- * show the whole pool a second time under Cursor. Hide it only in that
- * case. A real separate Sand quota (different reset, or a percent more than
- * a point away from the pool) stays. Accounts with no Grok Bot product row
- * keep the Sand bar.
+ * Cursor's Sand RPC reports Grok Bot usage. grok.com shows that as a weekly
+ * Grok Bot limit of its own, separate from the SuperGrok pool and with its own
+ * reset, so the Sand bar normally stays. It is hidden only when it is
+ * indistinguishable from the Grok pool, so the same numbers are not drawn
+ * twice: Grok billing lists a GrokBot product share, and the two windows reset
+ * at the same instant and sit within a point of each other.
  */
 function cursorSandDuplicatesGrokPool(cursor, grok) {
   const sand = cursor?.quaternary_window;

@@ -374,6 +374,7 @@ const GROK_PRODUCT_LABEL_KEYS = {
   GrokBot: "limits.label.grok_bot",
   GrokChat: "limits.label.grok_chat",
   GrokImagine: "limits.label.grok_imagine",
+  GrokVoice: "limits.label.grok_voice",
   Cursor: "limits.label.grok_cursor",
 };
 

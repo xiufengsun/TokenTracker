@@ -99,9 +99,9 @@ export const PROVIDER_LIMIT_SPECS = {
     // Grok unified billing is weekly for SuperGrok / free-tier accounts and
     // monthly for legacy credit counters. period_type comes from the billing
     // API (USAGE_PERIOD_TYPE_WEEKLY / MONTHLY) via grok-limits.js.
-    // Product rows are shares of that same pool, not separate quotas.
-    // They must not get windowSeconds: pace would treat a 12% share as its
-    // own quota and project an ETA to 100%.
+    // Products are shares of that same pool, not separate quotas, so they ride
+    // on the pool row as `segments` (one stacked bar, like grok.com) instead
+    // of rows of their own that read as independent 100% quotas.
     windows(data) {
       const period = typeof data.period_type === "string" ? data.period_type : null;
       const primaryLabelKey =
@@ -118,9 +118,9 @@ export const PROVIDER_LIMIT_SPECS = {
           labelKey: primaryLabelKey,
           window: data.primary_window,
           windowSeconds,
+          segments: grokProductSegments(data),
         },
         { key: "ondemand", labelKey: "limits.label.grok_ondemand", window: data.secondary_window },
-        ...grokProductWindowSpecs(data),
       ];
     },
   },
@@ -266,28 +266,28 @@ const GROK_PRODUCT_LABEL_KEYS = {
   GrokBot: "limits.label.grok_bot",
   GrokChat: "limits.label.grok_chat",
   GrokImagine: "limits.label.grok_imagine",
+  GrokVoice: "limits.label.grok_voice",
   Cursor: "limits.label.grok_cursor",
 };
 
-/** Product-share rows. Known ids use copy keys; a future product uses the server label. */
-function grokProductWindowSpecs(data) {
-  if (!Array.isArray(data?.products)) return [];
-  const rows = [];
+/**
+ * Per-product slices of the pool bar, in API order. Known ids use copy keys; a
+ * future product uses the server label. Null when there is nothing to split,
+ * so the pool falls back to a plain bar.
+ */
+function grokProductSegments(data) {
+  if (!Array.isArray(data?.products)) return null;
+  const segments = [];
   for (const entry of data.products) {
     const product = typeof entry?.product === "string" ? entry.product : "";
-    if (!product || !entry?.window) continue;
+    const pct = Number(entry?.window?.used_percent);
+    if (!product || !(pct > 0)) continue;
     const labelKey = GROK_PRODUCT_LABEL_KEYS[product];
     const label = typeof entry.label === "string" ? entry.label.trim() : "";
     if (!labelKey && !label) continue;
-    rows.push({
-      key: `product-${product}`,
-      ...(labelKey ? { labelKey } : { label }),
-      window: entry.window,
-      // A share of the pool. Remaining mode must not redraw it as 100 − used.
-      share: true,
-    });
+    segments.push({ key: product, ...(labelKey ? { labelKey } : { label }), pct });
   }
-  return rows;
+  return segments.length > 0 ? segments : null;
 }
 
 /** Static copy() anchors for validate:copy — labels resolve at runtime via spec.labelKey. */
@@ -323,6 +323,7 @@ export function usageLimitsLabelCopyAnchor() {
     copy("limits.label.grok_bot"),
     copy("limits.label.grok_chat"),
     copy("limits.label.grok_imagine"),
+    copy("limits.label.grok_voice"),
     copy("limits.label.grok_cursor"),
     copy("limits.label.antigravity_claude_weekly"),
     copy("limits.label.antigravity_claude_5h"),

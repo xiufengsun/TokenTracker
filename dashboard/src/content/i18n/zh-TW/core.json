@@ -162,6 +162,7 @@
   "limits.label.grok_bot": "Grok 機器人",
   "limits.label.grok_chat": "聊天",
   "limits.label.grok_imagine": "Imagine",
+  "limits.label.grok_voice": "語音",
   "limits.label.grok_cursor": "Cursor",
   "limits.provider.claude": "Claude",
   "limits.provider.codex": "Codex",

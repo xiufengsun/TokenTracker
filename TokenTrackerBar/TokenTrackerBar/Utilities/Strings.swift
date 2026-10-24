@@ -99,6 +99,7 @@ enum Strings {
         case "GrokBot": return cursorGrokBotLabel
         case "GrokChat": return t("Chat", "聊天", "聊天", "チャット", "채팅")
         case "GrokImagine": return t("Imagine", "Imagine", "Imagine", "Imagine", "Imagine")
+        case "GrokVoice": return t("Voice", "语音", "語音", "ボイス", "음성")
         case "Cursor": return t("Cursor", "Cursor", "Cursor", "Cursor", "Cursor")
         default:
             let trimmed = fallback?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

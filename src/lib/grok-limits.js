@@ -536,6 +536,7 @@ const GROK_PRODUCT_LABELS = new Map([
   ["GrokBot", "Grok Bot"],
   ["GrokChat", "Chat"],
   ["GrokImagine", "Imagine"],
+  ["GrokVoice", "Voice"],
   ["Cursor", "Cursor"],
 ]);
 

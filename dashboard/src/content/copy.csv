@@ -769,6 +769,7 @@ limits.label.grok_build,ui,LimitsPage,UsageLimitsPanel,grok_build,"Grok Build",,
 limits.label.grok_bot,ui,LimitsPage,UsageLimitsPanel,grok_bot,"Grok Bot",,active
 limits.label.grok_chat,ui,LimitsPage,UsageLimitsPanel,grok_chat,"Chat",,active
 limits.label.grok_imagine,ui,LimitsPage,UsageLimitsPanel,grok_imagine,"Imagine",,active
+limits.label.grok_voice,ui,LimitsPage,UsageLimitsPanel,grok_voice,"Voice",,active
 limits.label.grok_cursor,ui,LimitsPage,UsageLimitsPanel,grok_cursor,"Cursor",,active
 limits.provider.claude,ui,LimitsPage,UsageLimitsPanel,provider_claude,"Claude",,active
 limits.provider.codex,ui,LimitsPage,UsageLimitsPanel,provider_codex,"Codex",,active

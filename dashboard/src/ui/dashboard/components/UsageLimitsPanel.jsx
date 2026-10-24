@@ -160,11 +160,35 @@ function buildWindowHoverDetail(spec, pace, mode) {
 // Shared with the session browser; see ui/components/HoverTooltip.jsx.
 const Tooltip = HoverTooltip;
 
-function LimitBar({ label, pct, reset, mode = LIMIT_DISPLAY_MODES.USED, pacePercent = null, paceOver = false, title = null, share = false }) {
+// Slices of a segmented pool bar share the pool's threshold hue and fade per
+// product in API order, like grok.com's usage bar.
+const SEGMENT_OPACITIES = [1, 0.65, 0.45, 0.3, 0.2];
+
+function segmentOpacity(index) {
+  return SEGMENT_OPACITIES[Math.min(index, SEGMENT_OPACITIES.length - 1)];
+}
+
+function PaceMarker({ paceX, paceOver }) {
+  return (
+    <>
+      {/* Notch: a slice of bare track that "cuts" the fill, so the mark reads
+          as a marker and stays visible even over a same-colored fill. */}
+      <div
+        className="absolute top-0 h-full bg-oai-gray-100 dark:bg-oai-gray-700/50"
+        style={{ left: `calc(${paceX}% - 3px)`, width: "6px" }}
+      />
+      <div
+        className={`absolute top-0 h-full ${paceOver ? "bg-red-500" : "bg-emerald-500"}`}
+        style={{ left: `calc(${paceX}% - 1px)`, width: "2px" }}
+      />
+    </>
+  );
+}
+
+function LimitBar({ label, pct, reset, mode = LIMIT_DISPLAY_MODES.USED, pacePercent = null, paceOver = false, title = null, segments = null }) {
   const rawUsed = Math.max(0, Math.min(100, Number(pct) || 0));
-  // A product share is points of the pool, not a quota that fills at 100%.
-  const displayPct = !share && mode === LIMIT_DISPLAY_MODES.REMAINING ? 100 - rawUsed : rawUsed;
-  const colorMode = share ? LIMIT_DISPLAY_MODES.USED : mode;
+  const displayPct = mode === LIMIT_DISPLAY_MODES.REMAINING ? 100 - rawUsed : rawUsed;
+  const fillColor = barColor(displayPct, mode);
   const rounded = Math.round(displayPct);
   // Sub-1% still matters (e.g. team pool); keep bar/text from collapsing to 0%.
   const widthPct = displayPct > 0 && rounded === 0 ? Math.max(displayPct, 0.35) : displayPct;
@@ -183,26 +207,34 @@ function LimitBar({ label, pct, reset, mode = LIMIT_DISPLAY_MODES.USED, pacePerc
       >
         {label}
       </span>
-      <div className="relative flex-1 bg-oai-gray-100 dark:bg-oai-gray-700/50 rounded-full h-1.5 overflow-hidden">
-        <div
-          className={`${barColor(displayPct, colorMode)} rounded-full h-full transition-[width] duration-500 ease-out`}
-          style={{ width: `${widthPct}%`, minWidth: displayPct > 0 ? "3px" : 0 }}
-        />
-        {paceX != null && (
-          <>
-            {/* Notch: a slice of bare track that "cuts" the fill, so the mark reads
-                as a marker and stays visible even over a same-colored fill. */}
+      {segments ? (
+        // One slice per product, then the bare track for what is left. The
+        // gaps show the card through, so slices stay apart in either theme.
+        <div data-limit-segments="" className="relative flex flex-1 gap-[2px] h-1.5 overflow-hidden">
+          {segments.map((segment, index) => (
             <div
-              className="absolute top-0 h-full bg-oai-gray-100 dark:bg-oai-gray-700/50"
-              style={{ left: `calc(${paceX}% - 3px)`, width: "6px" }}
+              key={segment.key}
+              data-limit-segment={segment.key}
+              className={`${fillColor} shrink-0 rounded-full h-full transition-[width] duration-500 ease-out`}
+              style={{
+                width: `${Math.max(0, Math.min(100, Number(segment.pct) || 0))}%`,
+                minWidth: "3px",
+                opacity: segmentOpacity(index),
+              }}
             />
-            <div
-              className={`absolute top-0 h-full ${paceOver ? "bg-red-500" : "bg-emerald-500"}`}
-              style={{ left: `calc(${paceX}% - 1px)`, width: "2px" }}
-            />
-          </>
-        )}
-      </div>
+          ))}
+          <div className="flex-1 min-w-0 rounded-full h-full bg-oai-gray-100 dark:bg-oai-gray-700/50" />
+          {paceX != null && <PaceMarker paceX={paceX} paceOver={paceOver} />}
+        </div>
+      ) : (
+        <div className="relative flex-1 bg-oai-gray-100 dark:bg-oai-gray-700/50 rounded-full h-1.5 overflow-hidden">
+          <div
+            className={`${fillColor} rounded-full h-full transition-[width] duration-500 ease-out`}
+            style={{ width: `${widthPct}%`, minWidth: displayPct > 0 ? "3px" : 0 }}
+          />
+          {paceX != null && <PaceMarker paceX={paceX} paceOver={paceOver} />}
+        </div>
+      )}
       <span className="text-[11px] tabular-nums text-oai-gray-500 dark:text-oai-gray-400 w-9 text-right shrink-0 whitespace-nowrap">
         {labelPct}%
       </span>
@@ -213,14 +245,37 @@ function LimitBar({ label, pct, reset, mode = LIMIT_DISPLAY_MODES.USED, pacePerc
   );
 }
 
+/** Dot + name + share for each slice of a segmented bar, aligned under the bar. */
+function LimitSegmentLegend({ segments, fillColor }) {
+  return (
+    <div
+      data-limit-legend=""
+      className="-mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] leading-snug"
+      style={{ paddingLeft: "calc(var(--tt-limits-label-w, 0px) + 0.5rem)" }}
+    >
+      {segments.map((segment, index) => (
+        <span key={segment.key} className="inline-flex items-center gap-1 whitespace-nowrap">
+          <span
+            aria-hidden
+            className={`${fillColor} inline-block h-1.5 w-1.5 shrink-0 rounded-full`}
+            style={{ opacity: segmentOpacity(index) }}
+          />
+          <span className="text-oai-gray-500 dark:text-oai-gray-400">{segment.label ?? copy(segment.labelKey)}</span>
+          <span className="tabular-nums text-oai-gray-700 dark:text-oai-gray-200">{formatPercentValue(segment.pct)}%</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /**
  * One window's explanation line. Adds only what the bar doesn't already show:
  * pace status + a current-rate projection. Used %, reset time live on the bar.
  */
 function explainLineFor(spec, pace, mode) {
   const label = spec.label ?? copy(spec.labelKey);
-  // Remaining mode flips a real quota to "how much is left". A product share stays the used percent.
-  const remaining = mode === LIMIT_DISPLAY_MODES.REMAINING && spec.share !== true;
+  // In remaining mode every percentage flips to "how much is left".
+  const remaining = mode === LIMIT_DISPLAY_MODES.REMAINING;
   const projection = (usedPct) => (remaining ? 100 - usedPct : usedPct);
   // No trusted window length (monthly / billing cycle): just the usage.
   if (pace.expectedPercent == null) {
@@ -244,19 +299,24 @@ function rowHasPaceMarker({ pace }) {
   return pace.pacePercent != null;
 }
 
+/** The footnote explains the pace marker, so it follows the rows that draw one. */
+function paceFootnoteRemaining(rows, mode) {
+  return rows.some((row) => rowHasPaceMarker(row) && (row.mode ?? mode) === LIMIT_DISPLAY_MODES.REMAINING);
+}
+
 function LimitDetail({ rows, mode, now = Date.now() }) {
   if (rows.length === 0) return null;
-  const remaining = mode === LIMIT_DISPLAY_MODES.REMAINING;
+  const remaining = paceFootnoteRemaining(rows, mode);
   const hasPaceMarker = rows.some(rowHasPaceMarker);
   // No own background or extra horizontal padding: it sits on the expanded
   // group's tint and lines up flush-left with the bars above.
   return (
     <div className="mt-1 flex flex-col gap-1">
-      {rows.map(({ spec, pace }) => {
+      {rows.map(({ spec, pace, mode: rowMode = mode }) => {
         const exact = formatExactReset(resetToMs(readWindowReset(spec.window, spec.resetField)));
         return (
           <div key={spec.key} className="text-[11px] leading-snug text-oai-gray-600 dark:text-oai-gray-300">
-            {explainLineFor(spec, pace, mode)}
+            {explainLineFor(spec, pace, rowMode)}
             {exact ? (
               <span className="text-oai-gray-400 dark:text-oai-gray-500">
                 {" · "}
@@ -394,7 +454,9 @@ function ToolGroup({ name, providerId, children, expandable = false, expanded = 
           onToggle?.();
         }
       }}
-      className="flex flex-col gap-1.5 -mx-1.5 px-1.5 py-1 rounded-lg cursor-pointer transition-colors hover:bg-oai-gray-50 dark:hover:bg-oai-gray-800/40 aria-expanded:bg-oai-gray-50 dark:aria-expanded:bg-oai-gray-800/40"
+      // Expanding reveals detail (e.g. Grok's per-product slices), so keyboard
+      // focus needs the same visible ring as the card's other toggles.
+      className="flex flex-col gap-1.5 -mx-1.5 px-1.5 py-1 rounded-lg cursor-pointer transition-colors hover:bg-oai-gray-50 dark:hover:bg-oai-gray-800/40 aria-expanded:bg-oai-gray-50 dark:aria-expanded:bg-oai-gray-800/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500"
     >
       {header}
       {children}
@@ -524,23 +586,33 @@ function StatusLine({ children, tone = "neutral" }) {
   return <div className={`text-[11px] leading-snug ${color}`}>{children}</div>;
 }
 
-function LimitWindowSection({ rows, mode, extra = null }) {
+function LimitWindowSection({ rows, mode, extra = null, expanded = false }) {
   const showEmpty = rows.length === 0 && !extra;
   return (
     <>
-      {rows.map(({ spec, pace }) => (
-        <LimitBar
-          key={spec.key}
-          label={spec.label ?? copy(spec.labelKey)}
-          pct={readWindowPct(spec.window, spec.pctField)}
-          reset={formatReset(readWindowReset(spec.window, spec.resetField))}
-          mode={mode}
-          share={spec.share === true}
-          pacePercent={pace.pacePercent}
-          paceOver={pace.paceOver}
-          title={buildWindowHoverDetail(spec, pace, mode)}
-        />
-      ))}
+      {rows.map(({ spec, pace, mode: rowMode = mode }) => {
+        const pct = readWindowPct(spec.window, spec.pctField);
+        // The per-product split is detail: collapsed shows the whole pool,
+        // expanding the group splits the bar and adds the legend.
+        const segments = expanded ? spec.segments : null;
+        return (
+          <React.Fragment key={spec.key}>
+            <LimitBar
+              label={spec.label ?? copy(spec.labelKey)}
+              pct={pct}
+              reset={formatReset(readWindowReset(spec.window, spec.resetField))}
+              mode={rowMode}
+              segments={segments}
+              pacePercent={pace.pacePercent}
+              paceOver={pace.paceOver}
+              title={buildWindowHoverDetail(spec, pace, rowMode)}
+            />
+            {segments ? (
+              <LimitSegmentLegend segments={segments} fillColor={barColor(pct, LIMIT_DISPLAY_MODES.USED)} />
+            ) : null}
+          </React.Fragment>
+        );
+      })}
       {showEmpty ? <StatusLine>{copy("limits.status.no_data")}</StatusLine> : null}
       {extra}
     </>
@@ -733,10 +805,15 @@ function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, bad
   const spec = PROVIDER_LIMIT_SPECS[id];
   if (!spec) return null;
   // Pace is computed once per window here and shared by the bar + the detail.
+  // A segmented pool always reads as used, like grok.com: its slices only add
+  // up to the headline in that orientation.
   const rows = spec
     .windows(data)
     .filter((s) => s.window)
-    .map((s) => ({ spec: s, pace: paceForSpec(s, mode, now) }));
+    .map((s) => {
+      const rowMode = s.segments ? LIMIT_DISPLAY_MODES.USED : mode;
+      return { spec: s, mode: rowMode, pace: paceForSpec(s, rowMode, now) };
+    });
   const extra = renderProviderExtra(spec.extra, data);
   return (
     <ToolGroup
@@ -750,7 +827,7 @@ function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, bad
       rightAdornment={subscription ? <SubscriptionRightBadge subscription={subscription} /> : null}
       toggleOnHeader={id === "zcode"}
     >
-      <LimitWindowSection mode={mode} rows={rows} extra={extra} />
+      <LimitWindowSection mode={mode} rows={rows} extra={extra} expanded={expanded} />
       {id === "opencodeGo" || id === "commandCode" ? (
         <EnvCredentialNotice providerId={id} data={data} onSaved={onKeySaved} />
       ) : null}
