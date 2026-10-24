@@ -1253,6 +1253,69 @@ test("index: OpenCode -free models stay zero-cost while the paid base model is b
   assert.ok(pricing.computeRowCost({ ...row, model: "deepseek-v4.1-flash" }) > 0);
 });
 
+test("index: -free suffix is zero-cost for non-OpenCode sources too (issue #744)", () => {
+  for (const source of ["muse", "claude", "cursor", ""]) {
+    const info = pricing.getModelPricingInfo("minimax-m2.5-free", source ? { source } : {});
+    assert.equal(info.status, "free", `source=${source || "(none)"}`);
+    assert.equal(
+      pricing.computeRowCost({
+        source: source || "unknown",
+        model: "minimax-m2.5-free",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cached_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        reasoning_output_tokens: 0,
+      }),
+      0,
+    );
+  }
+});
+
+test("index: Muse *-contributor-free SKUs are free, not unpriced (issue #744)", () => {
+  for (const model of [
+    "muse-spark-1.2-contributor-free",
+    "muse-spark-1.3-contributor-free",
+  ]) {
+    const info = pricing.getModelPricingInfo(model, { source: "muse" });
+    assert.equal(info.status, "free", model);
+    assert.equal(
+      pricing.computeRowCost({
+        source: "muse",
+        model,
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cached_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        reasoning_output_tokens: 0,
+      }),
+      0,
+      model,
+    );
+  }
+  // Unsuffixed contributor ids stay unpriced until we have evidence they are $0.
+  assert.equal(
+    pricing.getModelPricingInfo("muse-spark-1.3-contributor", { source: "muse" }).status,
+    "unpriced",
+  );
+});
+
+test("index: explicit curated exact still wins over -free suffix (issue #744)", () => {
+  const curated = require("../src/lib/pricing/curated-overrides.json");
+  const { lookupPricing } = require("../src/lib/pricing/matcher");
+  const fakeCurated = {
+    ...curated,
+    exact: {
+      ...curated.exact,
+      "synthetic-paid-free": { input: 9, output: 9, cache_read: 1, cache_write: 2 },
+    },
+  };
+  const hit = lookupPricing("synthetic-paid-free", { curated: fakeCurated, litellm: {}, source: "muse" });
+  assert.equal(hit.hit, true);
+  assert.equal(hit.source, "curated:exact");
+  assert.equal(hit.value.input, 9);
+});
+
 test("index: computeRowCost ignores reported costs from non-authoritative sources", () => {
   const row = {
     source: "claude",

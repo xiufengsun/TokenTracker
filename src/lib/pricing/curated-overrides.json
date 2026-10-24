@@ -508,6 +508,20 @@
       "output": 0,
       "cache_read": 0
     },
+    "muse-spark-1.2-contributor-free": {
+      "input": 0,
+      "output": 0,
+      "cache_read": 0,
+      "cache_write": 0,
+      "note": "Muse contributor free SKU. Also covered by matcher -free suffix; exact entry keeps status=free (issue #744)."
+    },
+    "muse-spark-1.3-contributor-free": {
+      "input": 0,
+      "output": 0,
+      "cache_read": 0,
+      "cache_write": 0,
+      "note": "Muse contributor free SKU. Also covered by matcher -free suffix; exact entry keeps status=free (issue #744)."
+    },
     "minimax-m2.1-free": {
       "input": 0,
       "output": 0,

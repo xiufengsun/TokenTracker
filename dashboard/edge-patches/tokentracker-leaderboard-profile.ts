@@ -268,6 +268,8 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "glm-4.7-free": { input: 0, output: 0, cache_read: 0 },
   "nemotron-3-super-free": { input: 0, output: 0, cache_read: 0 },
   "mimo-v2-pro-free": { input: 0, output: 0, cache_read: 0 },
+  "muse-spark-1.2-contributor-free": { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+  "muse-spark-1.3-contributor-free": { input: 0, output: 0, cache_read: 0, cache_write: 0 },
   "minimax-m2.1-free": { input: 0, output: 0, cache_read: 0 },
   "MiniMax-M2.1": { input: 0.5, output: 3, cache_read: 0.05 },
   // ── Xiaomi MiMo (mirrored from src/lib/pricing/seed-snapshot.json LiteLLM
@@ -391,9 +393,10 @@ function getModelPricing(model: string, source = "") {
   if (exact) return exact;
   const lower = model.toLowerCase();
   if (source === "cline" && lower.endsWith(":free")) return ZERO_PRICING;
-  // OpenCode Zen free models append `-free` to the paid id
-  // (deepseek-v4.1-flash-free); the base-name matchers must not bill them.
-  if (source === "opencode" && lower.endsWith("-free")) return ZERO_PRICING;
+  // Free gateway SKUs append `-free` to the paid id (deepseek-v4.1-flash-free,
+  // minimax-m2.5-free, Muse *-contributor-free). Exact MODEL_PRICING hits above
+  // still win; this only blocks fuzzy/base-name inheritance (issue #744).
+  if (lower.endsWith("-free")) return ZERO_PRICING;
   // Cline's own gateway namespaces (`cline-free/*` free tier, `cline-pass/*`
   // flat-rate Cline Pass) bill nothing per token, and the model id after the
   // slash must not inherit a public rate — cline-pass/glm-5.3 is not GLM-5.3

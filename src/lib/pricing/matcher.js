@@ -280,15 +280,6 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
       value: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
     };
   }
-  // OpenCode Zen free models carry a `-free` suffix on the paid model id
-  // (`deepseek-v4.1-flash-free`); the base-name fuzzy match must not bill them.
-  if (sourceKey === "opencode" && lower.endsWith("-free")) {
-    return {
-      hit: true,
-      source: "curated:opencode-free-suffix",
-      value: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-    };
-  }
   // AStudio does not disclose its routed model. Stop before generic aliases
   // and fuzzy matching can turn an unresolved router into a priced model.
   if (sourceKey === "acode" && (lower === "auto" || lower.endsWith("-auto"))) {
@@ -324,6 +315,21 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
   if (litellmDotExact) {
     return { hit: true, source: "litellm:exact-dot", value: litellmDotExact };
   }
+
+  // Free gateway SKUs carry a `-free` suffix on the paid model id
+  // (`deepseek-v4.1-flash-free`, `minimax-m2.5-free`, Muse `*-contributor-free`).
+  // Runs AFTER curated/LiteLLM exact so an explicit paid exact entry still wins,
+  // and BEFORE alias/fuzzy/base-name matchers so `foo-free` cannot inherit `foo`
+  // list rates. OpenCode Zen established the convention; other sources reuse it
+  // when they emit the same suffix (issue #744).
+  if (lower.endsWith("-free")) {
+    return {
+      hit: true,
+      source: sourceKey === "opencode" ? "curated:opencode-free-suffix" : "curated:free-suffix",
+      value: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+    };
+  }
+
   const curatedDotContainedExact = lookupContainedExactCaseInsensitive(curated.exact, dotForm);
   if (curatedDotContainedExact) {
     return { hit: true, source: "curated:exact-dot", value: curatedDotContainedExact };
