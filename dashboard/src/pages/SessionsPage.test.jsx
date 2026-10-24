@@ -278,6 +278,27 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("Review release")).not.toBeInTheDocument();
   });
 
+
+  it("filters oh-my-pi sessions from the source picker and URL", async () => {
+    const omp = {
+      ...zcodeRow,
+      session_hash: "omp-row",
+      source: "omp",
+      title: "OMP session",
+      model: "claude-sonnet-4-5",
+      resume_command: "omp --resume 019c625b-b900-7000-8000-000000000001",
+    };
+    getSessions.mockResolvedValue({ ...response, sessions: [...response.sessions, omp] });
+    window.history.replaceState(null, "", "/sessions?source=omp");
+    render(<SessionsPage />);
+    expect(await screen.findByText("OMP session")).toBeInTheDocument();
+    expect(screen.queryByText("Review release")).not.toBeInTheDocument();
+    await chooseSelect("Filter by session source", "All tools");
+    expect(screen.getByText("Review release")).toBeInTheDocument();
+    await chooseSelect("Filter by session source", "oh-my-pi");
+    expect(screen.getByText("OMP session")).toBeInTheDocument();
+    expect(screen.queryByText("Review release")).not.toBeInTheDocument();
+  });
   it("renders and searches every observed model in a mixed Codex session", async () => {
     const mixed = {
       ...response.sessions[1],
