@@ -356,11 +356,11 @@ test("OMP sidecar rebuilds on v26 upgrade and nested-only transcript changes", a
   const nested = fs.readFileSync(nestedPath, "utf8").trimEnd() + "\n" + JSON.stringify(
     assistant({ id: "cccccccc", input: 6, output: 2, totalTokens: 8, time: T0 + 8000 }),
   ) + "\n";
-  // Ensure mtime advances even on coarse filesystems.
-  const prior = fs.statSync(nestedPath).mtimeMs;
+  // Force an mtime advance after the write so coarse filesystems still
+  // invalidate the sidecar dependency signature.
   fs.writeFileSync(nestedPath, nested);
-  const nextMtime = Math.max(prior + 5, Date.now());
-  fs.utimesSync(nestedPath, nextMtime / 1000, nextMtime / 1000);
+  const nextMtime = (Date.now() + 1000) / 1000;
+  fs.utimesSync(nestedPath, nextMtime, nextMtime);
 
   const afterNested = await buildSessionAnalytics({ home, force: false, cacheTtlMs: 0 });
   assert.equal(afterNested.find((row) => row.source === "omp").total_tokens, 28);
