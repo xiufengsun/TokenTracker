@@ -240,7 +240,7 @@ brew install xiufengsun/tokentracker/tokentracker
 | **本地优先分析** | ✅ | ✅ | ✅ |
 | **原生桌面 App** | ✅ macOS、Windows、Linux | ❌ | ❌ |
 | **桌面小组件** | ✅ 4 个小组件 | ❌ | ❌ |
-| **限额追踪** | ✅ 17 家 provider | 较少（Claude 周期/用量） | 覆盖多个 provider |
+| **限额追踪** | ✅ 18 家 provider | 较少（Claude 周期/用量） | 覆盖多个 provider |
 | **终端数据分析** | 基础 CLI（`status`、`--json`） | 完善的 CLI 报表能力 | 丰富的交互式 TUI 与 CLI |
 | **JSON 导出** | ✅ | ✅ | ✅ |
 | **公开排行榜** | 可选（需主动登录参与） | ❌ | 可选（`submit`） |

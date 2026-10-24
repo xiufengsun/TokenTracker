@@ -36,7 +36,7 @@ final class LimitsSettingsStore: ObservableObject {
     static let shared = LimitsSettingsStore(userDefaults: .standard)
 
     /// All known provider identifiers, in default display order.
-    static let allProviders: [String] = ["claude", "codex", "cursor", "gemini", "kimi", "kiro", "grok", "copilot", "antigravity", "zcode", "opencodeGo", "commandCode", "qoder", "qoderCn", "codingPlan", "agentPlan", "devin"]
+    static let allProviders: [String] = ["claude", "codex", "cursor", "gemini", "kimi", "kiro", "grok", "copilot", "antigravity", "zcode", "opencodeGo", "commandCode", "qoder", "qoderCn", "codingPlan", "agentPlan", "devin", "workbuddy"]
 
     static let displayNames: [String: String] = [
         "claude": "Claude",
@@ -56,6 +56,7 @@ final class LimitsSettingsStore: ObservableObject {
         "codingPlan": "Ark Coding Plan",
         "agentPlan": "Ark Agent Plan",
         "devin": "Devin",
+        "workbuddy": "WorkBuddy",
     ]
 
     /// Providers whose visibility switch is also the consent to fetch them.
@@ -345,7 +346,9 @@ final class LimitsSettingsStore: ObservableObject {
     private static func normalizeProviderOrder(_ raw: [String]?) -> [String] {
         var seen = Set<String>()
         var ordered: [String] = []
-        for id in raw ?? [] where allProviders.contains(id) && !seen.contains(id) {
+        for rawId in raw ?? [] {
+            let id = rawId == "workbuddyAi" ? "workbuddy" : rawId
+            guard allProviders.contains(id), !seen.contains(id) else { continue }
             ordered.append(id)
             seen.insert(id)
         }
@@ -356,15 +359,17 @@ final class LimitsSettingsStore: ObservableObject {
     }
 
     private static func normalizeProviderVisibility(_ raw: [String: Any]?) -> [String: Bool] {
-        Dictionary(uniqueKeysWithValues: allProviders.map { id in
+        var visibility = Dictionary(uniqueKeysWithValues: allProviders.map { id in
             (id, rawBool(raw?[id]) ?? defaultVisibility(forProvider: id))
         })
+        if let legacy = rawBool(raw?["workbuddyAi"]) {
+            visibility["workbuddy"] = rawBool(raw?["workbuddy"]) == true || legacy
+        }
+        return visibility
     }
 
     private static func normalizeProviderVisibility(_ raw: [String: Bool]) -> [String: Bool] {
-        Dictionary(uniqueKeysWithValues: allProviders.map { id in
-            (id, raw[id] ?? defaultVisibility(forProvider: id))
-        })
+        normalizeProviderVisibility(raw.mapValues { $0 as Any })
     }
 
     private static func normalizeDisplayMode(_ raw: Any?) -> LimitDisplayMode {

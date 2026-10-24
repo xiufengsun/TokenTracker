@@ -114,6 +114,25 @@ describe("useLimitsDisplayPrefs", () => {
     expect(Object.values(LIMIT_DISPLAY_MODES)).toEqual(["used", "remaining"]);
   });
 
+  it("merges old WorkBuddy edition switches and order into one preference", () => {
+    setStoredSnapshot({ providerOrder: ["workbuddyAi", "claude", "workbuddy"],
+      providerVisibility: { workbuddy: false, workbuddyAi: true } });
+    const { result } = renderHook(() => useLimitsDisplayPrefs());
+    expect(result.current.order.slice(0, 2)).toEqual(["workbuddy", "claude"]);
+    expect(result.current.order.filter((id) => id.startsWith("workbuddy"))).toEqual(["workbuddy"]);
+    expect(result.current.visibility.workbuddy).toBe(true);
+    expect(result.current.visibility).not.toHaveProperty("workbuddyAi");
+    act(() => result.current.toggle("workbuddy"));
+    expect(result.current.visibility.workbuddy).toBe(false);
+    expect(readStoredSnapshot().providerVisibility).not.toHaveProperty("workbuddyAi");
+  });
+
+  it("keeps WorkBuddy hidden when both former edition switches were off", () => {
+    setStoredSnapshot({ providerVisibility: { workbuddy: false, workbuddyAi: false } });
+    const { result } = renderHook(() => useLimitsDisplayPrefs());
+    expect(result.current.visibility.workbuddy).toBe(false);
+  });
+
   it("matches the provider list used for visibility/order keys", () => {
     expect([...LIMIT_PROVIDER_IDS].sort()).toEqual(
       [
@@ -127,6 +146,7 @@ describe("useLimitsDisplayPrefs", () => {
         "cursor",
         "devin",
         "gemini",
+        "workbuddy",
         "grok",
         "kimi",
         "kiro",

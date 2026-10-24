@@ -1636,10 +1636,13 @@ limits.commandCode.setupHint.step1,ui,LimitsPage,UsageLimitsPanel,command_code_h
 limits.commandCode.setupHint.step2,ui,LimitsPage,UsageLimitsPanel,command_code_hint_step2,"Or save an API key here — TokenTracker uses it only for usage requests.",,active
 limits.commandCode.setupHint.snippet_login,ui,LimitsPage,UsageLimitsPanel,command_code_hint_snippet_login,"cmd login",,active
 limits.commandCode.setupHint.snippet_login_windows,ui,LimitsPage,UsageLimitsPanel,command_code_hint_snippet_login_windows,"cmdc auth login",,active
-landing.discovery.tracked_usage,landing,LandingPage,index.html,tracked_usage,"Token Tracker tracks input, output, cached, and cache-creation tokens per model, project, and time window. It also detects usage limits for 17 providers, including Claude, Codex, Cursor, Gemini, Antigravity, Qoder, Qoder CN, Command Code, and Devin.",Build-time static discovery copy,active
-landing.discovery.limits_summary,landing,LandingPage,index.html,limits_summary,"live quota and subscription status for 17 providers, with last-good caching for local providers such as Antigravity and Qoder.",Build-time static discovery copy,active
-landing.discovery.faq_usage,landing,LandingPage,index.html,faq_usage,"Input, output, cached, and cache-creation tokens per model, project, and time window. It also surfaces usage limits for 17 providers, including Claude, Codex, Cursor, Gemini, Antigravity, Qoder, Qoder CN, Command Code, and Devin.",Build-time static discovery copy,active
+landing.discovery.tracked_usage,landing,LandingPage,index.html,tracked_usage,"Token Tracker tracks input, output, cached, and cache-creation tokens per model, project, and time window. It also detects usage limits for 18 providers, including Claude, Codex, Cursor, Gemini, Antigravity, Qoder, Qoder CN, Command Code, Devin, and WorkBuddy.",Build-time static discovery copy,active
+landing.discovery.limits_summary,landing,LandingPage,index.html,limits_summary,"live quota and subscription status for 18 providers, with last-good caching for local providers such as Antigravity and Qoder.",Build-time static discovery copy,active
+landing.discovery.faq_usage,landing,LandingPage,index.html,faq_usage,"Input, output, cached, and cache-creation tokens per model, project, and time window. It also surfaces usage limits for 18 providers, including Claude, Codex, Cursor, Gemini, Antigravity, Qoder, Qoder CN, Command Code, Devin, and WorkBuddy.",Build-time static discovery copy,active
 limits.provider.devin,ui,LimitsPage,UsageLimitsPanel,provider_devin,"Devin",,active
+limits.provider.workbuddy,ui,LimitsPage,UsageLimitsPanel,provider_workbuddy,"WorkBuddy",,active
+limits.provider.workbuddy_ai,ui,LimitsPage,UsageLimitsPanel,provider_workbuddy_ai,"WorkBuddy AI",,active
+limits.label.workbuddy_plan,ui,LimitsPage,UsageLimitsPanel,workbuddy_plan,"Plan",,active
 limits.label.devin_daily,ui,LimitsPage,UsageLimitsPanel,devin_daily,"Daily",,active
 limits.label.devin_weekly,ui,LimitsPage,UsageLimitsPanel,devin_weekly,"Weekly",,active
 limits.devin.setupHint.title,ui,LimitsPage,UsageLimitsPanel,devin_hint_title,"Connect Devin",,active

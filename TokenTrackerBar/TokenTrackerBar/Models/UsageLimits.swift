@@ -19,10 +19,11 @@ struct UsageLimitsResponse: Codable, Equatable {
     let codingPlan: CodingPlanLimits?
     let agentPlan: AgentPlanLimits?
     let devin: DevinLimits?
+    let workbuddy: WorkbuddyLimits?
 
     enum CodingKeys: String, CodingKey {
         case fetchedAt = "fetched_at"
-        case claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, qoder, qoderCn, codingPlan, agentPlan, devin
+        case claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy
         case opencodeGo = "opencodeGo"
         case commandCode = "commandCode"
     }
@@ -359,11 +360,32 @@ struct GenericLimitWindow: Codable, Equatable {
     let usedPercent: Double
     let resetAt: String?
     let limitWindowSeconds: Double?
+    let limitCredits: Double?
+    let usedCredits: Double?
+    let remainingCredits: Double?
+
+    init(usedPercent: Double, resetAt: String? = nil, limitWindowSeconds: Double? = nil, limitCredits: Double? = nil, usedCredits: Double? = nil, remainingCredits: Double? = nil) {
+        self.usedPercent = usedPercent
+        self.resetAt = resetAt
+        self.limitWindowSeconds = limitWindowSeconds
+        self.limitCredits = limitCredits
+        self.usedCredits = usedCredits
+        self.remainingCredits = remainingCredits
+    }
+
+    var creditsDetail: String? {
+        guard let total = limitCredits, let used = usedCredits, let remaining = remainingCredits,
+              total.isFinite, used.isFinite, remaining.isFinite, total > 0, used >= 0, remaining >= 0 else { return nil }
+        return Strings.limitCreditsDetail(used: used, total: total, remaining: remaining)
+    }
 
     enum CodingKeys: String, CodingKey {
         case usedPercent = "used_percent"
         case resetAt = "reset_at"
         case limitWindowSeconds = "limit_window_seconds"
+        case limitCredits = "limit_credits"
+        case usedCredits = "used_credits"
+        case remainingCredits = "remaining_credits"
     }
 }
 
@@ -626,6 +648,25 @@ struct CodingPlanLimits: Codable, Equatable {
 
 typealias AgentPlanLimits = CodingPlanLimits
 
+/// WorkBuddy subscription-plan credits. China and international share one row.
+/// Only one account's plan package is published;
+/// reward grants are not a window.
+struct WorkbuddyLimits: Codable, Equatable {
+    let configured: Bool
+    let error: String?
+    let planLabel: String?
+    let primaryWindow: GenericLimitWindow?
+    let cachedAt: String?
+    let stale: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case configured, error, stale
+        case planLabel = "plan_label"
+        case primaryWindow = "primary_window"
+        case cachedAt = "cached_at"
+    }
+}
+
 /// Devin (devin.ai): daily + weekly subscription quota read from the official
 /// GetPlanStatus RPC by the local server, keyed by the Devin CLI's saved
 /// sign-in. Mirror of CommandCodeLimits minus the subscription status.
@@ -709,6 +750,7 @@ extension UsageLimitsResponse {
             (codingPlan?.configured ?? false, codingPlan?.error),
             (agentPlan?.configured ?? false, agentPlan?.error),
             (devin?.configured ?? false, devin?.error),
+            (workbuddy?.configured ?? false, workbuddy?.error),
         ]
         return providers.contains { $0.0 && $0.1 == nil }
     }
@@ -747,7 +789,8 @@ extension UsageLimitsResponse {
             qoderCn: qoderCn,
             codingPlan: codingPlan,
             agentPlan: agentPlan,
-            devin: .unconfigured
+            devin: .unconfigured,
+            workbuddy: workbuddy
         )
     }
 }

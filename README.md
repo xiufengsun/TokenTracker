@@ -316,7 +316,7 @@ Missing your tool? [Open an issue](https://github.com/xiufengsun/TokenTracker/is
 | **Local analysis** | ✅ | ✅ | ✅ |
 | **Native desktop apps** | ✅ macOS, Windows, Linux | ❌ | ❌ |
 | **Desktop widgets** | ✅ 4 widgets | ❌ | ❌ |
-| **Rate-limit tracking** | ✅ 17 providers | Limited (Claude blocks) | Multiple providers |
+| **Rate-limit tracking** | ✅ 18 providers | Limited (Claude blocks) | Multiple providers |
 | **Terminal analytics** | Basic CLI (`status`, `--json`) | Strong CLI reporting | Interactive TUI & CLI |
 | **JSON export** | ✅ | ✅ | ✅ |
 | **Public leaderboard** | Optional (opt-in) | ❌ | Optional (`submit`) |

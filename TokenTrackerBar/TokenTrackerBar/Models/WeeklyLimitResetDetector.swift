@@ -40,6 +40,7 @@ enum LimitResetProviderIconCatalog {
         case "codingPlan": return "volcano-ark.svg"
         case "agentPlan": return "volcano-ark.svg"
         case "devin": return "devin.svg"
+        case "workbuddy": return "codebuddy.svg"
         default: return nil
         }
     }
@@ -287,6 +288,11 @@ extension UsageLimitsResponse {
             addGeneric("devin", devin.configured, devin.error, [
                 ("primary", "Daily", devin.primaryWindow),
                 ("secondary", "Weekly", devin.secondaryWindow),
+            ])
+        }
+        if let workbuddy {
+            addGeneric("workbuddy", workbuddy.configured, workbuddy.error, [
+                ("primary", Strings.workbuddyPlanLabel, workbuddy.primaryWindow),
             ])
         }
 

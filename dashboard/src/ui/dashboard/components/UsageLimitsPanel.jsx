@@ -103,10 +103,10 @@ function formatCreditAmount(
   }).format(n);
 }
 
-function buildQuotaDetail(window) {
+function buildQuotaDetail(window, maximumFractionDigits) {
   if (!window || typeof window !== "object") return null;
   if (!(Number(window.limit_credits) > 0)) return null;
-  const formatOptions = { useGrouping: window.unit !== "calls" };
+  const formatOptions = { useGrouping: window.unit !== "calls", maximumFractionDigits };
   const used = formatCreditAmount(window.used_credits, formatOptions);
   const limit = formatCreditAmount(window.limit_credits, formatOptions);
   const remaining = formatCreditAmount(window.remaining_credits, formatOptions);
@@ -152,7 +152,7 @@ function buildWindowHoverDetail(spec, pace, mode) {
   if (exact) {
     lines.push(copy(spec.timeKind === "expiry" ? "limits.hover.expires_at" : "limits.hover.resets_at", { time: exact }));
   }
-  const quota = buildQuotaDetail(spec.window);
+  const quota = buildQuotaDetail(spec.window, spec.creditPrecision);
   if (quota) lines.push(quota);
   return lines.join("\n");
 }
@@ -1339,13 +1339,14 @@ function useWidestLabelWidth(containerRef) {
   return labelWidth;
 }
 
-export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, order, visibility, displayMode, subscriptions = [], showSubscriptions = true, onProviderKeySaved = null }) {
-  const dataById = { claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin };
+export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, order, visibility, displayMode, subscriptions = [], showSubscriptions = true, onProviderKeySaved = null }) {
+  const dataById = { claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy };
   const containerRef = useRef(null);
   const labelWidth = useWidestLabelWidth(containerRef);
   const [expandedId, setExpandedId] = useState(null);
   const [now, setNow] = useState(() => Date.now());
-  const effectiveOrder = Array.isArray(order) && order.length > 0 ? order : DEFAULT_ORDER;
+  const effectiveOrder = [...new Set((Array.isArray(order) && order.length > 0 ? order : DEFAULT_ORDER)
+    .map((id) => id === "workbuddyAi" ? "workbuddy" : id))];
   const effectiveMode = displayMode === LIMIT_DISPLAY_MODES.REMAINING
     ? LIMIT_DISPLAY_MODES.REMAINING
     : LIMIT_DISPLAY_MODES.USED;

@@ -67,6 +67,21 @@ enum Strings {
     static var cursorAutoLabel: String { t("Auto", "自动", "自動", "自動", "자동") }
     static var cursorGrokBotLabel: String { t("Grok Bot", "Grok 机器人", "Grok 機器人", "Grokボット", "Grok 봇") }
     static var codexCreditsLabel: String { t("Credits", "额度", "額度", "クレジット", "크레딧") }
+
+    static func limitCreditsDetail(used: Double, total: Double, remaining: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: loc)
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 2
+        func amount(_ value: Double) -> String { formatter.string(from: NSNumber(value: value)) ?? String(value) }
+        let used = amount(used), total = amount(total), remaining = amount(remaining)
+        return t("\(used) / \(total) credits used · \(remaining) left",
+                 "已用 \(used) / \(total) 点额度 · 剩余 \(remaining)",
+                 "已用 \(used) / \(total) 點額度 · 剩餘 \(remaining)",
+                 "\(used) / \(total) クレジット使用 · 残り \(remaining)",
+                 "\(used) / \(total) 크레딧 사용 · \(remaining) 남음")
+    }
     static var kimiWeeklyLabel: String { t("Weekly", "周", "周", "週間", "주간") }
     static var kimiFiveHourLabel: String { t("5h", "5h", "5h", "5h", "5h") }
     static var kimiTotalLabel: String { t("Total", "总量", "總量", "合計", "총량") }
@@ -76,6 +91,7 @@ enum Strings {
     // (UsageLimitsView) and the reset notification detector so both surfaces
     // render the same label.
     static var qoderPlanLabel: String { t("Plan", "套餐", "套餐", "プラン", "플랜") }
+    static var workbuddyPlanLabel: String { t("Plan", "套餐", "套餐", "プラン", "플랜") }
     static var qoderBonusLabel: String { t("Bonus", "奖励", "獎勵", "ボーナス", "보너스") }
     static var grokMonthLabel: String { t("Month", "月度", "月度", "月間", "월간") }
     static var grokWeekLabel: String { t("Weekly", "周", "週", "週間", "주간") }

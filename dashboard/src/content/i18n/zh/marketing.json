@@ -210,7 +210,7 @@
   "landing.v3.how.scene.session_title": "会话日志 · 上一轮",
   "landing.v3.how.scene.appended": "已在本机追加",
   "landing.v3.how.scene.total_tokens": "Token 总量",
-  "landing.discovery.tracked_usage": "Token Tracker 按模型、项目和时间范围统计输入、输出、缓存及缓存写入 token，并读取 Claude、Codex、Cursor、Gemini、Antigravity、Qoder、Qoder CN、Command Code 和 Devin 等 17 家工具的使用额度。",
-  "landing.discovery.limits_summary": "查看 17 家工具的实时额度和订阅状态；Antigravity、Qoder 等本地来源支持保留最近一次有效结果。",
-  "landing.discovery.faq_usage": "按模型、项目和时间范围统计输入、输出、缓存及缓存写入 token，并展示 Claude、Codex、Cursor、Gemini、Antigravity、Qoder、Qoder CN、Command Code 和 Devin 等 17 家工具的使用额度。"
+  "landing.discovery.tracked_usage": "Token Tracker 按模型、项目和时间范围统计输入、输出、缓存及缓存写入 token，并读取 Claude、Codex、Cursor、Gemini、Antigravity、Qoder、Qoder CN、Command Code、Devin、WorkBuddy 等 18 家工具的使用额度。",
+  "landing.discovery.limits_summary": "查看 18 家工具的实时额度和订阅状态；Antigravity、Qoder 等本地来源支持保留最近一次有效结果。",
+  "landing.discovery.faq_usage": "按模型、项目和时间范围统计输入、输出、缓存及缓存写入 token，并展示 Claude、Codex、Cursor、Gemini、Antigravity、Qoder、Qoder CN、Command Code、Devin、WorkBuddy 等 18 家工具的使用额度。"
 }

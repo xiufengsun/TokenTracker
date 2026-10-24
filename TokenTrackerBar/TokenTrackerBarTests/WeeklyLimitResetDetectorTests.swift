@@ -303,7 +303,10 @@ final class WeeklyLimitResetDetectorTests: XCTestCase {
         )
         XCTAssertEqual(
             readings.map { "\($0.provider).\($0.windowLabel)" },
-            ["qoder.Plan", "qoder.Bonus", "qoderCn.Plan", "qoderCn.Bonus"]
+            [
+                "qoder.\(Strings.qoderPlanLabel)", "qoder.\(Strings.qoderBonusLabel)",
+                "qoderCn.\(Strings.qoderPlanLabel)", "qoderCn.\(Strings.qoderBonusLabel)"
+            ]
         )
     }
 
