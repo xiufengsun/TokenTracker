@@ -114,6 +114,42 @@ function writeQueue(queuePath, records) {
   fs.writeFileSync(queuePath, records.map((r) => JSON.stringify(r)).join("\n") + "\n");
 }
 
+for (const statesOnly of [false, true]) {
+  test(`partial-accounting negotiation retains queue on old cloud and respects cancellation (${statesOnly ? "states" : "buckets"})`, async t => {
+    const { dir, queuePath, queueStatePath } = tempQueue("tokentracker-capabilities-");
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const base = statesOnly ? stateRecord("partial") : bucketRow("2027-01-10T10:00:00Z");
+    writeQueue(queuePath, [{ ...base, unclassified_input_tokens: 50, total_tokens: base.total_tokens + 50 }]);
+    const calls = [];
+    let version = 2, allowed = true, cancelOnProbe = false;
+    t.mock.method(globalThis, "fetch", async (url, init) => {
+      calls.push({ url: String(url), init });
+      if (init.method === "GET") {
+        assert.ok(init.signal, "capability probe has the same upload deadline");
+        if (cancelOnProbe) allowed = false;
+        return Response.json({ accounting_version: version });
+      }
+      return Response.json({ inserted: 1 });
+    });
+    const drain = () => drainQueueToCloud({ baseUrl: "https://example.test", deviceToken: "fixture", queuePath, queueStatePath, canUpload: () => allowed });
+    await assert.rejects(drain(), /usage remains queued locally/);
+    assert.equal(fs.existsSync(queueStatePath), false);
+    assert.equal(calls.filter(c => c.init.method === "POST").length, 0);
+    version = 3; cancelOnProbe = true;
+    await drain();
+    assert.equal(fs.existsSync(queueStatePath), false, "switching off after a probe cannot acknowledge rows");
+    assert.equal(calls.filter(c => c.init.method === "POST").length, 0);
+    cancelOnProbe = false; allowed = true;
+    await drain();
+    assert.equal(JSON.parse(fs.readFileSync(queueStatePath, "utf8")).offset, fs.statSync(queuePath).size);
+    const post = calls.find(c => c.init.method === "POST");
+    assert.ok(post.init.signal);
+    assert.ok(JSON.parse(post.init.body).upload_id);
+    const body = JSON.parse(post.init.body);
+    assert.equal((statesOnly ? body.account_session_states : body.hourly)[0].unclassified_input_tokens, 50);
+  });
+}
+
 test("1200 states-only queue: bounded batches, every request <= 500, nothing lost, no permanent 400", async (t) => {
   const { dir, queuePath, queueStatePath } = tempQueue("tokentracker-batching-");
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

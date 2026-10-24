@@ -93,6 +93,9 @@ function normalizeStateRow(observation) {
     const value = Number(observation?.[column]);
     row[column] = Number.isFinite(value) ? value : 0;
   }
+  if (Number(observation?.unclassified_input_tokens) > 0) {
+    row.unclassified_input_tokens = Number(observation.unclassified_input_tokens);
+  }
   return row;
 }
 
@@ -170,6 +173,9 @@ function aggregateSessionStates(states, opts = {}) {
       conversations: 0,
     };
     for (const column of TOKEN_COLUMNS) acc[column] += row[column];
+    if (row.unclassified_input_tokens) {
+      acc.unclassified_input_tokens = (acc.unclassified_input_tokens || 0) + row.unclassified_input_tokens;
+    }
     acc.conversations += 1;
     grouped.set(key, acc);
   }

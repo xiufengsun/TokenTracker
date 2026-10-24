@@ -50,6 +50,7 @@ const {
   resolveKiroBasePath,
   resolveHermesPath,
   resolveCopilotOtelPaths,
+  resolveVsCodeCopilotChatSessionPaths,
   normalizeCopilotDbPath,
   uniqueCopilotDbPaths,
   coalesceCopilotDbStatesByIdentity,
@@ -80,6 +81,7 @@ const {
   copilotOtelCursorHasLegacyCliUsage,
   pruneCopilotUsageClaims,
   parseCopilotIncremental,
+  parseVsCodeCopilotChatIncremental,
   parseCopilotSessionStoreIncremental,
   parseCopilotAppDbIncremental,
   resolveKimiWireFiles,
@@ -3369,6 +3371,49 @@ async function cmdSync(argv, context = {}) {
       }
     }
 
+    // ── VS Code Copilot Chat persisted workspace sessions ──
+    // The Chat extension can be routed through a custom endpoint without
+    // emitting ~/.copilot OTEL or session-store rows. Its exact token counts
+    // are persisted in workspaceStorage/*/chatSessions/*.jsonl (or legacy
+    // .json snapshots), so parse that source after the legacy Copilot readers.
+    const vscodeCopilotChatPaths = copilotSourceAllowed
+      ? resolveVsCodeCopilotChatSessionPaths(process.env)
+      : [];
+    const hasTrackedVsCodeCopilotChatFiles =
+      cursors?.copilotVsCode?.files &&
+      Object.keys(cursors.copilotVsCode.files).length > 0;
+    if (
+      copilotSourceAllowed &&
+      (vscodeCopilotChatPaths.length > 0 || hasTrackedVsCodeCopilotChatFiles)
+    ) {
+      if (progress?.enabled) {
+        progress.start(`Parsing VS Code Copilot ${renderBar(0)} | buckets 0`);
+      }
+      try {
+        const vscodeCopilotResult = await parseVsCodeCopilotChatIncremental({
+          sessionPaths: vscodeCopilotChatPaths,
+          cursors,
+          queuePath,
+          env: process.env,
+          onProgress: (p) => {
+            if (!progress?.enabled) return;
+            const pct = p.total > 0 ? p.index / p.total : 1;
+            progress.update(
+              `Parsing VS Code Copilot ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(p.total)} files | buckets ${formatNumber(p.bucketsQueued)}`,
+            );
+          },
+        });
+        copilotResult = mergeParseResult(copilotResult, vscodeCopilotResult);
+        if (vscodeCopilotResult.fileErrors > 0 && !opts.auto) {
+          process.stderr.write(
+            `VS Code Copilot sync: skipped ${vscodeCopilotResult.fileErrors} unreadable session file(s)\n`,
+          );
+        }
+      } catch (err) {
+        warnProviderParseFailure("VS Code Copilot", err, opts);
+      }
+    }
+
     if (copilotSourceAllowed) {
       if (Array.isArray(cursors?.copilot?.recentUsageEvents)) {
         cursors.copilot.recentUsageEvents = pruneCopilotUsageClaims(
@@ -4459,6 +4504,19 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) break;
       requestSignal = AbortSignal.timeout(Math.max(1, Math.ceil(remainingMs)));
+      if ([...result.buckets, ...result.sessionStates].some((row) => Number(row.unclassified_input_tokens) > 0)) {
+        // Older ingest silently drops unknown columns; do not advance the queue.
+        const capabilityUrl = new URL(functionUrlFor(root, INGEST_SLUG));
+        capabilityUrl.searchParams.set("capabilities", "1");
+        const capability = await fetchFunctionResponse(capabilityUrl.toString(), {
+          method: "GET", headers, signal: requestSignal,
+        });
+        const supported = capability.ok ? await capability.json().catch(() => null) : null;
+        if (!(Number(supported?.accounting_version) >= 3)) {
+          throw new Error("Cloud accounting support is not ready for unclassified input; usage remains queued locally.");
+        }
+        if (!canUpload() || Date.now() >= deadline) break;
+      }
       const res = await fetchFunctionResponse(functionUrlFor(root, INGEST_SLUG), {
         method: "POST",
         headers,
@@ -4566,6 +4624,8 @@ async function readQueueBatch(queuePath, startOffset, maxBuckets) {
             bucket_start: typeof bucket.bucket_start === "string" ? bucket.bucket_start : "",
             input_tokens: Number(bucket.input_tokens) || 0,
             output_tokens: Number(bucket.output_tokens) || 0,
+            ...(Object.hasOwn(bucket, "unclassified_input_tokens")
+              ? { unclassified_input_tokens: Number(bucket.unclassified_input_tokens) || 0 } : {}),
             cached_input_tokens: Number(bucket.cached_input_tokens) || 0,
             cache_creation_input_tokens: Number(bucket.cache_creation_input_tokens) || 0,
             reasoning_output_tokens: Number(bucket.reasoning_output_tokens) || 0,

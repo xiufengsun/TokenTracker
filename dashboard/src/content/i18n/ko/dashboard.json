@@ -1,4 +1,6 @@
 {
+  "usage.metric.unclassified_input": "입력 (캐시 구분 알 수 없음)",
+  "usage.cost.partial": "비용 정보 불완전",
   "cloud.action.resume_order": "결제 계속하기",
   "cloud.restore.title": "주문 찾기",
   "cloud.restore.detail": "주문 ID를 입력해 결제 상태를 확인하거나 결제를 계속하세요.",

@@ -929,7 +929,7 @@ function renderProfileCard(opts: {
   const p = PALETTE[theme];
   const displayName = row.display_name || "Anonymous";
   const tokens = compactNumber(Number(row.total_tokens ?? 0));
-  const cost = formatCost(Number(row.estimated_cost_usd ?? 0));
+  const cost = row.estimated_cost_usd == null ? "Partial cost" : formatCost(Number(row.estimated_cost_usd));
   const rank = row.rank ? `#${row.rank}` : "—";
   const periodLabel = period.charAt(0).toUpperCase() + period.slice(1);
   const shares = providerShares(row).slice(0, 3);

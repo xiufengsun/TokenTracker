@@ -1,4 +1,6 @@
 {
+  "usage.metric.unclassified_input": "Eingabe (Cache-Aufteilung unbekannt)",
+  "usage.cost.partial": "Kosten unvollständig",
   "cloud.action.resume_order": "Zahlung fortsetzen",
   "cloud.restore.title": "Bestellung suchen",
   "cloud.restore.detail": "Gib deine Bestellnummer ein, um den Zahlungsstatus zu prüfen oder die Zahlung fortzusetzen.",

@@ -1,4 +1,6 @@
 {
+  "usage.metric.unclassified_input": "輸入（快取拆分未知）",
+  "usage.cost.partial": "費用不完整",
   "cloud.membership.tools_title": "工具與帳單",
   "trend.monitor.pin_hint": "點擊柱子固定並捲動查看詳情",
   "usage.overview.all_tools": "全部",
