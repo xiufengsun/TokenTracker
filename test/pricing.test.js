@@ -1272,6 +1272,65 @@ test("index: -free suffix is zero-cost for non-OpenCode sources too (issue #744)
   }
 });
 
+test("index: qwen3.8-max uses Alibaba Singapore International list rates (issue #744)", () => {
+  const expected = { input: 2, output: 6, cache_read: 0.17, cache_write: 2.5 };
+  for (const model of [
+    "qwen3.8-max",
+    "QWEN3.8-MAX",
+    "qwen3-8-max",
+    "qwen3.8-max-0902",
+    "qwen3.8-max-2026-09-02",
+    "dashscope/qwen3.8-max",
+    "openrouter/qwen/qwen3.8-max",
+  ]) {
+    const rates = pricing.getModelPricing(model);
+    assert.deepEqual(
+      Object.fromEntries(Object.keys(expected).map((key) => [key, rates[key]])),
+      expected,
+      model,
+    );
+    const info = pricing.getModelPricingInfo(model);
+    assert.equal(info.status, "priced", model);
+  }
+  // Preview is a different SKU with no published Singapore International rate — stay unpriced.
+  // Cover both dotted and dash-normalized forms (exact-dot contained must not inherit Max).
+  for (const preview of [
+    "qwen3.8-max-preview",
+    "qwen3-8-max-preview",
+    "dashscope/qwen3-8-max-preview",
+    "openrouter/qwen/qwen3.8-max-preview",
+    "qwen3.8-max-0902-preview",
+    "qwen3-8-max-0902-preview",
+    "qwen3.8-max-2026-09-02-preview",
+    "qwen3-8-max-2026-09-02-preview",
+  ]) {
+    assert.equal(pricing.getModelPricingInfo(preview).status, "unpriced", preview);
+  }
+  // Dated exact entry is hit as curated:exact (not overridden by the shared-SKU regex).
+  assert.equal(
+    pricing.getModelPricingInfo("qwen3.8-max-0902").source,
+    "curated:exact",
+  );
+  // Must not inherit Flash rates (parity with edge distinct-SKU guard).
+  const flash = pricing.getModelPricing("qwen3.8-flash");
+  assert.notDeepEqual(
+    Object.fromEntries(["input", "output"].map((k) => [k, pricing.getModelPricing("qwen3.8-max")[k]])),
+    Object.fromEntries(["input", "output"].map((k) => [k, flash[k]])),
+  );
+  // Cost: 1M in + 1M out + 1M cache_read + 1M cache_write = 2+6+0.17+2.5 = 10.67
+  assert.ok(
+    Math.abs(
+      pricing.computeRowCost({
+        model: "qwen3.8-max",
+        input_tokens: 1e6,
+        output_tokens: 1e6,
+        cached_input_tokens: 1e6,
+        cache_creation_input_tokens: 1e6,
+      }) - 10.67,
+    ) < 1e-12,
+  );
+});
+
 test("index: Muse *-contributor-free SKUs are free, not unpriced (issue #744)", () => {
   for (const model of [
     "muse-spark-1.2-contributor-free",

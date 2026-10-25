@@ -183,6 +183,27 @@
       "cache_write": 0.2,
       "note": "Alibaba Model Studio Singapore (International), USD per MTok, verified 2026-09-29: https://www.alibabacloud.com/help/en/model-studio/qwen3-8-flash . Reference API estimate; other regions/providers can have different rates. Issue #715."
     },
+    "qwen3.8-max": {
+      "input": 2,
+      "output": 6,
+      "cache_read": 0.17,
+      "cache_write": 2.5,
+      "note": "Alibaba Model Studio Singapore (International), USD per MTok, verified 2026-10-25: https://www.alibabacloud.com/help/en/model-studio/model-pricing and https://www.alibabacloud.com/help/en/model-studio/qwen3-8-max . Reference API estimate; other regions/providers can have different rates. Issue #744."
+    },
+    "qwen3.8-max-0902": {
+      "input": 2,
+      "output": 6,
+      "cache_read": 0.17,
+      "cache_write": 2.5,
+      "note": "Alibaba Model Studio Singapore (International), USD per MTok, verified 2026-10-25: https://www.alibabacloud.com/help/en/model-studio/model-pricing and https://www.alibabacloud.com/help/en/model-studio/qwen3-8-max . Reference API estimate; other regions/providers can have different rates. Issue #744. Dated SKU qwen3.8-max-0902 shares Singapore International list rates."
+    },
+    "qwen3.8-max-2026-09-02": {
+      "input": 2,
+      "output": 6,
+      "cache_read": 0.17,
+      "cache_write": 2.5,
+      "note": "Alibaba Model Studio Singapore (International), USD per MTok, verified 2026-10-25: https://www.alibabacloud.com/help/en/model-studio/qwen3-8-max . Alias of qwen3.8-max-0902; same Singapore International list rates. Issue #744."
+    },
     "hy4-preview": {
       "input": 0.833,
       "output": 2.5,

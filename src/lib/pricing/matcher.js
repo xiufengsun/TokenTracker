@@ -252,6 +252,11 @@ function lookupContainedExactCaseInsensitive(table, model) {
     // is a separate SKU from Opus 5). Dated and provider suffixes still work.
     const suffix = lower.slice(start + key.length);
     if (/^[.\d]/.test(suffix)) continue;
+    // Alternate SKU markers (preview/next/exp/…) must not inherit the base
+    // exact rate, including when they follow a date snapshot
+    // (`qwen3.8-max-2026-09-02-preview`, `qwen3-8-max-0902-preview`).
+    // Plain dated (-0902 / -YYYY-MM-DD) and provider-qualified suffixes still match.
+    if (/(?:^|-)(?:preview|next|exp|experimental|beta|alpha)(?:-|$)/.test(suffix)) continue;
     return table[key];
   }
   return null;
@@ -293,18 +298,25 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
     }
   }
 
-  // 1. CURATED exact
-  // Qwen Flash's provider-qualified and dated IDs share the reference SKU.
-  // Keep the boundary strict: Flash-Next and Max have independent prices.
-  if (/(?:^|\/)qwen3[.-]8-flash(?:-\d{4}-\d{2}-\d{2})?$/.test(lower.trim()) && curated.exact?.["qwen3.8-flash"]) {
-    return { hit: true, source: "curated:exact", value: curated.exact["qwen3.8-flash"] };
-  }
+  // 1. CURATED exact (before family regex aliases so a distinct dated exact
+  // entry cannot be overridden by the shared-SKU regex).
   if (curated.exact && curated.exact[lookupModel]) {
     return { hit: true, source: "curated:exact", value: curated.exact[lookupModel] };
   }
   const curatedDotExact = lookupExactCaseInsensitive(curated.exact, dotForm);
   if (curatedDotExact) {
     return { hit: true, source: "curated:exact-dot", value: curatedDotExact };
+  }
+
+  // Qwen Flash's provider-qualified and dated IDs share the reference SKU.
+  // Keep the boundary strict: Flash-Next and Max have independent prices.
+  if (/(?:^|\/)qwen3[.-]8-flash(?:-\d{4}-\d{2}-\d{2})?$/.test(lower.trim()) && curated.exact?.["qwen3.8-flash"]) {
+    return { hit: true, source: "curated:exact", value: curated.exact["qwen3.8-flash"] };
+  }
+  // Qwen Max (dated -0902 and ISO snapshot -YYYY-MM-DD) share Singapore International SKU.
+  // Keep the boundary strict vs Flash / Flash-Next / -preview (issue #744).
+  if (/(?:^|\/)qwen3[.-]8-max(?:-0902|-\d{4}-\d{2}-\d{2})?$/.test(lower.trim()) && curated.exact?.["qwen3.8-max"]) {
+    return { hit: true, source: "curated:exact", value: curated.exact["qwen3.8-max"] };
   }
 
   // 2. LiteLLM exact

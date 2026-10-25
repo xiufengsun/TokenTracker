@@ -106,12 +106,37 @@ test("Qwen3.8 Flash local and all cloud paths share full cache pricing (#715)", 
   }
 });
 
+test("Qwen3.8 Max local and all cloud paths share Singapore International rates (#744)", () => {
+  const { getModelPricing: localPricing, computeRowCost } = require("../src/lib/pricing");
+  const expected = { input: 2, output: 6, cache_read: 0.17, cache_write: 2.5 };
+  const variants = ["qwen3.8-max", "QWEN3.8-MAX", "qwen3-8-max", "qwen3.8-max-0902",
+    "qwen3.8-max-2026-09-02", "dashscope/qwen3.8-max", "openrouter/qwen/qwen3.8-max"];
+  for (const name of [CANONICAL, ...MIRRORS]) {
+    const { code } = transformSync(extractBlock(name), { loader: "ts", target: "es2020" });
+    const edgePricing = vm.runInNewContext(`${code}\ngetModelPricing;`);
+    for (const model of variants) {
+      const local = localPricing(model);
+      assert.deepEqual(Object.fromEntries(Object.keys(expected).map(key => [key, local[key]])), expected, model);
+      assert.deepEqual(JSON.parse(JSON.stringify(edgePricing(model))), expected, `${name}: ${model}`);
+    }
+    const cost = computeRowCost({ model: "qwen3.8-max", input_tokens: 1e6, output_tokens: 1e6,
+      cached_input_tokens: 1e6, cache_creation_input_tokens: 1e6 });
+    assert.ok(Math.abs(cost - 10.67) < 1e-12, "qwen3.8-max cache cost must not be omitted");
+    // Distinct from Flash
+    assert.notDeepEqual(JSON.parse(JSON.stringify(edgePricing("qwen3.8-max"))),
+      JSON.parse(JSON.stringify(edgePricing("qwen3.8-flash"))));
+  }
+});
+
 test("canonical pricing block retains regression-prone entries and matcher order", () => {
   const block = extractBlock(CANONICAL);
 
   // Entries whose absence has already shipped real mispricing.
   for (const key of [
     '"kimi-k2.6"',
+    '"qwen3.8-max"',
+    '"qwen3.8-max-0902"',
+    '"qwen3.8-max-2026-09-02"',
     '"mimo-v2.5-pro"',
     '"mimo-v2.5"',
     '"mimo-v2-flash"',
