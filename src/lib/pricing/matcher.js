@@ -342,6 +342,17 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
     };
   }
 
+  // Kimi Code K2.8 Preview aliases must not inherit fuzzy `kimi` → kimi-k2.5 rates (#766).
+  // Parser stores bare `k2.8`; raw `kimicoding` / `kimi-k2.8` / `kimicoding/k2.8` may still
+  // appear in lookups. `kimi-for-coding` keeps its curated exact entry (resolved above).
+  // Stay unpriced until an official per-token public rate exists.
+  if (
+    /(?:^|\/)(?:kimicoding(?:\/k2\.8)?|kimi-k2\.8|k2\.8)(?:-|\.|$)/.test(lower.trim()) ||
+    lower.trim() === "kimicoding"
+  ) {
+    return { hit: false, source: "miss", value: null };
+  }
+
   const curatedDotContainedExact = lookupContainedExactCaseInsensitive(curated.exact, dotForm);
   if (curatedDotContainedExact) {
     return { hit: true, source: "curated:exact-dot", value: curatedDotContainedExact };

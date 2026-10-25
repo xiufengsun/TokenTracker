@@ -1331,6 +1331,16 @@ test("index: qwen3.8-max uses Alibaba Singapore International list rates (issue 
   );
 });
 
+test("index: Kimi K2.8 Preview aliases stay unpriced (do not inherit kimi-k2.5 fuzzy) (#766)", () => {
+  for (const model of ["k2.8", "kimicoding", "kimi-k2.8", "kimicoding/k2.8", "KIMICODING/K2.8"]) {
+    const info = pricing.getModelPricingInfo(model);
+    assert.equal(info.status, "unpriced", model);
+  }
+  // kimi-for-coding keeps its curated exact entry.
+  assert.equal(pricing.getModelPricingInfo("kimi-for-coding").status, "priced");
+  assert.equal(pricing.getModelPricingInfo("kimi-k2.5").status, "priced");
+});
+
 test("index: Muse *-contributor-free SKUs are free, not unpriced (issue #744)", () => {
   for (const model of [
     "muse-spark-1.2-contributor-free",

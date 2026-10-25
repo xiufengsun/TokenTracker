@@ -509,6 +509,16 @@ function getModelPricing(model: string, source = "") {
   if (lower === "k3" || lower.endsWith("/k3")) return MODEL_PRICING["kimi-k3"];
   if (lower.includes("kimi-k2.7-code")) return MODEL_PRICING["kimi-k2.7-code"];
   if (lower.includes("kimi-k2.6")) return MODEL_PRICING["kimi-k2.6"];
+  // K2.8 Preview aliases must not inherit kimi-k2.5 (#766). Stay unpriced
+  // until an official per-token public rate exists (Kimi Code is mostly quota).
+  if (
+    lower.includes("kimicoding") ||
+    lower.includes("kimi-k2.8") ||
+    lower === "k2.8" ||
+    lower.endsWith("/k2.8")
+  ) {
+    return ZERO_PRICING;
+  }
   if (lower.includes("kimi")) return MODEL_PRICING["kimi-k2.5"];
   // MiMo ordering: more specific suffixes first (mimo-v2.5-pro before
   // mimo-v2.5 which is a substring; the free tier is a distinct name).

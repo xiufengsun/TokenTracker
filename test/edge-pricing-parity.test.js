@@ -430,6 +430,26 @@ test("all cloud cost paths keep OpenCode -free models at zero", () => {
   }
 });
 
+test("Kimi K2.8 Preview aliases stay unpriced locally and in all cloud paths (#766)", () => {
+  const { getModelPricing: localPricing } = require("../src/lib/pricing");
+  const aliases = ["k2.8", "kimicoding", "kimi-k2.8", "kimicoding/k2.8"];
+  for (const name of [CANONICAL, ...MIRRORS]) {
+    const { code } = transformSync(extractBlock(name), { loader: "ts", target: "es2020" });
+    const edgePricing = vm.runInNewContext(`${code}\ngetModelPricing;`);
+    for (const model of aliases) {
+      assert.equal(localPricing(model).input, 0, model);
+      assert.deepEqual(
+        JSON.parse(JSON.stringify(edgePricing(model))),
+        { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+        `${name}: ${model}`,
+      );
+    }
+    // Sibling priced models still resolve.
+    assert.ok(edgePricing("kimi-k2.5").input > 0, name);
+    assert.ok(edgePricing("kimi-for-coding").input > 0, name);
+  }
+});
+
 test("WorkBuddy AI auto routing stays unpriced across local and cloud paths", () => {
   const { getModelPricing: localPricing } = require("../src/lib/pricing");
   for (const name of [CANONICAL, ...MIRRORS]) {

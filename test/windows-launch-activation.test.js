@@ -65,6 +65,8 @@ test("Windows entrypoint forwards a secondary manual launch and keeps startup qu
 test("Windows relaunch activation and deep links use distinct named-pipe handlers", {
   skip: process.platform !== "win32",
 }, () => {
+  // Windows CI under load can exceed 30s compiling/running the pwsh fixture
+  // (spawnSync pwsh ETIMEDOUT). Keep under the suite's 120s per-test budget.
   const output = execFileSync("pwsh", [
     "-NoProfile",
     "-NonInteractive",
@@ -72,7 +74,7 @@ test("Windows relaunch activation and deep links use distinct named-pipe handler
     path.join(__dirname, "fixtures/windows-launch-activation.ps1"),
     "-SourcePath",
     path.join(__dirname, "../TokenTrackerWin/SingleInstance.cs"),
-  ], { encoding: "utf8", timeout: 30000 });
+  ], { encoding: "utf8", timeout: 90_000 });
 
   assert.match(output, /PASS: activation and deep links remain distinct/);
 });
