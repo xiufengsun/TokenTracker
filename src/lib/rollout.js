@@ -14223,7 +14223,7 @@ function normalizeOpenSquillaUsageRow(row) {
     output_tokens: row.output_tokens,
     reasoning_tokens: row.reasoning_tokens,
     cached_tokens: row.cache_read_tokens,
-    cache_write_tokens: row.cache_write_tokens,
+    cache_creation_input_tokens: row.cache_write_tokens,
     total_tokens: row.total_tokens,
   });
   const timestampMs = coerceEpochMs(row.completed_at_ms);
