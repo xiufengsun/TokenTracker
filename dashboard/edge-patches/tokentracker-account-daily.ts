@@ -232,6 +232,14 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "kimi-k2.5-free": { input: 0, output: 0, cache_read: 0 },
   "kimi-k2.6": { input: 0.95, output: 4, cache_read: 0.16 },
   "kimi-k2.7-code": { input: 0.95, output: 4, cache_read: 0.19 },
+  // Kimi K3.1 Pro / Highspeed (official USD list https://platform.kimi.ai/ 2026-10-25).
+  // Must precede kimi-k3: substring "kimi-k3" would otherwise bill k3.1 at k3 rates.
+  "kimi-k3.1-pro": { input: 2, output: 10, cache_read: 0.2, cache_write: 2 },
+  "kimi-k3.1-pro-highspeed": { input: 4, output: 20, cache_read: 0.2, cache_write: 4 },
+  "k3.1-pro": { input: 2, output: 10, cache_read: 0.2, cache_write: 2 },
+  "k3.1pro": { input: 2, output: 10, cache_read: 0.2, cache_write: 2 },
+  "k3.1-pro-highspeed": { input: 4, output: 20, cache_read: 0.2, cache_write: 4 },
+  "k3.1pro-highspeed": { input: 4, output: 20, cache_read: 0.2, cache_write: 4 },
   // Kimi K3 (released 2026-07-16; reported rates $3/M in, $15/M out, $0.30/M
   // cached). Kimi Code records the alias as bare "k3" (kimi-code/k3), hence
   // the separate "k3" exact key below. Not yet in LiteLLM.
@@ -517,9 +525,16 @@ function getModelPricing(model: string, source = "") {
   // of the $0.20/$0.50 MTok fast-tier rate (15x / 30x overestimate).
   if (lower.includes("grok-4-1-fast")) return MODEL_PRICING["grok-4-1-fast-non-reasoning"];
   if (lower.includes("grok-4")) return MODEL_PRICING["grok-4"];
+  // k3.1-pro-highspeed before k3.1-pro before kimi-k3 (substring trap).
+  if (lower.includes("kimi-k3.1-pro-highspeed") || lower.includes("k3.1-pro-highspeed") || lower.includes("k3.1pro-highspeed")) {
+    return MODEL_PRICING["kimi-k3.1-pro-highspeed"];
+  }
+  if (lower.includes("kimi-k3.1-pro") || lower.includes("k3.1-pro") || lower.includes("k3.1pro")) {
+    return MODEL_PRICING["kimi-k3.1-pro"];
+  }
   if (lower.includes("kimi-k3")) return MODEL_PRICING["kimi-k3"];
   // Bare "k3" alias from Kimi Code (or provider-prefixed "*/k3"); the exact
-  // key above only catches the unprefixed form.
+  // key above only catches the unprefixed form. Do not treat k3.1* as bare k3.
   if (lower === "k3" || lower.endsWith("/k3")) return MODEL_PRICING["kimi-k3"];
   if (lower.includes("kimi-k2.7-code")) return MODEL_PRICING["kimi-k2.7-code"];
   if (lower.includes("kimi-k2.6")) return MODEL_PRICING["kimi-k2.6"];

@@ -427,6 +427,48 @@
       "output": 4,
       "cache_read": 0.19
     },
+    "kimi-k3.1-pro": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.2,
+      "cache_write": 2,
+      "note": "Kimi K3.1 Pro (API id kimi-k3.1-pro). Official USD list from https://platform.kimi.ai/ : $2/M input, $10/M output, $2/M cache write (default 5m TTL), $0.20/M cache hit. Flat 1M context; no context-length tiers. Verified 2026-10-25. Distinct from kimi-k3 ($3/$15)."
+    },
+    "kimi-k3.1-pro-highspeed": {
+      "input": 4,
+      "output": 20,
+      "cache_read": 0.2,
+      "cache_write": 4,
+      "note": "Kimi K3.1 Pro Highspeed (API id kimi-k3.1-pro-highspeed). Official USD list from https://platform.kimi.ai/ : $4/M input, $20/M output, $4/M cache write (default 5m TTL), $0.20/M cache hit. Same intelligence as K3.1 Pro at higher speed. Verified 2026-10-25."
+    },
+    "k3.1-pro": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.2,
+      "cache_write": 2,
+      "note": "Bare/compact alias for kimi-k3.1-pro. Same official rates."
+    },
+    "k3.1pro": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.2,
+      "cache_write": 2,
+      "note": "Compact alias (no hyphen) for kimi-k3.1-pro. Same official rates."
+    },
+    "k3.1-pro-highspeed": {
+      "input": 4,
+      "output": 20,
+      "cache_read": 0.2,
+      "cache_write": 4,
+      "note": "Bare alias for kimi-k3.1-pro-highspeed. Same official rates."
+    },
+    "k3.1pro-highspeed": {
+      "input": 4,
+      "output": 20,
+      "cache_read": 0.2,
+      "cache_write": 4,
+      "note": "Compact alias for kimi-k3.1-pro-highspeed. Same official rates."
+    },
     "kimi-k3": {
       "input": 3,
       "output": 15,
@@ -784,6 +826,30 @@
     {
       "match": "kimi-k2.7-code",
       "ref": "kimi-k2.7-code"
+    },
+    {
+      "match": "kimi-k3.1-pro-highspeed",
+      "ref": "kimi-k3.1-pro-highspeed"
+    },
+    {
+      "match": "k3.1-pro-highspeed",
+      "ref": "kimi-k3.1-pro-highspeed"
+    },
+    {
+      "match": "k3.1pro-highspeed",
+      "ref": "kimi-k3.1-pro-highspeed"
+    },
+    {
+      "match": "kimi-k3.1-pro",
+      "ref": "kimi-k3.1-pro"
+    },
+    {
+      "match": "k3.1-pro",
+      "ref": "kimi-k3.1-pro"
+    },
+    {
+      "match": "k3.1pro",
+      "ref": "kimi-k3.1-pro"
     },
     {
       "match": "kimi-k3",

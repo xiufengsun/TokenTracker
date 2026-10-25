@@ -188,6 +188,64 @@ test("matcher: Kimi K3 aliases resolve to curated k3 rates (not the kimi-k2.5 fa
   }
 });
 
+test("matcher: Kimi K3.1 Pro / Highspeed resolve to official rates (not kimi-k3 fuzzy)", () => {
+  const curated = require("../src/lib/pricing/curated-overrides.json");
+  const litellm = {};
+  const pro = [
+    "kimi-k3.1-pro",
+    "KIMI-K3.1-PRO",
+    "k3.1-pro",
+    "k3.1pro",
+    "moonshot/kimi-k3.1-pro",
+    "openrouter/moonshotai/kimi-k3.1-pro",
+  ];
+  const highspeed = [
+    "kimi-k3.1-pro-highspeed",
+    "k3.1-pro-highspeed",
+    "k3.1pro-highspeed",
+    "moonshot/kimi-k3.1-pro-highspeed",
+  ];
+  for (const model of pro) {
+    const r = matcher.lookupPricing(model, { curated, litellm, source: "kimi" });
+    assert.equal(r.hit, true, `${model} should resolve`);
+    assert.equal(r.value.input, 2, `${model} input`);
+    assert.equal(r.value.output, 10, `${model} output`);
+    assert.equal(r.value.cache_read, 0.2, `${model} cache_read`);
+    assert.equal(r.value.cache_write, 2, `${model} cache_write`);
+    assert.notEqual(r.value.input, 3, `${model} must not inherit kimi-k3 $3 input`);
+  }
+  for (const model of highspeed) {
+    const r = matcher.lookupPricing(model, { curated, litellm, source: "kimi" });
+    assert.equal(r.hit, true, `${model} should resolve`);
+    assert.equal(r.value.input, 4, `${model} input`);
+    assert.equal(r.value.output, 20, `${model} output`);
+    assert.equal(r.value.cache_read, 0.2, `${model} cache_read`);
+    assert.equal(r.value.cache_write, 4, `${model} cache_write`);
+  }
+  // Regression: plain k3 still at k3 rates
+  const k3 = matcher.lookupPricing("kimi-k3", { curated, litellm });
+  assert.equal(k3.value.input, 3);
+  assert.equal(k3.value.output, 15);
+});
+
+test("index: Kimi K3.1 Pro and gemini-4-argon priced via public API", () => {
+  const pricing = require("../src/lib/pricing");
+  const pro = pricing.getModelPricingInfo("kimi-k3.1-pro");
+  assert.equal(pro.status, "priced");
+  assert.equal(pro.input, 2);
+  assert.equal(pro.output, 10);
+  const hs = pricing.getModelPricingInfo("kimi-k3.1-pro-highspeed");
+  assert.equal(hs.status, "priced");
+  assert.equal(hs.input, 4);
+  assert.equal(hs.output, 20);
+  // Gemini 4 Argon already curated at Google introductory list rate
+  const argon = pricing.getModelPricingInfo("gemini-4-argon");
+  assert.equal(argon.status, "priced");
+  assert.equal(argon.input, 2);
+  assert.equal(argon.output, 10);
+  assert.equal(argon.cache_read, 0.1);
+});
+
 test("matcher: lookupPricing fuzzy match restores `digit-digit` to `digit.digit` (droid GLM parity)", () => {
   // Droid dash-normalizes upstream `GLM-5.1` to `glm-5-1`, but curated keys
   // are dot-delimited. The matcher must retry a dot-restored variant of the

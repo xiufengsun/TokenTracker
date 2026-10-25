@@ -149,6 +149,8 @@ test("canonical pricing block retains regression-prone entries and matcher order
     '"composer-2.5"',
     '"composer-2.5-fast"',
     '"gemini-4-argon"',
+    '"kimi-k3.1-pro"',
+    '"kimi-k3.1-pro-highspeed"',
     '"glm-5.3"',
     '"glm-5.3-flash"',
     '"deepseek-v4.1-flash"',
@@ -197,6 +199,9 @@ test("canonical pricing block retains regression-prone entries and matcher order
   );
   order('lower.includes("grok-4.5"))', 'lower.includes("grok-4"))');
   order('lower.includes("gemini-4-argon")', 'lower.includes("gemini-3"))');
+  order('lower.includes("kimi-k3.1-pro-highspeed")', 'lower.includes("kimi-k3.1-pro")');
+  order('lower.includes("kimi-k3.1-pro")', 'lower.includes("kimi-k3")');
+  order('lower.includes("kimi-k3")', 'lower.includes("kimi")');
   order('lower.includes("composer-2.5") && lower.includes("fast")', 'lower.includes("composer"))');
   order('/haiku-5[.-]5(?:$|[^0-9.])/', 'lower.includes("haiku"))');
   // GLM-5.3 Flash is a distinct cheap SKU ($0.15/$0.50 vs the flagship's
@@ -496,4 +501,37 @@ test("all cloud cost paths retain DeepSeek V4 peak/off-peak pricing tiers", () =
     /ma\.totalCostUsd \+= subscriptionBacked/,
     "model breakdown must price each pricing-tier row before collapsing models",
   );
+});
+
+test("Kimi K3.1 Pro / Highspeed priced distinctly from kimi-k3 locally and in all cloud paths", () => {
+  const { getModelPricing: localPricing } = require("../src/lib/pricing");
+  const cases = [
+    ["kimi-k3.1-pro", { input: 2, output: 10, cache_read: 0.2, cache_write: 2 }],
+    ["k3.1pro", { input: 2, output: 10, cache_read: 0.2, cache_write: 2 }],
+    ["kimi-k3.1-pro-highspeed", { input: 4, output: 20, cache_read: 0.2, cache_write: 4 }],
+    ["moonshot/kimi-k3.1-pro-highspeed", { input: 4, output: 20, cache_read: 0.2, cache_write: 4 }],
+  ];
+  for (const name of [CANONICAL, ...MIRRORS]) {
+    const { code } = transformSync(extractBlock(name), { loader: "ts", target: "es2020" });
+    const edgePricing = vm.runInNewContext(`${code}\ngetModelPricing;`);
+    for (const [model, rates] of cases) {
+      assert.deepEqual(
+        JSON.parse(JSON.stringify(edgePricing(model))),
+        rates,
+        `${name}: ${model}`,
+      );
+      assert.equal(localPricing(model).input, rates.input, `local ${model}`);
+      assert.equal(localPricing(model).output, rates.output, `local ${model}`);
+    }
+    assert.notDeepEqual(
+      JSON.parse(JSON.stringify(edgePricing("kimi-k3.1-pro"))),
+      JSON.parse(JSON.stringify(edgePricing("kimi-k3"))),
+      `${name}: k3.1-pro must not inherit kimi-k3`,
+    );
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(edgePricing("gemini-4-argon"))),
+      { input: 2, output: 10, cache_read: 0.1, cache_write: 0 },
+      `${name}: gemini-4-argon`,
+    );
+  }
 });
