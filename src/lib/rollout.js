@@ -14108,6 +14108,240 @@ async function parseLmstudioIncremental({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// OpenSquilla
+//
+// Read only the finalized usage ledger's model rows. Transcript entries and
+// message content are not needed for token attribution and are never selected.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const OPENSQUILLA_SOURCE = "opensquilla";
+
+function resolveOpenSquillaPath(value, home) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return null;
+  if (raw === "~") return path.resolve(home);
+  if (raw.startsWith("~/") || raw.startsWith("~\\")) {
+    return path.resolve(home, raw.slice(2));
+  }
+  return path.resolve(raw);
+}
+
+function resolveOpenSquillaDbPaths(env = process.env, deps = {}) {
+  const home = deps.home || env.HOME || env.USERPROFILE || os.homedir();
+  const platform = deps.platform || process.platform;
+  const dbOverride = resolveOpenSquillaPath(env.TOKENTRACKER_OPENSQUILLA_DB, home);
+  if (dbOverride) return [dbOverride];
+
+  const gatewayStateDir = resolveOpenSquillaPath(env.OPENSQUILLA_GATEWAY_STATE_DIR, home);
+  if (gatewayStateDir) return [path.join(gatewayStateDir, "sessions.db")];
+
+  const stateHome = resolveOpenSquillaPath(env.OPENSQUILLA_STATE_DIR, home);
+  if (stateHome) return [path.join(stateHome, "state", "sessions.db")];
+
+  const profileHomeOverride = typeof env.OPENSQUILLA_HOME === "string"
+    ? env.OPENSQUILLA_HOME.trim()
+    : "";
+  const profileOverride = typeof env.OPENSQUILLA_PROFILE === "string"
+    ? env.OPENSQUILLA_PROFILE.trim()
+    : "";
+  if (profileHomeOverride || profileOverride) {
+    const profilesRoot = resolveOpenSquillaPath(
+      profileHomeOverride || path.join(home, ".opensquilla", "profiles"),
+      home,
+    );
+    const profile = profileOverride || "default";
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(profile)) return [];
+    return [path.join(profilesRoot, profile, "state", "sessions.db")];
+  }
+
+  const paths = [path.join(home, ".opensquilla", "state", "sessions.db")];
+  let userDataRoot;
+  if (platform === "win32") {
+    userDataRoot = env.APPDATA || path.join(home, "AppData", "Roaming");
+  } else if (platform === "darwin") {
+    userDataRoot = path.join(home, "Library", "Application Support");
+  } else {
+    userDataRoot = env.XDG_CONFIG_HOME || path.join(home, ".config");
+  }
+  paths.unshift(path.join(
+    userDataRoot,
+    "@opensquilla",
+    "desktop-electron",
+    "opensquilla",
+    "state",
+    "sessions.db",
+  ));
+
+  const seen = new Set();
+  return paths.filter((dbPath) => {
+    const resolved = path.resolve(dbPath);
+    const key = platform === "win32" ? resolved.toLowerCase() : resolved;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function readOpenSquillaUsageRows(dbPath, sqliteOptions = {}) {
+  if (!dbPath || !fssync.existsSync(dbPath)) return [];
+  const options = {
+    label: "OpenSquilla",
+    maxBuffer: 32 * 1024 * 1024,
+    timeout: 30_000,
+    ...sqliteOptions,
+    readOnly: true,
+    throwOnReadFailure: true,
+  };
+  const tables = new Set(
+    (await readSqliteJsonRowsAsync(
+      dbPath,
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('usage_events','usage_event_items')",
+      options,
+    )).map((row) => row?.name).filter(Boolean),
+  );
+  if (!tables.has("usage_events") || !tables.has("usage_event_items")) return [];
+  const sql = [
+    "SELECT e.event_id, e.completed_at_ms, i.ordinal,",
+    "COALESCE(i.model, e.model) AS model, i.input_tokens, i.output_tokens,",
+    "i.reasoning_tokens, i.cache_read_tokens, i.cache_write_tokens, i.total_tokens",
+    "FROM usage_events AS e",
+    "JOIN usage_event_items AS i ON i.event_id = e.event_id",
+    "WHERE e.status = 'finalized' AND e.completed_at_ms IS NOT NULL",
+    "ORDER BY e.completed_at_ms, e.event_id, i.ordinal",
+  ].join(" ");
+  return readSqliteJsonRowsAsync(dbPath, sql, options);
+}
+
+function normalizeOpenSquillaUsageRow(row) {
+  const eventId = typeof row?.event_id === "string" ? row.event_id.trim() : "";
+  if (!eventId || row?.ordinal == null) return null;
+
+  // OpenSquilla stores input as a cache-inclusive total and reasoning as an
+  // output subset; normalize both before writing TokenTracker queue rows.
+  const totals = normalizeLocalStudioTokens({
+    input_tokens: row.input_tokens,
+    output_tokens: row.output_tokens,
+    reasoning_tokens: row.reasoning_tokens,
+    cached_tokens: row.cache_read_tokens,
+    cache_write_tokens: row.cache_write_tokens,
+    total_tokens: row.total_tokens,
+  });
+  const timestampMs = coerceEpochMs(row.completed_at_ms);
+  const bucketStart = timestampMs
+    ? toUtcHalfHourStart(new Date(timestampMs).toISOString())
+    : null;
+  if (!totals || !bucketStart) return null;
+
+  return {
+    key: "opensquilla:" + eventId + ":" + String(toNonNegativeInt(row.ordinal)),
+    model: normalizeModelInput(row.model) || DEFAULT_MODEL,
+    bucketStart,
+    totals,
+  };
+}
+
+async function parseOpenSquillaIncremental({
+  dbPaths,
+  cursors,
+  queuePath,
+  onProgress,
+  env,
+  sqliteOptions,
+} = {}) {
+  await ensureDir(path.dirname(queuePath));
+  const priorState = cursors.opensquilla && typeof cursors.opensquilla === "object"
+    ? cursors.opensquilla
+    : {};
+  const messages = priorState.messages && typeof priorState.messages === "object"
+    ? priorState.messages
+    : {};
+  const fingerprints = priorState.fingerprints && typeof priorState.fingerprints === "object"
+    ? { ...priorState.fingerprints }
+    : {};
+  const requestedPaths = Array.isArray(dbPaths) && dbPaths.length
+    ? dbPaths
+    : resolveOpenSquillaDbPaths(env || process.env);
+  const seenPaths = new Set();
+  const availablePaths = requestedPaths.filter((dbPath) => {
+    if (typeof dbPath !== "string" || !dbPath.trim() || !fssync.existsSync(dbPath)) return false;
+    const resolved = path.resolve(dbPath);
+    const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    if (seenPaths.has(key)) return false;
+    seenPaths.add(key);
+    return true;
+  });
+  if (availablePaths.length === 0) {
+    cursors.opensquilla = { ...priorState, messages, fingerprints, updatedAt: new Date().toISOString() };
+    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+  }
+
+  const pathFingerprints = new Map();
+  let databaseChanged = false;
+  for (const dbPath of availablePaths) {
+    const key = path.resolve(dbPath);
+    const fingerprint = sqliteSidecarFingerprint(dbPath);
+    pathFingerprints.set(key, fingerprint);
+    if (!fingerprints[key] || !sameSqliteFingerprint(fingerprint, fingerprints[key])) {
+      databaseChanged = true;
+    }
+  }
+  if (!databaseChanged) {
+    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+  }
+
+  // The Desktop profile is first in the default path list. If a migrated CLI
+  // profile retains the same event IDs, prefer the active Desktop copy and
+  // count each model row only once.
+  const rowsByEventItem = new Map();
+  for (const dbPath of availablePaths) {
+    const dbRows = await readOpenSquillaUsageRows(dbPath, sqliteOptions);
+    for (const row of dbRows) {
+      const eventId = typeof row?.event_id === "string" ? row.event_id.trim() : "";
+      if (!eventId || row?.ordinal == null) continue;
+      const key = eventId + ":" + String(toNonNegativeInt(row.ordinal));
+      if (!rowsByEventItem.has(key)) rowsByEventItem.set(key, row);
+    }
+  }
+  const rows = Array.from(rowsByEventItem.values());
+  const hourlyState = normalizeHourlyState(cursors?.hourly);
+  const touchedBuckets = new Set();
+  const cb = typeof onProgress === "function" ? onProgress : null;
+  let eventsAggregated = 0;
+  for (let index = 0; index < rows.length; index++) {
+    const event = normalizeOpenSquillaUsageRow(rows[index]);
+    if (event && reconcilePassiveUsageEvent({
+      event,
+      source: OPENSQUILLA_SOURCE,
+      messages,
+      hourlyState,
+      touchedBuckets,
+    })) eventsAggregated += 1;
+    if (cb) {
+      cb({
+        index: index + 1,
+        total: rows.length,
+        recordsProcessed: index + 1,
+        eventsAggregated,
+        bucketsQueued: touchedBuckets.size,
+      });
+    }
+  }
+
+  for (const dbPath of availablePaths) {
+    const key = path.resolve(dbPath);
+    const before = pathFingerprints.get(key);
+    const after = sqliteSidecarFingerprint(dbPath);
+    fingerprints[key] = sameSqliteFingerprint(before, after) ? after : before;
+  }
+  const bucketsQueued = await enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets });
+  const updatedAt = new Date().toISOString();
+  hourlyState.updatedAt = updatedAt;
+  cursors.hourly = hourlyState;
+  cursors.opensquilla = { messages, fingerprints, updatedAt };
+  return { recordsProcessed: rows.length, eventsAggregated, bucketsQueued };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Unsloth Studio
 //
 // Durable inference usage lives in `studio.db`. The SQL projections below
@@ -25865,6 +26099,10 @@ module.exports = {
   normalizeLocalStudioTokens,
   readLmstudioFileRecords,
   parseLmstudioIncremental,
+  resolveOpenSquillaDbPaths,
+  readOpenSquillaUsageRows,
+  normalizeOpenSquillaUsageRow,
+  parseOpenSquillaIncremental,
   resolveUnslothDbPath,
   readUnslothUsageRows,
   normalizeUnslothUsageRow,

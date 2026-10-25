@@ -11,6 +11,7 @@ const SPECIAL_PROVIDER_NAMES = {
   muse: "Muse Code",
   pidots: "Pi · Dots",
   lmstudio: "LM Studio",
+  opensquilla: "OpenSquilla",
   unsloth: "Unsloth Studio",
 };
 

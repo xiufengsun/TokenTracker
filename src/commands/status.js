@@ -83,6 +83,7 @@ const {
   resolveZedDbPath,
   resolveLmstudioHome,
   resolveLmstudioLogFiles,
+  resolveOpenSquillaDbPaths,
   resolveUnslothDbPath,
   resolveQoderDbPaths,
   resolveQoderCnDbPaths,
@@ -828,6 +829,9 @@ async function cmdStatus(argv = []) {
   const lmstudioHome = resolveLmstudioHome(process.env);
   const lmstudioLogFiles = await resolveLmstudioLogFiles(process.env);
   const lmstudioInstalled = lmstudioLogFiles.length > 0;
+  const opensquillaDbPaths = resolveOpenSquillaDbPaths(process.env)
+    .filter((dbPath) => fssync.existsSync(dbPath));
+  const opensquillaInstalled = opensquillaDbPaths.length > 0;
   const unslothDbPath = resolveUnslothDbPath(process.env);
   const unslothInstalled = Boolean(unslothDbPath && fssync.existsSync(unslothDbPath));
 
@@ -1219,6 +1223,9 @@ async function cmdStatus(argv = []) {
         unsloth: unslothInstalled
           ? { installed: true, detail: unslothDbPath }
           : { installed: false },
+        opensquilla: opensquillaInstalled
+          ? { installed: true, detail: opensquillaDbPaths.join(" | ") }
+          : { installed: false },
         devin: devinInstalled
           ? { installed: true, detail: devinDbPath }
           : { installed: false },
@@ -1436,6 +1443,9 @@ async function cmdStatus(argv = []) {
         : null,
       unslothInstalled
         ? `- Unsloth Studio: passive reader (${unslothDbPath})`
+        : null,
+      opensquillaInstalled
+        ? "- OpenSquilla: passive reader (" + opensquillaDbPaths.join(" | ") + ")"
         : null,
       devinInstalled
         ? `- Devin CLI: passive reader (${devinDbPath})`
