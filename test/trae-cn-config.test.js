@@ -164,6 +164,25 @@ test("resolveTraeCnStoragePath finds the classic client through a junction", { s
   );
 });
 
+test("resolveTraeCnStoragePath hands a non-file storage.json to the reader (fail-closed)", () => {
+  const parent = makeTraeCnHome();
+  const soloHome = path.join(parent, "TRAE SOLO CN");
+  const storagePath = path.join(soloHome, "User", "globalStorage", "storage.json");
+  fs.mkdirSync(storagePath, { recursive: true }); // directory named storage.json
+  assert.equal(
+    resolveTraeCnStoragePath({ platform: "win32", home: "C:\\u", env: { APPDATA: parent } }),
+    storagePath,
+  );
+  assert.throws(
+    () => readTraeCnAuthFromStorage({ platform: "win32", home: "C:\\u", env: { APPDATA: parent } }),
+    (error) => {
+      assert.equal(error.code, "TRAE_CN_STORAGE_UNREADABLE");
+      assert.match(error.message, /could not be read/);
+      return true;
+    },
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Storage auth reading: plaintext + encrypted tc v5
 // ---------------------------------------------------------------------------

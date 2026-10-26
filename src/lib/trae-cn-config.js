@@ -103,15 +103,19 @@ function resolveTraeCnStoragePath(options = {}) {
   if (!parent) return null;
   for (const dir of TRAE_CN_APP_DIRS) {
     const candidate = path.join(parent, dir, "User", "globalStorage", "storage.json");
-    let present;
-    try { present = fs.statSync(candidate).isFile(); }
-    catch (err) {
+    try {
+      // Any successful stat means this client dir is the discovery hit —
+      // including a non-file path (e.g. a directory named storage.json).
+      // Hand that to the reader so EISDIR surfaces as TRAE_CN_STORAGE_UNREADABLE
+      // instead of silently skipping to the next client or reporting absent.
+      fs.statSync(candidate);
+      return candidate;
+    } catch (err) {
       // Permission failures must reach the reader's diagnostics, not
       // masquerade as an absent installation and silently drop an entire
       // usage history (same discovery policy as trae-db.js).
-      present = err.code !== "ENOENT" && err.code !== "ENOTDIR";
+      if (err.code !== "ENOENT" && err.code !== "ENOTDIR") return candidate;
     }
-    if (present) return candidate;
   }
   return null;
 }
