@@ -52,6 +52,7 @@ internal sealed class DashboardWindow : Window
     private bool _backdropEnabled;
     private bool _exiting;
     private bool _oauthInFlight;
+    private long _oauthAttempt;
     private CancellationTokenSource? _oauthTimeout;
     private readonly OAuthLoginWindow _oauthLoginWindow = new();
     private Task? _initializationTask;
@@ -945,19 +946,23 @@ internal sealed class DashboardWindow : Window
     private void BeginNativeOAuth()
     {
         _oauthInFlight = true;
+        var attempt = ++_oauthAttempt;
         UpdateWebViewActivity();
         _oauthTimeout?.Cancel();
         _oauthTimeout?.Dispose();
         _oauthTimeout = new CancellationTokenSource();
-        _ = WaitForNativeOAuthTimeoutAsync(_oauthTimeout.Token);
+        _ = WaitForNativeOAuthTimeoutAsync(_oauthTimeout.Token, attempt);
     }
 
-    private async Task WaitForNativeOAuthTimeoutAsync(CancellationToken cancellationToken)
+    private async Task WaitForNativeOAuthTimeoutAsync(CancellationToken cancellationToken, long attempt)
     {
         try
         {
             await Task.Delay(TimeSpan.FromMinutes(10), cancellationToken);
-            await Dispatcher.InvokeAsync(ExpireNativeOAuth);
+            // Re-check attempt on the dispatcher: Cancel does not dequeue an
+            // already-queued InvokeAsync, so a stale timeout must not close a
+            // newer login's dedicated browser window.
+            await Dispatcher.InvokeAsync(() => ExpireNativeOAuth(attempt));
         }
         catch (OperationCanceledException)
         {
@@ -1002,8 +1007,9 @@ internal sealed class DashboardWindow : Window
         UpdateWebViewActivity();
     }
 
-    private void ExpireNativeOAuth()
+    private void ExpireNativeOAuth(long attempt)
     {
+        if (attempt != _oauthAttempt || !_oauthInFlight) return;
         _oauthLoginWindow.CloseTracked("oauth flow timed out");
         CompleteNativeOAuth();
     }

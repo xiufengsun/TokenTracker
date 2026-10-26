@@ -35,4 +35,8 @@ test("hidden and minimized dashboards suspend with OAuth and restore race protec
   assert.doesNotMatch(source, /--disable-background-timer-throttling|--disable-renderer-backgrounding|--disable-backgrounding-occluded-windows/);
   const oauth = source.slice(source.indexOf("private void BeginNativeOAuth()"), source.indexOf("private async Task WaitForNativeOAuthTimeoutAsync("));
   assert.match(oauth, /_oauthInFlight = true;[\s\S]*UpdateWebViewActivity/);
+  assert.match(oauth, /var attempt = \+\+_oauthAttempt;/);
+  assert.match(source, /WaitForNativeOAuthTimeoutAsync\(_oauthTimeout\.Token, attempt\)/);
+  assert.match(source, /ExpireNativeOAuth\(long attempt\)/);
+  assert.match(source, /if \(attempt != _oauthAttempt \|\| !_oauthInFlight\) return;/);
 });
