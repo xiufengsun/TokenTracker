@@ -14316,7 +14316,10 @@ async function parseOpenSquillaIncremental({
     }
   }
   const rows = Array.from(rowsByEventItem.values());
-  const hourlyState = normalizeHourlyState(cursors?.hourly);
+  // structuredClone so a failed enqueueTouchedBuckets cannot leave mutated
+  // totals committed while opensquilla.messages stays unchanged (retry would
+  // subtract again). Same pattern as TRAE / session reconcilers.
+  const hourlyState = structuredClone(normalizeHourlyState(cursors?.hourly));
   const touchedBuckets = new Set();
   const cb = typeof onProgress === "function" ? onProgress : null;
   let eventsAggregated = 0;

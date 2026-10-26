@@ -3,6 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const cp = require("node:child_process");
@@ -191,3 +192,68 @@ sqliteTest("OpenSquilla retracts observations when a previously synced database 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('OpenSquilla failed enqueue must not leave mutated hourly totals', async () => {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'opensquilla-fail-enqueue-'));
+  const originalAppend = fsp.appendFile;
+  const a = path.resolve('CLAUDE.md');
+  const b = path.resolve('README.md');
+  let failAppend = false;
+
+  fsp.appendFile = async (...args) => {
+    if (failAppend) throw new Error('simulated queue append failure');
+    return originalAppend(...args);
+  };
+
+  try {
+    const cursors = {};
+    const run = (dbPaths) => parseOpenSquillaIncremental({
+      dbPaths,
+      cursors,
+      queuePath: path.join(fixtureRoot, 'queue.jsonl'),
+      sqliteOptions: {
+        execFile: async (_cmd, args) => {
+          const sql = args.at(-1);
+          const db = args.at(-2);
+          if (String(sql).includes('sqlite_master')) {
+            return {
+              stdout: JSON.stringify([
+                { name: 'usage_events' },
+                { name: 'usage_event_items' },
+              ]),
+            };
+          }
+          return {
+            stdout: JSON.stringify([{
+              event_id: db === a ? 'a' : 'b',
+              ordinal: 0,
+              model: 'test-model',
+              completed_at_ms: 1790867104000,
+              input_tokens: db === a ? 100 : 50,
+              output_tokens: 0,
+              reasoning_tokens: 0,
+              cache_read_tokens: 0,
+              cache_write_tokens: 0,
+              total_tokens: db === a ? 100 : 50,
+            }]),
+          };
+        },
+      },
+    });
+
+    await run([a, b]);
+    assert.equal(Object.values(cursors.hourly.buckets)[0].totals.total_tokens, 150);
+    failAppend = true;
+    await assert.rejects(run([a]), /simulated queue append failure/);
+    assert.equal(Object.values(cursors.hourly.buckets)[0].totals.total_tokens, 150);
+    assert.equal(Object.keys(cursors.opensquilla.messages).length, 2);
+    failAppend = false;
+    await run([a]);
+    assert.equal(Object.values(cursors.hourly.buckets)[0].totals.total_tokens, 100);
+  } finally {
+    fsp.appendFile = originalAppend;
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
