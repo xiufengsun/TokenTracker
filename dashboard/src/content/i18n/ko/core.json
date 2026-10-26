@@ -159,6 +159,7 @@
   "limits.label.grok_imagine": "Imagine",
   "limits.label.grok_voice": "음성",
   "limits.label.grok_cursor": "Cursor",
+  "limits.grok.shares_are_used": "제품별 비율은 사용한 양의 몫입니다.",
   "limits.provider.claude": "Claude",
   "limits.provider.codex": "Codex",
   "limits.provider.cursor": "Cursor",

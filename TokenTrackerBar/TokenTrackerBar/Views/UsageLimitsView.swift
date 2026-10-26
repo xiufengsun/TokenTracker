@@ -348,9 +348,13 @@ struct UsageLimitsView: View {
                     // The per-product split is detail: it shows only while this
                     // provider is clicked open; otherwise the bar is the whole pool.
                     let showSegments = explainingProvider == id && !spec.segments.isEmpty
-                    limitRow(label: spec.label, pct: spec.pct, reset: spec.resetText, toolName: toolName, windowSeconds: spec.windowSeconds, resetDate: spec.resetDate, segments: spec.segments, showSegments: showSegments, productPool: spec.productPool, creditsDetail: spec.creditsDetail)
+                    limitRow(label: spec.label, pct: spec.pct, reset: spec.resetText, toolName: toolName, windowSeconds: spec.windowSeconds, resetDate: spec.resetDate, segments: spec.segments, showSegments: showSegments, creditsDetail: spec.creditsDetail)
                     if showSegments {
-                        segmentLegend(spec.segments, pct: spec.pct)
+                        segmentLegend(
+                            spec.segments,
+                            pct: spec.pct,
+                            note: settings.displayMode == .remaining && spec.productPool ? Strings.grokSharesAreUsed : nil
+                        )
                     }
                 }
                 if let sub = subscription {
@@ -692,13 +696,13 @@ struct UsageLimitsView: View {
         resetDate: Date? = nil,
         segments: [LimitSegment] = [],
         showSegments: Bool = false,
-        productPool: Bool = false,
         creditsDetail: String? = nil
     ) -> some View {
         let rawClamped = min(max(pct, 0), 100)
         let usedFraction = rawClamped / 100.0
-        // A segmented pool stays in used mode, like grok.com: its slices only add up to the headline that way.
-        let remainingMode = settings.displayMode == .remaining && !productPool
+        // The headline follows the selected mode. Product slices are points of
+        // the amount used, so they stack only in used mode.
+        let remainingMode = settings.displayMode == .remaining
         let displayValue = remainingMode ? (100 - rawClamped) : rawClamped
 
         // Unified threshold fill (green → amber → red), based on actual usage so
@@ -737,7 +741,7 @@ struct UsageLimitsView: View {
                 fillColor: fillColor,
                 pacePercent: pacePercent,
                 paceOver: paceOver,
-                segments: showSegments ? segments.map(\.pct) : []
+                segments: (showSegments && !remainingMode) ? segments.map(\.pct) : []
             )
             .animation(reduceMotion ? .none : .easeOut(duration: 0.5), value: displayValue)
 
@@ -771,7 +775,7 @@ struct UsageLimitsView: View {
     /// Dot + name + share for each slice of a segmented bar, aligned under the
     /// bar. One concatenated Text so entries wrap like the web legend without
     /// `Layout` (macOS 13+); non-breaking spaces keep each entry on one line.
-    private func segmentLegend(_ segments: [LimitSegment], pct: Double) -> some View {
+    private func segmentLegend(_ segments: [LimitSegment], pct: Double, note: String? = nil) -> some View {
         let fillColor = Color.limitBar(fraction: min(max(pct, 0), 100) / 100.0)
         let entries = segments.enumerated().map { index, segment -> Text in
             let name = segment.label.replacingOccurrences(of: " ", with: "\u{00A0}")
@@ -784,14 +788,24 @@ struct UsageLimitsView: View {
         }
         let legend = entries.dropFirst().reduce(entries.first ?? Text("")) { $0 + Text("   ") + $1 }
         let labelWidth = labelColumnWidth > 0 ? min(labelColumnWidth, Self.labelColumnMaxWidth) : 0
-        return legend
-            .font(.system(.caption2, design: .default))
-            .monospacedDigit()
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, labelWidth + Self.rowColumnSpacing)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(segments.map { "\($0.label) \(segmentPercentLabel($0.pct))" }.joined(separator: ", "))
+        let sharesLabel = segments.map { "\($0.label) \(segmentPercentLabel($0.pct))" }.joined(separator: ", ")
+        return VStack(alignment: .leading, spacing: 2) {
+            legend
+                .font(.system(.caption2, design: .default))
+                .monospacedDigit()
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let note, !note.isEmpty {
+                Text(note)
+                    .font(.system(.caption2, design: .default))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.leading, labelWidth + Self.rowColumnSpacing)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(note.map { "\(sharesLabel). \($0)" } ?? sharesLabel)
     }
 
     private func segmentPercentLabel(_ pct: Double) -> String {
@@ -1356,7 +1370,8 @@ private struct LimitWindowSpec: Identifiable {
     let resetText: String?
     /// Shares of `pct` drawn as one stacked bar plus a legend (Grok products).
     var segments: [LimitSegment] = []
-    /// The pool keeps its used orientation even before the first post-reset product.
+    /// These slices are points of one shared cap. The headline still follows
+    /// used/remaining; the stack is drawn only while the mode is used.
     var productPool: Bool = false
     var creditsDetail: String? = nil
 }
@@ -1447,12 +1462,7 @@ private struct LimitsExplainContent: View {
 
     /// The footnote explains the pace mark, so it follows the rows that draw one.
     private var footnoteRemaining: Bool {
-        specs.contains { isRemaining($0) && pace(for: $0).pacePercent != nil }
-    }
-
-    /// A segmented pool always reads as used, matching its row.
-    private func isRemaining(_ spec: LimitWindowSpec) -> Bool {
-        remainingMode && !spec.productPool
+        remainingMode && hasPaceMarker
     }
 
     private func pace(for spec: LimitWindowSpec) -> LimitPace.Result {
@@ -1463,7 +1473,7 @@ private struct LimitsExplainContent: View {
             usedFraction: min(max(spec.pct, 0), 100) / 100.0,
             windowSeconds: windowSeconds,
             secondsUntilReset: resetDate.timeIntervalSinceNow,
-            remainingMode: isRemaining(spec)
+            remainingMode: remainingMode
         )
     }
 
@@ -1475,7 +1485,7 @@ private struct LimitsExplainContent: View {
         let pace = pace(for: spec)
         var text = Strings.limitWindowExplainLine(
             label: spec.label, used: used, expected: pace.expectedPercent, over: pace.paceOver,
-            runsOutEta: pace.runsOutEta, projectedEnd: pace.projectedEnd, remainingMode: isRemaining(spec)
+            runsOutEta: pace.runsOutEta, projectedEnd: pace.projectedEnd, remainingMode: remainingMode
         )
         // Exact local reset instant (#248) — the row itself only shows a compact
         // relative countdown, so the popover carries the precise time.

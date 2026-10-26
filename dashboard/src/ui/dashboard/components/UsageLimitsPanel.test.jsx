@@ -525,12 +525,12 @@ describe("UsageLimitsPanel", () => {
     }));
 
     const group = screen.getByText("Grok Build").closest("[role='button']");
-    expect(within(group).getByText("3%")).toBeInTheDocument();
+    expect(within(group).getByText("97%")).toBeInTheDocument();
     const markers = group.querySelectorAll("div.absolute.top-0.h-full");
     expect(markers).toHaveLength(2);
-    expect(markers[1].style.left).toContain("14.285");
+    expect(markers[1].style.left).toContain("85.714");
     fireEvent.click(group);
-    expect(within(group).getByText(copy("limits.explain.body"))).toBeInTheDocument();
+    expect(within(group).getByText(copy("limits.explain.body_remaining"))).toBeInTheDocument();
 
     rerender(createElement(UsageLimitsPanel, {
       grok: { ...grok, primary_window: { ...grok.primary_window, used_percent: 0 } },
@@ -540,7 +540,7 @@ describe("UsageLimitsPanel", () => {
     expect(group.querySelectorAll("div.absolute.top-0.h-full")).toHaveLength(0);
   });
 
-  it("shows Grok's whole pool collapsed and splits it into product slices with a legend on click", () => {
+  it("shows Grok's remaining pool as one bar and lists used product shares on click", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-25T00:00:00.000Z"));
     const resetAt = "2026-10-01T00:00:00.000Z";
@@ -561,29 +561,30 @@ describe("UsageLimitsPanel", () => {
       displayMode: "remaining",
     }));
 
-    // Collapsed: one whole-pool bar, no slices or legend yet.
+    // Collapsed: one whole-pool bar in the selected remaining orientation.
     expect(document.querySelector("[data-limit-legend]")).toBeNull();
+    expect(document.querySelector("[data-limit-share-note]")).toBeNull();
     expect(document.querySelectorAll("[data-limit-segment]")).toHaveLength(0);
-    const group = screen.getByText("62%").closest("[role='button']");
-    // The pool stays "used" even in Remaining mode, so it equals the slices' sum.
-    expect(within(group).queryByText("38%")).toBeNull();
+    const group = screen.getByText("38%").closest("[role='button']");
+    expect(within(group).queryByText("62%")).toBeNull();
     // Products are legend entries, not rows with their own 0–100% track.
     const rowLabels = [...group.querySelectorAll("[data-limit-label]")].map((el) => el.textContent);
     expect(rowLabels).toEqual([copy("limits.label.grok_week")]);
-    // Pace mark in used orientation: one day of seven elapsed.
+    // Pace mark in remaining orientation: one day of seven elapsed.
     let markers = group.querySelectorAll("div.absolute.top-0.h-full");
     expect(markers).toHaveLength(2);
-    expect(markers[1].style.left).toContain("14.285");
+    expect(markers[1].style.left).toContain("85.714");
 
-    // Clicking the group reveals each product's share.
+    // Clicking the group reveals each product's used share. The bar stays a
+    // single remaining fill so the headline is not the sum of those shares.
     fireEvent.click(group);
     const legend = group.querySelector("[data-limit-legend]");
     expect(legend).not.toBeNull();
-    expect(group.querySelectorAll("[data-limit-segment]")).toHaveLength(4);
-    expect([...group.querySelectorAll("[data-limit-segment]")].map((el) => el.style.flexGrow)).toEqual(["45", "13", "3", "0.4"]);
-    expect(Number(group.querySelector("[data-limit-unallocated-used]").style.flexGrow)).toBeCloseTo(0.6);
-    expect(Number(group.querySelector("[data-limit-remainder]").style.flexGrow)).toBe(38);
-    expect(within(group).getByText("62%")).toBeInTheDocument();
+    expect(group.querySelectorAll("[data-limit-segment]")).toHaveLength(0);
+    expect(group.querySelector("[data-limit-share-note]")).not.toBeNull();
+    expect(within(group).getByText(copy("limits.grok.shares_are_used"))).toBeInTheDocument();
+    expect(within(group).getByText("38%")).toBeInTheDocument();
+    expect(within(group).queryByText("62%")).toBeNull();
     expect(within(legend).getByText("Grok Build")).toBeInTheDocument();
     expect(within(legend).getByText(copy("limits.label.grok_chat"))).toBeInTheDocument();
     expect(within(legend).getByText(copy("limits.label.grok_voice"))).toBeInTheDocument();
@@ -592,11 +593,11 @@ describe("UsageLimitsPanel", () => {
     expect(within(legend).getByText(`${copy("limits.bar.sub_one_percent")}%`)).toBeInTheDocument();
     markers = group.querySelectorAll("div.absolute.top-0.h-full");
     expect(markers).toHaveLength(2);
-    expect(markers[1].style.left).toContain("14.285");
-    expect(within(group).getByText(copy("limits.explain.body"))).toBeInTheDocument();
+    expect(markers[1].style.left).toContain("85.714");
+    expect(within(group).getByText(copy("limits.explain.body_remaining"))).toBeInTheDocument();
   });
 
-  it.each([[], [{ product: "GrokBuild", window: { used_percent: 0 } }]])("keeps the Grok pool in used mode after reset with products %j", (products) => {
+  it.each([[], [{ product: "GrokBuild", window: { used_percent: 0 } }]])("shows a full Grok pool in remaining mode after reset with products %j", (products) => {
     render(<UsageLimitsPanel order={["grok"]} displayMode="remaining" grok={{
       configured: true, period_type: "weekly",
       primary_window: { used_percent: 0 },
@@ -604,15 +605,16 @@ describe("UsageLimitsPanel", () => {
       products,
     }} />);
     const group = screen.getByRole("button", { name: /^Grok Build/ });
-    expect(within(group).getByText("0%")).toBeInTheDocument();
+    expect(within(group).getByText("100%")).toBeInTheDocument();
     expect(within(group).getByText("80%")).toBeInTheDocument();
     fireEvent.click(group);
     expect(group.querySelector("[data-limit-segments]")).toBeNull();
-    expect(within(group).getAllByText(copy("limits.explain.used", { label: copy("limits.label.grok_week"), used: "0" }))).toHaveLength(2);
+    expect(group.querySelector("[data-limit-share-note]")).toBeNull();
+    expect(within(group).getAllByText(copy("limits.explain.remaining", { label: copy("limits.label.grok_week"), used: "100" }))).toHaveLength(2);
   });
 
   it.each([98, 97])("budgets near-full Grok slices with %s percent in the first product", (first) => {
-    render(<UsageLimitsPanel order={["grok"]} displayMode="remaining" grok={{
+    render(<UsageLimitsPanel order={["grok"]} displayMode="used" grok={{
       configured: true, primary_window: { used_percent: first + 2 },
       products: [
         { product: "GrokBuild", window: { used_percent: first } },

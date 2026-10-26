@@ -122,6 +122,18 @@ enum Strings {
             return trimmed.isEmpty ? product : trimmed
         }
     }
+
+    /// Shown under the product legend in Remaining mode. The shares are points
+    /// of the amount used, so they do not add up to the remaining headline.
+    static var grokSharesAreUsed: String {
+        t(
+            "Product shares are portions of the amount used.",
+            "各产品百分比是已用部分的份额。",
+            "各產品百分比是已用部分的份額。",
+            "各製品の割合は、使用した分の内訳です。",
+            "제품별 비율은 사용한 양의 몫입니다."
+        )
+    }
     static var limitResetNow: String { t("now", "现在", "現在", "今", "지금") }
     static func kimiParallelLabel(_ count: Int) -> String {
         t("Parallel: \(count)", "并发：\(count)", "併發：\(count)", "並列：\(count)", "병렬: \(count)")

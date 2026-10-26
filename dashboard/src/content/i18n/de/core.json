@@ -413,6 +413,7 @@
   "limits.label.grok_imagine": "Imagine",
   "limits.label.grok_voice": "Voice",
   "limits.label.grok_cursor": "Cursor",
+  "limits.grok.shares_are_used": "Die Produktanteile sind Anteile der verbrauchten Menge.",
   "limits.label.opencode_go_5h": "5h",
   "limits.label.opencode_go_monthly": "Monatlich",
   "limits.label.qoder_credits": "Credits",

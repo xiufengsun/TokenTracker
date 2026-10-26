@@ -771,6 +771,7 @@ limits.label.grok_chat,ui,LimitsPage,UsageLimitsPanel,grok_chat,"Chat",,active
 limits.label.grok_imagine,ui,LimitsPage,UsageLimitsPanel,grok_imagine,"Imagine",,active
 limits.label.grok_voice,ui,LimitsPage,UsageLimitsPanel,grok_voice,"Voice",,active
 limits.label.grok_cursor,ui,LimitsPage,UsageLimitsPanel,grok_cursor,"Cursor",,active
+limits.grok.shares_are_used,ui,LimitsPage,UsageLimitsPanel,shares_are_used,"Product shares are portions of the amount used.",,active
 limits.provider.claude,ui,LimitsPage,UsageLimitsPanel,provider_claude,"Claude",,active
 limits.provider.codex,ui,LimitsPage,UsageLimitsPanel,provider_codex,"Codex",,active
 limits.provider.cursor,ui,LimitsPage,UsageLimitsPanel,provider_cursor,"Cursor",,active

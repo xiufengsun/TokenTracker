@@ -100,8 +100,9 @@ export const PROVIDER_LIMIT_SPECS = {
     // monthly for legacy credit counters. period_type comes from the billing
     // API (USAGE_PERIOD_TYPE_WEEKLY / MONTHLY) via grok-limits.js.
     // Products are shares of that same pool, not separate quotas, so they ride
-    // on the pool row as `segments` (one stacked bar, like grok.com) instead
-    // of rows of their own that read as independent 100% quotas.
+    // on the pool row as `segments` instead of rows that read as independent
+    // 100% quotas. The headline follows used/remaining. The stack itself is
+    // drawn only in used mode, where the slices add up to that headline.
     windows(data) {
       const period = typeof data.period_type === "string" ? data.period_type : null;
       const primaryLabelKey =

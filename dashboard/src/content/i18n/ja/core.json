@@ -159,6 +159,7 @@
   "limits.label.grok_imagine": "Imagine",
   "limits.label.grok_voice": "ボイス",
   "limits.label.grok_cursor": "Cursor",
+  "limits.grok.shares_are_used": "各製品の割合は、使用した分の内訳です。",
   "limits.provider.claude": "Claude",
   "limits.provider.codex": "Codex",
   "limits.provider.cursor": "Cursor",

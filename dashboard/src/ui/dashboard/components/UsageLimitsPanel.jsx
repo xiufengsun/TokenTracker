@@ -590,9 +590,14 @@ function LimitWindowSection({ rows, mode, extra = null, expanded = false }) {
     <>
       {rows.map(({ spec, pace, mode: rowMode = mode }) => {
         const pct = readWindowPct(spec.window, spec.pctField);
-        // The per-product split is detail: collapsed shows the whole pool,
-        // expanding the group splits the bar and adds the legend.
-        const segments = expanded ? spec.segments : null;
+        // Product shares are detail. Collapsed shows the whole pool. Expanding
+        // lists each share. The stacked bar is the used orientation only:
+        // in remaining mode the fill is what's left, and the shares stay in
+        // the legend because they are points of the amount used.
+        const shareSegments = expanded && spec.productPool && Array.isArray(spec.segments) && spec.segments.length > 0
+          ? spec.segments
+          : null;
+        const barSegments = shareSegments && rowMode !== LIMIT_DISPLAY_MODES.REMAINING ? shareSegments : null;
         return (
           <React.Fragment key={spec.key}>
             <LimitBar
@@ -600,13 +605,24 @@ function LimitWindowSection({ rows, mode, extra = null, expanded = false }) {
               pct={pct}
               reset={formatReset(readWindowReset(spec.window, spec.resetField))}
               mode={rowMode}
-              segments={segments}
+              segments={barSegments}
               pacePercent={pace.pacePercent}
               paceOver={pace.paceOver}
               title={buildWindowHoverDetail(spec, pace, rowMode)}
             />
-            {segments ? (
-              <LimitSegmentLegend segments={segments} fillColor={barColor(pct, LIMIT_DISPLAY_MODES.USED)} />
+            {shareSegments ? (
+              <>
+                <LimitSegmentLegend segments={shareSegments} fillColor={barColor(pct, LIMIT_DISPLAY_MODES.USED)} />
+                {rowMode === LIMIT_DISPLAY_MODES.REMAINING ? (
+                  <div
+                    data-limit-share-note=""
+                    className="-mt-0.5 text-[11px] leading-snug text-oai-gray-400 dark:text-oai-gray-500"
+                    style={{ paddingLeft: "calc(var(--tt-limits-label-w, 0px) + 0.5rem)" }}
+                  >
+                    {copy("limits.grok.shares_are_used")}
+                  </div>
+                ) : null}
+              </>
             ) : null}
           </React.Fragment>
         );
@@ -803,15 +819,11 @@ function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, bad
   const spec = PROVIDER_LIMIT_SPECS[id];
   if (!spec) return null;
   // Pace is computed once per window here and shared by the bar + the detail.
-  // A segmented pool always reads as used, like grok.com: its slices only add
-  // up to the headline in that orientation.
+  // Every window, including a segmented pool, follows the selected display mode.
   const rows = spec
     .windows(data)
     .filter((s) => s.window)
-    .map((s) => {
-      const rowMode = s.productPool ? LIMIT_DISPLAY_MODES.USED : mode;
-      return { spec: s, mode: rowMode, pace: paceForSpec(s, rowMode, now) };
-    });
+    .map((s) => ({ spec: s, mode, pace: paceForSpec(s, mode, now) }));
   const extra = renderProviderExtra(spec.extra, data);
   return (
     <ToolGroup

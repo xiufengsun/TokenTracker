@@ -164,6 +164,7 @@
   "limits.label.grok_imagine": "Imagine",
   "limits.label.grok_voice": "语音",
   "limits.label.grok_cursor": "Cursor",
+  "limits.grok.shares_are_used": "各产品百分比是已用部分的份额。",
   "limits.provider.claude": "Claude",
   "limits.provider.codex": "Codex",
   "limits.provider.cursor": "Cursor",
