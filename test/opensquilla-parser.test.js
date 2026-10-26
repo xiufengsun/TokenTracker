@@ -148,3 +148,46 @@ sqliteTest("OpenSquilla imports finalized model rows, normalizes cache/reasoning
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+sqliteTest("OpenSquilla retracts observations when a previously synced database disappears", async () => {
+  const { dir, dbPath } = createOpenSquillaDb();
+  try {
+    const queuePath = path.join(dir, "queue.jsonl");
+    const cursors = {};
+    const first = await parseOpenSquillaIncremental({ dbPaths: [dbPath], cursors, queuePath });
+    assert.equal(first.eventsAggregated, 2);
+    assert.equal(Object.keys(cursors.opensquilla.messages).length, 2);
+
+    // Desktop removed; remaining empty CLI DB should retract prior totals.
+    const emptyCli = path.join(dir, "cli-sessions.db");
+    executeSql(emptyCli, [
+      "CREATE TABLE usage_events (",
+      "event_id TEXT PRIMARY KEY, started_at_ms INTEGER NOT NULL,",
+      "completed_at_ms INTEGER, status TEXT NOT NULL, model TEXT);",
+      "CREATE TABLE usage_event_items (",
+      "event_id TEXT NOT NULL, ordinal INTEGER NOT NULL, model TEXT,",
+      "input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,",
+      "reasoning_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL,",
+      "cache_write_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,",
+      "PRIMARY KEY (event_id, ordinal));",
+    ].join("\n"));
+
+    const afterRemoval = await parseOpenSquillaIncremental({
+      dbPaths: [emptyCli],
+      cursors,
+      queuePath,
+    });
+    assert.ok(afterRemoval.eventsAggregated >= 2, "retracts prior observations");
+    assert.equal(Object.keys(cursors.opensquilla.messages).length, 0);
+    const fingerprints = Object.keys(cursors.opensquilla.fingerprints || {});
+    assert.deepEqual(fingerprints, [path.resolve(emptyCli)]);
+
+    // Temporary unavailability (no DB) must not wipe retained state.
+    cursors.opensquilla.messages = { "opensquilla:keep:0": { model: "x", bucketStart: "2026-10-01T00:00:00.000Z", totals: { input_tokens: 1, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_tokens: 1 } } };
+    const unavailable = await parseOpenSquillaIncremental({ dbPaths: [], cursors, queuePath });
+    assert.deepEqual(unavailable, { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 });
+    assert.equal(Object.keys(cursors.opensquilla.messages).length, 1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

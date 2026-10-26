@@ -14252,8 +14252,9 @@ async function parseOpenSquillaIncremental({
   const priorState = cursors.opensquilla && typeof cursors.opensquilla === "object"
     ? cursors.opensquilla
     : {};
+  // Copy before mutate so a failed queue append leaves committed cursors intact.
   const messages = priorState.messages && typeof priorState.messages === "object"
-    ? priorState.messages
+    ? { ...priorState.messages }
     : {};
   const fingerprints = priorState.fingerprints && typeof priorState.fingerprints === "object"
     ? { ...priorState.fingerprints }
@@ -14270,6 +14271,8 @@ async function parseOpenSquillaIncremental({
     seenPaths.add(key);
     return true;
   });
+  // No currently readable DB is treated as temporary unavailability — keep
+  // prior observations rather than wiping totals.
   if (availablePaths.length === 0) {
     cursors.opensquilla = { ...priorState, messages, fingerprints, updatedAt: new Date().toISOString() };
     return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
@@ -14277,12 +14280,22 @@ async function parseOpenSquillaIncremental({
 
   const pathFingerprints = new Map();
   let databaseChanged = false;
+  const currentPathKeys = new Set();
   for (const dbPath of availablePaths) {
     const key = path.resolve(dbPath);
+    currentPathKeys.add(key);
     const fingerprint = sqliteSidecarFingerprint(dbPath);
     pathFingerprints.set(key, fingerprint);
     if (!fingerprints[key] || !sameSqliteFingerprint(fingerprint, fingerprints[key])) {
       databaseChanged = true;
+    }
+  }
+  // A removed Desktop/CLI DB must also trigger reconciliation so orphaned
+  // observations can be retracted (fingerprint-only checks would miss this).
+  for (const key of Object.keys(fingerprints)) {
+    if (!currentPathKeys.has(key)) {
+      databaseChanged = true;
+      break;
     }
   }
   if (!databaseChanged) {
@@ -14307,8 +14320,10 @@ async function parseOpenSquillaIncremental({
   const touchedBuckets = new Set();
   const cb = typeof onProgress === "function" ? onProgress : null;
   let eventsAggregated = 0;
+  const currentKeys = new Set();
   for (let index = 0; index < rows.length; index++) {
     const event = normalizeOpenSquillaUsageRow(rows[index]);
+    if (event) currentKeys.add(event.key);
     if (event && reconcilePassiveUsageEvent({
       event,
       source: OPENSQUILLA_SOURCE,
@@ -14327,17 +14342,38 @@ async function parseOpenSquillaIncremental({
     }
   }
 
+  // Retract observations that disappeared with a removed database (or were
+  // deleted from the remaining DB). Overlapping event IDs keep Desktop-first
+  // totals via reconcilePassiveUsageEvent above.
+  for (const key of Object.keys(messages)) {
+    if (!key.startsWith("opensquilla:") || currentKeys.has(key)) continue;
+    const previous = messages[key];
+    if (previous?.model && previous?.bucketStart && previous?.totals) {
+      const oldBucket = getHourlyBucket(
+        hourlyState,
+        OPENSQUILLA_SOURCE,
+        previous.model,
+        previous.bucketStart,
+      );
+      subtractTotals(oldBucket.totals, previous.totals);
+      touchedBuckets.add(bucketKey(OPENSQUILLA_SOURCE, previous.model, previous.bucketStart));
+    }
+    delete messages[key];
+    eventsAggregated += 1;
+  }
+
+  const nextFingerprints = {};
   for (const dbPath of availablePaths) {
     const key = path.resolve(dbPath);
     const before = pathFingerprints.get(key);
     const after = sqliteSidecarFingerprint(dbPath);
-    fingerprints[key] = sameSqliteFingerprint(before, after) ? after : before;
+    nextFingerprints[key] = sameSqliteFingerprint(before, after) ? after : before;
   }
   const bucketsQueued = await enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets });
   const updatedAt = new Date().toISOString();
   hourlyState.updatedAt = updatedAt;
   cursors.hourly = hourlyState;
-  cursors.opensquilla = { messages, fingerprints, updatedAt };
+  cursors.opensquilla = { messages, fingerprints: nextFingerprints, updatedAt };
   return { recordsProcessed: rows.length, eventsAggregated, bucketsQueued };
 }
 
