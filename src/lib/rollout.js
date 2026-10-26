@@ -6790,12 +6790,14 @@ async function parseQoderDbIncremental({
 // → token (or → USD) rate, so fabricating one would push an invented number
 // into totals, trends, achievements and the cloud leaderboard. Rows without
 // authoritative tokens contribute conversation activity only, and
-// total_cost_usd stays 0. Transcript `usage.credits` is surfaced separately
-// (qoder-credits sidecar) rather than as a token estimate.
+// total_cost_usd stays 0. Transcript `usage.credits` is deliberately NOT copied
+// into bucket totals — there is no first-party credit→USD rate to book cost
+// from, and carrying it forward invites someone to divide by it later.
 //
 // conversation_count here follows this provider's existing per-response
-// convention (`: 1` per admitted assistant row). That field is NOT comparable
-// across providers — see the note in the Craft branch.
+// convention (`: 1` per admitted main-transcript row). That field is NOT
+// comparable across providers — same rule as the Claude branch's isMainSession
+// (#307) and Claude Science's `isRoot ? 1 : 0` (see the Claude Science parser).
 //
 // Old local.db is kept as a legacy fallback; both sources now use distinct
 // cursor namespaces (qoder vs qoderNew) via disjoint messageKey prefixes
@@ -6906,7 +6908,8 @@ function qoderNewTimestampMs(record) {
 // The epsilon floor is load-bearing: the activity gate below only needs "some
 // credits were reported", and upstream float noise like 1e-9 would otherwise
 // admit rows that carry no usage at all. Real Qoder credits observed in the
-// wild start around 0.099, so 1e-6 never suppresses genuine activity.
+// wild start around 0.2 (2026-10 CN corpus), so 1e-6 never suppresses genuine
+// activity.
 const MIN_QODER_CREDIT_ACTIVITY = 1e-6;
 
 function readQoderNominalCredits(usage) {
@@ -6947,6 +6950,9 @@ function normalizeQoderNewTokens(usage) {
       total_tokens: inp + cach + cc + out,
       billable_total_tokens: inp + cach + cc + out,
       credits: Number.isFinite(credits) && credits > 0 ? credits : 0,
+      // `credits` is carried for reference only — bucket totals never read it
+      // (no credit→token or credit→USD estimate exists), so this field must
+      // stay dead or someone will eventually divide by it.
       usage_precision: null,
     };
   }
@@ -7107,6 +7113,15 @@ async function parseQoderNewIncremental({
           projectRef = context?.projectRef || null;
         }
       }
+      // Same sessionId+msgId can appear in both the main transcript and a
+      // subagent transcript (mirrored id). currentByKey is last-wins and
+      // listQoderNewSessionFiles orders by localeCompare, so without this
+      // guard the subagent copy (conversation_count 0) could silently replace
+      // the main row's activity depending on file order. A main-session
+      // record always wins the shared key; duplicates of the same class keep
+      // last-wins (a streamed rewrite of one main row must not double count).
+      const existing = currentByKey.get(messageKey);
+      if (existing && !isMainSession) continue;
       currentByKey.set(messageKey, {
         totals,
         bucketStart,

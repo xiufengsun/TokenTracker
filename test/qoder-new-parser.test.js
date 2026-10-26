@@ -584,8 +584,25 @@ test("subagent transcript sharing a sessionId does not clobber or double-count",
     sessionFiles: [main, sub], cursors, queuePath, sourceKey: "qoder-cn", cursorKey: "qoderCnNew",
   });
   // Same sessionId + same message id collapses to one key by design; the point
-  // is that it never double counts and never drops the main row.
+  // is that it never double counts and the main-transcript copy wins the key
+  // regardless of file order — a subagent copy carries conversation_count 0.
   assert.equal(first.messagesProcessed, 1);
+  assert.equal(
+    cursors.qoderCnNew.messages["jsonl:sess-1|same-id"]?.totals.conversation_count,
+    1,
+    "main-transcript copy must win the shared key, not the subagent copy",
+  );
+  // Same outcome when the subagent file is walked first.
+  const cursorsReversed = {};
+  const reversed = await parseQoderNewIncremental({
+    sessionFiles: [sub, main], cursors: cursorsReversed, queuePath, sourceKey: "qoder-cn", cursorKey: "qoderCnNew",
+  });
+  assert.equal(reversed.messagesProcessed, 1);
+  assert.equal(
+    cursorsReversed.qoderCnNew.messages["jsonl:sess-1|same-id"]?.totals.conversation_count,
+    1,
+    "main-transcript copy wins even when the subagent file is walked first",
+  );
   const second = await parseQoderNewIncremental({
     sessionFiles: [main, sub], cursors, queuePath, sourceKey: "qoder-cn", cursorKey: "qoderCnNew",
   });
@@ -623,17 +640,29 @@ test("subagent rows are tracked but add no conversation activity", async (t) => 
   }
 });
 
-test("subagent detection is separator-agnostic (UNC backslashes)", async (t) => {
+test("subagent detection is separator-agnostic (backslash separators)", async (t) => {
   const tmp = tempDir();
   const { queuePath } = tempQueue();
-  t.after(() => { fs.rmSync(path.dirname(queuePath), { recursive: true, force: true }); });
-  // Simulate a WSL UNC walk where path.join emits backslashes.
-  const uncFile = `C:\\\\wsl$\\\\Ubuntu\\\\home\\\\u\\\\.qoder-cn\\\\proj\\\\sess\\\\subagents\\\\agent-1.jsonl`;
+  t.after(() => { fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(path.dirname(queuePath), { recursive: true, force: true }); });
+  // On POSIX a backslash is a plain filename character, so a UNC-shaped path
+  // can be created and read for real — this actually exercises the
+  // /[\\/]subagents[\\/]/ classification instead of only the unreadable-path
+  // skip that the pre-#review version of this test pinned.
+  const uncFile = path.join(tmp, "C:\\wsl$\\Ubuntu\\home\\u\\.qoder-cn\\proj\\sess\\subagents\\agent-1.jsonl");
+  fs.mkdirSync(path.dirname(uncFile), { recursive: true });
+  writeJsonl(uncFile, [
+    qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "s1", sessionId: "sess" }),
+  ]);
   const cursors = {};
   const res = await parseQoderNewIncremental({
     sessionFiles: [uncFile], cursors, queuePath, sourceKey: "qoder-cn", cursorKey: "qoderCnNew",
   });
-  assert.equal(res.messagesProcessed, 0, "unreadable path is skipped, not crashed on");
+  assert.equal(res.messagesProcessed, 1, "backslash path is read, not skipped");
+  const [key] = Object.keys(cursors.qoderCnNew.messages);
+  assert.equal(cursors.qoderCnNew.messages[key].totals.conversation_count, 0,
+    "backslash subagents/ path must classify as a subagent transcript");
+  assert.equal(queueRows(queuePath).filter((r) => r.source === "qoder-cn").length, 0,
+    "subagent row must not publish an all-zero bucket");
 });
 
 test("a subagent row that later gains real tokens is bucketed exactly once", async (t) => {
@@ -821,6 +850,7 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
     return;
   }
   let eligible = 0;
+  let noIdEligible = 0;
   const keys = new Set();
   for (const file of files) {
     for (const line of fs.readFileSync(file, "utf8").split("\n")) {
@@ -829,14 +859,28 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
       try { record = JSON.parse(line); } catch { continue; }
       const msg = record?.message;
       if (record?.type !== "assistant" || msg?.role !== "assistant" || typeof msg.usage !== "object" || !msg.usage) continue;
-      const hasToken = ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]
-        .some((f) => Number(msg.usage[f]) > 0);
+      // Mirror the parser's token fields, including its OpenAI-style
+      // `cached_tokens` fallback for cache reads.
+      const hasToken = ["input_tokens", "output_tokens", "cache_creation_input_tokens"]
+        .some((f) => Number(msg.usage[f]) > 0)
+        || Number(msg.usage.cache_read_input_tokens ?? msg.usage.cached_tokens) > 0;
       const hasCredit = [msg.usage.credits, msg.usage.original_credits]
         .some((v) => typeof v === "number" && Number.isFinite(v) && v >= 1e-6);
       if (!hasToken && !hasCredit && msg.usage.billable === false) continue;
+      // Mirror the parser's timestamp gate — rows without a parseable
+      // timestamp are dropped before admission, so they are not eligible.
+      const rawTs = record.timestamp ?? msg.timestamp;
+      const tsOk = typeof rawTs === "number"
+        ? Number.isFinite(rawTs)
+        : typeof rawTs === "string" && rawTs.trim() !== "" && !Number.isNaN(Date.parse(rawTs));
+      if (!tsOk) continue;
       eligible += 1;
       const id = msg.id || record.uuid;
-      if (id) keys.add(`${record.sessionId}|${id}`);
+      // Mirror qoderNewMessageKey's distinct-key rules: sessionId|id when a
+      // session id exists, bare id otherwise; rows with neither fall under a
+      // per-line fallback key the parser always admits.
+      if (id) keys.add(record.sessionId ? `${record.sessionId}|${id}` : id);
+      else noIdEligible += 1;
     }
   }
   if (eligible === 0) {
@@ -853,7 +897,7 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
     sessionFiles: files, cursors, queuePath, sourceKey: "qoder-cn", cursorKey: "qoderCnNew",
   });
   assert.ok(first.messagesProcessed > 0, "the gate must no longer erase the source");
-  assert.equal(first.messagesProcessed, keys.size, "admitted rows must equal distinct message keys");
+  assert.equal(first.messagesProcessed, keys.size + noIdEligible, "admitted rows must equal distinct message keys");
   assert.equal(second.eventsAggregated, 0, "backfill must be idempotent");
   for (const row of queueRows(queuePath).filter((r) => r.source === "qoder-cn")) {
     assert.equal(row.total_tokens, 0, "Qoder must not invent tokens");
