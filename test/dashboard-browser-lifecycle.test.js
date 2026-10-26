@@ -54,7 +54,7 @@ test("Windows hides and reuses the dashboard WebView2 on normal close", () => {
   assert.match(windowSource, /private bool _oauthInFlight/);
   assert.match(windowSource, /BeginNativeOAuth\(\)/);
   assert.match(windowSource, /CompleteNativeOAuth\(\)/);
-  assert.match(windowSource, /ExpireNativeOAuth\(\)/);
+  assert.match(windowSource, /ExpireNativeOAuth\(long attempt\)/);
   assert.match(windowSource, /t\.GetString\(\) == "authCompleted"/);
 
   const closingHandler = windowSource.match(
