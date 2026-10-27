@@ -554,6 +554,20 @@ test("credits must be a real number: type junk and sub-epsilon noise do not admi
   assert.equal(discounted.res.messagesProcessed, 1, "max(credits, original_credits) must drive admission");
 });
 
+test("a huge numeric timestamp is dropped, not a RangeError that kills the source", async (t) => {
+  // Nanosecond epochs pass coerceEpochMs but exceed the ECMAScript TimeClip
+  // limit; new Date(ms).toISOString() throws before the bucket helper's own
+  // invalid-date guard. One such row must not abort every later sync.
+  const { res, rows } = await runOne(t, [
+    qRec({ credits: 0.5, billable: false, input_tokens: 0, output_tokens: 0 },
+      { id: "ns-epoch", ts: 1_770_000_000_000_000_000 }),
+    qRec({ credits: 0.5, billable: false, input_tokens: 0, output_tokens: 0 },
+      { id: "good", ts: "2026-09-10T08:00:00.000Z" }),
+  ]);
+  assert.equal(res.messagesProcessed, 1, "the good row must still be admitted");
+  assert.equal(rows.reduce((s, r) => s + r.conversation_count, 0), 1);
+});
+
 test("mixed billable true/false in one file both count and keep distinct keys", async (t) => {
   const { res, rows } = await runOne(t, [
     qRec({ credits: 1.0, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "x1", ts: "2026-09-10T08:00:00.000Z" }),
@@ -852,9 +866,11 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
   // Mirror normalizeQoderNewTokens' per-field truncation and clamping so the
   // queued-token sum can be pinned exactly, whatever usage shapes the corpus
   // carries (0.4.x credit-only rows contribute 0; 0.1.8 precise-token rows
-  // contribute their real counts).
-  const fieldTokens = (usage, field) => {
-    let value = Number(usage[field] ?? 0);
+  // contribute their real counts). The cache field reproduces the parser's
+  // `??` chain exactly — present-but-null cache_read_input_tokens must fall
+  // through to cached_tokens, same as the parser.
+  const fieldTokens = (raw) => {
+    let value = Number(raw ?? 0);
     if (!Number.isFinite(value) || value < 0) value = 0;
     return Math.trunc(value);
   };
@@ -881,15 +897,19 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
         : typeof rawTs === "string" && rawTs.trim() !== "" && !Number.isNaN(Date.parse(rawTs));
       if (!tsOk) continue;
       eligible += 1;
-      expectedTokens += fieldTokens(msg.usage, "input_tokens")
-        + fieldTokens(msg.usage, "output_tokens")
-        + fieldTokens(msg.usage, msg.usage.cache_read_input_tokens !== undefined ? "cache_read_input_tokens" : "cached_tokens")
-        + fieldTokens(msg.usage, "cache_creation_input_tokens");
-      const id = msg.id || record.uuid;
-      // Mirror qoderNewMessageKey's distinct-key rules: sessionId|id when a
-      // session id exists, bare id otherwise; rows with neither fall under a
-      // per-line fallback key the parser always admits.
-      if (id) keys.add(record.sessionId ? `${record.sessionId}|${id}` : id);
+      expectedTokens += fieldTokens(msg.usage.input_tokens)
+        + fieldTokens(msg.usage.output_tokens)
+        + fieldTokens(msg.usage.cache_read_input_tokens ?? msg.usage.cached_tokens)
+        + fieldTokens(msg.usage.cache_creation_input_tokens);
+      // Mirror qoderNewMessageKey's fallback chain and normalizeMessageKeyPart's
+      // trim: message.id, then row uuid, then record id; sessionId (either case
+      // convention) qualifies the key when present. Rows with no id at all fall
+      // under a per-line fallback key the parser always admits.
+      const id = [msg.id, record.uuid, record.id]
+        .find((v) => typeof v === "string" && v.trim() !== "")?.trim();
+      const sid = [record.sessionId, record.session_id]
+        .find((v) => typeof v === "string" && v.trim() !== "")?.trim();
+      if (id) keys.add(sid ? `${sid}|${id}` : id);
       else noIdEligible += 1;
     }
   }

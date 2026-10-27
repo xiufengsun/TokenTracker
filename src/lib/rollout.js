@@ -6892,12 +6892,21 @@ function qoderNewMessageKey(record, filePath, lineIndex = 0) {
   return `jsonl:${fallbackSuffix}|${record?.uuid || ""}`;
 }
 
+// 8.64e15 is the ECMAScript TimeClip limit. A larger finite number (nanosecond
+// epochs, clock garbage) passes coerceEpochMs untouched, and `new Date(ms)`
+// yields Invalid Date whose .toISOString() THROWS RangeError — outside the
+// per-line JSON.parse try/catch, aborting the whole source on one bad row and
+// silently removing Qoder from every later sync (warnProviderParseFailure is
+// quiet in auto syncs). Clamp to a drop instead.
+const MAX_QODER_TIMESTAMP_MS = 8.64e15;
+
 function qoderNewTimestampMs(record) {
-  return coerceEpochMs(record?.timestamp)
+  const ms = coerceEpochMs(record?.timestamp)
     || coerceEpochMs(record?.message?.timestamp)
     || parseIsoTimestampMs(record?.timestamp)
     || parseIsoTimestampMs(record?.message?.timestamp)
     || 0;
+  return ms > MAX_QODER_TIMESTAMP_MS ? 0 : ms;
 }
 
 // Nominal credits for one transcript row. `credits` and `original_credits`
@@ -6967,9 +6976,10 @@ function normalizeQoderNewTokens(usage) {
 // must not add to conversation activity — same rule the Claude branch enforces
 // with isMainSession (#307) and Claude Science encodes with `isRoot ? 1 : 0`.
 // A row that carries neither tokens nor activity is still tracked in the cursor:
-// its credits belong to the sidecar, and a streamed rewrite can hand it real
-// tokens later. It must not touch an hourly or project bucket though, because
-// getHourlyBucket() creates buckets on demand and would publish an all-zero row.
+// a streamed rewrite can hand it real tokens later, and the cursor entry is what
+// makes that transition subtract/add correctly. It must not touch an hourly or
+// project bucket though, because getHourlyBucket() creates buckets on demand and
+// would publish an all-zero row.
 function qoderRowCountsAsUsage(totals) {
   return (totals?.total_tokens || 0) > 0 || (totals?.conversation_count || 0) > 0;
 }
@@ -7118,8 +7128,9 @@ async function parseQoderNewIncremental({
       // listQoderNewSessionFiles orders by localeCompare, so without this
       // guard the subagent copy (conversation_count 0) could silently replace
       // the main row's activity depending on file order. A main-session
-      // record always wins the shared key; duplicates of the same class keep
-      // last-wins (a streamed rewrite of one main row must not double count).
+      // record always wins the shared key; main-main duplicates keep last-wins
+      // (a streamed rewrite of one main row must not double count), and a
+      // subagent copy never overrides anything.
       const existing = currentByKey.get(messageKey);
       if (existing && !isMainSession) continue;
       currentByKey.set(messageKey, {
