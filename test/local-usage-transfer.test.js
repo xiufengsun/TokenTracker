@@ -271,3 +271,28 @@ test("real local API previews and commits imports, filters existing usage endpoi
   assert.equal((await context()).reason, "local_history_only");
   assert.equal((await context("local:machine-bbbb")).totals.total_tokens, 200);
 });
+
+test("export/import preserves ultrafast and ultrafast_long_context subsets (#886)", async (t) => {
+  const a = await machine(t, "machine-aaaa", [row(200, {
+    ultrafast_input_tokens: 150,
+    ultrafast_output_tokens: 50,
+    ultrafast_cached_input_tokens: 0,
+    ultrafast_cache_creation_input_tokens: 0,
+    ultrafast_reasoning_output_tokens: 0,
+    ultrafast_long_context_input_tokens: 40,
+    ultrafast_long_context_output_tokens: 10,
+    ultrafast_long_context_cached_input_tokens: 0,
+    ultrafast_long_context_cache_creation_input_tokens: 0,
+    ultrafast_long_context_reasoning_output_tokens: 0,
+  })]);
+  const b = await machine(t, "machine-bbbb", [row(10)]);
+  const snapshot = await a.service.exportSnapshot();
+  assert.equal(snapshot.rows[0].ultrafast_input_tokens, 150);
+  assert.equal(snapshot.rows[0].ultrafast_output_tokens, 50);
+  assert.equal(snapshot.rows[0].ultrafast_long_context_input_tokens, 40);
+  assert.equal(snapshot.rows[0].ultrafast_long_context_output_tokens, 10);
+  await apply(b.service, snapshot);
+  const viewed = await b.service.view([row(10)], "local:machine-aaaa");
+  assert.equal(viewed[0].ultrafast_input_tokens, 150);
+  assert.equal(viewed[0].ultrafast_long_context_input_tokens, 40);
+});

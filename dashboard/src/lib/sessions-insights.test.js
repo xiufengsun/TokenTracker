@@ -67,3 +67,44 @@ describe("session statistics", () => {
     expect(rows[0].session_hash).toBe("recent");
   });
 });
+
+describe("ultrafast pricing field allowlist", () => {
+
+  it("keeps ultrafast subsets when scoping sessions to a date range (#886)", () => {
+    const rows = [{
+      session_hash: "s1",
+      total_tokens: 200,
+      own_total_tokens: 200,
+      cost_usd: 1.2,
+      own_cost_usd: 1.2,
+      usage_buckets: [{
+        timestamp: "2026-10-26T12:00:00Z",
+        model: "gpt-6.1-sol",
+        total_tokens: 200,
+        input_tokens: 100,
+        output_tokens: 100,
+        cached_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        reasoning_output_tokens: 0,
+        ultrafast_input_tokens: 100,
+        ultrafast_output_tokens: 100,
+        ultrafast_cached_input_tokens: 0,
+        ultrafast_cache_creation_input_tokens: 0,
+        ultrafast_reasoning_output_tokens: 0,
+        cost_usd: 1.2,
+      }],
+      model_usage: [{ model: "gpt-6.1-sol", total_tokens: 200, ultrafast_input_tokens: 100 }],
+    }];
+    const scoped = scopeSessionsToRange(
+      rows,
+      Date.parse("2026-10-26T00:00:00Z"),
+      Date.parse("2026-10-26T23:59:59Z"),
+    );
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0].ultrafast_input_tokens).toBe(100);
+    expect(scoped[0].ultrafast_output_tokens).toBe(100);
+    expect(scoped[0].model_usage[0].ultrafast_input_tokens).toBe(100);
+  });
+
+});
+
