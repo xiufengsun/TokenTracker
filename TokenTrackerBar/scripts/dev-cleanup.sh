@@ -6,11 +6,22 @@ set -uo pipefail
 # Remove every trace of the Debug "TokenTracker Dev" variant (spec §7).
 # Never touches the production domain (com.tokentracker.bar), the production
 # App Group container, ~/.tokentracker, or /Applications/TokenTracker.app.
-# Idempotent: safe to run repeatedly.
+# Idempotent: safe to run repeatedly. Missing paths are tolerated (rm -rf is
+# a no-op on them); REAL deletion failures are reported on stderr and make
+# the script exit nonzero.
 # ─────────────────────────────────────────────
 
 DEV_DOMAIN="com.tokentracker.bar.dev"
 DEV_SUITE="group.com.tokentracker.bar.dev"
+CLEANUP_FAILED=0
+
+remove_path() {
+  # rm -rf returns 0 for absent paths, so a nonzero here is a real failure.
+  if ! rm -rf "$1" 2>/dev/null; then
+    echo "⚠️  删除失败: $1" >&2
+    CLEANUP_FAILED=1
+  fi
+}
 
 # 1. Quit the Dev app. Path-scoped match: only the DerivedData Debug product
 #    and its embedded node — other projects' Debug processes are unaffected.
@@ -19,26 +30,36 @@ pkill -f "TokenTrackerBar-[^/]*/Build/Products/Debug/TokenTracker Dev.app" 2>/de
 sleep 2
 
 # 2. Preferences: standard domain + shared-suite domain. `defaults delete`
-#    exits nonzero when the domain is missing — tolerated. Never `rm` the
-#    Preferences plists and never `killall cfprefsd` (cfprefsd coherence).
+#    exits nonzero when the domain is missing — tolerated. Never `killall
+#    cfprefsd` (cfprefsd coherence). cfprefsd leaves an empty-dict plist
+#    behind after a domain delete; once the domain is forgotten, removing the
+#    orphan file is safe and keeps traces at zero (dev spec §7-2).
 defaults delete "$DEV_DOMAIN" 2>/dev/null || true
 defaults delete "$DEV_SUITE" 2>/dev/null || true
-# cfprefsd leaves an empty-dict plist behind after a domain delete; once the
-# domain is forgotten, removing the orphan file is safe and keeps traces at zero.
-rm -f "$HOME/Library/Preferences/$DEV_DOMAIN.plist" \
-      "$HOME/Library/Preferences/$DEV_SUITE.plist" 2>/dev/null
+if ! rm -f "$HOME/Library/Preferences/$DEV_DOMAIN.plist" \
+      "$HOME/Library/Preferences/$DEV_SUITE.plist" 2>/dev/null; then
+  echo "⚠️  删除失败: .dev Preferences plists" >&2
+  CLEANUP_FAILED=1
+fi
 
-# 3. Containers / WebKit / caches (tolerate absence).
-rm -rf "$HOME/Library/Group Containers/$DEV_SUITE" 2>/dev/null
-rm -rf "$HOME/Library/WebKit/$DEV_DOMAIN" "$HOME/Library/Caches/$DEV_DOMAIN" 2>/dev/null
-rm -rf "$HOME/Library/HTTPStorages/$DEV_DOMAIN" "$HOME/Library/HTTPStorages/$DEV_DOMAIN.binarycookies" 2>/dev/null
-rm -rf "$HOME/Library/Saved Application State/$DEV_DOMAIN.savedState" 2>/dev/null
+# 3. Containers / WebKit / caches (tolerate absence, report real failures).
+remove_path "$HOME/Library/Group Containers/$DEV_SUITE"
+remove_path "$HOME/Library/WebKit/$DEV_DOMAIN"
+remove_path "$HOME/Library/Caches/$DEV_DOMAIN"
+remove_path "$HOME/Library/HTTPStorages/$DEV_DOMAIN"
+remove_path "$HOME/Library/HTTPStorages/$DEV_DOMAIN.binarycookies"
+remove_path "$HOME/Library/Saved Application State/$DEV_DOMAIN.savedState"
 
 # 4. Delete the Debug product itself.
 APP_DELETED=1
 for app in ~/Library/Developer/Xcode/DerivedData/TokenTrackerBar-*/Build/Products/Debug/TokenTracker\ Dev.app; do
   [ -e "$app" ] || continue
-  rm -rf "$app" && APP_DELETED=0
+  if rm -rf "$app"; then
+    APP_DELETED=0
+  else
+    echo "⚠️  删除失败: $app" >&2
+    CLEANUP_FAILED=1
+  fi
 done
 
 echo "✅ Dev 痕迹已清理(默认域/suite/容器/缓存/产物)。"
@@ -55,3 +76,9 @@ fi
 # 6. Self-check: production must be untouched.
 defaults read com.tokentracker.bar >/dev/null 2>&1 && echo "✅ 自检:生产域完好" || echo "⚠️ 生产域读取失败(请人工确认)"
 [ -d "/Applications/TokenTracker.app" ] && echo "✅ 自检:正式版 app 未被触碰" || echo "⚠️ 未找到 /Applications/TokenTracker.app"
+
+# 7. Exit nonzero when any real deletion failed (absence is not a failure).
+if [ "$CLEANUP_FAILED" -ne 0 ]; then
+  echo "⚠️  部分路径删除失败(见上方 ⚠️ 行),以非零状态退出。" >&2
+  exit 1
+fi

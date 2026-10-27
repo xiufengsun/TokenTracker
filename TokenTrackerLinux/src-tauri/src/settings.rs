@@ -18,10 +18,12 @@ const SETTINGS_FILE: &str = "settings.json";
 
 /// Pure so tests can inject directories without mutating process env.
 fn settings_path(xdg_config_home: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
-    let home = home?;
+    // XDG_CONFIG_HOME alone is sufficient; HOME is required only for the
+    // ~/.config fallback (a set XDG dir must not be discarded in stripped-down
+    // environments where HOME is absent).
     let base = match xdg_config_home {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => Path::new(home).join(".config"),
+        _ => Path::new(home?).join(".config"),
     };
     Some(base.join(SETTINGS_DIR).join(SETTINGS_FILE))
 }
@@ -126,6 +128,12 @@ mod tests {
             path,
             Path::new("/home/u/.config/tokentracker/settings.json")
         );
+    }
+
+    #[test]
+    fn settings_path_resolves_xdg_config_home_without_home() {
+        let path = settings_path(Some("/xdg/cfg"), None).expect("XDG set is enough");
+        assert_eq!(path, Path::new("/xdg/cfg/tokentracker/settings.json"));
     }
 
     #[test]

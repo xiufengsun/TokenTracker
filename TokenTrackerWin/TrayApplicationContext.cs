@@ -806,6 +806,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 break;
             case "launchSilently" when value is bool silent:
                 SilentStart.Set(silent);
+                // The tray menu is a persistent WinForms object (unlike the macOS
+                // rebuild-per-open menu): keep its check in step with
+                // dashboard-driven changes so the next click toggles, not reverts.
+                _silentItem.Checked = silent;
                 break;
             case TokenUnits.SettingKey when value is string unitSystem:
                 // Display-only preference: persist it, then re-render the tray summary
