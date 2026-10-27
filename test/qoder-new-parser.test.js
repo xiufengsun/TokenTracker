@@ -969,7 +969,9 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
       const key = sid ? `${sid}|${id}` : id;
       keys.add(key);
       const prev = expectedTokensByKey.get(key);
-      if (prev && prev.isMainSession) continue;
+      // Match parser precedence: main always beats subagent; within the same
+      // class, last-wins so streamed rewrites update the expected token sum.
+      if (prev?.isMainSession && !isMainSession) continue;
       expectedTokensByKey.set(key, { isMainSession, tokens: usageTokens(msg.usage) });
     }
   }
