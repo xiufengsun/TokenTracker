@@ -1,6 +1,6 @@
 # Spec:Dev 变体隔离(Dev Variant Isolation)
 
-版本:v1.0 · 日期:2026-09-05 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现(2026-09-05),开发痕迹已清理
+版本:v1.1 · 日期:2026-10-28 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现(2026-09-05),v1.1 缺口补全(2026-10-28),开发痕迹已清理
 评审史:R1 代码事实+契约清理 / R2 XcodeGen 精度+一致性 / R3 矛盾+可实现性 / R4 冷读+QA 审计,双审×4 轮已吸收,见文末修订记录
 关联:`docs/silent-start-toggle-spec.md`、`docs/silent-startup.md`
 范围:仅 macOS `TokenTrackerBar/` P0。决策记录:dev 端口 **7681**;**Dev 不写 Widget 快照**
