@@ -121,6 +121,14 @@
       "ultrafast_multiplier": 6,
       "note": "Official Standard USD/MTok rates verified 2026-10-02 (issue #737): https://developers.openai.com/api/docs/models/gpt-6.1-sol. Requests above 272K input use 2x input/cache and 1.5x output rates; Fast mode is 2x the applicable rates. Premiums apply only to observed request subsets. Cloud aggregates remain Standard short-context estimates."
     },
+    "gpt-6.1-terra": {
+      "input": 1,
+      "output": 5,
+      "cache_read": 0.05,
+      "cache_write": 1.25,
+      "priority_multiplier": 2,
+      "note": "Official Standard USD/MTok rates verified 2026-10-27: https://developers.openai.com/api/docs/models/gpt-6.1-terra and https://developers.openai.com/api/docs/pricing. Short-context (≤272K): $1/$5/$0.05 cached/$1.25 cache write (30m). Requests above 272K input use 2x input/cache and 1.5x output for the full request. Fast mode is 2x Standard; Ultrafast is not published for this model. Premiums apply only to observed request subsets. Cloud aggregates remain Standard short-context estimates."
+    },
     "gpt-6-sol": {
       "input": 2,
       "output": 10,
@@ -738,6 +746,10 @@
     {
       "match": "gpt-6.1-sol",
       "ref": "gpt-6.1-sol"
+    },
+    {
+      "match": "gpt-6.1-terra",
+      "ref": "gpt-6.1-terra"
     },
     {
       "match": "gpt-6-sol",
