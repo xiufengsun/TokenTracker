@@ -45,13 +45,18 @@ targets:
         ENABLE_APP_SANDBOX: NO
         COPY_PHASE_STRIP: NO
         STRIP_INSTALLED_PRODUCT: NO
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.tokentracker.bar.dev
+          PRODUCT_NAME: TokenTracker Dev
     info:
       path: TokenTrackerBar/Info.plist
       properties:
         LSUIElement: true
-        CFBundleDisplayName: TokenTracker
-        # Keep in sync with CFBundleDisplayName: the app menu title uses CFBundleName.
-        CFBundleName: TokenTracker
+        CFBundleDisplayName: $(PRODUCT_NAME)
+        # App menu title uses CFBundleName; both follow PRODUCT_NAME so the Debug
+        # config becomes the distinguishable "TokenTracker Dev" variant.
+        CFBundleName: $(PRODUCT_NAME)
         CFBundleIconFile: AppIcon
         CFBundleIconName: AppIcon
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
@@ -147,6 +152,9 @@ targets:
           - "$(inherited)"
           - "@executable_path/../Frameworks"
           - "@executable_path/../../../../Frameworks"
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.tokentracker.bar.dev.widget
     info:
       path: TokenTrackerWidget/Info.plist
       properties:
