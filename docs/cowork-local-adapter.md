@@ -60,6 +60,10 @@ The script prefers the adjacent checkout's runtime. If copied outside the
 checkout, it can also use the runtime in `/Applications/TokenTracker.app` or
 `~/.tokentracker/tracker/app`, with its dependencies present. These are internal
 runtime interfaces, so compatibility with future versions must be rechecked.
+The parse-failure retry guarantee requires the runtime from this checkout:
+older packaged runtimes (including 1.4.12/1.4.13) do not honor the adapter's
+`failOnClaudeParseFailure` context option. Use the checkout until an updated
+runtime is released.
 The script does not modify the application bundle or install a scheduler.
 Rerun it after Cowork activity, or invoke it with a scheduler you configure.
 It scans all retained daily ledgers on each run; large histories increase work.
@@ -98,7 +102,9 @@ This bridge does not provide a permanent per-source cloud exclusion.
   an existing parser cursor may have consumed.
 - The bridge uses its own run lease and TokenTracker's native sync/config
   leases. A refresh-pending marker is written before publication, so a failed
-  refresh is retried even when no new events remain to import.
+  refresh is retried even when no new events remain to import. The bridge opts
+  into propagating Claude parser errors before the sync commits its cursors;
+  ordinary sync callers retain their best-effort provider handling.
 
 Deduplication is specific to these ledger records. Manually importing the same
 Cowork SDK audit transcripts through another root can double-count usage because
@@ -116,7 +122,9 @@ The tests use synthetic temporary homes and the real Claude parser, sync command
 and ground-truth rebuild. They cover counter mapping, multiple models, repeat
 imports, duplicate profiles, source rotation, malformed/partial records,
 conflicting counters, interrupted output, lock contention, config preservation,
-scoped sync, and failed-refresh recovery.
+scoped sync, and failed-refresh recovery. A stream-error regression exercises
+the real parser after a complete row has been read, verifies recovery with an
+unchanged ledger, and checks that retry/rebuild totals agree without duplication.
 
 ```sh
 node --test test/cowork-local-adapter.test.js

@@ -3,6 +3,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
+const fssync = require("node:fs");
+const { Readable } = require("node:stream");
 const os = require("node:os");
 const path = require("node:path");
 const { importCoworkUsage, runAdapter } = require("../scripts/cowork-local-adapter.cjs");
@@ -11,6 +13,7 @@ const { openLock } = require("../src/lib/fs");
 const { computeClaudeGroundTruthBuckets } = require("../src/lib/claude-categorizer");
 
 const packageRoot = path.resolve(__dirname, "..");
+/** Build a synthetic per-turn ledger entry, with optional field overrides. */
 const event = (overrides = {}) => ({
   v: 1, ts: Date.parse("2026-10-26T07:25:12Z"), surface: "cowork",
   origin: "turn", sessionId: "private-session", isError: false,
@@ -21,6 +24,7 @@ const event = (overrides = {}) => ({
   tools: { private: "DO_NOT_COPY" }, ...overrides,
 });
 
+/** Run an integration scenario in an isolated home and remove its files afterward. */
 async function fixture(fn) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "tt-cowork-"));
   const roots = ["Claude", "Claude-3p"].map((name) =>
@@ -33,6 +37,7 @@ async function fixture(fn) {
   finally { await fs.rm(home, { recursive: true, force: true }); }
 }
 
+/** Parse the generated journal and return the latest aggregate for each bucket. */
 async function parse(outputRoot, home, cursors = {}) {
   const queuePath = path.join(home, "parser-queue.jsonl");
   await parseClaudeIncremental({
@@ -46,6 +51,26 @@ async function parse(outputRoot, home, cursors = {}) {
     latest.set([row.source, row.model, row.hour_start].join("|"), row);
   }
   return [...latest.values()];
+}
+
+/** Inject a read-stream failure after one complete row, retaining the real parser. */
+async function withClaudeReadFailure(file, fn) {
+  const originalReadStream = fssync.createReadStream;
+  let incrementalReads = 0;
+  fssync.createReadStream = function (filePath, options) {
+    // Let the lineage pre-scan finish; fail the subsequent token read. Other
+    // reads (bounded cwd discovery and ground-truth repair) stay functional.
+    if (filePath !== file || options?.start == null || options?.end != null || ++incrementalReads === 1)
+      return originalReadStream.call(this, filePath, options);
+    const tail = fssync.readFileSync(file).subarray(options?.start || 0);
+    return Readable.from((async function* () {
+      yield tail.subarray(0, tail.indexOf(10) + 1);
+      await new Promise((resolve) => setImmediate(resolve));
+      throw Object.assign(new Error("simulated Claude read failure"), { code: "EIO" });
+    })());
+  };
+  try { await fn(); }
+  finally { fssync.createReadStream = originalReadStream; }
 }
 
 test("real parser: exact cache semantics, no private text or invented conversations, stable rescan", async () => {
@@ -265,5 +290,52 @@ test("invalid existing configuration is preserved instead of replaced", async ()
       assert.equal(await fs.readFile(configPath, "utf8"), raw);
       assert.deepEqual(await listClaudeProjectFiles(path.join(f.outputRoot, "projects")), []);
     }
+  });
+});
+
+test("real Claude read failure preserves the retry marker and recovers unchanged ledgers exactly once", async () => {
+  await fixture(async (f) => {
+    await f.write([event()]);
+    await runAdapter({ home: f.home });
+    const dir = path.join(f.home, ".tokentracker", "tracker");
+    const queuePath = path.join(dir, "queue.jsonl");
+    const before = await fs.readFile(queuePath, "utf8");
+    const [journal] = await listClaudeProjectFiles(path.join(f.outputRoot, "projects"));
+    const pending = path.join(f.home, ".tokentracker", "cowork-adapter", "refresh-pending.json");
+    await f.write([event(), event({ ts: event().ts + 1000 }), event({ ts: event().ts + 2000 })]);
+    await withClaudeReadFailure(journal, async () => {
+      await assert.rejects(runAdapter({ home: f.home }), { code: "EIO" });
+    });
+    await fs.access(pending);
+    assert.equal(await fs.readFile(queuePath, "utf8"), before);
+
+    // Nothing new to import: the pending marker alone must trigger recovery.
+    const recovered = await runAdapter({ home: f.home });
+    assert.equal(recovered.imported, 0);
+    assert.equal(recovered.refreshed, true);
+    await assert.rejects(fs.access(pending), { code: "ENOENT" });
+    const after = await fs.readFile(queuePath, "utf8");
+    const rows = after.trim().split("\n").map(JSON.parse);
+    assert.equal(rows.filter((row) => row.source === "claude").at(-1).total_tokens, 4050);
+    assert.equal((await runAdapter({ home: f.home })).refreshed, false);
+    assert.equal(await fs.readFile(queuePath, "utf8"), after);
+    const truth = await computeClaudeGroundTruthBuckets({ rootDirs: [path.join(f.outputRoot, "projects")] });
+    assert.equal(truth.rows.reduce((sum, row) => sum + row.total_tokens, 0), 4050);
+  });
+});
+
+test("ordinary sync callers retain best-effort handling of Claude read failures", async () => {
+  await fixture(async (f) => {
+    await f.write([event()]);
+    await runAdapter({ home: f.home, refresh: false });
+    const [journal] = await listClaudeProjectFiles(path.join(f.outputRoot, "projects"));
+    const { cmdSync } = require("../src/commands/sync");
+    await withClaudeReadFailure(journal, async () => {
+      await assert.doesNotReject(cmdSync(["--auto", "--source", "claude"], {
+        home: f.home,
+        trackerDataDir: path.join(f.home, ".tokentracker", "tracker"),
+        scanSources: ["claude"],
+      }));
+    });
   });
 });

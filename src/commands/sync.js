@@ -544,6 +544,14 @@ async function clearSyncSkip(trackerDir) {
   }
 }
 
+/**
+ * Parse selected providers and refresh local queues, respecting upload policy.
+ * @param {string[]} argv Sync CLI arguments.
+ * @param {object} [context] Runtime paths, scope, and internal caller options.
+ * @param {boolean} [context.failOnClaudeParseFailure=false] Rethrow Claude parse
+ * failures before cursor commit so usage bridges can retry; other callers keep
+ * best-effort provider parsing.
+ */
 async function cmdSync(argv, context = {}) {
   context = context && typeof context === "object" ? context : {};
   const opts = parseArgs(argv);
@@ -1253,6 +1261,9 @@ async function cmdSync(argv, context = {}) {
         });
       } catch (err) {
         warnProviderParseFailure("Claude", err, opts);
+        // The Cowork bridge must retain its pending marker and retry. Other
+        // callers keep best-effort parsing so one provider cannot block them.
+        if (context.failOnClaudeParseFailure === true) throw err;
       }
     }
 

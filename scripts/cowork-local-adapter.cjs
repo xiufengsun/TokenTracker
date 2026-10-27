@@ -14,15 +14,19 @@ const COUNTERS = {
   cacheReadTokens: "cache_read_input_tokens",
   cacheWriteTokens: "cache_creation_input_tokens",
 };
+/** Hash stable record identities without storing the original session ID. */
 const hash = (value) => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
+/** List directory entries; an absent optional source directory is empty. */
 async function entries(dir) {
   try { return await fs.readdir(dir, { withFileTypes: true }); }
   catch (error) { if (error.code === "ENOENT") return []; throw error; }
 }
 
+/** Discover daily NDJSON ledgers within the supported account/profile layout. */
 async function ledgerFiles(roots) {
   const files = new Set();
+  /** Walk only bounded non-hidden directories, collecting usage-ledger files. */
   async function walk(dir, depth) {
     if (depth > 4) return;
     for (const entry of await entries(dir)) {
@@ -40,6 +44,7 @@ async function ledgerFiles(roots) {
   return [...files].sort();
 }
 
+/** Convert one supported turn into usage-only Claude records, one per model. */
 function normalizeLedgerRecord(row) {
   if (row?.v !== 1 || row.surface !== "cowork" || row.origin !== "turn" ||
       typeof row.sessionId !== "string" || !row.sessionId ||
@@ -68,6 +73,7 @@ function normalizeLedgerRecord(row) {
   return result;
 }
 
+/** Recover dedup identities and unterminated tails from the append-only output. */
 async function readJournal(outputDir) {
   const known = new Map();
   const separators = new Set();
@@ -86,9 +92,11 @@ async function readJournal(outputDir) {
   return { known, separators };
 }
 
-// Callers must hold TokenTracker's sync lease before writing its scan roots.
-// The append-only journal is also the dedup index; there is no second cursor
-// whose crash/reinstallation could replay already imported usage.
+/**
+ * Append previously unseen valid usage while preserving rebuildable history.
+ * Callers must hold TokenTracker's sync lease before writing its scan roots.
+ * The journal itself is the dedup index, avoiding a second cursor that can drift.
+ */
 async function importCoworkUsage({ roots, outputRoot }) {
   const outputDir = path.join(outputRoot, "projects", "cowork");
   const { known, separators } = await readJournal(outputDir);
@@ -135,6 +143,7 @@ async function importCoworkUsage({ roots, outputRoot }) {
   return { imported: pending.size, known: known.size + pending.size, ledgers: files.length, skipped };
 }
 
+/** Locate the adjacent checkout first, then known installed CLI runtimes. */
 function installedPackage(home) {
   const candidates = [
     path.resolve(__dirname, ".."),
@@ -148,6 +157,7 @@ function installedPackage(home) {
   throw new Error("TokenTracker runtime not found");
 }
 
+/** Serialize bridge invocations across publication and the subsequent refresh. */
 async function runAdapter(options = {}) {
   const home = options.home || os.homedir();
   const trackerPackage = options.trackerPackage || installedPackage(home);
@@ -161,6 +171,10 @@ async function runAdapter(options = {}) {
   finally { await lock.release(); }
 }
 
+/**
+ * Register the scan root, publish usage under the native lease, then sync locally.
+ * The caller holds the bridge lease. Keep the pending marker until sync succeeds.
+ */
 async function runAdapterLocked({ home, trackerPackage, refresh = true }) {
   const trackerDir = path.join(home, ".tokentracker", "tracker");
   const adapterDir = path.join(home, ".tokentracker", "cowork-adapter");
@@ -223,6 +237,7 @@ async function runAdapterLocked({ home, trackerPackage, refresh = true }) {
     try {
       await cmdSync(["--auto", "--from-notify", "--source", "claude", "--wait-for-lock"], {
         home, trackerDataDir: trackerDir, scanSources: ["claude"],
+        failOnClaudeParseFailure: true,
       });
       await fs.rm(pendingPath, { force: true });
     } finally {
