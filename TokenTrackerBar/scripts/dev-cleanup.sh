@@ -62,15 +62,21 @@ for app in ~/Library/Developer/Xcode/DerivedData/TokenTrackerBar-*/Build/Product
   fi
 done
 
-echo "✅ Dev 痕迹已清理(默认域/suite/容器/缓存/产物)。"
+if [ "$CLEANUP_FAILED" -eq 0 ]; then
+  echo "✅ Dev 痕迹已清理(默认域/suite/容器/缓存/产物)。"
+else
+  echo "⚠️  清理完成,但有删除失败项(见上方 ⚠️ 行)。"
+fi
 echo "ℹ️  手动检查项:"
 echo "   1. 系统设置 → 通用 → 登录项:若存在 'TokenTracker Dev' 请手动移除。"
 echo "   2. 通知授权记录随 bundle id 残留,系统级无法脚本删除。"
 echo "   3. EmbeddedServer/ 构建产物可用 ./scripts/bundle-node.sh --clean 清理(可选)。"
 if [ "$APP_DELETED" -eq 0 ]; then
   echo "   4. Debug 产物已删除。"
-else
+elif [ "$CLEANUP_FAILED" -eq 0 ]; then
   echo "   4. 未找到 Debug 产物(可能已删)。"
+else
+  echo "   4. Debug 产物删除失败(见上方 ⚠️ 行)。"
 fi
 
 # 6. Self-check: production must be untouched.

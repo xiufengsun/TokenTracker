@@ -332,7 +332,7 @@ webview 既无 `webkit.messageHandlers.nativeBridge` 也无 `chrome.webview` 桥
   XDG_CONFIG_HOME 单独有效即解析,HOME 仅 `~/.config` fallback 臂必需(原实现先取
   HOME,XDG+无 HOME 的裁剪环境误回退 false 且无法保存;补 `settings_path_resolves_xdg_
   config_home_without_home` 单测);② Windows 托盘勾选态同步——面板 `setSetting("launch
-  Silently")` 路径补 `_silentItem.Checked = silent`(托盘菜单为常驻 WinForms 对象,不随
+  Silently")` 路径补 `_silentItem.Checked = silent`(托盘菜单为常驻 WinForms 对象,不会随
   打开重建,失步会导致下次点击反向写回)。
 - v1.2(2026-10-28):移除 macOS 菜单项 tooltip「下次启动生效」(owner 决定;§5.2 同步——
   三端菜单均不承载该提示,语义保留在 §3 生效时机、面板 `silentStartHint` 与本文档)。
