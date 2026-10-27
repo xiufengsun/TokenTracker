@@ -484,11 +484,13 @@ const qRec = (usage, { ts = "2026-09-10T08:00:00.000Z", id, sessionId = "sess-1"
   };
 };
 
-async function runOne(records, { sourceKey = "qoder", cursorKey = "qoderNew", cursors = {} } = {}) {
+async function runOne(t, records, { sourceKey = "qoder", cursorKey = "qoderNew", cursors = {} } = {}) {
   const tmp = tempDir();
+  t.after(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
   const sessionFile = path.join(tmp, "proj", "sess1.jsonl");
   writeJsonl(sessionFile, records);
-  const { queuePath } = tempQueue();
+  const { dir, queuePath } = tempQueue();
+  t.after(() => { fs.rmSync(dir, { recursive: true, force: true }); });
   const res = await parseQoderNewIncremental({
     sessionFiles: [sessionFile], cursors, queuePath, sourceKey, cursorKey,
   });
@@ -496,11 +498,10 @@ async function runOne(records, { sourceKey = "qoder", cursorKey = "qoderNew", cu
 }
 
 test("billable:false with real credits counts as activity, no tokens, no cost", async (t) => {
-  const { res, queuePath, rows } = await runOne([
+  const { res, rows } = await runOne(t, [
     qRec({ credits: 0.7290659749999999, original_credits: 0.7290659749999999, billable: false,
       input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }),
   ]);
-  t.after(() => { fs.rmSync(path.dirname(queuePath), { recursive: true, force: true }); });
   assert.equal(res.messagesProcessed, 1);
   assert.equal(res.eventsAggregated, 1);
   const row = rows.find((r) => r.conversation_count > 0);
@@ -513,10 +514,9 @@ test("billable:false with real credits counts as activity, no tokens, no cost", 
 });
 
 test("billable:false with zero credits stays dropped (synthetic / cancelled calls)", async (t) => {
-  const { res, queuePath, rows } = await runOne([
+  const { res, rows } = await runOne(t, [
     qRec({ credits: 0, original_credits: 0, billable: false, input_tokens: 0, output_tokens: 0 }),
   ]);
-  t.after(() => { fs.rmSync(path.dirname(queuePath), { recursive: true, force: true }); });
   assert.equal(res.messagesProcessed, 0);
   assert.equal(rows.length, 0);
 });
@@ -524,12 +524,11 @@ test("billable:false with zero credits stays dropped (synthetic / cancelled call
 test("gate is a superset of the old behaviour: absent/null/\"true\" billable still count", async (t) => {
   // These three shapes were admitted before the fix (billable !== false). The
   // credits signal may only ADD rows, never remove them.
-  const { res, queuePath, rows } = await runOne([
+  const { res, rows } = await runOne(t, [
     qRec({ credits: 0, input_tokens: 0, output_tokens: 0, __id: "a" }),
     qRec({ credits: 0, billable: null, input_tokens: 0, output_tokens: 0, __id: "b" }, { id: "b" }),
     qRec({ credits: 0, billable: "true", input_tokens: 0, output_tokens: 0, __id: "c" }, { id: "c" }),
   ]);
-  t.after(() => { fs.rmSync(path.dirname(queuePath), { recursive: true, force: true }); });
   assert.equal(res.messagesProcessed, 3);
   assert.equal(rows.reduce((s, r) => s + r.conversation_count, 0), 3);
 });
@@ -540,29 +539,26 @@ test("credits must be a real number: type junk and sub-epsilon noise do not admi
     { credits: 1e999 }, { credits: -5 }, { credits: null }, { credits: 1e-9 },
   ];
   for (const extra of junk) {
-    const { res } = await runOne([
+    const { res } = await runOne(t, [
       qRec({ billable: false, input_tokens: 0, output_tokens: 0, ...extra }, { id: `junk-${JSON.stringify(extra)}` }),
     ]);
     assert.equal(res.messagesProcessed, 0, `must not admit ${JSON.stringify(extra)}`);
   }
   // 1e-6 is at the floor and must admit.
-  const floor = await runOne([qRec({ billable: false, credits: 1e-6, input_tokens: 0, output_tokens: 0, __id: "f" })]);
+  const floor = await runOne(t, [qRec({ billable: false, credits: 1e-6, input_tokens: 0, output_tokens: 0, __id: "f" })]);
   assert.equal(floor.res.messagesProcessed, 1);
-  fs.rmSync(path.dirname(floor.queuePath), { recursive: true, force: true });
   // credits:0 with a real original_credits must admit — `??` would take the 0.
-  const discounted = await runOne([
+  const discounted = await runOne(t, [
     qRec({ billable: false, credits: 0, original_credits: 1.5, input_tokens: 0, output_tokens: 0, __id: "d" }),
   ]);
   assert.equal(discounted.res.messagesProcessed, 1, "max(credits, original_credits) must drive admission");
-  fs.rmSync(path.dirname(discounted.queuePath), { recursive: true, force: true });
 });
 
 test("mixed billable true/false in one file both count and keep distinct keys", async (t) => {
-  const { res, queuePath, rows } = await runOne([
+  const { res, rows } = await runOne(t, [
     qRec({ credits: 1.0, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "x1", ts: "2026-09-10T08:00:00.000Z" }),
     qRec({ credits: 1.0, billable: true, input_tokens: 0, output_tokens: 0 }, { id: "x2", ts: "2026-09-10T08:05:00.000Z" }),
   ]);
-  t.after(() => { fs.rmSync(path.dirname(queuePath), { recursive: true, force: true }); });
   assert.equal(res.messagesProcessed, 2);
   assert.equal(rows.reduce((s, r) => s + r.conversation_count, 0), 2);
 });
@@ -646,8 +642,8 @@ test("subagent detection is separator-agnostic (backslash separators)", async (t
   t.after(() => { fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(path.dirname(queuePath), { recursive: true, force: true }); });
   // On POSIX a backslash is a plain filename character, so a UNC-shaped path
   // can be created and read for real — this actually exercises the
-  // /[\\/]subagents[\\/]/ classification instead of only the unreadable-path
-  // skip that the pre-#review version of this test pinned.
+  // /[\\/]subagents[\\/]/ classification (a WSL \\wsl$ walk produces exactly
+  // these separator patterns) instead of only pinning the unreadable-path skip.
   const uncFile = path.join(tmp, "C:\\wsl$\\Ubuntu\\home\\u\\.qoder-cn\\proj\\sess\\subagents\\agent-1.jsonl");
   fs.mkdirSync(path.dirname(uncFile), { recursive: true });
   writeJsonl(uncFile, [
@@ -851,7 +847,17 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
   }
   let eligible = 0;
   let noIdEligible = 0;
+  let expectedTokens = 0;
   const keys = new Set();
+  // Mirror normalizeQoderNewTokens' per-field truncation and clamping so the
+  // queued-token sum can be pinned exactly, whatever usage shapes the corpus
+  // carries (0.4.x credit-only rows contribute 0; 0.1.8 precise-token rows
+  // contribute their real counts).
+  const fieldTokens = (usage, field) => {
+    let value = Number(usage[field] ?? 0);
+    if (!Number.isFinite(value) || value < 0) value = 0;
+    return Math.trunc(value);
+  };
   for (const file of files) {
     for (const line of fs.readFileSync(file, "utf8").split("\n")) {
       if (!line.trim()) continue;
@@ -875,6 +881,10 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
         : typeof rawTs === "string" && rawTs.trim() !== "" && !Number.isNaN(Date.parse(rawTs));
       if (!tsOk) continue;
       eligible += 1;
+      expectedTokens += fieldTokens(msg.usage, "input_tokens")
+        + fieldTokens(msg.usage, "output_tokens")
+        + fieldTokens(msg.usage, msg.usage.cache_read_input_tokens !== undefined ? "cache_read_input_tokens" : "cached_tokens")
+        + fieldTokens(msg.usage, "cache_creation_input_tokens");
       const id = msg.id || record.uuid;
       // Mirror qoderNewMessageKey's distinct-key rules: sessionId|id when a
       // session id exists, bare id otherwise; rows with neither fall under a
@@ -899,8 +909,12 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
   assert.ok(first.messagesProcessed > 0, "the gate must no longer erase the source");
   assert.equal(first.messagesProcessed, keys.size + noIdEligible, "admitted rows must equal distinct message keys");
   assert.equal(second.eventsAggregated, 0, "backfill must be idempotent");
+  assert.equal(
+    queueRows(queuePath).filter((r) => r.source === "qoder-cn").reduce((s, r) => s + (r.total_tokens || 0), 0),
+    expectedTokens,
+    "queued tokens must equal exactly what the corpus reports — nothing invented",
+  );
   for (const row of queueRows(queuePath).filter((r) => r.source === "qoder-cn")) {
-    assert.equal(row.total_tokens, 0, "Qoder must not invent tokens");
     assert.equal(row.total_cost_usd, 0, "Qoder must not invent cost");
   }
 });

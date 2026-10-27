@@ -6950,9 +6950,9 @@ function normalizeQoderNewTokens(usage) {
       total_tokens: inp + cach + cc + out,
       billable_total_tokens: inp + cach + cc + out,
       credits: Number.isFinite(credits) && credits > 0 ? credits : 0,
-      // `credits` is carried for reference only — bucket totals never read it
-      // (no credit→token or credit→USD estimate exists), so this field must
-      // stay dead or someone will eventually divide by it.
+      // `credits` dies at the totals boundary — parseQoderNewIncremental never
+      // copies it into bucket totals or the cursor, and must not start: there
+      // is no first-party credit→token or credit→USD rate to divide it by.
       usage_precision: null,
     };
   }
