@@ -619,6 +619,45 @@ test("subagent transcript sharing a sessionId does not clobber or double-count",
   assert.equal(second.eventsAggregated, 0);
 });
 
+test("subagent subagent duplicates keep last-wins; a main copy still promotes over them", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  // Streamed rewrite inside a subagent file: the later row carries the final
+  // (larger) usage and must be the one booked — first-wins here would
+  // under-count subagent tokens.
+  const sub = path.join(tmp, "proj", "sess-1", "subagents", "agent-1.jsonl");
+  const main = path.join(tmp, "proj", "sess-1.jsonl");
+  writeJsonl(sub, [
+    qRec({ credits: 0.5, billable: false, input_tokens: 100, output_tokens: 0 }, { id: "same-id", sessionId: "sess-1", ts: "2026-09-10T08:00:00.000Z" }),
+    qRec({ credits: 0.5, billable: false, input_tokens: 1000, output_tokens: 40 }, { id: "same-id", sessionId: "sess-1", ts: "2026-09-10T08:00:01.000Z" }),
+  ]);
+  const cursors = {};
+  const first = await parseQoderNewIncremental({
+    sessionFiles: [sub], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  assert.equal(first.messagesProcessed, 1, "rewrites collapse to one key");
+  assert.equal(
+    cursors.qoderNew.messages["jsonl:sess-1|same-id"]?.totals.total_tokens, 1040,
+    "the later rewrite's totals win within a subagent file",
+  );
+  // A main-transcript copy of the same id still promotes over the subagent copy.
+  writeJsonl(main, [
+    qRec({ credits: 0.5, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "same-id", sessionId: "sess-1", ts: "2026-09-10T08:00:02.000Z" }),
+  ]);
+  const second = await parseQoderNewIncremental({
+    sessionFiles: [sub, main], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  assert.equal(second.messagesProcessed, 1);
+  assert.equal(
+    cursors.qoderNew.messages["jsonl:sess-1|same-id"]?.totals.conversation_count, 1,
+    "main copy promotes over the existing subagent copy",
+  );
+});
+
 test("subagent rows are tracked but add no conversation activity", async (t) => {
   const tmp = tempDir();
   const { queuePath } = tempQueue();
@@ -866,7 +905,14 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
   }
   let eligible = 0;
   let noIdEligible = 0;
-  let expectedTokens = 0;
+  // Mirror the parser's per-key precedence contract: one booked row per
+  // message key, main-session copies beat subagent copies regardless of walk
+  // order, and same-class duplicates keep last-wins (a streamed rewrite's
+  // later, final usage is the one booked). The expected-token sum reduces per
+  // key with exactly that precedence — summing every eligible line would
+  // double-count rewrite rows the parser collapses.
+  const expectedTokensByKey = new Map();
+  let noIdExpectedTokens = 0;
   const keys = new Set();
   // Mirror normalizeQoderNewTokens' per-field truncation and clamping so the
   // queued-token sum can be pinned exactly, whatever usage shapes the corpus
@@ -879,7 +925,12 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
     if (!Number.isFinite(value) || value < 0) value = 0;
     return Math.trunc(value);
   };
+  const usageTokens = (usage) => fieldTokens(usage.input_tokens)
+    + fieldTokens(usage.output_tokens)
+    + fieldTokens(usage.cache_read_input_tokens ?? usage.cached_tokens)
+    + fieldTokens(usage.cache_creation_input_tokens);
   for (const file of files) {
+    const isMainSession = !/[\\/]subagents[\\/]/.test(file);
     for (const line of fs.readFileSync(file, "utf8").split("\n")) {
       if (!line.trim()) continue;
       let record;
@@ -902,10 +953,6 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
         : typeof rawTs === "string" && rawTs.trim() !== "" && !Number.isNaN(Date.parse(rawTs));
       if (!tsOk) continue;
       eligible += 1;
-      expectedTokens += fieldTokens(msg.usage.input_tokens)
-        + fieldTokens(msg.usage.output_tokens)
-        + fieldTokens(msg.usage.cache_read_input_tokens ?? msg.usage.cached_tokens)
-        + fieldTokens(msg.usage.cache_creation_input_tokens);
       // Mirror qoderNewMessageKey's fallback chain and normalizeMessageKeyPart's
       // trim: message.id, then row uuid, then record id; sessionId (either case
       // convention) qualifies the key when present. Rows with no id at all fall
@@ -914,10 +961,20 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
         .find((v) => typeof v === "string" && v.trim() !== "")?.trim();
       const sid = [record.sessionId, record.session_id]
         .find((v) => typeof v === "string" && v.trim() !== "")?.trim();
-      if (id) keys.add(sid ? `${sid}|${id}` : id);
-      else noIdEligible += 1;
+      if (!id) {
+        noIdEligible += 1;
+        noIdExpectedTokens += usageTokens(msg.usage);
+        continue;
+      }
+      const key = sid ? `${sid}|${id}` : id;
+      keys.add(key);
+      const prev = expectedTokensByKey.get(key);
+      if (prev && prev.isMainSession) continue;
+      expectedTokensByKey.set(key, { isMainSession, tokens: usageTokens(msg.usage) });
     }
   }
+  const expectedTokens = Array.from(expectedTokensByKey.values())
+    .reduce((sum, e) => sum + e.tokens, noIdExpectedTokens);
   if (eligible === 0) {
     t.skip("no credit-bearing rows in corpus");
     return;

@@ -7125,14 +7125,14 @@ async function parseQoderNewIncremental({
       }
       // Same sessionId+msgId can appear in both the main transcript and a
       // subagent transcript (mirrored id). currentByKey is last-wins and
-      // listQoderNewSessionFiles orders by localeCompare, so without this
-      // guard the subagent copy (conversation_count 0) could silently replace
-      // the main row's activity depending on file order. A main-session
-      // record always wins the shared key; main-main duplicates keep last-wins
-      // (a streamed rewrite of one main row must not double count), and a
-      // subagent copy never overrides anything.
+      // listQoderNewSessionFiles orders by localeCompare, so an unguarded
+      // subagent copy (conversation_count 0) could silently replace the main
+      // row's activity depending on file order. Precedence: a main-session
+      // record always wins a subagent copy; within the same class, last-wins
+      // stands so a streamed rewrite (the later, final token counts) is what
+      // gets booked — first-wins here would under-count subagent tokens.
       const existing = currentByKey.get(messageKey);
-      if (existing && !isMainSession) continue;
+      if (existing?.isMainSession && !isMainSession) continue;
       currentByKey.set(messageKey, {
         totals,
         bucketStart,
@@ -7140,6 +7140,7 @@ async function parseQoderNewIncremental({
         projectKey,
         projectRef,
         filePath,
+        isMainSession,
       });
     }
     if (cb && (fileIdx % 50 === 0 || fileIdx === files.length - 1)) {
