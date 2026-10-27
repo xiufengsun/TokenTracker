@@ -21,9 +21,11 @@ export function MenuBarSection() {
   // they sit next to the live preview. This section keeps only the system-level
   // toggles + actions that don't have a visual analogue.
   const launchAtLogin = Boolean(settings?.launchAtLogin);
+  const launchSilently = Boolean(settings?.launchSilently);
   const toastOnReset = settings?.toastOnReset !== false;
   const confettiOnReset = settings?.confettiOnReset !== false;
   const launchAtLoginSupported = settings?.launchAtLoginSupported !== false;
+  const launchSilentlySupported = settings?.launchSilentlySupported !== false;
   const autoUpdateEnabled = settings?.autoUpdateEnabled !== false;
   const updateStatus = settings?.updateStatus || null;
   const updateBusy = Boolean(settings?.updateBusy);
@@ -82,6 +84,21 @@ export function MenuBarSection() {
               checked={launchAtLogin}
               onChange={() => setSetting("launchAtLogin", !launchAtLogin)}
               ariaLabel={copy("settings.menubar.launchAtLogin")}
+            />
+          }
+        />
+      ) : null}
+      {/* Outside the launchAtLoginSupported gate: Windows pushes that flag false
+          but supports Silent Start natively, so this row must render there too. */}
+      {launchSilentlySupported ? (
+        <SettingsRow
+          label={copy("settings.menubar.silentStart")}
+          hint={copy("settings.menubar.silentStartHint")}
+          control={
+            <ToggleSwitch
+              checked={launchSilently}
+              onChange={() => setSetting("launchSilently", !launchSilently)}
+              ariaLabel={copy("settings.menubar.silentStart")}
             />
           }
         />
