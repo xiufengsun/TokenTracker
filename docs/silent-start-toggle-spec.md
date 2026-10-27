@@ -1,6 +1,6 @@
 # Spec:静默启动用户开关(Silent Start)
 
-版本:v1.3 · 日期:2026-10-28 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现,v1.1 设置页开关已实现,待发布
+版本:v1.4 · 日期:2026-10-28 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现,v1.1 设置页开关已实现,待发布
 评审史:R1 代码事实 / R2 语义规范 / R3 矛盾可实现性 / R4 冷读核验+验收审计,双审×4 轮已吸收
 关联文档:`docs/silent-startup.md`、`docs/silent-start-toggle-plan.md`
 **落盘路径(定稿)**:`docs/silent-start-toggle-spec.md`(`docs/plans/` 被 .gitignore 忽略,
@@ -62,13 +62,15 @@
 
 | 来源 \ silentStart | OFF(默认) | ON |
 |---|---|---|
-| manual | macOS:弹仪表盘;Windows:仪表盘不弹(宠物按 §4.3);Linux:弹窗口 | 三端均不弹 |
+| manual | macOS:弹仪表盘;Windows:弹(v1.4 勘误:#832 后基线,login 仍不弹;宠物按 §4.3);Linux:弹窗口 | 三端均不弹 |
 | login | macOS:不弹(现状);Windows:不弹;Linux(P1):不弹 | 三端均不弹 |
 | deeplink | 三端均弹(Linux 的 auth 回调路径现状已弹窗,无需改动) | 三端均弹(含冷启动注记) |
 | resummon | 三端均弹 | 三端均弹 |
 
 > 冷启动注记:Windows 首实例启动即携带深链参数时,**deeplink 绕过静默门控必弹仪表盘**
-> (此时宠物已被 `deepLink is null` 条件压制)——该路径不受 `silent_effective` 影响。
+> (此时宠物按 §4.3 公式处理:`StoredVisible=true` 时仍恢复显示,仅无上退出记录时才被
+> `deepLink is null` 条件压制;v1.4 勘误,原措辞与 §4.3 公式矛盾)——该路径不受
+> `silent_effective` 影响。
 
 ### 4.3 宠物 / 辅助面板规则
 
@@ -99,7 +101,8 @@
 ### 4.5 现状基线(开关关闭时逐字保持,唯 §4.3 宠物修复除外)
 
 - macOS:manual 弹、login 不弹(`TokenTrackerBarApp.swift:149-154`)、deeplink 弹、reopen 弹。
-- Windows:manual/login 仪表盘从不自动弹;deeplink(auth/callback)弹;宠物按 §4.3(含修复项)。
+- Windows:manual 弹 / login 不弹(v1.4 勘误:#832 后基线如此,关闭时逐字保持;
+  宠物按 §4.3(含修复项));deeplink(auth/callback)弹。
 - Linux:窗口以可见方式创建并展示加载页 → 仪表盘(`main.rs:274-283`、`start_dashboard`)。
 
 ## 5. UI 呈现(P0 范围;设置页开关见 §5.3,三端统一仍为 P2)
@@ -316,6 +319,15 @@ webview 既无 `webkit.messageHandlers.nativeBridge` 也无 `chrome.webview` 桥
 
 ## 修订记录(完整,定稿随文件入库)
 
+- v1.4(2026-10-28,CodeRabbit PR #901 第二轮行外评审):① §4.2 manual 行与 §4.5 的
+  Windows 基线勘误——#832(ActivateMessage 重构)之后 main 的实际行为是「manual 弹 /
+  login 不弹」,原文「仪表盘从不自动弹」是 0.95.0 时代基线,已陈旧;**代码不动**(关闭时
+  逐字保持 #832 后现状,`test/windows-launch-activation.test.js` 钉死该形状),只修文档。
+  驳回 bot「删除 manual 启动的 ActivateDashboard」的建议——那会改变 main 现状行为。
+  ② §4.2 冷启动注记措辞勘误:宠物在 `StoredVisible=true` 时按 §4.3 公式恢复,原「已被
+  压制」与 §4.3 公式矛盾。③ 驳回「冷启动 deeplink 压制宠物」建议,理由同上。
+  ④ 搁置「Release App Group provision」建议:entitlements 无 `application-groups` 为
+  存量设计(生产走 widget 容器 fallback),改动牵扯签名验证,留独立 follow-up。
 - v1.3(2026-10-28,CodeRabbit PR #901 行内评审):① §6-3 `settings_path` 语义修正——
   XDG_CONFIG_HOME 单独有效即解析,HOME 仅 `~/.config` fallback 臂必需(原实现先取
   HOME,XDG+无 HOME 的裁剪环境误回退 false 且无法保存;补 `settings_path_resolves_xdg_

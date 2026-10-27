@@ -147,10 +147,13 @@ Other load-bearing facts:
 ### Linux (`TokenTrackerLinux/`, Tauri v2)
 
 Window is built **programmatically** in `setup()` — `tauri.conf.json` has `"windows": []`
-(`TokenTrackerLinux/src-tauri/tauri.conf.json:13`). Builder call at
-`TokenTrackerLinux/src-tauri/src/main.rs:274-283` has **no `.visible(false)`**, so the window is
-always shown at launch (it paints `src/index.html` as a loading screen while the embedded Node server
-boots, then navigates to the dashboard — `start_dashboard`, `main.rs:91-137`).
+(`TokenTrackerLinux/src-tauri/tauri.conf.json:13`). The builder call in `setup()`
+(`main.rs:449-481`) sets `.visible(!silent_start)` (line 480, `silent_start` read from
+`tokentracker_linux::settings::silent_start()` at line 448): the window is shown at launch
+unless Silent Start is enabled. With Silent Start on, the window is created hidden — it still
+paints `src/index.html` as a loading screen and navigates to the dashboard in the background
+(`start_dashboard`, `main.rs:91-137`), and is shown later by the tray "Open Dashboard" action,
+a second-instance activation, or an OAuth callback (`oauth::deliver_pending_callback`).
 
 Other load-bearing facts:
 
