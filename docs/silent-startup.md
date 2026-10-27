@@ -1,12 +1,13 @@
 # Silent startup (launch to background without showing the panel)
 
-> **Implementation status (2026-09-04):** the Silent Start toggle (P0) is implemented on all
+> **Implementation status (see spec v1.2):** the Silent Start toggle (P0) is implemented on all
 > three desktop clients — macOS menu item `Silent Start`, Windows tray item `Silent Start`
 > (next to Launch at Login), Linux tray `CheckMenuItem`. Persisted per platform
 > (`LaunchSilently` / `StartSilently` / `silent_start`), default OFF; takes effect on next
-> launch. See `docs/silent-start-toggle-spec.md` for the behavior contract.
-> Note: the "takes effect on next launch" hint ships as a macOS tooltip only; Windows and
-> Linux tray menus have no reliable tooltip carrier, so this documentation is the carrier.
+> launch. macOS and Windows also expose the toggle in the dashboard settings panel
+> (spec §5.3). See `docs/silent-start-toggle-spec.md` for the behavior contract.
+> Note: no menu carries a "takes effect on next launch" tooltip — the hint lives in the
+> settings panel (`silentStartHint`) and this documentation is the carrier elsewhere.
 > GNOME without the AppIndicator extension shows no tray icon at all — with Silent Start
 > enabled on such a desktop the app has no visible entry point (global hotkey is the
 > planned P3 mitigation).

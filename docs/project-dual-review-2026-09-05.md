@@ -17,15 +17,15 @@
 
 ## 发布前必修(阻断)
 
-1. **F32 [P1] `cargo fmt`** — settings.rs:48,57 过不了 `cargo fmt --check`,ci.yml:110 会红并连锁堵死 npm-publish 与整条发布链。
-2. **F1 [P1] Dev 构建更新防线缺口** — TokenTrackerBarApp.swift:173 `UpdateChecker.shared.check(silent: true)` 未包 `#if !DEBUG`。已亲验:silent 路径在 AutoUpdatePolicy 默认开 + 位于 /Applications 时**无提示**下载安装并强制重启、直接 removeItem 替换 /Applications/TokenTracker.app(UpdateChecker.swift:143-156,461-462,404)。菜单/NativeBridge 两处都堵了,这第三条路没堵。
-3. **F9 [P1] 版本未 bump** — 九处版本位一致停在 0.95.0 = 已发布 tag v0.95.0(非 draft)。重发必失败("version already consumed")。发布前 `npm version patch|minor`。
+1. **F32 [P1] `cargo fmt`** — settings.rs:48,57 过不了 `cargo fmt --check`,ci.yml:110 会红并连锁堵死 npm-publish 与整条发布链。**✅ 已解决(2026-10-28,PR #901):`cargo fmt --check` 通过。**
+2. **F1 [P1] Dev 构建更新防线缺口** — TokenTrackerBarApp.swift:173 `UpdateChecker.shared.check(silent: true)` 未包 `#if !DEBUG`。已亲验:silent 路径在 AutoUpdatePolicy 默认开 + 位于 /Applications 时**无提示**下载安装并强制重启、直接 removeItem 替换 /Applications/TokenTracker.app(UpdateChecker.swift:143-156,461-462,404)。菜单/NativeBridge 两处都堵了,这第三条路没堵。**✅ 已解决(2026-10-28,PR #901):该调用已包 `#if !DEBUG`,四处更新入口 Debug 全硬关(dev spec §4-6)。**
+3. **F9 [P1] 版本未 bump** — 九处版本位一致停在 0.95.0 = 已发布 tag v0.95.0(非 draft)。重发必失败("version already consumed")。发布前 `npm version patch|minor`。**✅ 已解决(2026-10-28,PR #901):版本提交已 `npm version` 同步至 1.4.15,validate:versions 绿。**
 4. **F10/F11 [P2/P3] 提交卫生** — `.v2c/`(含本机插件缓存绝对路径)、`out/`、`docs/silent-startup-report.html`(1013 行生成态中文 HTML)未忽略;新源文件(settings.rs / SilentStart.cs / dev-cleanup.sh)须显式 add。
 
 ## 随本次 release 强烈建议
 
 5. **F19+F20 [P2] 云端计价漂移且无守护** — 本地 computeRowCost 对 `prime-agent-github-copilot`/`prime-agent-copilot` 返回 $0(pricing/index.js:17-22),5 个 edge 副本的零价守卫只查 `pi-*` 两个别名(如 leaderboard-refresh.ts:426)→ Prime Agent 用户的云端 estimated_cost_usd 虚高(用户可见的错误数据)。且 parity 测试第三用例**正向断言**了这份不完整守卫(test/edge-pricing-parity.test.js)——两处必须一起改,否则修 F19 会把测试打红。
-6. **F2 [P2·需 owner 裁定] dev-cleanup.sh 违反 spec §7-2** — spec 行 122 钉死"不得 rm Preferences plist",脚本 :26-29 却在 rm(defaults delete 后清"孤儿文件",注释自辩安全)。二选一:删脚本两行守 spec,或修订 spec 接受此清理。该禁令本身是上一轮双审的决定,默认建议守 spec。
+6. **F2 [P2·需 owner 裁定] dev-cleanup.sh 违反 spec §7-2** — spec 行 122 钉死"不得 rm Preferences plist",脚本 :26-29 却在 rm(defaults delete 后清"孤儿文件",注释自辩安全)。二选一:删脚本两行守 spec,或修订 spec 接受此清理。该禁令本身是上一轮双审的决定,默认建议守 spec。**✅ 已裁定(2026-10-28,owner 选方案 i):spec §7-2 收窄为"先 delete 后 rm 仅限 .dev 孤儿 plist"(dev spec v1.1)。**
 
 ## release train 尽快跟进(预存问题,非本次引入)
 
@@ -48,5 +48,7 @@ computeRowCost 只按五列计价、无调用方绕过;Claude 系 dedup 全走 c
 无 macOS 实机 QA(silent start/dev 共存未真实启动验证);无 Windows 运行时(本机无 dotnet,静态审查);无 dashboard 运行时/e2e;无摄取管线压测与解析器 fuzz;无三平台真机 OAuth 全链路;F24 未做 DNS-rebinding PoC;CI 绿仅单次观测。
 
 ## 建议发布序列
+
+> **2026-10-28 执行状态(PR #901)**:F32 ✓ / F1 ✓ / F9 ✓ / F2 ✓(owner 裁定方案 i)/ F12 ✓(§ 引用改平铺记法)/ F15 ✓(关联文档改指向已入库的 plan);`.gitignore` 已补 `.mimosa/`、`.v2c/`、`out/`;report.html 已随 docs 入库并在 PR body 说明。**仍未做**:F19+F20(edge 五处+测试)、F24+F25(本地中继 Origin/Host 门)、F33(Test csproj 链入 SilentStart.cs)。
 
 显式提交新文件(勿带 .v2c/、out/、report.html)→ `cargo fmt` → F1 一行修复 → (建议)F19+F20 edge 五处+测试 → owner 裁定 F2 → push → CI 绿(npm 自动发)→ `npm version patch`(勿推本地 tag)→ `gh workflow run "release (macOS + Windows + Linux)" -f version=<新版本>` → train 上尽快跟 F24+F25。

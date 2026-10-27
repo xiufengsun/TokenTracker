@@ -129,7 +129,8 @@
    plist**(先 delete 后 rm 的顺序保证 cfprefsd 不再持有该域,不会复活;生产域
    plist 仍绝不可触碰)。v1.1 勘误:原"不得 rm Preferences plist"与 §6「执行后不留
    `.dev` 痕迹」矛盾,按孤儿文件语义收窄为上述例外。
-3. `rm -rf` §6-4、§6-6 各路径(容忍不存在)。
+3. `rm -rf` §6-4、§6-6 各路径(路径不存在不是失败;**真删除失败须 stderr 报告并以非零
+   退出**,v1.1 ④)。
 4. 删除 §6-1 的 Dev 产物(glob 定位,`-z` 判空跳过)。
 5. 打印指引:登录项手动移除(§6-5)、通知授权残留(§6-7)、`bundle-node.sh --clean`(§6-8)。
 6. 自检:生产域仍存在(`defaults read com.tokentracker.bar` 不因脚本失败)、
@@ -190,7 +191,9 @@ showBuildSettings 命令同目录运行。
   收窄原禁令(仅限两个 `.dev` 域、永不 killall cfprefsd、生产域绝不可触碰),
   与 §6 零痕迹目标对齐;③ 代码注释勘误:WidgetSnapshot.swift DEBUG 注释不再
   声称 entitlements 需要变更(entitlements config 无关且刻意不改);§4.x 引用
-  统一为可解析的平铺记法 §4-1/§4-3。
+  统一为可解析的平铺记法 §4-1/§4-3;④ §7-3 删除失败语义——容忍路径不存在
+  (`rm -rf` 对缺失路径本就返回 0),真删除失败须 stderr 报告并以非零退出
+  (`remove_path` helper),CodeRabbit PR #901。
 - v0.5(R4 双审吸收):① §4.2 语言双写(dev 域 AppleLanguages + dev suite)与 D2 分域断言对齐,补首跑前置;② §3 PRODUCT_NAME 标注仅 app target;③ §1 改"产物零差异";④ D3 补精确容器路径与"先退生产版"时序;⑤ D4 补截断目检与 Release plist 键检查;⑥ D7 补基线采集;⑦ 新增 QA 前置段;⑧ D6 补脚本 stdout 断言;⑨ D8 改事实陈述;⑩ D9 并入观察者与 entitlements 审查结论。
 - v0.4(R3 双审吸收):① **[P0]** "Check for Updates" 有两处插入点(SwiftUI 应用菜单
   TokenTrackerBarApp.swift:24-26 + 状态栏 buildMenu:1235-1240),两处都要 `#if !DEBUG`;
