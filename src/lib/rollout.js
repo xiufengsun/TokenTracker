@@ -6770,13 +6770,35 @@ async function parseQoderDbIncremental({
 //
 // Qoder 2026-08 (app 0.1.2+) migrated from SharedClientCache/cache/db/local.db
 // to Electron main.sqlite + ~/.qoder/projects/<slug>/<sessionId>.jsonl.
-// The new transcript's message.usage no longer carries prompt_tokens — it is a
-// credit-billed SDK: {input_tokens:0, output_tokens:0, credits:3.2, billable:true}.
-// Only rows with authoritative token fields are counted: credit-only usage
-// without tokens is intentionally not counted (usage stays unsupported, no
-// token delta) because there is no first-party evidence for a credit→token
-// rate. Cost was never estimated — no authoritative credit→USD rate is
-// published, so total_cost_usd stays 0.
+//
+// The transcript's message.usage shape has drifted at least once, and BOTH
+// shapes occur in real user history:
+//   - app 0.1.8 / agent 1.1.44: Anthropic-style precise token fields, on the
+//     main transcript AND on subagent transcripts
+//     (see test/qoder-new-parser.test.js "Real CN record shape").
+//   - app 0.4.x, model "qfmodel": every row is
+//     {input_tokens:0, output_tokens:0, cache_*:0, credits:>0, billable:false}.
+// The old comment here claimed the credit-billed shape was `{credits, billable:
+// true}`; that assumption is what made the gate below drop 100% of modern Qoder
+// rows, so Qoder vanished from the dashboard instead of showing up as
+// "0 tokens / N requests". `billable` means "charged to the account", NOT
+// "a call happened" — free-tier models report false while still reporting
+// credits. Admission therefore needs all three signals, and dropping any of
+// them regresses a shape that used to count.
+//
+// Non-goals: credit→token conversion stays out. There is no first-party credit
+// → token (or → USD) rate, so fabricating one would push an invented number
+// into totals, trends, achievements and the cloud leaderboard. Rows without
+// authoritative tokens contribute conversation activity only, and
+// total_cost_usd stays 0. Transcript `usage.credits` is deliberately NOT copied
+// into bucket totals — there is no first-party credit→USD rate to book cost
+// from, and carrying it forward invites someone to divide by it later.
+//
+// conversation_count here follows this provider's existing per-response
+// convention (`: 1` per admitted main-transcript row). That field is NOT
+// comparable across providers — same rule as the Claude branch's isMainSession
+// (#307) and Claude Science's `isRoot ? 1 : 0` (see the Claude Science parser).
+//
 // Old local.db is kept as a legacy fallback; both sources now use distinct
 // cursor namespaces (qoder vs qoderNew) via disjoint messageKey prefixes
 // (row: vs jsonl:) but upload under the same source="qoder".
@@ -6870,17 +6892,47 @@ function qoderNewMessageKey(record, filePath, lineIndex = 0) {
   return `jsonl:${fallbackSuffix}|${record?.uuid || ""}`;
 }
 
+// 8.64e15 is the ECMAScript TimeClip limit. A larger finite number (nanosecond
+// epochs, clock garbage) passes coerceEpochMs untouched, and `new Date(ms)`
+// yields Invalid Date whose .toISOString() THROWS RangeError — outside the
+// per-line JSON.parse try/catch, aborting the whole source on one bad row and
+// silently removing Qoder from every later sync (warnProviderParseFailure is
+// quiet in auto syncs). Clamp to a drop instead.
+const MAX_QODER_TIMESTAMP_MS = 8.64e15;
+
 function qoderNewTimestampMs(record) {
-  return coerceEpochMs(record?.timestamp)
+  const ms = coerceEpochMs(record?.timestamp)
     || coerceEpochMs(record?.message?.timestamp)
     || parseIsoTimestampMs(record?.timestamp)
     || parseIsoTimestampMs(record?.message?.timestamp)
     || 0;
+  return ms > MAX_QODER_TIMESTAMP_MS ? 0 : ms;
+}
+
+// Nominal credits for one transcript row. `credits` and `original_credits`
+// coexist (the latter is the pre-discount value), and either alone can be 0,
+// so take the larger instead of `credits ?? original_credits` — `??` does not
+// skip a present-but-zero `credits`, which would drop real activity.
+//
+// The epsilon floor is load-bearing: the activity gate below only needs "some
+// credits were reported", and upstream float noise like 1e-9 would otherwise
+// admit rows that carry no usage at all. Real Qoder credits observed in the
+// wild start around 0.2 (2026-10 CN corpus), so 1e-6 never suppresses genuine
+// activity.
+const MIN_QODER_CREDIT_ACTIVITY = 1e-6;
+
+function readQoderNominalCredits(usage) {
+  let max = 0;
+  for (const raw of [usage?.credits, usage?.original_credits]) {
+    if (typeof raw !== "number" || !Number.isFinite(raw)) continue;
+    if (raw > max) max = raw;
+  }
+  return max >= MIN_QODER_CREDIT_ACTIVITY ? max : 0;
 }
 
 function normalizeQoderNewTokens(usage) {
   if (!usage || typeof usage !== "object") return null;
-  const credits = Number(usage.credits ?? usage.original_credits ?? 0);
+  const credits = readQoderNominalCredits(usage);
   let input = Number(usage.input_tokens ?? 0);
   let cached = Number(usage.cache_read_input_tokens ?? usage.cached_tokens ?? 0);
   let cacheCreation = Number(usage.cache_creation_input_tokens ?? 0);
@@ -6907,14 +6959,29 @@ function normalizeQoderNewTokens(usage) {
       total_tokens: inp + cach + cc + out,
       billable_total_tokens: inp + cach + cc + out,
       credits: Number.isFinite(credits) && credits > 0 ? credits : 0,
+      // `credits` dies at the totals boundary — parseQoderNewIncremental never
+      // copies it into bucket totals or the cursor, and must not start: there
+      // is no first-party credit→token or credit→USD rate to divide it by.
       usage_precision: null,
     };
   }
-  // Credit-only usage without authoritative token fields is intentionally
-  // not counted (no token delta): there is no first-party evidence for a
-  // credit→token rate. The caller still counts billable messages as
-  // conversation activity.
+  // Credit-only usage without authoritative token fields yields null: no token
+  // delta, because there is no first-party credit→token rate. The caller still
+  // counts it as conversation activity when nominal credits prove the call
+  // really happened.
   return null;
+}
+
+// Subagent transcripts are internal turns of the same conversation, so they
+// must not add to conversation activity — same rule the Claude branch enforces
+// with isMainSession (#307) and Claude Science encodes with `isRoot ? 1 : 0`.
+// A row that carries neither tokens nor activity is still tracked in the cursor:
+// a streamed rewrite can hand it real tokens later, and the cursor entry is what
+// makes that transition subtract/add correctly. It must not touch an hourly or
+// project bucket though, because getHourlyBucket() creates buckets on demand and
+// would publish an all-zero row.
+function qoderRowCountsAsUsage(totals) {
+  return (totals?.total_tokens || 0) > 0 || (totals?.conversation_count || 0) > 0;
 }
 
 async function parseQoderNewIncremental({
@@ -6977,6 +7044,9 @@ async function parseQoderNewIncremental({
     } catch (_e) {
       continue;
     }
+    // Separator-agnostic: WSL installs are walked over \\wsl$ UNC paths where
+    // path.join emits backslashes (#307).
+    const isMainSession = !/[\\/]subagents[\\/]/.test(filePath);
     const lines = raw.split("\n");
     for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
       const line = lines[lineIdx];
@@ -6994,9 +7064,19 @@ async function parseQoderNewIncremental({
       const usage = msg.usage;
       if (!usage || typeof usage !== "object") continue;
       const base = normalizeQoderNewTokens(usage);
-      // Allow billable zero-token messages to still count conversation (no token delta)
+      // Three independent admission signals, kept as a superset of the previous
+      // behaviour — dropping any one regresses rows that used to count:
+      //   base            authoritative tokens (app 0.1.8 / agent 1.1.44 shape)
+      //   isBillable      billable is absent or true (the older credit-billed shape)
+      //   nominalCredits  credits > 0 even though billable is false: Qoder 0.4.x
+      //                   reports billable=false for its free model while still
+      //                   reporting real credits, and gate-on-billable alone
+      //                   discarded every row so the whole source vanished.
+      // Rows that are not billable AND carry no credits stay dropped: that is
+      // the synthetic / cancelled / empty-call case we must not count.
       const isBillable = usage.billable !== false;
-      if (!base && !isBillable) continue;
+      const nominalCredits = readQoderNominalCredits(usage);
+      if (!base && !isBillable && nominalCredits <= 0) continue;
       const timestampMs = qoderNewTimestampMs(record);
       if (!timestampMs) continue;
       const bucketStart = toUtcHalfHourStart(new Date(timestampMs).toISOString());
@@ -7014,7 +7094,7 @@ async function parseQoderNewIncremental({
         billable_total_tokens: base.billable_total_tokens,
         total_cost_usd: 0,
         usage_precision: base.usage_precision || undefined,
-        conversation_count: 1,
+        conversation_count: isMainSession ? 1 : 0,
       } : {
         input_tokens: 0,
         cached_input_tokens: 0,
@@ -7024,7 +7104,7 @@ async function parseQoderNewIncremental({
         total_tokens: 0,
         billable_total_tokens: 0,
         total_cost_usd: 0,
-        conversation_count: 1,
+        conversation_count: isMainSession ? 1 : 0,
       };
       let projectKey = null;
       let projectRef = null;
@@ -7043,6 +7123,16 @@ async function parseQoderNewIncremental({
           projectRef = context?.projectRef || null;
         }
       }
+      // Same sessionId+msgId can appear in both the main transcript and a
+      // subagent transcript (mirrored id). currentByKey is last-wins and
+      // listQoderNewSessionFiles orders by localeCompare, so without this
+      // guard the subagent copy (conversation_count 0) could silently replace
+      // the main row's activity depending on file order. A main-session
+      // record always wins the shared key; main-main duplicates keep last-wins
+      // (a streamed rewrite of one main row must not double count), and a
+      // subagent copy never overrides anything.
+      const existing = currentByKey.get(messageKey);
+      if (existing && !isMainSession) continue;
       currentByKey.set(messageKey, {
         totals,
         bucketStart,
@@ -7077,7 +7167,7 @@ async function parseQoderNewIncremental({
       && (prev.projectKey || null) === (cur.projectKey || null)
       && (prev.totals?.total_cost_usd || 0) === (cur.totals.total_cost_usd || 0);
     if (unchanged) continue;
-    if (prev.totals && prev.bucketStart && prev.model) {
+    if (prev.totals && prev.bucketStart && prev.model && qoderRowCountsAsUsage(prev.totals)) {
       const oldBucket = getHourlyBucket(hourlyState, sourceKey, prev.model, prev.bucketStart);
       subtractTotals(oldBucket.totals, prev.totals);
       touchedBuckets.add(bucketKey(sourceKey, prev.model, prev.bucketStart));
@@ -7088,16 +7178,17 @@ async function parseQoderNewIncremental({
       }
     }
     if (cur) {
-      const bucket = getHourlyBucket(hourlyState, sourceKey, cur.model, cur.bucketStart);
-      addTotals(bucket.totals, cur.totals);
-      if (cur.totals.usage_precision) bucket.usage_precision = cur.totals.usage_precision;
-      // addTotals handles total_cost_usd via USD_TICKS, but credits cost is small; ensure it accumulates
-      touchedBuckets.add(bucketKey(sourceKey, cur.model, cur.bucketStart));
-      if (projectEnabled && cur.projectKey) {
-        const projectBucket = getProjectBucket(projectState, cur.projectKey, sourceKey, cur.bucketStart, cur.projectRef);
-        addTotals(projectBucket.totals, cur.totals);
-        if (cur.totals.usage_precision) projectBucket.usage_precision = cur.totals.usage_precision;
-        projectTouchedBuckets.add(projectBucketKey(cur.projectKey, sourceKey, cur.bucketStart));
+      if (qoderRowCountsAsUsage(cur.totals)) {
+        const bucket = getHourlyBucket(hourlyState, sourceKey, cur.model, cur.bucketStart);
+        addTotals(bucket.totals, cur.totals);
+        if (cur.totals.usage_precision) bucket.usage_precision = cur.totals.usage_precision;
+        touchedBuckets.add(bucketKey(sourceKey, cur.model, cur.bucketStart));
+        if (projectEnabled && cur.projectKey) {
+          const projectBucket = getProjectBucket(projectState, cur.projectKey, sourceKey, cur.bucketStart, cur.projectRef);
+          addTotals(projectBucket.totals, cur.totals);
+          if (cur.totals.usage_precision) projectBucket.usage_precision = cur.totals.usage_precision;
+          projectTouchedBuckets.add(projectBucketKey(cur.projectKey, sourceKey, cur.bucketStart));
+        }
       }
       qoderState.messages[key] = {
         totals: cur.totals,
@@ -7118,15 +7209,17 @@ async function parseQoderNewIncremental({
   // Add brand-new keys
   for (const [key, cur] of currentByKey.entries()) {
     if (qoderState.messages[key]) continue;
-    const bucket = getHourlyBucket(hourlyState, sourceKey, cur.model, cur.bucketStart);
-    addTotals(bucket.totals, cur.totals);
-    if (cur.totals.usage_precision) bucket.usage_precision = cur.totals.usage_precision;
-    touchedBuckets.add(bucketKey(sourceKey, cur.model, cur.bucketStart));
-    if (projectEnabled && cur.projectKey) {
-      const projectBucket = getProjectBucket(projectState, cur.projectKey, sourceKey, cur.bucketStart, cur.projectRef);
-      addTotals(projectBucket.totals, cur.totals);
-      if (cur.totals.usage_precision) projectBucket.usage_precision = cur.totals.usage_precision;
-      projectTouchedBuckets.add(projectBucketKey(cur.projectKey, sourceKey, cur.bucketStart));
+    if (qoderRowCountsAsUsage(cur.totals)) {
+      const bucket = getHourlyBucket(hourlyState, sourceKey, cur.model, cur.bucketStart);
+      addTotals(bucket.totals, cur.totals);
+      if (cur.totals.usage_precision) bucket.usage_precision = cur.totals.usage_precision;
+      touchedBuckets.add(bucketKey(sourceKey, cur.model, cur.bucketStart));
+      if (projectEnabled && cur.projectKey) {
+        const projectBucket = getProjectBucket(projectState, cur.projectKey, sourceKey, cur.bucketStart, cur.projectRef);
+        addTotals(projectBucket.totals, cur.totals);
+        if (cur.totals.usage_precision) projectBucket.usage_precision = cur.totals.usage_precision;
+        projectTouchedBuckets.add(projectBucketKey(cur.projectKey, sourceKey, cur.bucketStart));
+      }
     }
     qoderState.messages[key] = {
       totals: cur.totals,

@@ -457,3 +457,484 @@ test("parseQoderNewIncremental handles zero credit with only cache-creation toke
   assert.equal(row.usage_precision, undefined);
   assert.equal(row.conversation_count, 1);
 });
+
+// ── Admission gate: credits prove the call happened even when billable=false ──
+//
+// Qoder 0.4.x reports every qfmodel row as {tokens: 0, credits: >0,
+// billable:false}. The old gate dropped all of them, which erased the whole
+// source from the dashboard. These cases pin the three admission signals and,
+// just as importantly, the rows that must STAY dropped.
+
+const qRec = (usage, { ts = "2026-09-10T08:00:00.000Z", id, sessionId = "sess-1" } = {}) => {
+  const msgId = id || usage.__id || "m1";
+  const { __id, ...cleanUsage } = usage;
+  return {
+    type: "assistant",
+    timestamp: ts,
+    uuid: msgId,
+    sessionId,
+    cwd: "/tmp/proj",
+    message: {
+      id: msgId,
+      role: "assistant",
+      model: "qfmodel",
+      content: [{ type: "text", text: "ok" }],
+      usage: cleanUsage,
+    },
+  };
+};
+
+async function runOne(t, records, { sourceKey = "qoder", cursorKey = "qoderNew", cursors = {} } = {}) {
+  const tmp = tempDir();
+  t.after(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+  const sessionFile = path.join(tmp, "proj", "sess1.jsonl");
+  writeJsonl(sessionFile, records);
+  const { dir, queuePath } = tempQueue();
+  t.after(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+  const res = await parseQoderNewIncremental({
+    sessionFiles: [sessionFile], cursors, queuePath, sourceKey, cursorKey,
+  });
+  return { res, queuePath, rows: queueRows(queuePath).filter((r) => r.source === sourceKey), cursors, tmp, sessionFile };
+}
+
+test("billable:false with real credits counts as activity, no tokens, no cost", async (t) => {
+  const { res, rows } = await runOne(t, [
+    qRec({ credits: 0.7290659749999999, original_credits: 0.7290659749999999, billable: false,
+      input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }),
+  ]);
+  assert.equal(res.messagesProcessed, 1);
+  assert.equal(res.eventsAggregated, 1);
+  const row = rows.find((r) => r.conversation_count > 0);
+  assert.ok(row, "credit-only row must enqueue activity");
+  assert.equal(row.total_tokens, 0);
+  assert.equal(row.billable_total_tokens, 0);
+  assert.equal(row.conversation_count, 1);
+  assert.equal(row.total_cost_usd, 0);
+  assert.equal(row.usage_precision, undefined, "0 tokens must not be labelled an estimate");
+});
+
+test("billable:false with zero credits stays dropped (synthetic / cancelled calls)", async (t) => {
+  const { res, rows } = await runOne(t, [
+    qRec({ credits: 0, original_credits: 0, billable: false, input_tokens: 0, output_tokens: 0 }),
+  ]);
+  assert.equal(res.messagesProcessed, 0);
+  assert.equal(rows.length, 0);
+});
+
+test("gate is a superset of the old behaviour: absent/null/\"true\" billable still count", async (t) => {
+  // These three shapes were admitted before the fix (billable !== false). The
+  // credits signal may only ADD rows, never remove them.
+  const { res, rows } = await runOne(t, [
+    qRec({ credits: 0, input_tokens: 0, output_tokens: 0, __id: "a" }),
+    qRec({ credits: 0, billable: null, input_tokens: 0, output_tokens: 0, __id: "b" }, { id: "b" }),
+    qRec({ credits: 0, billable: "true", input_tokens: 0, output_tokens: 0, __id: "c" }, { id: "c" }),
+  ]);
+  assert.equal(res.messagesProcessed, 3);
+  assert.equal(rows.reduce((s, r) => s + r.conversation_count, 0), 3);
+});
+
+test("credits must be a real number: type junk and sub-epsilon noise do not admit", async (t) => {
+  const junk = [
+    { credits: true }, { credits: "7" }, { credits: [5] }, { credits: {} },
+    { credits: 1e999 }, { credits: -5 }, { credits: null }, { credits: 1e-9 },
+  ];
+  for (const extra of junk) {
+    const { res } = await runOne(t, [
+      qRec({ billable: false, input_tokens: 0, output_tokens: 0, ...extra }, { id: `junk-${JSON.stringify(extra)}` }),
+    ]);
+    assert.equal(res.messagesProcessed, 0, `must not admit ${JSON.stringify(extra)}`);
+  }
+  // 1e-6 is at the floor and must admit.
+  const floor = await runOne(t, [qRec({ billable: false, credits: 1e-6, input_tokens: 0, output_tokens: 0, __id: "f" })]);
+  assert.equal(floor.res.messagesProcessed, 1);
+  // credits:0 with a real original_credits must admit — `??` would take the 0.
+  const discounted = await runOne(t, [
+    qRec({ billable: false, credits: 0, original_credits: 1.5, input_tokens: 0, output_tokens: 0, __id: "d" }),
+  ]);
+  assert.equal(discounted.res.messagesProcessed, 1, "max(credits, original_credits) must drive admission");
+});
+
+test("a huge numeric timestamp is dropped, not a RangeError that kills the source", async (t) => {
+  // Nanosecond epochs pass coerceEpochMs but exceed the ECMAScript TimeClip
+  // limit; new Date(ms).toISOString() throws before the bucket helper's own
+  // invalid-date guard. One such row must not abort every later sync.
+  const { res, rows } = await runOne(t, [
+    qRec({ credits: 0.5, billable: false, input_tokens: 0, output_tokens: 0 },
+      { id: "ns-epoch", ts: 1_770_000_000_000_000_000 }),
+    qRec({ credits: 0.5, billable: false, input_tokens: 0, output_tokens: 0 },
+      { id: "good", ts: "2026-09-10T08:00:00.000Z" }),
+  ]);
+  assert.equal(res.messagesProcessed, 1, "the good row must still be admitted");
+  assert.equal(rows.reduce((s, r) => s + r.conversation_count, 0), 1);
+});
+
+test("mixed billable true/false in one file both count and keep distinct keys", async (t) => {
+  const { res, rows } = await runOne(t, [
+    qRec({ credits: 1.0, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "x1", ts: "2026-09-10T08:00:00.000Z" }),
+    qRec({ credits: 1.0, billable: true, input_tokens: 0, output_tokens: 0 }, { id: "x2", ts: "2026-09-10T08:05:00.000Z" }),
+  ]);
+  assert.equal(res.messagesProcessed, 2);
+  assert.equal(rows.reduce((s, r) => s + r.conversation_count, 0), 2);
+});
+
+test("subagent transcript sharing a sessionId does not clobber or double-count", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  const main = path.join(tmp, "proj", "sess-1.jsonl");
+  const sub = path.join(tmp, "proj", "sess-1", "subagents", "agent-1.jsonl");
+  const rec = (id) => qRec({ credits: 0.5, billable: false, input_tokens: 0, output_tokens: 0 }, { id, sessionId: "sess-1" });
+  writeJsonl(main, [rec("same-id")]);
+  writeJsonl(sub, [rec("same-id")]);
+  const cursors = {};
+  const first = await parseQoderNewIncremental({
+    sessionFiles: [main, sub], cursors, queuePath, sourceKey: "qoder-cn", cursorKey: "qoderCnNew",
+  });
+  // Same sessionId + same message id collapses to one key by design; the point
+  // is that it never double counts and the main-transcript copy wins the key
+  // regardless of file order — a subagent copy carries conversation_count 0.
+  assert.equal(first.messagesProcessed, 1);
+  assert.equal(
+    cursors.qoderCnNew.messages["jsonl:sess-1|same-id"]?.totals.conversation_count,
+    1,
+    "main-transcript copy must win the shared key, not the subagent copy",
+  );
+  // Same outcome when the subagent file is walked first.
+  const cursorsReversed = {};
+  const reversed = await parseQoderNewIncremental({
+    sessionFiles: [sub, main], cursors: cursorsReversed, queuePath, sourceKey: "qoder-cn", cursorKey: "qoderCnNew",
+  });
+  assert.equal(reversed.messagesProcessed, 1);
+  assert.equal(
+    cursorsReversed.qoderCnNew.messages["jsonl:sess-1|same-id"]?.totals.conversation_count,
+    1,
+    "main-transcript copy wins even when the subagent file is walked first",
+  );
+  const second = await parseQoderNewIncremental({
+    sessionFiles: [main, sub], cursors, queuePath, sourceKey: "qoder-cn", cursorKey: "qoderCnNew",
+  });
+  assert.equal(second.eventsAggregated, 0);
+});
+
+test("subagent rows are tracked but add no conversation activity", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  const main = path.join(tmp, "proj", "sess-1.jsonl");
+  const sub = path.join(tmp, "proj", "sess-1", "subagents", "agent-1.jsonl");
+  writeJsonl(main, [qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "m1", sessionId: "sess-1" })]);
+  writeJsonl(sub, [
+    qRec({ credits: 2, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "s1", sessionId: "sess-1" }),
+    qRec({ credits: 3, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "s2", sessionId: "sess-1" }),
+  ]);
+  const cursors = {};
+  const res = await parseQoderNewIncremental({
+    sessionFiles: [main, sub], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  // All three stay tracked (their credits and any later token rewrite need it)
+  // but only the main-transcript row counts as conversation activity.
+  assert.equal(res.messagesProcessed, 3);
+  assert.equal(Object.keys(cursors.qoderNew.messages).length, 3);
+  const rows = queueRows(queuePath).filter((r) => r.source === "qoder");
+  assert.equal(rows.reduce((s, r) => s + r.conversation_count, 0), 1);
+  assert.equal(rows.reduce((s, r) => s + (r.total_tokens || 0), 0), 0);
+  for (const row of rows) {
+    assert.ok(row.conversation_count > 0 || row.total_tokens > 0,
+      "subagent rows must not publish all-zero buckets");
+  }
+});
+
+test("subagent detection is separator-agnostic (backslash separators)", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => { fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(path.dirname(queuePath), { recursive: true, force: true }); });
+  // On POSIX a backslash is a plain filename character, so a UNC-shaped path
+  // can be created and read for real — this actually exercises the
+  // /[\\/]subagents[\\/]/ classification (a WSL \\wsl$ walk produces exactly
+  // these separator patterns) instead of only pinning the unreadable-path skip.
+  const uncFile = path.join(tmp, "C:\\wsl$\\Ubuntu\\home\\u\\.qoder-cn\\proj\\sess\\subagents\\agent-1.jsonl");
+  fs.mkdirSync(path.dirname(uncFile), { recursive: true });
+  writeJsonl(uncFile, [
+    qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "s1", sessionId: "sess" }),
+  ]);
+  const cursors = {};
+  const res = await parseQoderNewIncremental({
+    sessionFiles: [uncFile], cursors, queuePath, sourceKey: "qoder-cn", cursorKey: "qoderCnNew",
+  });
+  assert.equal(res.messagesProcessed, 1, "backslash path is read, not skipped");
+  const [key] = Object.keys(cursors.qoderCnNew.messages);
+  assert.equal(cursors.qoderCnNew.messages[key].totals.conversation_count, 0,
+    "backslash subagents/ path must classify as a subagent transcript");
+  assert.equal(queueRows(queuePath).filter((r) => r.source === "qoder-cn").length, 0,
+    "subagent row must not publish an all-zero bucket");
+});
+
+test("a subagent row that later gains real tokens is bucketed exactly once", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  const sub = path.join(tmp, "proj", "sess-1", "subagents", "agent-1.jsonl");
+  writeJsonl(sub, [qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "s1", sessionId: "sess-1" })]);
+  const cursors = {};
+  const first = await parseQoderNewIncremental({
+    sessionFiles: [sub], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  assert.equal(first.eventsAggregated, 1);
+  assert.equal(queueRows(queuePath).filter((r) => r.source === "qoder").length, 0, "no all-zero row published");
+  // Upstream rewrites the row with authoritative tokens.
+  writeJsonl(sub, [qRec({ credits: 1, billable: false, input_tokens: 1000, output_tokens: 40 }, { id: "s1", sessionId: "sess-1" })]);
+  const second = await parseQoderNewIncremental({
+    sessionFiles: [sub], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  assert.equal(second.eventsAggregated, 1);
+  const rows = queueRows(queuePath).filter((r) => r.source === "qoder");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].total_tokens, 1040, "tokens arrive exactly once, not doubled");
+  assert.equal(rows[0].conversation_count, 0, "still no conversation activity for a subagent turn");
+});
+
+test("deleting a main row retracts its activity without leaving a phantom bucket", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  const file = path.join(tmp, "proj", "sess1.jsonl");
+  writeJsonl(file, [
+    qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "a", ts: "2026-09-10T08:00:00.000Z" }),
+    qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "b", ts: "2026-09-10T08:05:00.000Z" }),
+  ]);
+  const cursors = {};
+  await parseQoderNewIncremental({
+    sessionFiles: [file], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  const before = queueRows(queuePath).filter((r) => r.source === "qoder");
+  assert.equal(before.reduce((s, r) => s + r.conversation_count, 0), 2);
+  writeJsonl(file, [
+    qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "a", ts: "2026-09-10T08:00:00.000Z" }),
+  ]);
+  await parseQoderNewIncremental({
+    sessionFiles: [file], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  const after = queueRows(queuePath).filter((r) => r.source === "qoder");
+  const latest = after[after.length - 1];
+  assert.equal(latest.conversation_count, 1, "retraction must land on the real activity count");
+  for (const row of after) {
+    assert.ok(row.conversation_count > 0 || row.total_tokens > 0, "no all-zero bucket rows");
+  }
+});
+
+test("streamed rewrites of one message id count once and restate on change", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  const file = path.join(tmp, "proj", "sess1.jsonl");
+  const rec = (tokens) => qRec({ credits: 0.4, billable: false, ...tokens }, { id: "dup" });
+  writeJsonl(file, [rec({ input_tokens: 0, output_tokens: 0 }), rec({ input_tokens: 0, output_tokens: 0 })]);
+  const cursors = {};
+  const first = await parseQoderNewIncremental({
+    sessionFiles: [file], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  assert.equal(first.messagesProcessed, 1, "duplicate id collapses to one key");
+  assert.equal(cursors.qoderNew.messages["jsonl:sess-1|dup"].totals.conversation_count, 1);
+});
+
+test("legacy qoder cursor keys migrate and coexist with the credits admission", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  const file = path.join(tmp, "proj", "sess1.jsonl");
+  writeJsonl(file, [qRec({ credits: 3, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "legacy" })]);
+  const messageKey = "jsonl:sess-1|legacy";
+  const cursors = {
+    qoder: {
+      messages: {
+        [messageKey]: {
+          totals: {
+            input_tokens: 10, cached_input_tokens: 0, cache_creation_input_tokens: 0,
+            output_tokens: 5, reasoning_output_tokens: 0, total_tokens: 15,
+            billable_total_tokens: 15, total_cost_usd: 0, conversation_count: 1,
+          },
+          conversationCount: 1,
+          bucketStart: "2026-09-10T08:00:00.000Z",
+          model: "qfmodel",
+          projectKey: null,
+          projectRef: null,
+          updatedAt: "2026-09-10T08:00:00.000Z",
+        },
+      },
+      updatedAt: "2026-09-10T08:00:00.000Z",
+    },
+  };
+  const first = await parseQoderNewIncremental({
+    sessionFiles: [file], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  assert.ok(cursors.qoderNew, "one-time migration must move jsonl: keys into the new namespace");
+  assert.equal(cursors.qoder.messages[messageKey], undefined, "legacy namespace must not keep the key");
+  assert.equal(first.messagesProcessed, 1);
+  const second = await parseQoderNewIncremental({
+    sessionFiles: [file], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  assert.equal(second.eventsAggregated, 0, "migration + admission must not double count on the next pass");
+});
+
+test("identical files reached through a symlink dedupe by message key", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  const realDir = path.join(tmp, "real");
+  const file = path.join(realDir, "sess1.jsonl");
+  writeJsonl(file, [qRec({ credits: 1.25, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "s1" })]);
+  const linkDir = path.join(tmp, "link");
+  try {
+    fs.symlinkSync(realDir, linkDir, "dir");
+  } catch {
+    t.skip("filesystem does not allow symlinks");
+    return;
+  }
+  const both = [file, path.join(linkDir, "sess1.jsonl")];
+  const cursors = {};
+  const res = await parseQoderNewIncremental({
+    sessionFiles: both, cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  assert.equal(res.messagesProcessed, 1, "same content under two paths must count once");
+});
+
+test("credit-only activity is idempotent across repeated syncs", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  const file = path.join(tmp, "proj", "sess1.jsonl");
+  writeJsonl(file, [
+    qRec({ credits: 0.5, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "a", ts: "2026-09-10T08:00:00.000Z" }),
+    qRec({ credits: 0.5, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "b", ts: "2026-09-10T08:10:00.000Z" }),
+  ]);
+  const cursors = {};
+  const first = await parseQoderNewIncremental({
+    sessionFiles: [file], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  const afterFirst = fs.readFileSync(queuePath, "utf8");
+  const second = await parseQoderNewIncremental({
+    sessionFiles: [file], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  assert.equal(first.messagesProcessed, 2);
+  assert.equal(second.eventsAggregated, 0);
+  assert.equal(second.bucketsQueued, 0);
+  assert.equal(fs.readFileSync(queuePath, "utf8"), afterFirst, "queue must not grow on re-sync");
+});
+
+// Backstop against the failure that erased Qoder from the dashboard: this runs
+// the parser over the operator's real transcripts when present, asserting shape
+// invariants only (never absolute row counts, since the corpus grows live).
+test("real Qoder CN corpus: every credit-bearing row is admitted and carries no tokens", async (t) => {
+  const projectsDir = resolveQoderCnProjectsDir({ home: os.homedir(), env: {} });
+  if (!fs.existsSync(projectsDir)) {
+    t.skip(`no Qoder CN corpus at ${projectsDir}`);
+    return;
+  }
+  const files = await listQoderNewSessionFiles(projectsDir);
+  if (files.length === 0) {
+    t.skip("empty Qoder CN corpus");
+    return;
+  }
+  let eligible = 0;
+  let noIdEligible = 0;
+  let expectedTokens = 0;
+  const keys = new Set();
+  // Mirror normalizeQoderNewTokens' per-field truncation and clamping so the
+  // queued-token sum can be pinned exactly, whatever usage shapes the corpus
+  // carries (0.4.x credit-only rows contribute 0; 0.1.8 precise-token rows
+  // contribute their real counts). The cache field reproduces the parser's
+  // `??` chain exactly — present-but-null cache_read_input_tokens must fall
+  // through to cached_tokens, same as the parser.
+  const fieldTokens = (raw) => {
+    let value = Number(raw ?? 0);
+    if (!Number.isFinite(value) || value < 0) value = 0;
+    return Math.trunc(value);
+  };
+  for (const file of files) {
+    for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      let record;
+      try { record = JSON.parse(line); } catch { continue; }
+      const msg = record?.message;
+      if (record?.type !== "assistant" || msg?.role !== "assistant" || typeof msg.usage !== "object" || !msg.usage) continue;
+      // Mirror the parser's token fields, including its OpenAI-style
+      // `cached_tokens` fallback for cache reads.
+      const hasToken = ["input_tokens", "output_tokens", "cache_creation_input_tokens"]
+        .some((f) => Number(msg.usage[f]) > 0)
+        || Number(msg.usage.cache_read_input_tokens ?? msg.usage.cached_tokens) > 0;
+      const hasCredit = [msg.usage.credits, msg.usage.original_credits]
+        .some((v) => typeof v === "number" && Number.isFinite(v) && v >= 1e-6);
+      if (!hasToken && !hasCredit && msg.usage.billable === false) continue;
+      // Mirror the parser's timestamp gate — rows without a parseable
+      // timestamp are dropped before admission, so they are not eligible.
+      const rawTs = record.timestamp ?? msg.timestamp;
+      const tsOk = typeof rawTs === "number"
+        ? Number.isFinite(rawTs)
+        : typeof rawTs === "string" && rawTs.trim() !== "" && !Number.isNaN(Date.parse(rawTs));
+      if (!tsOk) continue;
+      eligible += 1;
+      expectedTokens += fieldTokens(msg.usage.input_tokens)
+        + fieldTokens(msg.usage.output_tokens)
+        + fieldTokens(msg.usage.cache_read_input_tokens ?? msg.usage.cached_tokens)
+        + fieldTokens(msg.usage.cache_creation_input_tokens);
+      // Mirror qoderNewMessageKey's fallback chain and normalizeMessageKeyPart's
+      // trim: message.id, then row uuid, then record id; sessionId (either case
+      // convention) qualifies the key when present. Rows with no id at all fall
+      // under a per-line fallback key the parser always admits.
+      const id = [msg.id, record.uuid, record.id]
+        .find((v) => typeof v === "string" && v.trim() !== "")?.trim();
+      const sid = [record.sessionId, record.session_id]
+        .find((v) => typeof v === "string" && v.trim() !== "")?.trim();
+      if (id) keys.add(sid ? `${sid}|${id}` : id);
+      else noIdEligible += 1;
+    }
+  }
+  if (eligible === 0) {
+    t.skip("no credit-bearing rows in corpus");
+    return;
+  }
+  const { queuePath } = tempQueue();
+  t.after(() => { fs.rmSync(path.dirname(queuePath), { recursive: true, force: true }); });
+  const cursors = {};
+  const first = await parseQoderNewIncremental({
+    sessionFiles: files, cursors, queuePath, sourceKey: "qoder-cn", cursorKey: "qoderCnNew",
+  });
+  const second = await parseQoderNewIncremental({
+    sessionFiles: files, cursors, queuePath, sourceKey: "qoder-cn", cursorKey: "qoderCnNew",
+  });
+  assert.ok(first.messagesProcessed > 0, "the gate must no longer erase the source");
+  assert.equal(first.messagesProcessed, keys.size + noIdEligible, "admitted rows must equal distinct message keys");
+  assert.equal(second.eventsAggregated, 0, "backfill must be idempotent");
+  assert.equal(
+    queueRows(queuePath).filter((r) => r.source === "qoder-cn").reduce((s, r) => s + (r.total_tokens || 0), 0),
+    expectedTokens,
+    "queued tokens must equal exactly what the corpus reports — nothing invented",
+  );
+  for (const row of queueRows(queuePath).filter((r) => r.source === "qoder-cn")) {
+    assert.equal(row.total_cost_usd, 0, "Qoder must not invent cost");
+  }
+});
