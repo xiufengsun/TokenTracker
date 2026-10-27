@@ -189,7 +189,7 @@ export function parseSessionFilters(search) {
   const from = dateValue("from");
   const to = dateValue("to");
   return {
-    source: ["claude", "codex", "grok", "zcode", "opencode", "kimi", "omp"].includes(source) ? source : "all",
+    source: ["claude", "codex", "grok", "zcode", "opencode", "kimi", "omp", "dsh"].includes(source) ? source : "all",
     model: params.get("model") || "all",
     from,
     to,

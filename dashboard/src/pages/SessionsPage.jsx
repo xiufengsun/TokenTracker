@@ -41,6 +41,7 @@ const SOURCE_FILTERS = [
   { id: "zcode", label: () => "ZCode" },
   { id: "kimi", label: () => copy("leaderboard.column.kimi") },
   { id: "omp", label: () => "oh-my-pi" },
+  { id: "dsh", label: () => copy("provider.display.deepseek_harness") },
 ];
 
 const DATE_RANGES = [
