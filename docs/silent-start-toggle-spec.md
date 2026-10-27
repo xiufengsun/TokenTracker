@@ -1,6 +1,6 @@
 # Spec:静默启动用户开关(Silent Start)
 
-版本:v1.0 · 日期:2026-09-04 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现,待发布
+版本:v1.2 · 日期:2026-10-28 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现,v1.1 设置页开关已实现,待发布
 评审史:R1 代码事实 / R2 语义规范 / R3 矛盾可实现性 / R4 冷读核验+验收审计,双审×4 轮已吸收
 关联文档:`docs/silent-startup.md`、`docs/plans/2026-09-04-silent-start-toggle.md`
 **落盘路径(定稿)**:`docs/silent-start-toggle-spec.md`(`docs/plans/` 被 .gitignore 忽略,
