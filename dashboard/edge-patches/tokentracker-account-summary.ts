@@ -620,6 +620,7 @@ interface HourlyRow {
   total_tokens: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  unclassified_input_tokens?: number | null;
   cached_input_tokens: number | null;
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
@@ -633,6 +634,7 @@ interface GroupedRow {
   total_tokens: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  unclassified_input_tokens?: number | null;
   cached_input_tokens: number | null;
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
@@ -677,6 +679,7 @@ interface SummaryWire {
 const SUMMARY_TOTAL_KEYS = [
   "total_tokens", "input_tokens", "output_tokens", "cached_input_tokens",
   "cache_creation_input_tokens", "reasoning_output_tokens", "conversation_count", "active_days",
+  "unclassified_input_tokens",
 ];
 
 function decodeSummaryWire(data: unknown): CompactSummary {
@@ -783,6 +786,7 @@ function computeRowCost(row: GroupedRow): number {
   if (row.source === "pi-github-copilot" || row.source === "pi-copilot") return 0;
   const reportedCost = Number(row.total_cost_usd);
   if (
+    !(Number(row.unclassified_input_tokens) > 0) &&
     SOURCES_WITH_AUTHORITATIVE_COST.has(row.source) &&
     Number.isFinite(reportedCost) &&
     reportedCost > 0
@@ -943,6 +947,7 @@ export default async function (req: Request): Promise<Response> {
     total_tokens: num("total_tokens"),
     billable_total_tokens: num("total_tokens"),
     total_cost_usd: totalCost,
+    unclassified_input_tokens: num("unclassified_input_tokens"),
     input_tokens: num("input_tokens"),
     output_tokens: num("output_tokens"),
     cached_input_tokens: num("cached_input_tokens"),
@@ -992,7 +997,7 @@ export default async function (req: Request): Promise<Response> {
     from,
     to,
     days: num("active_days"),
-    totals: { ...totals, total_cost_usd: totalCost.toFixed(6) },
+    totals: { ...totals, ...costFields(totalCost.toFixed(6), totals.unclassified_input_tokens) },
     rolling: {
       last_7d: {
         from: l7from.toISOString().slice(0, 10),
@@ -1010,4 +1015,12 @@ export default async function (req: Request): Promise<Response> {
       },
     },
   });
+}
+
+function costFields(known: number | string, unclassified: number) {
+  return {
+    total_cost_usd: unclassified > 0 ? null : known,
+    known_cost_usd: known,
+    cost_status: unclassified > 0 ? "partial" : "complete",
+  };
 }

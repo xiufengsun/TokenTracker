@@ -1,4 +1,6 @@
 {
+  "usage.metric.unclassified_input": "输入（缓存拆分未知）",
+  "usage.cost.partial": "费用不完整",
   "cloud.membership.tools_title": "工具与账单",
   "trend.monitor.pin_hint": "点击柱子固定并滚动查看详情",
   "usage.overview.all_tools": "全部",

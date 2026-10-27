@@ -1230,6 +1230,11 @@ export function DashboardPage({
         value: hasSummary ? formatTokens(summary?.input_tokens) : "—",
         title: hasSummary ? formatTokensTooltip(summary?.input_tokens) : undefined,
       },
+      ...(Number(summary?.unclassified_input_tokens) > 0 ? [{
+        label: copy("usage.metric.unclassified_input"),
+        value: formatTokens(summary.unclassified_input_tokens),
+        title: formatTokensTooltip(summary.unclassified_input_tokens),
+      }] : []),
       {
         label: copy("usage.metric.output"),
         value: hasSummary ? formatTokens(summary?.output_tokens) : "—",
@@ -1249,6 +1254,7 @@ export function DashboardPage({
     [
       summary?.cached_input_tokens,
       summary?.input_tokens,
+      summary?.unclassified_input_tokens,
       summary?.output_tokens,
       summary?.reasoning_output_tokens,
       summaryTotalTokens,
@@ -1262,10 +1268,11 @@ export function DashboardPage({
     model.pricing?.status === "unpriced" && model.cost_source !== "provider_reported" && Number(model.totals?.total_tokens) > 0,
   ));
   const summaryCostValue = useMemo(() => {
+    if (summary?.cost_status === "partial") return copy("usage.cost.partial");
     if (hasUnpricedUsage && Number(summary?.total_cost_usd) === 0) return copy("dashboard.cost_breakdown.unpriced_label");
     const value = formatUsdCurrency(summary?.total_cost_usd, { currency, rate });
     return hasUnpricedUsage && value !== "-" ? `≥${value}` : value;
-  }, [summary?.total_cost_usd, currency, rate, hasUnpricedUsage]);
+  }, [summary?.total_cost_usd, summary?.cost_status, currency, rate, hasUnpricedUsage]);
   const summaryConversationsValue = useMemo(
     () => summary?.conversation_count ?? null,
     [summary?.conversation_count],

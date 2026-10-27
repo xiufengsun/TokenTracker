@@ -162,11 +162,11 @@ public struct WidgetSnapshot: Codable, Equatable {
 
 public struct PeriodTotals: Codable, Equatable {
     public var tokens: Int
-    public var costUsd: Double
+    public var costUsd: Double?
     public var conversations: Int
     public var activeDays: Int
 
-    public init(tokens: Int = 0, costUsd: Double = 0, conversations: Int = 0, activeDays: Int = 0) {
+    public init(tokens: Int = 0, costUsd: Double? = 0, conversations: Int = 0, activeDays: Int = 0) {
         self.tokens = tokens
         self.costUsd = costUsd
         self.conversations = conversations
@@ -179,9 +179,9 @@ public struct PeriodTotals: Codable, Equatable {
 public struct DailyPoint: Codable, Equatable {
     public var day: Date
     public var totalTokens: Int
-    public var costUsd: Double
+    public var costUsd: Double?
 
-    public init(day: Date, totalTokens: Int, costUsd: Double) {
+    public init(day: Date, totalTokens: Int, costUsd: Double?) {
         self.day = day
         self.totalTokens = totalTokens
         self.costUsd = costUsd
@@ -208,10 +208,10 @@ public struct SnapshotSourceEntry: Codable, Equatable, Identifiable {
     public var id: String { source }
     public var source: String
     public var tokens: Int
-    public var costUsd: Double
+    public var costUsd: Double?
     public var sharePercent: Double
 
-    public init(source: String, tokens: Int, costUsd: Double, sharePercent: Double) {
+    public init(source: String, tokens: Int, costUsd: Double?, sharePercent: Double) {
         self.source = source
         self.tokens = tokens
         self.costUsd = costUsd

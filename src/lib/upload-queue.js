@@ -13,7 +13,8 @@ function sessionSnapshotMs(row) {
       typeof row.model !== "string" || !row.model.trim() || row.model.trim().length > 200 ||
       !Number.isFinite(Date.parse(row.bucket_start)) || !Number.isFinite(verifiedMs) ||
       TOKEN_COLUMNS.some((column) => !Number.isSafeInteger(Number(row[column])) || Number(row[column]) < 0) ||
-      Number(row.total_tokens) !== Number(row.input_tokens) + Number(row.output_tokens) + Number(row.cached_input_tokens) + Number(row.cache_creation_input_tokens)) return null;
+      !Number.isSafeInteger(Number(row.unclassified_input_tokens ?? 0)) || Number(row.unclassified_input_tokens ?? 0) < 0 ||
+      Number(row.total_tokens) !== Number(row.input_tokens) + Number(row.output_tokens) + Number(row.cached_input_tokens) + Number(row.cache_creation_input_tokens) + Number(row.unclassified_input_tokens ?? 0)) return null;
   return verifiedMs;
 }
 

@@ -12,8 +12,8 @@ const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_STATE_BYTES = 64 * 1024 * 1024;
 const MAX_DEVICES = 32;
 const TOKEN_FIELDS = ["input_tokens", "output_tokens", "cached_input_tokens", "cache_creation_input_tokens",
-  "reasoning_output_tokens", "total_tokens", "billable_total_tokens", "conversation_count",
-  ...["long_context_", "priority_", "priority_long_context_"].flatMap((prefix) =>
+  "unclassified_input_tokens", "reasoning_output_tokens", "total_tokens", "billable_total_tokens", "conversation_count",
+  ...["long_context_", "priority_", "priority_long_context_", "ultrafast_", "ultrafast_long_context_"].flatMap((prefix) =>
     ["input_tokens", "output_tokens", "cached_input_tokens", "cache_creation_input_tokens", "reasoning_output_tokens"].map((field) => prefix + field))];
 const ROW_FIELDS = new Set(["source", "model", "hour_start", "total_cost_usd", ...TOKEN_FIELDS]);
 const validId = (id) => typeof id === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(id);
@@ -44,8 +44,11 @@ function cleanRow(row, strict = false) {
     if (value || Object.hasOwn(row, field) || field === "total_tokens" || field === "billable_total_tokens") result[field] = value;
   }
   if (Object.hasOwn(row, "total_cost_usd")) {
-    if (!Number.isFinite(row.total_cost_usd) || row.total_cost_usd < 0) fail("invalid_snapshot");
-    result.total_cost_usd = row.total_cost_usd;
+    if (row.total_cost_usd === null) {
+      if (!(result.unclassified_input_tokens > 0)) fail("invalid_snapshot");
+      result.total_cost_usd = null;
+    } else if (!Number.isFinite(row.total_cost_usd) || row.total_cost_usd < 0) fail("invalid_snapshot");
+    else result.total_cost_usd = row.total_cost_usd;
   }
   return result;
 }

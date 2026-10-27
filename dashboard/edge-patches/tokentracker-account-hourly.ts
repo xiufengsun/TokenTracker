@@ -75,6 +75,7 @@ interface HourlyRow {
   total_tokens: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  unclassified_input_tokens?: number | null;
   cached_input_tokens: number | null;
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
@@ -88,6 +89,7 @@ interface GroupedRow {
   total_tokens: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  unclassified_input_tokens?: number | null;
   cached_input_tokens: number | null;
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
@@ -285,6 +287,7 @@ export default async function (req: Request): Promise<Response> {
     billable_total_tokens: number;
     input_tokens: number;
     output_tokens: number;
+    unclassified_input_tokens: number;
     cached_input_tokens: number;
     cache_creation_input_tokens: number;
     reasoning_output_tokens: number;
@@ -307,6 +310,7 @@ export default async function (req: Request): Promise<Response> {
         billable_total_tokens: 0,
         input_tokens: 0,
         output_tokens: 0,
+        unclassified_input_tokens: 0,
         cached_input_tokens: 0,
         cache_creation_input_tokens: 0,
         reasoning_output_tokens: 0,
@@ -320,6 +324,7 @@ export default async function (req: Request): Promise<Response> {
     bucket.billable_total_tokens += tt;
     bucket.input_tokens += Number(row.input_tokens) || 0;
     bucket.output_tokens += Number(row.output_tokens) || 0;
+    bucket.unclassified_input_tokens += Number(row.unclassified_input_tokens) || 0;
     bucket.cached_input_tokens += Number(row.cached_input_tokens) || 0;
     bucket.cache_creation_input_tokens += Number(row.cache_creation_input_tokens) || 0;
     bucket.reasoning_output_tokens += Number(row.reasoning_output_tokens) || 0;

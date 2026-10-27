@@ -57,11 +57,12 @@ node bin/tracker.js serve --no-sync       # local dashboard server on :7680
 input_tokens                  = non-cached input only (no cache reads/writes)
 cached_input_tokens           = cache reads
 cache_creation_input_tokens   = cache writes
+unclassified_input_tokens     = reported input with unknown fresh/cache split; disjoint from every other input column
 reasoning_output_tokens       = reasoning tokens (Codex/acode/every-code/OmO/Cline/Muse fold them into output_tokens for cost)
-total_tokens                  = input + output + cache_creation + cache_read (+ reasoning_output when output excludes reasoning); Codex/acode/every-code/OmO/Cline/Muse keep reasoning as an informational subset because it is already included in output_tokens
+total_tokens                  = input + unclassified_input + output + cache_creation + cache_read (+ reasoning_output when output excludes reasoning); Codex/acode/every-code/OmO/Cline/Muse keep reasoning as an informational subset because it is already included in output_tokens
 ```
 
-**Cost is computed from `input_tokens + output_tokens + cached_input_tokens + cache_creation_input_tokens + reasoning_output_tokens` only — never `total_tokens`** (`computeRowCost` in `src/lib/pricing/index.js`). If a new provider only fills `total_tokens` with input=0/output=0, the dashboard renders **$0 cost** regardless of pricing entries. Distribute the total across columns or extend `computeRowCost`.
+**Cost is computed from `input_tokens + output_tokens + cached_input_tokens + cache_creation_input_tokens + reasoning_output_tokens` only — never `total_tokens`** (`computeRowCost` in `src/lib/pricing/index.js`). Unknown cache splits belong in `unclassified_input_tokens`, not uncached input: include them in volume but return a null total cost and `cost_status: partial`, with only the provable subtotal in `known_cost_usd`. `computeKnownRowCost` prices each original row (preserving priority/long-context subsets); never re-price aggregated base columns. Cloud accounting-v3 migration and edge deployment must precede a client release that uploads this column.
 
 ### Queue entry
 
@@ -71,6 +72,7 @@ total_tokens                  = input + output + cache_creation + cache_read (+ 
   "source": "claude|codex|cursor|gemini|...",
   "model": "claude-opus-4-6|gpt-5.4|...",
   "input_tokens": 0, "output_tokens": 0,
+  "unclassified_input_tokens": 0,
   "cached_input_tokens": 0, "cache_creation_input_tokens": 0,
   "reasoning_output_tokens": 0,
   "total_tokens": 0, "conversation_count": 1

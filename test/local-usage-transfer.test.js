@@ -4,6 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
 const { createLocalUsageTransfer } = require("../src/lib/local-usage-transfer");
+const { computeRowCost, computeKnownRowCost } = require("../src/lib/pricing");
 
 function row(total, extra = {}) {
   return { source: "codex", model: "gpt-5.5", hour_start: "2026-10-18T10:00:00.000Z",
@@ -87,6 +88,27 @@ test("previews follow the dashboard's aggregate billable fallback without rewrit
   assert.equal((await c.service.preview(zero)).after, 300);
 });
 
+test("partial accounting survives export, preview, import and device view", async (t) => {
+  const partial = row(120, { input_tokens: 50, unclassified_input_tokens: 60, output_tokens: 10,
+    total_cost_usd: null, known_cost_usd: 0.0042, cost_status: "partial" });
+  const a = await machine(t, "machine-aaaa", [partial]);
+  const b = await machine(t, "machine-bbbb", [row(200)]);
+  const snapshot = await a.service.exportSnapshot();
+  assert.equal(snapshot.rows[0].unclassified_input_tokens, 60);
+  assert.equal(snapshot.rows[0].total_cost_usd, null);
+  assert.equal(snapshot.rows[0].known_cost_usd, undefined);
+  const preview = await b.service.preview(snapshot);
+  assert.equal(preview.after, 320);
+  await b.service.importSnapshot(snapshot, preview.token);
+  const imported = await b.service.view([row(200)], "local:machine-aaaa");
+  assert.equal(imported[0].unclassified_input_tokens, 60);
+  assert.equal(imported[0].total_cost_usd, null);
+  assert.equal(imported[0].input_tokens, 50);
+  assert.equal(imported[0].total_tokens, 120);
+  assert.equal(computeRowCost(imported[0]), null);
+  assert.equal(computeKnownRowCost(imported[0]), computeKnownRowCost(partial));
+});
+
 test("invalid, conflicting and stale previews cannot change the committed ledger", async (t) => {
   const a = await machine(t, "machine-aaaa", [row(100)]);
   const b = await machine(t, "machine-bbbb", [row(200)]);
@@ -103,6 +125,14 @@ test("invalid, conflicting and stale previews cannot change the committed ledger
     bad.rows[0].input_tokens = invalid;
     await assert.rejects(b.service.preview(bad), { code: "invalid_snapshot" });
   }
+  for (const invalid of [-1, 1.5, "4", "-2"]) {
+    const bad = structuredClone(snapshot);
+    bad.rows[0].unclassified_input_tokens = invalid;
+    await assert.rejects(b.service.preview(bad), { code: "invalid_snapshot" });
+  }
+  const nullCostComplete = structuredClone(snapshot);
+  nullCostComplete.rows[0].total_cost_usd = null;
+  await assert.rejects(b.service.preview(nullCostComplete), { code: "invalid_snapshot" });
   await assert.rejects(b.service.view([row(210)], "local:unknown"), { code: "unknown_device" });
   assert.equal(total(await b.service.view([row(210)])), 310);
 });
@@ -270,4 +300,29 @@ test("real local API previews and commits imports, filters existing usage endpoi
   assert.equal((await context("local:machine-aaaa")).reason, "local_history_only");
   assert.equal((await context()).reason, "local_history_only");
   assert.equal((await context("local:machine-bbbb")).totals.total_tokens, 200);
+
+  const partial = row(120, { model: "gpt-6.1-sol", input_tokens: 50, unclassified_input_tokens: 60,
+    total_cost_usd: null, priority_input_tokens: 20, priority_output_tokens: 4,
+    ultrafast_input_tokens: 30, ultrafast_output_tokens: 6 });
+  await a.write([partial]);
+  const partialSnapshot = await a.service.exportSnapshot();
+  const partialPreview = await (await post({ action: "preview", snapshot: partialSnapshot })).json();
+  assert.equal((await post({ action: "import", snapshot: partialSnapshot, token: partialPreview.token })).status, 200);
+  const partialSummary = (await summary("local:machine-aaaa")).totals;
+  assert.equal(partialSummary.total_tokens, 120);
+  assert.equal(partialSummary.unclassified_input_tokens, 60);
+  assert.equal(partialSummary.total_cost_usd, null);
+  assert.equal(partialSummary.cost_status, "partial");
+  assert.ok(Math.abs(Number(partialSummary.known_cost_usd) - computeKnownRowCost(partial)) < 1e-9);
+  assert.equal((await summary()).totals.cost_status, "partial");
+
+  await b.write([partial]);
+  const exported = await (await post({ action: "export" })).json();
+  assert.equal(exported.snapshot.rows[0].unclassified_input_tokens, 60);
+  assert.equal(exported.snapshot.rows[0].total_cost_usd, null);
+  assert.equal(exported.snapshot.rows[0].ultrafast_input_tokens, 30);
+  assert.equal(Object.hasOwn(exported.snapshot.rows[0], "known_cost_usd"), false);
+  assert.equal(Object.hasOwn(exported.snapshot.rows[0], "cost_status"), false);
+  assert.equal((await a.service.preview(exported.snapshot)).action, "added",
+    "the actual API export must still satisfy the strict snapshot import contract");
 });

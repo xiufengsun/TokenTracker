@@ -274,7 +274,7 @@ export default async function (req: Request): Promise<Response> {
     const n = Number(row.total_tokens ?? 0);
     value = compact ? `${compactNumber(n)} tokens` : `${n.toLocaleString("en-US")} tokens`;
   } else if (metric === "cost") {
-    value = formatCost(Number(row.estimated_cost_usd ?? 0));
+    value = row.estimated_cost_usd == null ? "Partial" : formatCost(Number(row.estimated_cost_usd));
   } else {
     value = `#${row.rank ?? "?"}`;
   }

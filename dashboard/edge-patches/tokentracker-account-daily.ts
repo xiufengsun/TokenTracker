@@ -633,6 +633,7 @@ interface HourlyRow {
   total_tokens: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  unclassified_input_tokens?: number | null;
   cached_input_tokens: number | null;
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
@@ -646,6 +647,7 @@ interface GroupedRow {
   total_tokens: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  unclassified_input_tokens?: number | null;
   cached_input_tokens: number | null;
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
@@ -665,7 +667,7 @@ interface CompactDaily {
   // [day, total, input, output, cache_read, cache_write, reasoning,
   //  conversations, { model: tokens }]
   days: [string, number | string, number | string, number | string, number | string,
-    number | string, number | string, number | string, Record<string, number | string> | null][];
+    number | string, number | string, number | string, Record<string, number | string> | null, (number | string)?][];
   // [day, source, model, pricing_tier, input, output, cache_read, cache_write, reasoning]
   cost_dims: [string, string | null, string | null, string | null, number | string,
     number | string, number | string, number | string, number | string][];
@@ -676,7 +678,7 @@ interface DailyWire {
   source_names: (string | null)[];
   pricing_tiers: (string | null)[];
   days: [string, number | string, number | string, number | string, number | string,
-    number | string, number | string, number | string, (number | string)[] | null][];
+    number | string, number | string, number | string, (number | string)[] | null, (number | string)?][];
   cost_dims: [string, number, number, number, number | string, number | string,
     number | string, number | string, number | string][];
 }
@@ -702,8 +704,9 @@ function decodeDailyWire(data: unknown): CompactDaily {
   const sourceNames = Array.isArray(payload.source_names) ? payload.source_names : [];
   const pricingTiers = Array.isArray(payload.pricing_tiers) ? payload.pricing_tiers : [];
   return {
-    days: (Array.isArray(payload.days) ? payload.days : []).map(([day, tt, i, o, cr, cw, rs, cv, pairs]) =>
-      [day, tt, i, o, cr, cw, rs, cv, expandModelPairs(pairs, modelNames)]
+    days: (Array.isArray(payload.days) ? payload.days : []).map(([day, tt, i, o, cr, cw, rs, cv, pairs, unknownInput]) =>
+      [day, tt, i, o, cr, cw, rs, cv, expandModelPairs(pairs, modelNames),
+        ...(typeof unknownInput === "number" || typeof unknownInput === "string" ? [unknownInput] : [])]
     ),
     cost_dims: (Array.isArray(payload.cost_dims) ? payload.cost_dims : []).map(([day, source, model, tier, i, o, cr, cw, rs]) =>
       [day, sourceNames[source], modelNames[model], pricingTiers[tier], i, o, cr, cw, rs]
@@ -783,6 +786,7 @@ function computeRowCost(row: GroupedRow): number {
   if (row.source === "pi-github-copilot" || row.source === "pi-copilot") return 0;
   const reportedCost = Number(row.total_cost_usd);
   if (
+    !(Number(row.unclassified_input_tokens) > 0) &&
     SOURCES_WITH_AUTHORITATIVE_COST.has(row.source) &&
     Number.isFinite(reportedCost) &&
     reportedCost > 0
@@ -895,6 +899,7 @@ export default async function (req: Request): Promise<Response> {
     total_cost_usd: number;
     input_tokens: number;
     output_tokens: number;
+    unclassified_input_tokens: number;
     cached_input_tokens: number;
     cache_creation_input_tokens: number;
     reasoning_output_tokens: number;
@@ -907,7 +912,7 @@ export default async function (req: Request): Promise<Response> {
   // Postgres already bucketed to the local day and kept only [from, to] — the
   // same inclusive range the `day < from || day > to` skip used to enforce —
   // and folded a NULL/empty model into "unknown" just as String(model || …) did.
-  for (const [day, tt, i, o, cr, cw, rs, cv, models] of compact.days) {
+  for (const [day, tt, i, o, cr, cw, rs, cv, models, unknownInput] of compact.days) {
     const total = Number(tt) || 0;
     const mdl: Record<string, number> = {};
     if (models) for (const name of Object.keys(models)) mdl[name] = Number(models[name]) || 0;
@@ -916,6 +921,7 @@ export default async function (req: Request): Promise<Response> {
       total_tokens: total,
       billable_total_tokens: total,
       total_cost_usd: 0,
+      unclassified_input_tokens: Number(unknownInput) || 0,
       input_tokens: Number(i) || 0,
       output_tokens: Number(o) || 0,
       cached_input_tokens: Number(cr) || 0,
@@ -949,5 +955,13 @@ export default async function (req: Request): Promise<Response> {
   }
 
   const data = Array.from(byDay.values()).sort((a, b) => a.day.localeCompare(b.day));
-  return json({ from, to, data });
+  return json({ from, to, data: data.map((row) => ({ ...row, ...costFields(row.total_cost_usd, row.unclassified_input_tokens) })) });
+}
+
+function costFields(known: number | string, unclassified: number) {
+  return {
+    total_cost_usd: unclassified > 0 ? null : known,
+    known_cost_usd: known,
+    cost_status: unclassified > 0 ? "partial" : "complete",
+  };
 }

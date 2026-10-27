@@ -1,3 +1,4 @@
+const { unclassifiedInput, annotateCostPayload } = require("./usage-accounting");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -60,6 +61,7 @@ const {
   MODEL_PRICING,
   getModelPricing,
   computeRowCost,
+  computeKnownRowCost,
   ensurePricingLoaded,
   getPricingRevision,
   getModelPricingInfo,
@@ -170,7 +172,8 @@ function isLegacyInclusiveCodexRow(row) {
 }
 
 function normalizeQueueRow(row) {
-  let normalized = row;
+  const unknownInput = unclassifiedInput(row);
+  let normalized = unknownInput > 0 ? { ...row, unclassified_input_tokens: unknownInput } : row;
   if (isLegacyInclusiveCodexRow(normalized)) {
     normalized = {
       ...normalized,
@@ -275,7 +278,7 @@ async function buildDailyAggregates(normalizedRows, timeZoneContext) {
         total_cost_usd: 0,
         input_tokens: 0,
         output_tokens: 0,
-        cached_input_tokens: 0,
+        unclassified_input_tokens: 0, cached_input_tokens: 0,
         cache_creation_input_tokens: 0,
         reasoning_output_tokens: 0,
         conversation_count: 0,
@@ -284,10 +287,11 @@ async function buildDailyAggregates(normalizedRows, timeZoneContext) {
     const a = byDay.get(day);
     a.total_tokens += row.total_tokens || 0;
     a.billable_total_tokens += row.billable_total_tokens ?? row.total_tokens ?? 0;
-    a.total_cost_usd += computeRowCost(row);
+    a.total_cost_usd += computeKnownRowCost(row);
     a.input_tokens += row.input_tokens || 0;
     a.output_tokens += row.output_tokens || 0;
     a.cached_input_tokens += row.cached_input_tokens || 0;
+    a.unclassified_input_tokens = (a.unclassified_input_tokens || 0) + (row.unclassified_input_tokens || 0 || 0);
     a.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
     a.reasoning_output_tokens += row.reasoning_output_tokens || 0;
     a.conversation_count += row.conversation_count || 0;
@@ -305,7 +309,7 @@ async function buildDailyAggregates(normalizedRows, timeZoneContext) {
 function buildCodexCategoryFallbackFromQueue(queueRows, { from, to, timeZoneContext }) {
   const totals = {
     input_tokens: 0,
-    cached_input_tokens: 0,
+    unclassified_input_tokens: 0, cached_input_tokens: 0,
     cache_creation_input_tokens: 0,
     output_tokens: 0,
     reasoning_output_tokens: 0,
@@ -321,6 +325,7 @@ function buildCodexCategoryFallbackFromQueue(queueRows, { from, to, timeZoneCont
     if (to && day > to) continue;
     totals.input_tokens += Number(row.input_tokens || 0);
     totals.cached_input_tokens += Number(row.cached_input_tokens || 0);
+    totals.unclassified_input_tokens = (totals.unclassified_input_tokens || 0) + (Number(row.unclassified_input_tokens || 0) || 0);
     totals.cache_creation_input_tokens += Number(row.cache_creation_input_tokens || 0);
     totals.output_tokens += Number(row.output_tokens || 0);
     totals.reasoning_output_tokens += Number(row.reasoning_output_tokens || 0);
@@ -343,7 +348,7 @@ function buildCodexCategoryFallbackFromQueue(queueRows, { from, to, timeZoneCont
           name: "User input",
           totals: {
             input_tokens: totals.input_tokens,
-            cached_input_tokens: 0,
+            unclassified_input_tokens: 0, cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
             output_tokens: 0,
             reasoning_output_tokens: 0,
@@ -367,7 +372,7 @@ function buildCodexCategoryFallbackFromQueue(queueRows, { from, to, timeZoneCont
           name: "Assistant response",
           totals: {
             input_tokens: 0,
-            cached_input_tokens: 0,
+            unclassified_input_tokens: 0, cached_input_tokens: 0,
             cache_creation_input_tokens: 0,
             output_tokens: Math.max(0, totals.output_tokens - totals.reasoning_output_tokens),
             reasoning_output_tokens: 0,
@@ -605,7 +610,7 @@ async function aggregateHourlyByDay(rows, dayKey, timeZoneContext) {
         billable_total_tokens: 0,
         input_tokens: 0,
         output_tokens: 0,
-        cached_input_tokens: 0,
+        unclassified_input_tokens: 0, cached_input_tokens: 0,
         cache_creation_input_tokens: 0,
         reasoning_output_tokens: 0,
         conversation_count: 0,
@@ -617,6 +622,7 @@ async function aggregateHourlyByDay(rows, dayKey, timeZoneContext) {
     bucket.input_tokens += row.input_tokens || 0;
     bucket.output_tokens += row.output_tokens || 0;
     bucket.cached_input_tokens += row.cached_input_tokens || 0;
+    bucket.unclassified_input_tokens = (bucket.unclassified_input_tokens || 0) + (row.unclassified_input_tokens || 0 || 0);
     bucket.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
     bucket.reasoning_output_tokens += row.reasoning_output_tokens || 0;
     bucket.conversation_count += row.conversation_count || 0;
@@ -902,7 +908,8 @@ function scanClaudeProjects(projectMap) {
 // JSON response helper
 // ---------------------------------------------------------------------------
 
-function json(res, data, status) {
+function json(res, data, status, { annotateCosts = true } = {}) {
+  if (annotateCosts) data = annotateCostPayload(data);
   // Usage and cost payloads change on every sync, and cost is re-priced on
   // every read (pricing is applied per request, never stored in the queue) —
   // so a cached response can pin stale costs on screen indefinitely. WebView2
@@ -1651,7 +1658,9 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           json(res, await localUsage.devices(await readQueueData(qp), inRange));
         } else if (req.method === "POST") {
           const body = JSON.parse((await readBodyLimited(req, LOCAL_USAGE_MAX_BYTES + 4096)).toString("utf8"));
-          if (body.action === "export") json(res, { snapshot: await localUsage.exportSnapshot() });
+          // Snapshots have a strict, hashed wire contract. Derived display-cost
+          // annotations must not mutate their rows at the response boundary.
+          if (body.action === "export") json(res, { snapshot: await localUsage.exportSnapshot() }, 200, { annotateCosts: false });
           else if (body.action === "preview") json(res, await localUsage.preview(body.snapshot));
           else if (body.action === "import") json(res, await localUsage.importSnapshot(body.snapshot, body.token));
           else if (body.action === "remove") { await localUsage.remove(body.machine_id); json(res, { ok: true }); }
@@ -2442,12 +2451,13 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           acc.input_tokens += r.input_tokens;
           acc.output_tokens += r.output_tokens;
           acc.cached_input_tokens += r.cached_input_tokens;
+          acc.unclassified_input_tokens = (acc.unclassified_input_tokens || 0) + (r.unclassified_input_tokens || 0);
           acc.cache_creation_input_tokens += r.cache_creation_input_tokens;
           acc.reasoning_output_tokens += r.reasoning_output_tokens;
           acc.conversation_count += r.conversation_count;
           return acc;
         },
-        { total_tokens: 0, billable_total_tokens: 0, total_cost_usd: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0 },
+        { total_tokens: 0, billable_total_tokens: 0, total_cost_usd: 0, input_tokens: 0, output_tokens: 0, unclassified_input_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0 },
       );
       const totalCost = totals.total_cost_usd;
 
@@ -2644,9 +2654,11 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       }
 
       let totalCostUsd = 0;
+      let unclassifiedInputTokens = 0;
       for (const d of daily) {
         if (d.day >= from && d.day <= to) {
           totalCostUsd += d.total_cost_usd || 0;
+          unclassifiedInputTokens += d.unclassified_input_tokens || 0;
         }
       }
 
@@ -2659,7 +2671,8 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         active_days: cells.filter((c) => c.billable_total_tokens > 0).length, 
         streak_days: 0, 
         weeks: weeksArr,
-        total_cost_usd: totalCostUsd
+        total_cost_usd: totalCostUsd,
+        unclassified_input_tokens: unclassifiedInputTokens,
       });
       return true;
     }
@@ -2681,17 +2694,18 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         const src = row.source || "unknown";
         const mdl = row.model || "unknown";
         if (!bySource.has(src))
-          bySource.set(src, { source: src, source_scope: getSourceScope(src), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_cost_usd: "0" }, models: new Map() });
+          bySource.set(src, { source: src, source_scope: getSourceScope(src), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, unclassified_input_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_cost_usd: "0" }, models: new Map() });
         const sa = bySource.get(src);
         sa.totals.total_tokens += row.total_tokens || 0;
         sa.totals.billable_total_tokens += row.billable_total_tokens ?? row.total_tokens ?? 0;
         sa.totals.input_tokens += row.input_tokens || 0;
         sa.totals.output_tokens += row.output_tokens || 0;
         sa.totals.cached_input_tokens += row.cached_input_tokens || 0;
+        sa.totals.unclassified_input_tokens = (sa.totals.unclassified_input_tokens || 0) + (row.unclassified_input_tokens || 0 || 0);
         sa.totals.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
         sa.totals.reasoning_output_tokens += row.reasoning_output_tokens || 0;
         if (!sa.models.has(mdl))
-          sa.models.set(mdl, { model: mdl, model_id: mdl, pricing: getModelPricingInfo(mdl, { source: src }), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_cost_usd: "0" } });
+          sa.models.set(mdl, { model: mdl, model_id: mdl, pricing: getModelPricingInfo(mdl, { source: src }), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, unclassified_input_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_cost_usd: "0" } });
         const ma = sa.models.get(mdl);
         const reportedCost = ["grok", "cline"].includes(src) && Number(row.total_cost_usd) > 0;
         const costSource = reportedCost ? "provider_reported" : "model_pricing";
@@ -2701,6 +2715,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         ma.totals.input_tokens += row.input_tokens || 0;
         ma.totals.output_tokens += row.output_tokens || 0;
         ma.totals.cached_input_tokens += row.cached_input_tokens || 0;
+        ma.totals.unclassified_input_tokens = (ma.totals.unclassified_input_tokens || 0) + (row.unclassified_input_tokens || 0 || 0);
         ma.totals.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
         ma.totals.reasoning_output_tokens += row.reasoning_output_tokens || 0;
         // Price each row, exactly as aggregateByDay does for the hero (#653).
@@ -2709,7 +2724,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         // base columns rather than adding volume, so they survive only while the
         // row is intact. Summing the base columns first and pricing once silently
         // dropped every premium — same tokens, fewer dollars than the hero.
-        ma.totals.total_cost_usd = Number(ma.totals.total_cost_usd || 0) + computeRowCost(row);
+        ma.totals.total_cost_usd = Number(ma.totals.total_cost_usd || 0) + computeKnownRowCost(row);
       }
       if (pricingRevision !== getPricingRevision()) return handleLocalApi(req, res, url);
 
@@ -2833,7 +2848,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
               billable_total_tokens: 0,
               input_tokens: 0,
               output_tokens: 0,
-              cached_input_tokens: 0,
+              unclassified_input_tokens: 0, cached_input_tokens: 0,
               cache_creation_input_tokens: 0,
               reasoning_output_tokens: 0,
               conversation_count: 0,
@@ -2848,6 +2863,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           agg.input_tokens += Number(row.input_tokens || 0);
           agg.output_tokens += Number(row.output_tokens || 0);
           agg.cached_input_tokens += Number(row.cached_input_tokens || 0);
+          agg.unclassified_input_tokens = (agg.unclassified_input_tokens || 0) + (Number(row.unclassified_input_tokens || 0) || 0);
           agg.cache_creation_input_tokens += Number(row.cache_creation_input_tokens || 0);
           agg.reasoning_output_tokens += Number(row.reasoning_output_tokens || 0);
           agg.conversation_count += Number(row.conversation_count || 0);
@@ -2916,7 +2932,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         billable_total_tokens: 0,
         input_tokens: 0,
         output_tokens: 0,
-        cached_input_tokens: 0,
+        unclassified_input_tokens: 0, cached_input_tokens: 0,
         cache_creation_input_tokens: 0,
         reasoning_output_tokens: 0,
         conversation_count: 0,
@@ -2929,6 +2945,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         acc.input_tokens += Number(row.input_tokens || 0);
         acc.output_tokens += Number(row.output_tokens || 0);
         acc.cached_input_tokens += Number(row.cached_input_tokens || 0);
+        acc.unclassified_input_tokens = (acc.unclassified_input_tokens || 0) + (Number(row.unclassified_input_tokens || 0) || 0);
         acc.cache_creation_input_tokens += Number(row.cache_creation_input_tokens || 0);
         acc.reasoning_output_tokens += Number(row.reasoning_output_tokens || 0);
         acc.conversation_count += Number(row.conversation_count || 0);
@@ -3322,13 +3339,14 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         if (!day || day < from || day > to) continue;
         const month = day.slice(0, 7);
         if (!byMonth.has(month))
-          byMonth.set(month, { month, total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0 });
+          byMonth.set(month, { month, total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, unclassified_input_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0 });
         const a = byMonth.get(month);
         a.total_tokens += row.total_tokens || 0;
         a.billable_total_tokens += row.billable_total_tokens ?? row.total_tokens ?? 0;
         a.input_tokens += row.input_tokens || 0;
         a.output_tokens += row.output_tokens || 0;
         a.cached_input_tokens += row.cached_input_tokens || 0;
+        a.unclassified_input_tokens = (a.unclassified_input_tokens || 0) + (row.unclassified_input_tokens || 0 || 0);
         a.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
         a.reasoning_output_tokens += row.reasoning_output_tokens || 0;
         a.conversation_count += row.conversation_count || 0;

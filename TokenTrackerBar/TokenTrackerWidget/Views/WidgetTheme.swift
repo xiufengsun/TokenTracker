@@ -72,7 +72,8 @@ enum WidgetFormat {
         }
     }
 
-    static func cost(_ value: Double) -> String {
+    static func cost(_ value: Double?) -> String {
+        guard let value else { return "—" }
         if value >= 1_000 {
             return String(format: "$%.0f", value)
         }

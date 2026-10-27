@@ -1,4 +1,6 @@
 {
+  "usage.metric.unclassified_input": "入力（キャッシュ内訳不明）",
+  "usage.cost.partial": "費用情報が不完全",
   "cloud.action.resume_order": "支払いを続ける",
   "cloud.restore.title": "注文を探す",
   "cloud.restore.detail": "注文IDを入力して、支払い状況を確認するか支払いを続けてください。",

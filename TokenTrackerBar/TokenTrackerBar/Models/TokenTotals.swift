@@ -10,6 +10,8 @@ struct TokenTotals: Codable, Equatable {
     var reasoningOutputTokens: Int
     var conversationCount: Int
     var totalCostUsd: String?
+    var unclassifiedInputTokens: Int = 0
+    var costStatus: String? = nil
 
     init(
         totalTokens: Int = 0, billableTotalTokens: Int = 0,
@@ -40,6 +42,8 @@ struct TokenTotals: Codable, Equatable {
         reasoningOutputTokens = try c.decodeIfPresent(Int.self, forKey: .reasoningOutputTokens) ?? 0
         conversationCount = try c.decodeIfPresent(Int.self, forKey: .conversationCount) ?? 0
         totalCostUsd = try c.decodeIfPresent(String.self, forKey: .totalCostUsd)
+        unclassifiedInputTokens = try c.decodeIfPresent(Int.self, forKey: .unclassifiedInputTokens) ?? 0
+        costStatus = try c.decodeIfPresent(String.self, forKey: .costStatus)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -52,5 +56,7 @@ struct TokenTotals: Codable, Equatable {
         case reasoningOutputTokens = "reasoning_output_tokens"
         case conversationCount = "conversation_count"
         case totalCostUsd = "total_cost_usd"
+        case unclassifiedInputTokens = "unclassified_input_tokens"
+        case costStatus = "cost_status"
     }
 }

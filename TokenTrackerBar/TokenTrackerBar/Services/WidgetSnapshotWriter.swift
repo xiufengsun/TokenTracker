@@ -177,8 +177,8 @@ enum WidgetSnapshotWriter {
 
     // MARK: - Helpers
 
-    private static func parseCost(_ s: String?) -> Double {
-        guard let s, let v = Double(s) else { return 0 }
+    private static func parseCost(_ s: String?) -> Double? {
+        guard let s, let v = Double(s) else { return nil }
         return v
     }
 
