@@ -52,6 +52,7 @@ enum WidgetSnapshotWriter {
     }
 
     static func update(from vm: DashboardViewModel, capturedAt: Date) async {
+        #if !DEBUG // Dev variant: no widget snapshot writes, no timeline reloads, no container access (dev spec §4-3)
         // Monotonic ticket (main-actor serialized): if a newer update starts
         // while we're suspended on the range fetches below, this call is stale
         // and must not write — otherwise its older snapshot could land after
@@ -111,6 +112,7 @@ enum WidgetSnapshotWriter {
         } else {
             logger.warning("Failed to write widget snapshot")
         }
+        #endif // !DEBUG
     }
 
     /// Serializes snapshot writes off the main actor.

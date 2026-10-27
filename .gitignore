@@ -147,3 +147,8 @@ TokenTrackerLinux/packaging/arch/tokentracker-linux/pkg/
 TokenTrackerLinux/packaging/arch/tokentracker-linux/src/
 TokenTrackerLinux/packaging/arch/tokentracker-linux/*.pkg.tar.*
 TokenTrackerLinux/packaging/arch/tokentracker-linux/*.log
+
+# Local AI-tooling / build artifacts (untracked scratch)
+.mimosa/
+.v2c/
+out/
