@@ -684,45 +684,105 @@ function ResetBankSection({ model }) {
   );
 }
 
+// Countdown bar scale per group (issue 888 R2): ZCode reset cards carry only
+// expires_at (no grant time), so the bar shows "time until the earliest live
+// card expires" against a fixed scale of one window per group — cards align to
+// window boundaries, so the earliest card never exceeds it and anything beyond
+// clips at 100%. A larger scale would pin bars near empty and read as false
+// urgency. Keep in sync with the menu-bar popover (UsageLimitsView.swift
+// zcodeFiveHourResetCountdownScale / zcodeWeeklyResetCountdownScale).
+const ZCODE_RESET_COUNTDOWN_SCALES_MS = {
+  five_hour: 5 * 3600 * 1000,
+  weekly: 7 * 24 * 3600 * 1000,
+};
+
 function ZcodeResetBankSection({ data }) {
+  const [open, setOpen] = useState(false);
   const now = Date.now();
   const groups = [
     { key: "five_hour", label: copy("limits.label.zcode_5h") },
     { key: "weekly", label: copy("limits.label.zcode_weekly") },
-  ].map((group) => ({
-    ...group,
-    cards: (data[group.key] || []).filter((card) => Date.parse(card.expires_at) > now)
-      .slice().sort((a, b) => Date.parse(a.expires_at) - Date.parse(b.expires_at)),
-  }));
+  ].map((group) => {
+    const cards = (data[group.key] || [])
+      .filter((card) => Date.parse(card.expires_at) > now)
+      .sort((a, b) => Date.parse(a.expires_at) - Date.parse(b.expires_at));
+    // The inventory is issued in batches that share one expiry instant, so the
+    // hover title collapses same-instant repeats into "time ×count" (issue 888).
+    const batchCounts = new Map();
+    for (const card of cards) {
+      const ms = Date.parse(card.expires_at);
+      batchCounts.set(ms, (batchCounts.get(ms) || 0) + 1);
+    }
+    const batches = [...batchCounts.entries()].sort((a, b) => a[0] - b[0]);
+    const batchTitle = batches
+      .map(([ms, n]) => (n > 1 ? `${formatExactReset(ms)} ×${n}` : formatExactReset(ms)))
+      .join("\n");
+    const scale = ZCODE_RESET_COUNTDOWN_SCALES_MS[group.key] || 0;
+    const countdownPercent =
+      cards.length && scale
+        ? Math.max(0, Math.min(100, ((Date.parse(cards[0].expires_at) - now) / scale) * 100))
+        : 0;
+    return { ...group, cards, batchTitle, countdownPercent };
+  });
+  // A plain loop, not `reduce`: an unbraced arrow body would let the
+  // ui-hardcode scanner's `>...<` regex read this line as raw JSX text.
+  let totalLive = 0;
+  for (const group of groups) totalLive += group.cards.length;
   return (
-    <div className="mt-1 flex flex-col gap-1.5">
-      <div className="text-[10.5px] font-medium uppercase tracking-wide text-oai-gray-400 dark:text-oai-gray-500">
-        {copy("limits.zcode.reset_bank.title")}
-      </div>
-      {data.error ? (
-        <StatusLine tone="error">{data.error}</StatusLine>
-      ) : groups.map((group) => (
-        <div key={group.key} className="flex items-center gap-2 text-[11px]">
-          <span
-            data-limit-label=""
-            className="shrink-0 whitespace-nowrap text-oai-gray-500 dark:text-oai-gray-400"
-            style={{ width: "var(--tt-limits-label-w)" }}
-          >
-            {group.label}
+    <div className="mt-2 border-t border-oai-gray-200/60 pt-2 dark:border-oai-gray-800">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={(event) => { event.stopPropagation(); setOpen((value) => !value); }}
+        onKeyDown={(event) => event.stopPropagation()}
+        className="flex w-full items-center gap-1.5 rounded text-xs text-oai-gray-500 transition-colors hover:text-oai-gray-800 dark:text-oai-gray-400 dark:hover:text-oai-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500"
+      >
+        <ClockIcon size={13} aria-hidden />
+        <span className="min-w-0 truncate">{copy("limits.zcode.reset_bank.title")}</span>
+        {totalLive ? (
+          <span className="rounded-full bg-oai-gray-100 px-2 py-0.5 text-[10px] tabular-nums text-oai-gray-600 dark:bg-oai-gray-800 dark:text-oai-gray-300">
+            {copy("limits.zcode.reset_bank.count", { count: totalLive })}
           </span>
-          <span className="rounded-full bg-oai-gray-100 px-2 py-0.5 tabular-nums text-oai-gray-600 dark:bg-oai-gray-800 dark:text-oai-gray-300">
-            {copy("limits.zcode.reset_bank.count", { count: group.cards.length })}
-          </span>
-          {group.cards.length ? (
-            <span
-              className="ml-auto text-right text-[10px] tabular-nums text-oai-gray-400 dark:text-oai-gray-500"
-              title={group.cards.map((card) => formatExactReset(Date.parse(card.expires_at))).join("\n")}
-            >
-              {copy("limits.zcode.reset_bank.earliest", { time: formatExactReset(Date.parse(group.cards[0].expires_at)) })}
-            </span>
-          ) : null}
+        ) : null}
+        <ChevronDown size={13} aria-hidden className={`ml-auto transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open ? (
+        <div className="mt-2 flex flex-col gap-1.5">
+          {data.error ? (
+            <StatusLine tone="error">{data.error}</StatusLine>
+          ) : groups.map((group) => (
+            <div key={group.key} className="flex items-center gap-2 text-[11px]">
+              <span
+                data-limit-label=""
+                className="shrink-0 whitespace-nowrap text-oai-gray-500 dark:text-oai-gray-400"
+                style={{ width: "var(--tt-limits-label-w)" }}
+              >
+                {group.label}
+              </span>
+              <span className="rounded-full bg-oai-gray-100 px-2 py-0.5 tabular-nums text-oai-gray-600 dark:bg-oai-gray-800 dark:text-oai-gray-300">
+                {copy("limits.zcode.reset_bank.count", { count: group.cards.length })}
+              </span>
+              <div
+                className="relative min-w-0 flex-1 bg-oai-gray-100 dark:bg-oai-gray-700/50 rounded-full h-1.5 overflow-hidden"
+                title={group.batchTitle}
+              >
+                <div
+                  className="bg-oai-gray-400 dark:bg-oai-gray-500 rounded-full h-full transition-[width] duration-500 ease-out"
+                  style={{ width: `${group.countdownPercent}%`, minWidth: group.countdownPercent > 0 ? "3px" : 0 }}
+                />
+              </div>
+              {group.cards.length ? (
+                <span
+                  className="ml-auto shrink-0 whitespace-nowrap text-right text-[10px] tabular-nums text-oai-gray-400 dark:text-oai-gray-500"
+                  title={group.batchTitle}
+                >
+                  {copy("limits.zcode.reset_bank.earliest", { time: formatExactReset(Date.parse(group.cards[0].expires_at)) })}
+                </span>
+              ) : null}
+            </div>
+          ))}
         </div>
-      ))}
+      ) : null}
     </div>
   );
 }

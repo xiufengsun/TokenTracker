@@ -872,26 +872,51 @@ struct UsageLimitsView: View {
         let id: String
         let label: String
         let count: Int
+        /// Earliest live card as a fixed-scale countdown: 100 = a whole window
+        /// of time left, 0 = expiring now (see the scale constants below).
+        let countdownPercent: Double
         let earliest: String?
         let earliestHelp: String?
     }
 
+    /// Fixed countdown scales for the ZCode reset-card bars (#888 R2). ZCode
+    /// cards carry only `expires_at` (no grant time), so instead of Codex's
+    /// per-card lifetime the bar shows "time until the earliest live card
+    /// expires" against a fixed scale of one window per group: cards align to
+    /// window boundaries, so the earliest live card is never further out than
+    /// this and anything beyond clips at 100%. An oversized scale would pin the
+    /// bars near empty and read as false urgency. Keep in sync with the
+    /// dashboard (`ZCODE_RESET_COUNTDOWN_SCALES_MS` in UsageLimitsPanel.jsx).
+    private static let zcodeFiveHourResetCountdownScale: TimeInterval = 5 * 3600
+    private static let zcodeWeeklyResetCountdownScale: TimeInterval = 7 * 86400
+
     private func zcodeResetBankGroups(_ resetCredits: ZcodeResetCredits, now: Date = Date()) -> [ZcodeResetGroupSpec] {
-        let pairs: [(String, String, [ZcodeResetCard]?)] = [
-            ("five_hour", "5h", resetCredits.fiveHour),
-            ("weekly", "Weekly", resetCredits.weekly),
+        let pairs: [(String, String, [ZcodeResetCard]?, TimeInterval)] = [
+            ("five_hour", "5h", resetCredits.fiveHour, Self.zcodeFiveHourResetCountdownScale),
+            ("weekly", "Weekly", resetCredits.weekly, Self.zcodeWeeklyResetCountdownScale),
         ]
-        return pairs.map { id, label, cards in
+        return pairs.map { id, label, cards, scale in
             let live = (cards ?? []).compactMap { card -> (Date, String)? in
                 guard let date = resetDate(iso: card.expiresAt), date > now else { return nil }
                 return (date, card.expiresAt)
             }.sorted { $0.0 < $1.0 }
             let earliest = live.first.map { Strings.codexResetBankExpiryDateTime($0.0) }
-            let help = live.map { Strings.codexResetBankExpiryDateTime($0.0) }.joined(separator: "\n")
+            // The inventory is issued in batches that share one expiry instant,
+            // so the tooltip collapses same-instant repeats into "time ×count".
+            let batches = Dictionary(grouping: live, by: { $0.0.timeIntervalSince1970 })
+                .sorted { $0.key < $1.key }
+            let help = batches.map { instant, group in
+                let time = Strings.codexResetBankExpiryDateTime(Date(timeIntervalSince1970: instant))
+                return group.count > 1 ? "\(time) ×\(group.count)" : time
+            }.joined(separator: "\n")
+            let countdown = live.first.map { next in
+                min(100, max(0, next.0.timeIntervalSince(now) / scale * 100))
+            } ?? 0
             return ZcodeResetGroupSpec(
                 id: id,
                 label: label,
                 count: live.count,
+                countdownPercent: countdown,
                 earliest: earliest.map { Strings.zcodeResetBankEarliest($0) },
                 earliestHelp: help.isEmpty ? nil : help
             )
@@ -921,7 +946,12 @@ struct UsageLimitsView: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
                             .background(Color.primary.opacity(0.06), in: Capsule())
-                        Spacer(minLength: 0)
+                        UsageLimitBar(
+                            percent: group.countdownPercent,
+                            fillColor: Color.limitBar(fraction: 0),
+                            pacePercent: nil,
+                            paceOver: false
+                        )
                         if let earliest = group.earliest {
                             Text(earliest)
                                 .font(.system(.caption2, design: .default))
