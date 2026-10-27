@@ -1375,9 +1375,14 @@ final class StatusBarController: NSObject {
         DashboardWindowController.shared.showSettings()
     }
 
+    // Debug builds hard-off: the selector is only referenced by the guarded
+    // menu item, but keeping it out of the Debug binary closes the last
+    // programmatic path to the updater (dev spec §4-6).
+    #if !DEBUG
     @objc private func checkForUpdates() {
         UpdateChecker.shared.check(silent: false)
     }
+    #endif
 
     @objc private func openGitHub() {
         if let url = URL(string: "https://github.com/xiufengsun/TokenTracker") {
