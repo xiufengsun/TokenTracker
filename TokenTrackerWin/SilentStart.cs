@@ -33,8 +33,10 @@ internal static class SilentStart
         }
     }
 
-    /// <summary>Read-modify-write so the other keys in the shared file survive.</summary>
-    public static void Set(bool value)
+    /// <summary>Read-modify-write so the other keys in the shared file survive.
+    /// Returns whether the write landed, so callers can avoid showing an unsaved
+    /// value; failures keep the swallow policy (never take the tray app down).</summary>
+    public static bool Set(bool value)
     {
         try
         {
@@ -44,11 +46,13 @@ internal static class SilentStart
             root[Key] = value;
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
             File.WriteAllText(SettingsPath, root.ToJsonString());
+            return true;
         }
         catch
         {
             // Same swallow-as-existing-helpers policy: a failed preference write must
             // never take the tray app down.
+            return false;
         }
     }
 }
