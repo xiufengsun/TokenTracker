@@ -144,10 +144,12 @@ defaults read com.tokentracker.bar >/dev/null 2>&1 && echo "✅ 自检:生产域
 ## 任务 7:整体验证(D1-D9 抽本机可跑项)
 
 1. `git status --short`:改动必须恰好为 project.yml、Constants.swift、WidgetSnapshot.swift、
-   WidgetSnapshotWriter.swift、TokenTrackerBarApp.swift、StatusBarController.swift、
+   WidgetSnapshotWriter.swift、NativeBridge.swift(任务 5 的更新入口守卫)、
+   TokenTrackerBarApp.swift、StatusBarController.swift、
    scripts/dev-cleanup.sh(新增)、`TokenTrackerBar/TokenTrackerBar/Info.plist`
    (xcodegen 再生成的被跟踪产物,`$(PRODUCT_NAME)` 展开所致,任务 1 必要产物)、
-   docs 的 spec/plan 两个 md(状态行,由本工作流更新)。
+   docs 的 spec/plan 两个 md(状态行,由本工作流更新);与 `/tmp/dev-variant-baseline.txt`
+   存档基线对照,而非假定干净工作树(任务 0 起 Silent Start 改动已在树上)。
 2. D1 同跑:启动正式版 → 启动 Dev → `lsof -nP -iTCP` 应见 7680/7681 双 LISTEN。
 3. D2:Dev 切 Silent Start → `defaults read com.tokentracker.bar.dev LaunchSilently` = 1,
    `defaults read com.tokentracker.bar LaunchSilently` 报不存在(或原值不变)。

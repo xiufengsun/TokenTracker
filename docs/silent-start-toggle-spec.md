@@ -1,8 +1,8 @@
 # Spec:静默启动用户开关(Silent Start)
 
-版本:v1.2 · 日期:2026-10-28 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现,v1.1 设置页开关已实现,待发布
+版本:v1.3 · 日期:2026-10-28 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现,v1.1 设置页开关已实现,待发布
 评审史:R1 代码事实 / R2 语义规范 / R3 矛盾可实现性 / R4 冷读核验+验收审计,双审×4 轮已吸收
-关联文档:`docs/silent-startup.md`、`docs/plans/2026-09-04-silent-start-toggle.md`
+关联文档:`docs/silent-startup.md`、`docs/silent-start-toggle-plan.md`
 **落盘路径(定稿)**:`docs/silent-start-toggle-spec.md`(`docs/plans/` 被 .gitignore 忽略,
 定稿必须落在被 git 跟踪的路径)
 范围:macOS `TokenTrackerBar/`、Windows `TokenTrackerWin/`、Linux `TokenTrackerLinux/` 三端 P0。
@@ -202,7 +202,10 @@ webview 既无 `webkit.messageHandlers.nativeBridge` 也无 `chrome.webview` 桥
   + 0600 `OpenOptions::mode` + `serde_json`);读侧的记录防伪加固(O_NOFOLLOW、uid 校验、mode 检查、
   多目录候选)系记录伪造防御,设置文件不需要,不复制。文件形状固定为单键对象
   `{"silent_start": bool}`(新文件,今日无其他写入方;读取容忍未知键)。路径解析写成纯函数
-  `settings_path(xdg_config_home: Option<&str>, home: Option<&str>)`(env 未设或无效 → None → 默认 false;R3 与实现草稿对齐);单元测试写在模块内 `#[cfg(test)]`,
+  `settings_path(xdg_config_home: Option<&str>, home: Option<&str>)`(XDG_CONFIG_HOME 有效
+  即解析,HOME 仅 `~/.config` fallback 臂必需;两者均无效 → None → 默认 false;v1.3 修正,
+  CodeRabbit PR #901——原实现先取 HOME,XDG+无 HOME 的裁剪环境误回退 false 且无法保存);
+  单元测试写在模块内 `#[cfg(test)]`,
   用 `tests/paths.rs` 同款手写 TempDir 模式,**禁用 `set_var`**(测试线程竞态)。
   公开 `silent_start()` 与 `set_silent_start(bool)`;任何 IO 错误回落默认 false。
 - 窗口:`main.rs` setup 中 `WebviewWindowBuilder` 追加 `.visible(!silent_start)`(API 已核实:
@@ -313,6 +316,12 @@ webview 既无 `webkit.messageHandlers.nativeBridge` 也无 `chrome.webview` 桥
 
 ## 修订记录(完整,定稿随文件入库)
 
+- v1.3(2026-10-28,CodeRabbit PR #901 行内评审):① §6-3 `settings_path` 语义修正——
+  XDG_CONFIG_HOME 单独有效即解析,HOME 仅 `~/.config` fallback 臂必需(原实现先取
+  HOME,XDG+无 HOME 的裁剪环境误回退 false 且无法保存;补 `settings_path_resolves_xdg_
+  config_home_without_home` 单测);② Windows 托盘勾选态同步——面板 `setSetting("launch
+  Silently")` 路径补 `_silentItem.Checked = silent`(托盘菜单为常驻 WinForms 对象,不随
+  打开重建,失步会导致下次点击反向写回)。
 - v1.2(2026-10-28):移除 macOS 菜单项 tooltip「下次启动生效」(owner 决定;§5.2 同步——
   三端菜单均不承载该提示,语义保留在 §3 生效时机、面板 `silentStartHint` 与本文档)。
 - v1.1(设置页开关双审吸收,2026-10-28):① QA mock 补 `launchSilentlySupported: false`
