@@ -658,7 +658,12 @@ test("subagent detection is separator-agnostic (backslash separators)", async (t
   // can be created and read for real — this actually exercises the
   // /[\\/]subagents[\\/]/ classification (a WSL \\wsl$ walk produces exactly
   // these separator patterns) instead of only pinning the unreadable-path skip.
-  const uncFile = path.join(tmp, "C:\\wsl$\\Ubuntu\\home\\u\\.qoder-cn\\proj\\sess\\subagents\\agent-1.jsonl");
+  // On Windows the literal-drive-colon form is an invalid path, but path.join
+  // already emits backslash separators natively there, which exercises the
+  // same regex branch.
+  const uncFile = process.platform === "win32"
+    ? path.join(tmp, "wsl$", "Ubuntu", "home", "u", ".qoder-cn", "proj", "sess", "subagents", "agent-1.jsonl")
+    : path.join(tmp, "C:\\wsl$\\Ubuntu\\home\\u\\.qoder-cn\\proj\\sess\\subagents\\agent-1.jsonl");
   fs.mkdirSync(path.dirname(uncFile), { recursive: true });
   writeJsonl(uncFile, [
     qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "s1", sessionId: "sess" }),
