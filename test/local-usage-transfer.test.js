@@ -272,7 +272,7 @@ test("real local API previews and commits imports, filters existing usage endpoi
   assert.equal((await context("local:machine-bbbb")).totals.total_tokens, 200);
 });
 
-test("export/import preserves ultrafast and ultrafast_long_context subsets (#886)", async (t) => {
+test("export/import preserves ultrafast and ultrafast_long_context subsets (issue 886)", async (t) => {
   const a = await machine(t, "machine-aaaa", [row(200, {
     ultrafast_input_tokens: 150,
     ultrafast_output_tokens: 50,

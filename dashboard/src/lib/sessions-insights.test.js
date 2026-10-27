@@ -70,7 +70,7 @@ describe("session statistics", () => {
 
 describe("ultrafast pricing field allowlist", () => {
 
-  it("keeps ultrafast subsets when scoping sessions to a date range (#886)", () => {
+  it("keeps ultrafast subsets when scoping sessions to a date range (issue 886)", () => {
     const rows = [{
       session_hash: "s1",
       total_tokens: 200,
