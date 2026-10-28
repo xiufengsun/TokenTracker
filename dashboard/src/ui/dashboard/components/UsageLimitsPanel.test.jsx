@@ -217,6 +217,41 @@ describe("UsageLimitsPanel", () => {
     expect(within(section).queryByText(copy("limits.label.zcode_5h"))).not.toBeInTheDocument();
   });
 
+  it("hides the whole reset section when no window has live cards", () => {
+    render(<UsageLimitsPanel order={["zcode"]} zcode={{
+      configured: true, plan_label: "Pro", plan_kind: "coding-plan",
+      primary_window: { used_percent: 2 },
+      // An expired card and an empty list are both "spent": neither may
+      // resurrect the section the way the Codex reset bank never does.
+      reset_credits: {
+        five_hour: [{ expires_at: "2000-01-01T00:00:00Z" }],
+        weekly: [],
+      },
+    }} />);
+    expect(screen.queryByText(copy("limits.zcode.reset_bank.title"))).not.toBeInTheDocument();
+    expect(screen.queryByText(copy("limits.zcode.reset_bank.count", { count: 0 }))).not.toBeInTheDocument();
+  });
+
+  it("drops zero-count reset rows while keeping the window that still has cards", () => {
+    render(<UsageLimitsPanel order={["zcode"]} zcode={{
+      configured: true, plan_label: "Pro", plan_kind: "coding-plan",
+      primary_window: { used_percent: 2 },
+      reset_credits: {
+        five_hour: [],
+        weekly: [{ expires_at: "2030-10-20T09:00:00Z" }],
+      },
+    }} />);
+    // The collapsed badge counts only the window that still has cards.
+    expect(screen.getByText(copy("limits.zcode.reset_bank.count", { count: 1 }))).toBeInTheDocument();
+    fireEvent.click(screen.getByText(copy("limits.zcode.reset_bank.title")));
+    const section = screen.getByText(copy("limits.zcode.reset_bank.title")).closest("div");
+    expect(within(section).queryByText(copy("limits.label.zcode_5h"))).not.toBeInTheDocument();
+    expect(within(section).getByText(copy("limits.label.zcode_weekly"))).toBeInTheDocument();
+    expect(within(section).getByText(copy("limits.zcode.reset_bank.earliest", {
+      time: formatExpiry("2030-10-20T09:00:00Z"),
+    }))).toBeInTheDocument();
+  });
+
   it("shows provider status rows instead of hiding configured providers with errors", () => {
     render(
       <UsageLimitsPanel

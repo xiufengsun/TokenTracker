@@ -729,7 +729,15 @@ function ZcodeResetBankSection({ data }) {
   // A plain loop, not `reduce`: an unbraced arrow body would let the
   // ui-hardcode scanner's `>...<` regex read this line as raw JSX text.
   let totalLive = 0;
-  for (const group of groups) totalLive += group.cards.length;
+  const liveGroups = [];
+  for (const group of groups) {
+    totalLive += group.cards.length;
+    if (group.cards.length) liveGroups.push(group);
+  }
+  // Mirror the Codex reset bank (`buildResetBankRows`): a clean zero inventory
+  // renders nothing, and the expanded body drops zero-count window rows. A
+  // fetch failure keeps the section up so the error cannot hide (issue 888).
+  if (!totalLive && !data.error) return null;
   return (
     <div className="mt-2 border-t border-oai-gray-200/60 pt-2 dark:border-oai-gray-800">
       <button
@@ -755,7 +763,7 @@ function ZcodeResetBankSection({ data }) {
       ) : null}
       {open && !data.error ? (
         <div className="mt-2 flex flex-col gap-1.5">
-          {groups.map((group) => (
+          {liveGroups.map((group) => (
             <div key={group.key} className="flex items-center gap-2 text-[11px]">
               <span
                 data-limit-label=""
