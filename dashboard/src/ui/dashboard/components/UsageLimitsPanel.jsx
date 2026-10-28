@@ -594,9 +594,8 @@ function LimitWindowSection({ rows, mode, extra = null, expanded = false }) {
         // lists each share. The stacked bar is the used orientation only:
         // in remaining mode the fill is what's left, and the shares stay in
         // the legend because they are points of the amount used.
-        const shareSegments = expanded && spec.productPool && Array.isArray(spec.segments) && spec.segments.length > 0
-          ? spec.segments
-          : null;
+        const hasShareSegments = expanded && spec.productPool && Array.isArray(spec.segments) && spec.segments.length !== 0;
+        const shareSegments = hasShareSegments ? spec.segments : null;
         const barSegments = shareSegments && rowMode !== LIMIT_DISPLAY_MODES.REMAINING ? shareSegments : null;
         return (
           <React.Fragment key={spec.key}>
