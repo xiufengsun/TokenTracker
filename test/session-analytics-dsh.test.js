@@ -433,6 +433,54 @@ test("an unreadable transcript keeps the last complete rows and retries", async 
   }
 });
 
+test("an unreadable parent retains the complete DSH batch without reassigning replayed usage", async (t) => {
+  const home = fixture(t);
+  const dshHome = path.join(home, ".dsh");
+  const parent = await writeTranscript(dshHome, {
+    session: "parent",
+    name: "session.v4.jsonl.zstd",
+    zstd: true,
+    records: [dshHeader({ id: PARENT_ID }), userEntry("u-parent"), assistantEntry("m-parent")],
+  });
+  const fork = await writeTranscript(dshHome, {
+    session: "fork",
+    records: [
+      dshHeader({ id: FORK_ID, createdAt: T0 + 60000, extra: { isSeeded: true, parentSession: PARENT_ID } }),
+      userEntry("u-parent"),
+      assistantEntry("m-parent"),
+      userEntry("u-fork", { time: T0 + 61000 }),
+      assistantEntry("m-fork", { time: T0 + 62000, input: 7, output: 3 }),
+    ],
+  });
+  const totals = (rows) => Object.fromEntries(rows.filter((row) => row.source === "dsh")
+    .map((row) => [row.session_id, row.total_tokens]));
+  const first = await buildSessionAnalytics({ home, force: true });
+  const expected = { [PARENT_ID]: 120, [FORK_ID]: 10 };
+  assert.deepEqual(totals(first), expected);
+  const sidecar = resolveSessionSidecarPath(home);
+  const snapshot = fs.readFileSync(sidecar, "utf8");
+  const parentBytes = fs.readFileSync(parent);
+  fs.writeFileSync(parent, Buffer.concat([Buffer.from([0x28, 0xb5, 0x2f, 0xfd]), Buffer.alloc(64, 0x41)]));
+  fs.appendFileSync(fork, JSON.stringify(assistantEntry("m-new", { time: T0 + 63000, input: 3, output: 2 })) + "\n");
+
+  // The readable fork now claims the missing parent's replay. Mixing that
+  // partial row with the retained parent would bill the same 120 tokens twice.
+  for (const force of [true, false]) {
+    const partial = await buildSessionAnalytics({ home, force });
+    assert.equal(partial.skippedFiles, 1);
+    assert.deepEqual(totals(partial), expected);
+    assert.equal(fs.readFileSync(sidecar, "utf8"), snapshot);
+    assert.equal(fs.existsSync(sidecar + ".meta.json.dsh-incomplete"), true);
+  }
+
+  fs.writeFileSync(parent, parentBytes);
+  const recovered = await buildSessionAnalytics({ home });
+  assert.equal(recovered.skippedFiles, 0);
+  assert.deepEqual(totals(recovered), { [PARENT_ID]: 120, [FORK_ID]: 15 });
+  assert.equal(fs.existsSync(sidecar + ".meta.json.dsh-incomplete"), false);
+  assert.deepEqual(totals(await buildSessionAnalytics({ home })), totals(recovered));
+});
+
 test("appending to a transcript invalidates the cached parse", async (t) => {
   const dshHome = path.join(fixture(t), ".dsh");
   const file = await writeTranscript(dshHome, {

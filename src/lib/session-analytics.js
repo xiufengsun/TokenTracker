@@ -2383,7 +2383,10 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
         // complete rows instead of caching a silently smaller inventory.
         if (Array.isArray(scanned) && Number.isFinite(scanned.skippedFiles)) {
           skippedFiles += scanned.skippedFiles;
-          if (entry.source === "dsh" && scanned.skippedFiles > 0) incompleteDshScan = true;
+          if (entry.source === "dsh" && scanned.skippedFiles > 0) {
+            incompleteDshScan = true;
+            rows = [];
+          }
         }
       } catch (error) {
         // One active/partial session must not poison the sidecar, but do not
@@ -2437,12 +2440,11 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   }
   if (incompleteDshScan) {
     await writeAtomic(incompleteDshPath, "1\n");
-    // A dsh batch scans every transcript at once, so the failure can be partial:
-    // keep the previous row for a session that could not be read this round, but
-    // let the sessions that did scan replace their older copy.
-    const refreshedDsh = new Set(sessions.filter((row) => row.source === "dsh").map((row) => row.session_hash));
+    // Replay ownership depends on the entire inventory. A readable fork may
+    // claim an unreadable parent's events, so retain the complete batch rather
+    // than combining newly attributed rows with the parent's cached usage.
     sessions.push(...readSidecar(sidecarPath).filter((row) =>
-      row.source === "dsh" && row.version === SIDECAR_VERSION && !refreshedDsh.has(row.session_hash)));
+      row.source === "dsh" && row.version === SIDECAR_VERSION));
   }
   sessions.sort((a, b) => String(b.ended_at || "").localeCompare(String(a.ended_at || "")));
   // A failed database scan is an incomplete inventory. Keep the last complete
