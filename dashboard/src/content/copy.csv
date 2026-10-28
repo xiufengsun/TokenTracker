@@ -1268,6 +1268,7 @@ limits.label.opencode_go_weekly,ui,LimitsPage,UsageLimitsPanel,opencode_go_weekl
 limits.label.opencode_go_monthly,ui,LimitsPage,UsageLimitsPanel,opencode_go_monthly,"Monthly",,active
 limits.provider.qoder,ui,LimitsPage,UsageLimitsPanel,provider_qoder,"Qoder",,active
 limits.label.qoder_credits,ui,LimitsPage,UsageLimitsPanel,qoder_credits,"Credits",,active
+limits.label.qoder_addon_credits,ui,LimitsPage,UsageLimitsPanel,qoder_addon_credits,"Add-on Credits",,active
 limits.label.qoder_ultimate,ui,LimitsPage,UsageLimitsPanel,qoder_ultimate,"Ultimate Free Calls",,active
 limits.provider.qoder_cn,ui,LimitsPage,UsageLimitsPanel,provider_qoder_cn,"Qoder CN",,active
 limits.label.qoder_cn_credits,ui,LimitsPage,UsageLimitsPanel,qoder_cn_credits,"Credits",,active

@@ -93,6 +93,7 @@ enum Strings {
     static var qoderPlanLabel: String { t("Plan", "套餐", "套餐", "プラン", "플랜") }
     static var workbuddyPlanLabel: String { t("Plan", "套餐", "套餐", "プラン", "플랜") }
     static var qoderBonusLabel: String { t("Bonus", "奖励", "獎勵", "ボーナス", "보너스") }
+    static var qoderAddonLabel: String { t("Add-on", "资源包", "資源包", "リソースパック", "리소스 팩") }
     static var grokMonthLabel: String { t("Month", "月度", "月度", "月間", "월간") }
     static var grokWeekLabel: String { t("Weekly", "周", "週", "週間", "주간") }
     static var grokDayLabel: String { t("Daily", "日", "日", "日", "일") }

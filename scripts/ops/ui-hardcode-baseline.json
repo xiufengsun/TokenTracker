@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-15T06:35:11.647Z",
+  "generatedAt": "2026-10-28T23:10:54.027Z",
   "root": "dashboard/src",
   "rules": {
     "colors": "hex/rgb(a) literals",
@@ -7,7 +7,7 @@
   },
   "totals": {
     "colors": 404,
-    "rawText": 165
+    "rawText": 163
   },
   "files": {
     "dashboard/src/components/InsforgeUserHeaderControls.jsx": {
@@ -54,25 +54,11 @@
         "= 1)) && ("
       ]
     },
-    "dashboard/src/components/settings/AccountSection.jsx": {
-      "colors": 0,
-      "rawText": 1,
-      "rawTextTokens": [
-        "; return ("
-      ]
-    },
     "dashboard/src/components/settings/MenuBarSection.jsx": {
       "colors": 0,
       "rawText": 1,
       "rawTextTokens": [
         "GitHub"
-      ]
-    },
-    "dashboard/src/contexts/LoginModalContext.jsx": {
-      "colors": 0,
-      "rawText": 1,
-      "rawTextTokens": [
-        "setIsOpen(false), []); return ("
       ]
     },
     "dashboard/src/hooks/use-trend-data.issue360.test.tsx": {
@@ -435,7 +421,7 @@
     },
     "dashboard/src/ui/dashboard/components/UsageLimitsPanel.test.jsx": {
       "colors": 0,
-      "rawText": 6,
+      "rawText": 7,
       "rawTextTokens": [
         ", ); // Brand + tier, without repeating \"Coding Plan\" (title: \"Ark Coding Plan Lite\"). expect(screen.getByText(\"Ark Coding Plan Lite\")).toBeInTheDocument(); expect(screen.getByText(\"5h\")).toBeInTheDocument(); expect(screen.getByText(\"Weekly\")).toBeInTheDocument(); expect(screen.getByText(\"Monthly\")).toBeInTheDocument(); expect(screen.getByText(\"33%\")).toBeInTheDocument(); expect(screen.getByText(\"16%\")).toBeInTheDocument(); expect(screen.getByText(\"9%\")).toBeInTheDocument(); // Not-configured fallback shows the Ark CLI setup guide. rerender(",
         ", ); // Brand name only — no plan_label suffix to avoid \"OpenCode Go Go\". expect(screen.getByText(\"OpenCode Go\")).toBeInTheDocument(); expect(screen.getByText(\"5h\")).toBeInTheDocument(); expect(screen.getByText(\"Weekly\")).toBeInTheDocument(); expect(screen.getByText(\"Monthly\")).toBeInTheDocument(); expect(screen.getByText(\"12%\")).toBeInTheDocument(); expect(screen.getByText(\"30%\")).toBeInTheDocument(); expect(screen.getByText(\"60%\")).toBeInTheDocument(); // Not-configured fallback. rerender(",
@@ -478,10 +464,9 @@
     },
     "dashboard/src/ui/dashboard/components/__tests__/TrendMonitor.test.jsx": {
       "colors": 0,
-      "rawText": 2,
+      "rawText": 1,
       "rawTextTokens": [
-        "); expect(plain.container.textContent).not.toContain(\"14:00\"); const zoomed = render(",
-        "); expect(without.queryByRole(\"button\")).toBeNull(); const withCfg = render("
+        "); expect(plain.container.textContent).not.toContain(\"14:00\"); const zoomed = render("
       ]
     },
     "dashboard/src/ui/dashboard/views/DashboardView.jsx": {

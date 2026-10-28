@@ -617,6 +617,9 @@ struct UsageLimitsView: View {
         if let window = q.primaryWindow {
             specs.append(makeSpec(Strings.qoderPlanLabel, window.usedPercent, iso: window.resetAt))
         }
+        if let window = q.tertiaryWindow {
+            specs.append(makeSpec(Strings.qoderAddonLabel, window.usedPercent, iso: window.resetAt))
+        }
         if let window = q.secondaryWindow {
             specs.append(makeSpec(Strings.qoderBonusLabel, window.usedPercent, iso: window.resetAt))
         }

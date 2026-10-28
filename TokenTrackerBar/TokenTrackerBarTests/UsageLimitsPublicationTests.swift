@@ -226,6 +226,35 @@ final class UsageLimitsPublicationTests: XCTestCase {
 
     // MARK: - Fixtures
 
+    /// The Node API publishes the Qoder add-on pack as `tertiary_window`; the
+    /// popover can only mirror the dashboard's add-on row if that key decodes,
+    /// and the last-good cache must round-trip it through JSONEncoder.
+    func testQoderAddOnWindowDecodesAndRoundTrips() throws {
+        let withAddOn = try decodeResponse(overrides: [
+            "qoder": [
+                "configured": true,
+                "error": NSNull(),
+                "primary_window": ["used_percent": 0, "used_credits": 0, "limit_credits": 0, "remaining_credits": 0],
+                "tertiary_window": ["used_percent": 6, "used_credits": 67, "limit_credits": 1100, "remaining_credits": 1033],
+            ],
+        ])
+        XCTAssertEqual(withAddOn.qoder?.tertiaryWindow?.limitCredits, 1100)
+        XCTAssertEqual(withAddOn.qoder?.tertiaryWindow?.remainingCredits, 1033)
+
+        // Payloads from older builds carry no add-on key at all.
+        let withoutAddOn = try decodeResponse(overrides: [
+            "qoder": ["configured": true, "error": NSNull()],
+        ])
+        XCTAssertNil(withoutAddOn.qoder?.tertiaryWindow)
+        XCTAssertNil(withoutAddOn.qoder?.secondaryWindow)
+
+        let restored = try JSONDecoder().decode(
+            UsageLimitsResponse.self,
+            from: JSONEncoder().encode(withAddOn)
+        )
+        XCTAssertEqual(restored, withAddOn)
+    }
+
     private func decodeResponse(overrides: [String: Any] = [:]) throws -> UsageLimitsResponse {
         var payload: [String: Any] = [
             "fetched_at": "2026-06-10T00:00:00Z",

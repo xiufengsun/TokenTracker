@@ -279,16 +279,17 @@ function normalizeQoderRpcUsage(response) {
   const used = quota ? finiteNumber(quota.used, "userQuota.used") : 0;
   const total = quota ? finiteNumber(quota.total, "userQuota.total") : 0;
   const remaining = quota ? finiteNumber(quota.remaining, "userQuota.remaining") : 0;
-  const reportedPercent = Number(response.totalUsagePercentage ?? quota?.percentage);
+  // totalUsagePercentage aggregates the plan and add-on buckets and reaches
+  // this function on mixed scales (the OpenAPI returns fractions, the desktop
+  // IPC returns percents), so the primary window always derives its percent
+  // from its own quota numbers.
   const usedPercent = total === 0
     ? 0
     : addOnWindow
       ? (used / total) * 100
       : response.isQuotaExceeded === true
         ? 100
-        : Number.isFinite(reportedPercent)
-          ? reportedPercent
-          : (used / total) * 100;
+        : (used / total) * 100;
   const normalizedExpiry = normalizeResetAt(response.expiresAt);
   const expiryMs = normalizedExpiry ? Date.parse(normalizedExpiry) : NaN;
   return {
@@ -727,6 +728,12 @@ function parseQoderAccountUsageLog(text, { fallbackObservedAtMs = null } = {}) {
     return {
       limits,
       observedAtMs: Number.isFinite(lineObservedAtMs) ? lineObservedAtMs : fallbackObservedAtMs,
+      // The summary's own timestamp, or null when the line carries no parseable
+      // one and observedAtMs fell back to the file mtime. Callers that order
+      // this snapshot against other sources must use it, not observedAtMs: an
+      // mtime bump from an unrelated append would otherwise masquerade as a
+      // fresh observation.
+      lineObservedAtMs: Number.isFinite(lineObservedAtMs) ? lineObservedAtMs : null,
     };
   }
   return null;
@@ -772,7 +779,7 @@ function parseQoderQuotaLog(text) {
 // one; pruning to the current candidate set keeps the map bounded.
 const qoderNoSummaryScans = new Map();
 
-function readQoderLocalQuota({
+function readQoderLocalQuotaWithAge({
   home = os.homedir(),
   platform = process.platform,
   env = process.env,
@@ -780,11 +787,16 @@ function readQoderLocalQuota({
   envPrefix = "QODER",
   nowMs = Date.now(),
   maxAgeMs = QODER_LOG_MAX_AGE_MS,
+  olderThanMs = -Infinity,
 } = {}) {
   const candidates = [];
   for (const logRoot of qoderLogRoots({ home, platform, env, appDir, envPrefix })) {
     for (const entry of listRecentQoderLogs(logRoot)) {
       if (nowMs - entry.mtimeMs > maxAgeMs) continue;
+      // A file last written at or before the cache snapshot cannot hold an
+      // observation newer than it (a line's time never exceeds the file
+      // mtime), so scanning it could never win the timestamp comparison.
+      if (entry.mtimeMs <= olderThanMs) continue;
       candidates.push(entry);
     }
   }
@@ -804,7 +816,7 @@ function readQoderLocalQuota({
         return accountUsage;
       }
       const legacy = parseQoderQuotaLog(text);
-      return legacy ? { limits: legacy, observedAtMs: mtimeMs } : null;
+      return legacy ? { limits: legacy, observedAtMs: mtimeMs, lineObservedAtMs: null } : null;
     });
     if (parsed === undefined) continue; // Scan failed (I/O); retry on the next call.
     if (!parsed) {
@@ -813,12 +825,16 @@ function readQoderLocalQuota({
     }
     const observedAtMs = parsed.observedAtMs ?? mtimeMs;
     if (nowMs - observedAtMs > maxAgeMs) continue;
-    return parsed.limits;
+    return { limits: parsed.limits, lineObservedAtMs: parsed.lineObservedAtMs ?? null };
   }
   for (const cachedPath of qoderNoSummaryScans.keys()) {
     if (!seenPaths.has(cachedPath)) qoderNoSummaryScans.delete(cachedPath);
   }
   return null;
+}
+
+function readQoderLocalQuota(options = {}) {
+  return readQoderLocalQuotaWithAge(options)?.limits ?? null;
 }
 
 function siteFromEnv(value) {
@@ -899,9 +915,34 @@ async function fetchQoderLimits({
     }
   }
 
-  // Once native sources are unavailable, prefer a bounded disk snapshot before
-  // the manual-cookie or local-log fallback.
+  // A 0.4.x desktop app refreshes its main.log summary whenever the account
+  // page reloads, so the newest line can be newer than the last-good cache.
+  // Compare the summary's own timestamp against the cache instead of always
+  // trusting the cache: only a parseable line timestamp may win, and files
+  // last written before the cache are skipped without a scan. Once neither a
+  // fresh line nor a valid cache exists, fall through to the manual-cookie
+  // session (the only remaining remote source) before giving up.
   const cachedLimits = readQoderLimitsCache({ home, nowMs, namespace: cacheNamespace });
+  const cachedAtMs = Date.parse(cachedLimits?.cached_at || "");
+  const cacheFloorMs = Number.isFinite(cachedAtMs) ? cachedAtMs : -Infinity;
+  const localScan = readQoderLocalQuotaWithAge({
+    home,
+    platform,
+    env,
+    appDir,
+    envPrefix,
+    nowMs,
+    olderThanMs: cacheFloorMs,
+  });
+  if (localScan && (localScan.lineObservedAtMs ?? 0) > cacheFloorMs) {
+    const local = localScan.limits;
+    if (activityWindow) {
+      local.secondary_window = activityWindow;
+      local.source += activitySource === "disk-cache" ? "+cached-activity" : "+activity";
+    }
+    writeQoderLimitsCache(local, { home, nowMs, namespace: cacheNamespace });
+    return local;
+  }
   if (cachedLimits) {
     if (activityWindow) cachedLimits.secondary_window = activityWindow;
     return cachedLimits;
@@ -927,19 +968,6 @@ async function fetchQoderLimits({
   for (const session of sessions) {
     try {
       const result = await fetchQoderUsage(session.cookieHeader, session.site, fetchImpl);
-      // Qoder 1.18 can return an all-zero active plan with usage_percentage=0
-      // while the desktop client separately marks the account quota-exceeded.
-      // Preserve that status as metadata, but match Qoder's Credits UI by
-      // rendering an empty 0/0 bucket as 0%, not a full red 100% bar.
-      const local = result.primary_window?.limit_credits === 0
-        ? readQoderLocalQuota({ home, platform, env, appDir, envPrefix, nowMs })
-        : null;
-      if (local) {
-        result.quota_exceeded = local.quota_exceeded === true;
-        result.primary_window.reset_at = null;
-        result.source = "provider-api+local-log";
-        result.plan_label = local.plan_label || null;
-      }
       if (activityWindow) {
         result.secondary_window = activityWindow;
         result.source += activitySource === "disk-cache" ? "+cached-activity" : "+activity";
@@ -956,15 +984,6 @@ async function fetchQoderLimits({
     }
   }
 
-  const local = readQoderLocalQuota({ home, platform, env, appDir, envPrefix, nowMs });
-  if (local) {
-    if (activityWindow) {
-      local.secondary_window = activityWindow;
-      local.source += activitySource === "disk-cache" ? "+cached-activity" : "+activity";
-    }
-    writeQoderLimitsCache(local, { home, nowMs, namespace: cacheNamespace });
-    return local;
-  }
   if (activityWindow) {
     return {
       configured: true,

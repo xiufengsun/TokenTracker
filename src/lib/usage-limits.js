@@ -3938,7 +3938,7 @@ function normalizePlanLabel(raw, brand) {
   let s = String(raw).replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
   if (!s) return null;
   const lower = s.toLowerCase();
-  if (["free", "none", "unknown"].includes(lower)) return null;
+  if (["free", "none", "unknown", "invalid"].includes(lower)) return null;
   if (brand && lower === brand.toLowerCase()) return null; // e.g. Kiro defaults plan_name to "Kiro" when parse fails
   if (brand) {
     s = s.replace(new RegExp("^" + brand + "\\s+", "i"), "").trim();

@@ -192,6 +192,7 @@ export const PROVIDER_LIMIT_SPECS = {
     windows(data) {
       return [
         { key: "credits", labelKey: "limits.label.qoder_credits", window: data.primary_window },
+        { key: "addon", labelKey: "limits.label.qoder_addon_credits", window: data.tertiary_window },
         {
           key: "ultimate",
           labelKey: "limits.label.qoder_ultimate",

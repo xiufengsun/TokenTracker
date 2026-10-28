@@ -676,6 +676,7 @@ struct QoderLimits: Codable, Equatable {
     let planLabel: String?
     let primaryWindow: GenericLimitWindow?
     let secondaryWindow: GenericLimitWindow?
+    let tertiaryWindow: GenericLimitWindow?
     let cachedAt: String?
     let stale: Bool?
 
@@ -684,6 +685,7 @@ struct QoderLimits: Codable, Equatable {
         case planLabel = "plan_label"
         case primaryWindow = "primary_window"
         case secondaryWindow = "secondary_window"
+        case tertiaryWindow = "tertiary_window"
         case cachedAt = "cached_at"
     }
 }

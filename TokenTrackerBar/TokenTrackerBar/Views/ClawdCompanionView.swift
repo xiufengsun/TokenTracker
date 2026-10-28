@@ -1604,6 +1604,7 @@ struct ClawdCompanionView: View {
         if let qoder = limits.qoder {
             generic("qoder", configured: qoder.configured, error: qoder.error, windows: [
                 ("Credits", qoder.primaryWindow),
+                ("Add-on", qoder.tertiaryWindow),
                 ("Ultimate Free Calls", qoder.secondaryWindow)
             ])
         }

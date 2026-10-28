@@ -267,10 +267,12 @@ final class WeeklyLimitResetDetectorTests: XCTestCase {
         XCTAssertEqual(LimitResetProviderIconCatalog.svgFilename(for: "agentPlan"), "volcano-ark.svg")
     }
 
-    func testReadingsUsePlanAndBonusLabelsForQoderAndQoderCn() throws {
-        // The menu-bar panel renders these windows as "Plan" / "Bonus"
-        // (Strings.qoderPlanLabel / qoderBonusLabel); the reset detector must
-        // use the same labels so notification copy matches the UI.
+    func testReadingsUsePlanBonusAndAddonLabelsForQoderAndQoderCn() throws {
+        // The menu-bar panel renders these windows as "Plan" / "Add-on" /
+        // "Bonus" (Strings.qoderPlanLabel / qoderAddonLabel / qoderBonusLabel);
+        // the reset detector must use the same labels so notification copy
+        // matches the UI. The add-on row has no reset date, so its reading
+        // carries a nil resetAt and must never fire a reset notification.
         let json = """
         {
           "fetched_at": "2026-08-14T00:00:00Z",
@@ -284,12 +286,14 @@ final class WeeklyLimitResetDetectorTests: XCTestCase {
             "configured": true,
             "error": null,
             "primary_window": { "used_percent": 12, "reset_at": "2026-08-14T05:00:00Z" },
+            "tertiary_window": { "used_percent": 6, "used_credits": 67, "limit_credits": 1100, "remaining_credits": 1033 },
             "secondary_window": { "used_percent": 3, "reset_at": "2026-08-20T00:00:00Z" }
           },
           "qoderCn": {
             "configured": true,
             "error": null,
             "primary_window": { "used_percent": 40, "reset_at": "2026-08-14T05:00:00Z" },
+            "tertiary_window": { "used_percent": 8, "reset_at": "2026-08-20T00:00:00Z" },
             "secondary_window": { "used_percent": 8, "reset_at": "2026-08-20T00:00:00Z" }
           }
         }
@@ -299,15 +303,26 @@ final class WeeklyLimitResetDetectorTests: XCTestCase {
 
         XCTAssertEqual(
             readings.map { $0.windowKey },
-            ["qoder.primary", "qoder.secondary", "qoderCn.primary", "qoderCn.secondary"]
+            [
+                "qoder.primary", "qoder.tertiary", "qoder.secondary",
+                "qoderCn.primary", "qoderCn.tertiary", "qoderCn.secondary",
+            ]
         )
         XCTAssertEqual(
             readings.map { "\($0.provider).\($0.windowLabel)" },
             [
-                "qoder.\(Strings.qoderPlanLabel)", "qoder.\(Strings.qoderBonusLabel)",
-                "qoderCn.\(Strings.qoderPlanLabel)", "qoderCn.\(Strings.qoderBonusLabel)"
+                "qoder.\(Strings.qoderPlanLabel)", "qoder.\(Strings.qoderAddonLabel)", "qoder.\(Strings.qoderBonusLabel)",
+                "qoderCn.\(Strings.qoderPlanLabel)", "qoderCn.\(Strings.qoderAddonLabel)", "qoderCn.\(Strings.qoderBonusLabel)"
             ]
         )
+        XCTAssertEqual(readings.map { $0.usedPercent }, [12, 6, 3, 40, 8, 8])
+        func resetSeconds(_ key: String) -> Double? {
+            readings.first { $0.windowKey == key }?.resetAt
+        }
+        XCTAssertNotNil(resetSeconds("qoder.primary"))
+        // The add-on pack never renews: no reset date, no reset notification.
+        XCTAssertNil(resetSeconds("qoder.tertiary"))
+        XCTAssertNotNil(resetSeconds("qoderCn.tertiary"))
     }
 
     func testDevinDecodesOptionalWindowsAndEmitsReadings() throws {

@@ -944,6 +944,25 @@ describe("UsageLimitsPanel", () => {
     expect(screen.queryByText(copy("limits.label.qoder_cn_addon_credits"))).not.toBeInTheDocument();
   });
 
+  it("renders Qoder plan, add-on credits and Ultimate calls as separate buckets", () => {
+    const data = {
+      configured: true,
+      primary_window: { used_percent: 25, used_credits: 25, limit_credits: 100, remaining_credits: 75 },
+      secondary_window: { used_percent: 40, used_credits: 80, limit_credits: 200, remaining_credits: 120, unit: "calls" },
+      tertiary_window: { used_percent: 7, used_credits: 35, limit_credits: 500, remaining_credits: 465, unit: "credits" },
+    };
+    const { rerender } = render(<UsageLimitsPanel qoder={data} order={["qoder"]} />);
+    expect(screen.getByText(copy("limits.label.qoder_credits"))).toBeInTheDocument();
+    expect(screen.getByText(copy("limits.label.qoder_addon_credits"))).toBeInTheDocument();
+    expect(screen.getByText(copy("limits.label.qoder_ultimate"))).toBeInTheDocument();
+    const details = screen.getAllByRole("tooltip").map((tip) => tip.textContent);
+    expect(details.some((text) => /25[\s\S]*100[\s\S]*75/.test(text))).toBe(true);
+    expect(details.some((text) => /35[\s\S]*500[\s\S]*465/.test(text))).toBe(true);
+    expect(details.some((text) => /80[\s\S]*200[\s\S]*120/.test(text))).toBe(true);
+    rerender(<UsageLimitsPanel qoder={{ ...data, tertiary_window: undefined }} order={["qoder"]} />);
+    expect(screen.queryByText(copy("limits.label.qoder_addon_credits"))).not.toBeInTheDocument();
+  });
+
   it("appends plan_label to the provider title when present", () => {
     render(
       <UsageLimitsPanel
