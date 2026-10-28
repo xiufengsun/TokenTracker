@@ -1,6 +1,6 @@
 # Spec:Dev 变体隔离(Dev Variant Isolation)
 
-版本:v1.1 · 日期:2026-10-28 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现(2026-09-05),v1.1 缺口补全(2026-10-28),开发痕迹已清理
+版本:v1.2 · 日期:2026-10-28 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现(2026-09-05),v1.1 缺口补全 + v1.2 清理状态语义细化(2026-10-28),开发痕迹已清理
 评审史:R1 代码事实+契约清理 / R2 XcodeGen 精度+一致性 / R3 矛盾+可实现性 / R4 冷读+QA 审计,双审×4 轮已吸收,见文末修订记录
 关联:`docs/silent-start-toggle-spec.md`、`docs/silent-startup.md`
 范围:仅 macOS `TokenTrackerBar/` P0。决策记录:dev 端口 **7681**;**Dev 不写 Widget 快照**
@@ -131,7 +131,8 @@
    `.dev` 痕迹」矛盾,按孤儿文件语义收窄为上述例外。
 3. `rm -rf` §6-4、§6-6 各路径(路径不存在不是失败;**真删除失败须 stderr 报告并以非零
    退出**,v1.1 ④)。
-4. 删除 §6-1 的 Dev 产物(glob 定位,`-z` 判空跳过)。
+4. 删除 §6-1 的 Dev 产物(glob 定位,`-z` 判空跳过);产物状态行按「已删 / 真删除失败 /
+   未找到」三态报告,由产物专属失败标志驱动,不与偏好/缓存/容器失败混判(v1.2)。
 5. 打印指引:登录项手动移除(§6-5)、通知授权残留(§6-7)、`bundle-node.sh --clean`(§6-8)。
 6. 自检:生产域仍存在(`defaults read com.tokentracker.bar` 不因脚本失败)、
    `/Applications/TokenTracker.app` 未被触碰。
@@ -184,6 +185,10 @@ showBuildSettings 命令同目录运行。
 
 ## 修订记录
 
+- v1.2(2026-10-28,CodeRabbit PR #901 第二轮行内评审吸收):§7-4 产物状态行三态化——
+  产物删除失败由专属 `PRODUCT_FAILED` 标志驱动,偏好/缓存/容器失败不再令「未找到
+  Debug 产物」误报为「Debug 产物删除失败」;`CLEANUP_FAILED` 仅作总退出信号。
+  §7-3 的 stderr 报告 + 非零退出契约不变。
 - v1.1(缺口补全,2026-10-28):① §4-6 扩为四处更新入口(Debug 全硬关)——补
   (c) NativeBridge runAction 与 (d) 启动期静默自检(`#if !DEBUG`),并写明
   `UpdateChecker` 路径守卫对 /Applications、~/Applications 内的 Dev 副本无效、
