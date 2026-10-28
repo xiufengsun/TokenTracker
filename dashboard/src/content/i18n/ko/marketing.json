@@ -79,6 +79,7 @@
   "limits.zcode.reset_bank.title": "한도 초기화",
   "limits.zcode.reset_bank.count": "{{count}}회 사용 가능",
   "limits.zcode.reset_bank.earliest": "가장 빠른 만료: {{time}}",
+  "limits.zcode.reset_bank.batch": "{{time}} ×{{count}}",
   "leaderboard.range": "UTC {{period}} · {{from}} – {{to}}",
   "leaderboard.range_loading": "UTC {{period}} · …",
   "leaderboard.range.total": "전체 기간",
