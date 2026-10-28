@@ -40,6 +40,14 @@ const QODER_ACTIVITY_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const QODER_LIMITS_CACHE_FILE = "qoder-usage-limits-cache.json";
 const QODER_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const QODER_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS = 12 * 60 * 60 * 1000;
+// Qoder Desktop 0.4+ writes its account usage summary to main.log, which can
+// accumulate a whole session before the quota is read. Scan a bounded window
+// backwards instead of assuming the summary is near EOF.
+const QODER_LOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const QODER_LOG_SCAN_MAX_BYTES = 8 * 1024 * 1024;
+const QODER_LOG_SCAN_CHUNK_BYTES = 512 * 1024;
+const QODER_LOG_SCAN_OVERLAP_BYTES = 64 * 1024;
+const QODER_LOG_MAX_FILES = 8;
 const QODER_SERVER_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
 4k6Pz1EaDicBMpdpxKduSZu5OANqUq8er4GM95omAGIOPOh+Nx0spthYA2BqGz+l
@@ -575,7 +583,38 @@ async function fetchQoderUsage(cookieHeader, site, fetchImpl) {
   return normalizeQoderUsageResponse(await response.json());
 }
 
-function listRecentQoderRendererLogs(logRoot, maxFiles = 12) {
+function qoderLogRoots({
+  home = os.homedir(),
+  platform = process.platform,
+  env = process.env,
+  appDir = "Qoder",
+  envPrefix = "QODER",
+} = {}) {
+  const explicitLogRoot = env[`${envPrefix}_LOG_ROOT`];
+  if (typeof explicitLogRoot === "string" && explicitLogRoot.trim()) {
+    return [path.resolve(explicitLogRoot.trim())];
+  }
+  const configuredHome = env[`${envPrefix}_HOME`];
+  if (typeof configuredHome === "string" && configuredHome.trim()) {
+    return [path.join(path.resolve(configuredHome.trim()), "logs")];
+  }
+  const base = platform === "darwin"
+    ? path.join(home, "Library", "Application Support")
+    : platform === "win32"
+      ? (env.APPDATA || path.join(home, "AppData", "Roaming"))
+      : path.join(home, ".config");
+  // Qoder Desktop 0.4.x moved its Electron profile from Qoder[CN]/ to the
+  // bundle id directory and writes the account usage summary to main.log.
+  const bundleId = appDir === "QoderCN" || envPrefix === "QODER_CN"
+    ? "com.qodercn.app.stable"
+    : "com.qoder.app.stable";
+  return [
+    path.join(base, appDir, "logs"),
+    path.join(base, bundleId, "logs"),
+  ];
+}
+
+function listRecentQoderLogs(logRoot, maxFiles = QODER_LOG_MAX_FILES) {
   if (!fs.existsSync(logRoot)) return [];
   const files = [];
   const stack = [{ dir: logRoot, depth: 0 }];
@@ -591,7 +630,7 @@ function listRecentQoderRendererLogs(logRoot, maxFiles = 12) {
       const full = path.join(current.dir, entry.name);
       if (entry.isDirectory() && current.depth < 4) {
         stack.push({ dir: full, depth: current.depth + 1 });
-      } else if (entry.isFile() && entry.name === "renderer.log") {
+      } else if (entry.isFile() && (entry.name === "main.log" || entry.name === "renderer.log")) {
         let mtimeMs = 0;
         try {
           mtimeMs = fs.statSync(full).mtimeMs;
@@ -602,8 +641,89 @@ function listRecentQoderRendererLogs(logRoot, maxFiles = 12) {
   }
   return files
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    .slice(0, maxFiles)
-    .map((entry) => entry.full);
+    .slice(0, maxFiles);
+}
+
+function scanQoderLogFromEnd(logPath, parse, {
+  maxBytes = QODER_LOG_SCAN_MAX_BYTES,
+  chunkBytes = QODER_LOG_SCAN_CHUNK_BYTES,
+  overlapBytes = QODER_LOG_SCAN_OVERLAP_BYTES,
+} = {}) {
+  let fd;
+  try {
+    fd = fs.openSync(logPath, "r");
+  } catch (_error) {
+    return null;
+  }
+  try {
+    const size = fs.fstatSync(fd).size;
+    const floor = Math.max(0, size - maxBytes);
+    let end = size;
+    let carry = "";
+    while (end > floor) {
+      const start = Math.max(floor, end - chunkBytes);
+      const length = end - start;
+      const buffer = Buffer.alloc(length);
+      const read = fs.readSync(fd, buffer, 0, length, start);
+      const text = buffer.subarray(0, read).toString("utf8") + carry;
+      const parsed = parse(text);
+      if (parsed) return parsed;
+      // Keep this chunk's head so a line split across the boundary parses
+      // when the previous chunk is prepended.
+      carry = text.slice(0, overlapBytes);
+      end = start;
+    }
+  } catch (_error) {
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+  return null;
+}
+
+function parseQoderAccountUsageLog(text, { fallbackObservedAtMs = null } = {}) {
+  if (typeof text !== "string" || !text.includes('"qoderUsage"')) return null;
+  const lines = text.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (!line.includes('"qoderUsage"')) continue;
+    const jsonStart = line.indexOf('{"') >= 0 ? line.indexOf('{"') : line.indexOf("{");
+    if (jsonStart < 0) continue;
+    let payload;
+    try {
+      payload = JSON.parse(line.slice(jsonStart));
+    } catch (_error) {
+      try {
+        payload = JSON.parse(line.slice(jsonStart, line.lastIndexOf("}") + 1));
+      } catch (_error2) {
+        continue;
+      }
+    }
+    const usage = payload?.qoderUsage;
+    if (!usage || typeof usage !== "object") continue;
+    let limits;
+    try {
+      limits = normalizeQoderRpcUsage({
+        userType: usage.userType,
+        expiresAt: usage.expiresAt,
+        isQuotaExceeded: usage.isQuotaExceeded,
+        totalUsagePercentage: usage.totalUsagePercentage,
+        userQuota: usage.userQuota,
+        addOnQuota: usage.addOnQuota,
+      });
+    } catch (_error) {
+      continue;
+    }
+    if (!limits) continue;
+    limits.source = "local-log";
+    const timestampMatch = /^\[([^\]]+)\]/.exec(line);
+    const lineObservedAtMs = timestampMatch ? Date.parse(timestampMatch[1]) : NaN;
+    return {
+      limits,
+      observedAtMs: Number.isFinite(lineObservedAtMs) ? lineObservedAtMs : fallbackObservedAtMs,
+    };
+  }
+  return null;
 }
 
 function parseQoderQuotaLog(text) {
@@ -646,38 +766,28 @@ function readQoderLocalQuota({
   env = process.env,
   appDir = "Qoder",
   envPrefix = "QODER",
+  nowMs = Date.now(),
+  maxAgeMs = QODER_LOG_MAX_AGE_MS,
 } = {}) {
-  const logRootKey = `${envPrefix}_LOG_ROOT`;
-  const homeKey = `${envPrefix}_HOME`;
-  const explicitLogRoot =
-    typeof env[logRootKey] === "string" && env[logRootKey].trim()
-      ? path.resolve(env[logRootKey].trim())
-      : null;
-  const configuredRoot =
-    typeof env[homeKey] === "string" && env[homeKey].trim()
-      ? path.resolve(env[homeKey].trim())
-      : null;
-  const logRoot = explicitLogRoot || (configuredRoot
-    ? path.join(configuredRoot, "logs")
-    : platform === "darwin"
-      ? path.join(home, "Library", "Application Support", appDir, "logs")
-      : platform === "win32"
-        ? path.join(env.APPDATA || path.join(home, "AppData", "Roaming"), appDir, "logs")
-        : path.join(home, ".config", appDir, "logs"));
-  for (const logPath of listRecentQoderRendererLogs(logRoot)) {
-    try {
-      const fd = fs.openSync(logPath, "r");
-      try {
-        const stat = fs.fstatSync(fd);
-        const length = Math.min(stat.size, 512 * 1024);
-        const buffer = Buffer.alloc(length);
-        fs.readSync(fd, buffer, 0, length, Math.max(0, stat.size - length));
-        const parsed = parseQoderQuotaLog(buffer.toString("utf8"));
-        if (parsed) return parsed;
-      } finally {
-        fs.closeSync(fd);
-      }
-    } catch (_error) {}
+  const candidates = [];
+  for (const logRoot of qoderLogRoots({ home, platform, env, appDir, envPrefix })) {
+    for (const entry of listRecentQoderLogs(logRoot)) {
+      if (nowMs - entry.mtimeMs > maxAgeMs) continue;
+      candidates.push(entry);
+    }
+  }
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  for (const { full, mtimeMs } of candidates.slice(0, QODER_LOG_MAX_FILES)) {
+    const parsed = scanQoderLogFromEnd(full, (text) => {
+      const accountUsage = parseQoderAccountUsageLog(text, { fallbackObservedAtMs: mtimeMs });
+      if (accountUsage) return accountUsage;
+      const legacy = parseQoderQuotaLog(text);
+      return legacy ? { limits: legacy, observedAtMs: mtimeMs } : null;
+    });
+    if (!parsed) continue;
+    const observedAtMs = parsed.observedAtMs ?? mtimeMs;
+    if (nowMs - observedAtMs > maxAgeMs) continue;
+    return parsed.limits;
   }
   return null;
 }
@@ -793,7 +903,7 @@ async function fetchQoderLimits({
       // Preserve that status as metadata, but match Qoder's Credits UI by
       // rendering an empty 0/0 bucket as 0%, not a full red 100% bar.
       const local = result.primary_window?.limit_credits === 0
-        ? readQoderLocalQuota({ home, platform, env, appDir, envPrefix })
+        ? readQoderLocalQuota({ home, platform, env, appDir, envPrefix, nowMs })
         : null;
       if (local) {
         result.quota_exceeded = local.quota_exceeded === true;
@@ -817,7 +927,7 @@ async function fetchQoderLimits({
     }
   }
 
-  const local = readQoderLocalQuota({ home, platform, env, appDir, envPrefix });
+  const local = readQoderLocalQuota({ home, platform, env, appDir, envPrefix, nowMs });
   if (local) {
     if (activityWindow) {
       local.secondary_window = activityWindow;
@@ -874,6 +984,7 @@ module.exports = {
   readQoderLimitsCache,
   writeQoderLimitsCache,
   parseQoderQuotaLog,
+  parseQoderAccountUsageLog,
   readQoderLocalQuota,
   fetchQoderLimits,
   fetchQoderCnLimits,

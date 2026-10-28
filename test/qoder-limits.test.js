@@ -20,8 +20,49 @@ const {
   readQoderLimitsCache,
   writeQoderLimitsCache,
   parseQoderQuotaLog,
+  parseQoderAccountUsageLog,
+  readQoderLocalQuota,
   fetchQoderCnLimits,
 } = require("../src/lib/qoder-limits");
+
+function writeQoderDesktopMainLog(home, bundleId, session, {
+  used = 0,
+  total = 100,
+  observedAt = new Date().toISOString(),
+} = {}) {
+  const file = path.join(
+    home,
+    "Library",
+    "Application Support",
+    bundleId,
+    "logs",
+    session,
+    "main.log",
+  );
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const percentage = total > 0 ? (used / total) * 100 : 0;
+  const summary = {
+    operation: "account.getQuotaUsage",
+    displayMode: "qoder",
+    hasQoderUsage: true,
+    qoderUsage: {
+      userType: "personal_standard",
+      usageType: "credits",
+      expiresAt: 253_402_214_400_000,
+      totalUsagePercentage: percentage,
+      isQuotaExceeded: false,
+      userQuota: {
+        total,
+        used,
+        remaining: Math.max(0, total - used),
+        percentage,
+        unit: "credits",
+      },
+    },
+  };
+  fs.writeFileSync(file, `[${observedAt}] [INFO] [main] [Auth] [AccountUsage] usage summary ${JSON.stringify(summary)}\n`);
+  return file;
+}
 
 test("normalizeQoderUsageResponse merges camel-case base and shared quotas", () => {
   const result = normalizeQoderUsageResponse({
@@ -224,6 +265,194 @@ test("parseQoderQuotaLog preserves a non-exceeded zero quota snapshot", () => {
   `);
   assert.equal(parsed.quota_exceeded, false);
   assert.equal(parsed.primary_window.used_percent, 0);
+});
+
+test("parseQoderAccountUsageLog maps the 0.4.x desktop account usage summary", () => {
+  const line = `[2026-10-27T23:50:41.656Z] [INFO] [main] [Auth] [AccountUsage] 用量响应摘要 ${JSON.stringify({
+    operation: "account.getQuotaUsage",
+    displayMode: "qoder",
+    hasQoderUsage: true,
+    qoderUsage: {
+      userType: "personal_standard",
+      usageType: "credits",
+      expiresAt: 253_402_214_400_000,
+      totalUsagePercentage: 0,
+      isQuotaExceeded: false,
+      userQuota: { total: 0, used: 0, remaining: 0, percentage: 0, unit: "credits" },
+      addOnQuota: { total: 1000, used: 250, remaining: 750, percentage: 25, unit: "credits" },
+    },
+  })}`;
+
+  const parsed = parseQoderAccountUsageLog(line);
+  assert.equal(parsed.limits.plan_label, "personal_standard");
+  assert.equal(parsed.limits.quota_exceeded, false);
+  assert.equal(parsed.limits.primary_window.used_percent, 0);
+  assert.equal(parsed.limits.primary_window.limit_credits, 0);
+  assert.equal(parsed.limits.primary_window.reset_at, null);
+  assert.equal(parsed.limits.tertiary_window.limit_credits, 1000);
+  assert.equal(parsed.limits.tertiary_window.remaining_credits, 750);
+  assert.equal(parsed.limits.tertiary_window.used_percent, 25);
+  assert.equal(parsed.limits.source, "local-log");
+  assert.equal(parsed.observedAtMs, Date.parse("2026-10-27T23:50:41.656Z"));
+});
+
+test("readQoderLocalQuota reads the modern desktop main.log per edition", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-qoder-modern-log-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  writeQoderDesktopMainLog(home, "com.qoder.app.stable", "intl-session", { used: 90, total: 100 });
+  writeQoderDesktopMainLog(home, "com.qodercn.app.stable", "cn-session", { used: 25, total: 100 });
+  const nowMs = Date.now();
+
+  const intl = readQoderLocalQuota({
+    home,
+    platform: "darwin",
+    env: {},
+    appDir: "Qoder",
+    envPrefix: "QODER",
+    nowMs,
+  });
+  const cn = readQoderLocalQuota({
+    home,
+    platform: "darwin",
+    env: {},
+    appDir: "QoderCN",
+    envPrefix: "QODER_CN",
+    nowMs,
+  });
+
+  assert.equal(intl.primary_window.remaining_credits, 10);
+  assert.equal(cn.primary_window.remaining_credits, 75);
+});
+
+test("readQoderLocalQuota finds a summary far from the end of main.log", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-qoder-long-log-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = writeQoderDesktopMainLog(home, "com.qoder.app.stable", "long-session", {
+    used: 25,
+    total: 100,
+  });
+  fs.appendFileSync(file, `${"x".repeat(1024)}\n`.repeat(1600));
+
+  const result = readQoderLocalQuota({
+    home,
+    platform: "darwin",
+    env: {},
+    appDir: "Qoder",
+    envPrefix: "QODER",
+    nowMs: Date.now(),
+  });
+
+  assert.equal(result.primary_window.remaining_credits, 75);
+});
+
+test("readQoderLocalQuota prefers a fresh modern summary over a fresh legacy log", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-qoder-modern-newest-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  writeQoderDesktopMainLog(home, "com.qodercn.app.stable", "new-session", { used: 25, total: 100 });
+  const legacy = path.join(
+    home,
+    "Library",
+    "Application Support",
+    "QoderCN",
+    "logs",
+    "old-session",
+    "window1",
+    "renderer.log",
+  );
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(
+    legacy,
+    "Credit usage summary: userType=personal_standard, totalUsagePercentage=42, isQuotaExceeded=false, " +
+      "userQuota=used=42, total=100, remaining=58, percentage=42, unit=credits\n",
+  );
+  const now = new Date();
+  fs.utimesSync(legacy, new Date(now.getTime() - 60_000), new Date(now.getTime() - 60_000));
+
+  const result = readQoderLocalQuota({
+    home,
+    platform: "darwin",
+    env: {},
+    appDir: "QoderCN",
+    envPrefix: "QODER_CN",
+    nowMs: now.getTime(),
+  });
+
+  assert.equal(result.primary_window.remaining_credits, 75);
+});
+
+test("readQoderLocalQuota rejects a stale desktop summary even when the file is touched", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-qoder-stale-summary-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const observedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  const file = writeQoderDesktopMainLog(home, "com.qodercn.app.stable", "stale-session", {
+    used: 25,
+    total: 100,
+    observedAt,
+  });
+  fs.utimesSync(file, new Date(), new Date());
+
+  assert.equal(readQoderLocalQuota({
+    home,
+    platform: "darwin",
+    env: {},
+    appDir: "QoderCN",
+    envPrefix: "QODER_CN",
+    nowMs: Date.now(),
+  }), null);
+});
+
+test("readQoderLocalQuota rejects a stale legacy renderer.log", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-qoder-stale-legacy-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const legacy = path.join(
+    home,
+    "Library",
+    "Application Support",
+    "QoderCN",
+    "logs",
+    "old-session",
+    "window1",
+    "renderer.log",
+  );
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(
+    legacy,
+    "Credit usage summary: userType=personal_standard, totalUsagePercentage=0, isQuotaExceeded=false, " +
+      "userQuota=used=0, total=0, remaining=0, percentage=0, unit=credits\n",
+  );
+  const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(legacy, old, old);
+
+  assert.equal(readQoderLocalQuota({
+    home,
+    platform: "darwin",
+    env: {},
+    appDir: "QoderCN",
+    envPrefix: "QODER_CN",
+    nowMs: Date.now(),
+  }), null);
+});
+
+test("fetchQoderLimits falls back to a modern desktop main.log", async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-qoder-modern-fallback-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  writeQoderDesktopMainLog(home, "com.qoder.app.stable", "session", { used: 25, total: 100 });
+
+  const result = await fetchQoderLimits({
+    home,
+    platform: "darwin",
+    env: {},
+    rpcRequest: async () => {
+      throw new Error("Qoder local service is not running.");
+    },
+    fetchImpl: async () => {
+      throw new Error("Network unavailable.");
+    },
+  });
+
+  assert.equal(result.source, "local-log");
+  assert.equal(result.primary_window.remaining_credits, 75);
+  assert.equal(readQoderLimitsCache({ home }).primary_window.remaining_credits, 75);
 });
 
 test("normalizeQoderRpcUsage keeps Qoder's quota-exceeded 0/0 Credits bucket at 0%", () => {
