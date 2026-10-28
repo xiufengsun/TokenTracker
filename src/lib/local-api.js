@@ -26,7 +26,9 @@ const { negotiateEncoding } = require("./accept-encoding");
 const { createLocalUsageTransfer, MAX_BYTES: LOCAL_USAGE_MAX_BYTES } = require("./local-usage-transfer");
 const { fetchProviderServiceStatus } = require("./provider-status");
 
-const SYNC_TIMEOUT_MS = 120_000;
+// How long a local-sync request waits for its sync child before answering.
+// Native clients give up at 130s (macOS) so the server must answer first.
+const SYNC_RESPONSE_WAIT_MS = 120_000;
 // A failed account-view request should not stall every dashboard refresh
 // while an expired session or unreachable backend keeps timing out. The first
 // request still falls back normally; subsequent fan-out requests reuse that
@@ -910,15 +912,9 @@ function runSyncCommand(extraEnv = {}, opts = {}) {
     const finish = (fn, v) => {
       if (settled) return;
       settled = true;
-      clearTimeout(tid);
       opts.signal?.removeEventListener("abort", cancel);
       fn(v);
     };
-    let timedOut = false;
-    const tid = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    }, SYNC_TIMEOUT_MS);
     child.stdout?.on("data", (c) => {
       stdout += c;
     });
@@ -929,7 +925,6 @@ function runSyncCommand(extraEnv = {}, opts = {}) {
       finish(reject, Object.assign(e, { stdout: trimOutput(stdout), stderr: trimOutput(stderr) }));
     });
     child.on("close", (code) => {
-      if (timedOut) { finish(reject, Object.assign(new Error("Sync timed out"), { code: "SYNC_TIMEOUT", stdout: trimOutput(stdout), stderr: trimOutput(stderr) })); return; }
       if (opts.signal?.aborted) { finish(reject, Object.assign(new Error("Account session changed"), { code: "auth_session_changed", status: 409 })); return; }
       const r = { code: code ?? 1, stdout: trimOutput(stdout), stderr: trimOutput(stderr) };
       if (code === 0) {
@@ -946,6 +941,23 @@ function runSyncCommand(extraEnv = {}, opts = {}) {
       finish(reject, error);
     });
   });
+}
+
+// The sync child owns its own lifetime: it holds the sync lock and commits its
+// cursors only after the whole scan finishes. Killing it when the HTTP caller
+// stops waiting discarded that progress, so a backlog longer than one wait
+// window was rescanned and killed on every attempt and never landed. The
+// caller gets an answer after `waitMs`; the child keeps running to completion
+// and only an explicit abort (account session change) terminates it.
+function waitForSyncResponse(syncPromise, waitMs = SYNC_RESPONSE_WAIT_MS) {
+  let tid;
+  const expired = new Promise((_, reject) => {
+    tid = setTimeout(() => reject(Object.assign(
+      new Error("Sync is still running in the background"),
+      { code: "SYNC_RUNNING", status: 503 },
+    )), waitMs);
+  });
+  return Promise.race([syncPromise, expired]).finally(() => clearTimeout(tid));
 }
 
 // ---------------------------------------------------------------------------
@@ -2577,13 +2589,15 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           waitForLock:
             !drain && !background && Boolean(extraEnv.TOKENTRACKER_DEVICE_TOKEN),
         });
-        controller.done = syncPromise.catch(() => {});
-        const result = await syncPromise.catch((error) => {
+        // The controller tracks the child, not this request: an account switch
+        // must still be able to stop a sync that outlived its HTTP wait.
+        controller.done = syncPromise.catch(() => {}).finally(() => activeCloudSyncs.delete(controller));
+        const result = await waitForSyncResponse(syncPromise).catch((error) => {
           if (uploadGeneration !== localCloudGeneration) throw Object.assign(new Error("Account session changed"), { code: "auth_session_changed", status: 409 });
           const failure = currentCloudUploadFailure(syncStartedAt, { backoff: auto && drain, deviceToken: extraEnv.TOKENTRACKER_DEVICE_TOKEN, attemptId: extraEnv.TOKENTRACKER_LOCAL_SYNC_ATTEMPT_ID });
           if (failure) Object.assign(error, failure);
           throw error;
-        }).finally(() => activeCloudSyncs.delete(controller));
+        });
         if (extraEnv.TOKENTRACKER_DEVICE_TOKEN && uploadGeneration !== localCloudGeneration) throw Object.assign(new Error("Account session changed"), { code: "auth_session_changed", status: 409 });
         const failure = currentCloudUploadFailure(syncStartedAt, { deviceToken: extraEnv.TOKENTRACKER_DEVICE_TOKEN, attemptId: extraEnv.TOKENTRACKER_LOCAL_SYNC_ATTEMPT_ID });
         if (failure) throw Object.assign(new Error("Cloud upload failed"), failure);

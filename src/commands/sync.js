@@ -315,7 +315,7 @@ const DROID_DUP_SESSION_REPAIR_KEY = "droidDupSessionInflationRepair_2026_06";
 const CODEX_COLD_SCAN_AUDIT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const NOTIFY_LOCK_WAIT_MS = 130_000;
 const NOTIFY_LOCK_POLL_MS = 5_000;
-// Local API sync requests have a 120-second child-process budget. Reserve at
+// Local API sync requests answer within a 120-second wait window. Reserve at
 // least 30 seconds for parsing, persistence, and the response after contention.
 const PRIORITY_LOCK_WAIT_MS = 90_000;
 const PRIORITY_LOCK_POLL_MS = 250;
