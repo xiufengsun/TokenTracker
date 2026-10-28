@@ -141,7 +141,13 @@ describe("UsageLimitsPanel", () => {
         weekly: [{ expires_at: "2030-10-20T09:00:00Z" }],
       },
     }} />);
+    // Collapsed: the header shows only the total live-card badge.
     expect(screen.getByText(copy("limits.zcode.reset_bank.title"))).toBeInTheDocument();
+    expect(screen.getByText(copy("limits.zcode.reset_bank.count", { count: 3 }))).toBeInTheDocument();
+    expect(screen.queryByText(copy("limits.zcode.reset_bank.count", { count: 2 }))).not.toBeInTheDocument();
+
+    // Expanding reveals the per-group counts and earliest expiries.
+    fireEvent.click(screen.getByText(copy("limits.zcode.reset_bank.title")));
     expect(screen.getByText(copy("limits.zcode.reset_bank.count", { count: 2 }))).toBeInTheDocument();
     expect(screen.getByText(copy("limits.zcode.reset_bank.count", { count: 1 }))).toBeInTheDocument();
     expect(screen.getByText(copy("limits.zcode.reset_bank.earliest", {
@@ -153,6 +159,47 @@ describe("UsageLimitsPanel", () => {
     expect(screen.getByText("2%")).toBeInTheDocument();
   });
 
+  it("clips reset countdown bars at the fixed 5h and weekly scales", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-28T00:00:00.000Z"));
+    render(<UsageLimitsPanel order={["zcode"]} zcode={{
+      configured: true, plan_label: "Pro", plan_kind: "coding-plan",
+      primary_window: { used_percent: 2 },
+      reset_credits: {
+        // 10 days out: beyond the fixed 5h scale, so the fill clips at 100%.
+        five_hour: [{ expires_at: "2026-11-07T00:00:00Z" }],
+        // 3 of 7 days left: a fractional fill.
+        weekly: [{ expires_at: "2026-10-31T00:00:00Z" }],
+      },
+    }} />);
+    fireEvent.click(screen.getByText(copy("limits.zcode.reset_bank.title")));
+    const section = screen.getByText(copy("limits.zcode.reset_bank.title")).closest("div");
+    const fiveRow = within(section).getByText(copy("limits.label.zcode_5h")).closest("div");
+    expect(fiveRow.querySelector("div[style]").style.width).toBe("100%");
+    const weeklyRow = within(section).getByText(copy("limits.label.zcode_weekly")).closest("div");
+    expect(weeklyRow.querySelector("div[style]").style.width).toContain("42.8571");
+  });
+
+  it("batches same-instant reset cards into one time-by-count tooltip entry", () => {
+    render(<UsageLimitsPanel order={["zcode"]} zcode={{
+      configured: true, plan_label: "Pro", plan_kind: "coding-plan",
+      primary_window: { used_percent: 2 },
+      reset_credits: {
+        five_hour: [
+          { expires_at: "2030-10-19T10:00:00Z" }, { expires_at: "2030-10-19T10:00:00Z" },
+          { expires_at: "2030-10-18T10:00:00Z" },
+        ],
+      },
+    }} />);
+    fireEvent.click(screen.getByText(copy("limits.zcode.reset_bank.title")));
+    const batchedTitle = `${formatExpiry("2030-10-18T10:00:00Z")}\n${formatExpiry("2030-10-19T10:00:00Z")} ×2`;
+    // Both the bar track and the earliest-expiry label carry the batched tooltip.
+    // The default title matcher normalizes the attribute's newline away but not
+    // the query string, so match on the raw attribute to keep asserting the
+    // newline separator between batches.
+    expect(screen.getAllByTitle(batchedTitle, { normalizer: (text) => text })).toHaveLength(2);
+  });
+
   it("keeps reset inventory failures separate from normal Pro quota bars", () => {
     render(<UsageLimitsPanel order={["zcode"]} zcode={{
       configured: true, plan_label: "Pro", plan_kind: "coding-plan",
@@ -160,8 +207,14 @@ describe("UsageLimitsPanel", () => {
       reset_credits: { error: "Reset status unavailable" },
     }} />);
     expect(screen.getByText("2%")).toBeInTheDocument();
+    // The failure stays visible even while the section is collapsed.
     expect(screen.getByText(/Reset status unavailable/)).toBeInTheDocument();
     expect(screen.queryByText(copy("limits.zcode.reset_bank.count", { count: 0 }))).not.toBeInTheDocument();
+    // Expanding keeps showing the failure instead of empty group rows.
+    fireEvent.click(screen.getByText(copy("limits.zcode.reset_bank.title")));
+    expect(screen.getByText(/Reset status unavailable/)).toBeInTheDocument();
+    const section = screen.getByText(copy("limits.zcode.reset_bank.title")).closest("div");
+    expect(within(section).queryByText(copy("limits.label.zcode_5h"))).not.toBeInTheDocument();
   });
 
   it("shows provider status rows instead of hiding configured providers with errors", () => {

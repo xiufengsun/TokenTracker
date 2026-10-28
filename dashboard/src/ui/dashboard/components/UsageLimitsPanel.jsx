@@ -715,7 +715,9 @@ function ZcodeResetBankSection({ data }) {
     }
     const batches = [...batchCounts.entries()].sort((a, b) => a[0] - b[0]);
     const batchTitle = batches
-      .map(([ms, n]) => (n > 1 ? `${formatExactReset(ms)} ×${n}` : formatExactReset(ms)))
+      .map(([ms, n]) => (n > 1
+        ? copy("limits.zcode.reset_bank.batch", { time: formatExactReset(ms), count: n })
+        : formatExactReset(ms)))
       .join("\n");
     const scale = ZCODE_RESET_COUNTDOWN_SCALES_MS[group.key] || 0;
     const countdownPercent =
@@ -746,11 +748,14 @@ function ZcodeResetBankSection({ data }) {
         ) : null}
         <ChevronDown size={13} aria-hidden className={`ml-auto transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
-      {open ? (
+      {/* A failed inventory fetch stays visible above the collapsible body even
+          while the section is collapsed, so it cannot hide behind the toggle. */}
+      {data.error ? (
+        <StatusLine tone="error">{data.error}</StatusLine>
+      ) : null}
+      {open && !data.error ? (
         <div className="mt-2 flex flex-col gap-1.5">
-          {data.error ? (
-            <StatusLine tone="error">{data.error}</StatusLine>
-          ) : groups.map((group) => (
+          {groups.map((group) => (
             <div key={group.key} className="flex items-center gap-2 text-[11px]">
               <span
                 data-limit-label=""
