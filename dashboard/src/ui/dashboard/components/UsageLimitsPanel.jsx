@@ -696,9 +696,27 @@ const ZCODE_RESET_COUNTDOWN_SCALES_MS = {
   weekly: 7 * 24 * 3600 * 1000,
 };
 
+// Clean-zero visibility gate shared by renderProviderExtra and
+// ZcodeResetBankSection: mirror the Codex reset bank (`buildResetBankRows`)
+// and hide on a clean zero, while a fetch failure always counts as content so
+// the error cannot hide behind the collapse toggle (issue 888).
+// A plain loop, not an arrow chain: the ui-hardcode scanner's `>...<` regex
+// would read an unbraced arrow body here as raw JSX text.
+function zcodeResetBankHasContent(data, now) {
+  if (!data || typeof data !== "object") return false;
+  if (data.error) return true;
+  for (const key of ["five_hour", "weekly"]) {
+    for (const card of data[key] || []) {
+      if (Date.parse(card?.expires_at) > now) return true;
+    }
+  }
+  return false;
+}
+
 function ZcodeResetBankSection({ data }) {
   const [open, setOpen] = useState(false);
   const now = Date.now();
+  if (!zcodeResetBankHasContent(data, now)) return null;
   const groups = [
     { key: "five_hour", label: copy("limits.label.zcode_5h") },
     { key: "weekly", label: copy("limits.label.zcode_weekly") },
@@ -734,10 +752,6 @@ function ZcodeResetBankSection({ data }) {
     totalLive += group.cards.length;
     if (group.cards.length) liveGroups.push(group);
   }
-  // Mirror the Codex reset bank (`buildResetBankRows`): a clean zero inventory
-  // renders nothing, and the expanded body drops zero-count window rows. A
-  // fetch failure keeps the section up so the error cannot hide (issue 888).
-  if (!totalLive && !data.error) return null;
   return (
     <div className="mt-2 border-t border-oai-gray-200/60 pt-2 dark:border-oai-gray-800">
       <button
@@ -802,7 +816,11 @@ function ZcodeResetBankSection({ data }) {
 
 function renderProviderExtra(kind, data) {
   if (kind === "zcode_reset_bank") {
-    return data.reset_credits ? <ZcodeResetBankSection data={data.reset_credits} /> : null;
+    // Hand LimitWindowSection a real null when the bank is spent: a truthy
+    // element that renders nothing would still suppress the no-data line.
+    return zcodeResetBankHasContent(data.reset_credits, Date.now())
+      ? <ZcodeResetBankSection data={data.reset_credits} />
+      : null;
   }
   if (kind === "codex_meta") {
     // Credit amounts show on hover (LimitBar's title) instead of an

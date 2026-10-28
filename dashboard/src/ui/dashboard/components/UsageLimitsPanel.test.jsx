@@ -252,6 +252,17 @@ describe("UsageLimitsPanel", () => {
     }))).toBeInTheDocument();
   });
 
+  it("lets the no-data placeholder through when the reset bank is spent", () => {
+    render(<UsageLimitsPanel order={["zcode"]} zcode={{
+      configured: true, plan_label: "Pro", plan_kind: "coding-plan",
+      reset_credits: { five_hour: [], weekly: [] },
+    }} />);
+    // A spent bank must hand LimitWindowSection a real null: a truthy element
+    // that renders nothing would suppress the placeholder and blank the body.
+    expect(screen.getByText(copy("limits.status.no_data"))).toBeInTheDocument();
+    expect(screen.queryByText(copy("limits.zcode.reset_bank.title"))).not.toBeInTheDocument();
+  });
+
   it("shows provider status rows instead of hiding configured providers with errors", () => {
     render(
       <UsageLimitsPanel
