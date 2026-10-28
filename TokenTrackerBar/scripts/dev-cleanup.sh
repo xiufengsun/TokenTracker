@@ -14,6 +14,7 @@ set -uo pipefail
 DEV_DOMAIN="com.tokentracker.bar.dev"
 DEV_SUITE="group.com.tokentracker.bar.dev"
 CLEANUP_FAILED=0
+PRODUCT_FAILED=0
 
 remove_path() {
   # rm -rf returns 0 for absent paths, so a nonzero here is a real failure.
@@ -59,6 +60,7 @@ for app in ~/Library/Developer/Xcode/DerivedData/TokenTrackerBar-*/Build/Product
   else
     echo "⚠️  删除失败: $app" >&2
     CLEANUP_FAILED=1
+    PRODUCT_FAILED=1
   fi
 done
 
@@ -73,10 +75,10 @@ echo "   2. 通知授权记录随 bundle id 残留,系统级无法脚本删除�
 echo "   3. EmbeddedServer/ 构建产物可用 ./scripts/bundle-node.sh --clean 清理(可选)。"
 if [ "$APP_DELETED" -eq 0 ]; then
   echo "   4. Debug 产物已删除。"
-elif [ "$CLEANUP_FAILED" -eq 0 ]; then
-  echo "   4. 未找到 Debug 产物(可能已删)。"
-else
+elif [ "$PRODUCT_FAILED" -ne 0 ]; then
   echo "   4. Debug 产物删除失败(见上方 ⚠️ 行)。"
+else
+  echo "   4. 未找到 Debug 产物(可能已删)。"
 fi
 
 # 6. Self-check: production must be untouched.

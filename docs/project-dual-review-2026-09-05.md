@@ -19,7 +19,7 @@
 
 1. **F32 [P1] `cargo fmt`** — settings.rs:48,57 过不了 `cargo fmt --check`,ci.yml:110 会红并连锁堵死 npm-publish 与整条发布链。**✅ 已解决(2026-10-28,PR #901):`cargo fmt --check` 通过。**
 2. **F1 [P1] Dev 构建更新防线缺口** — TokenTrackerBarApp.swift:173 `UpdateChecker.shared.check(silent: true)` 未包 `#if !DEBUG`。已亲验:silent 路径在 AutoUpdatePolicy 默认开 + 位于 /Applications 时**无提示**下载安装并强制重启、直接 removeItem 替换 /Applications/TokenTracker.app(UpdateChecker.swift:143-156,461-462,404)。菜单/NativeBridge 两处都堵了,这第三条路没堵。**✅ 已解决(2026-10-28,PR #901):该调用已包 `#if !DEBUG`,四处更新入口 Debug 全硬关(dev spec §4-6)。**
-3. **F9 [P1] 版本未 bump** — 九处版本位一致停在 0.95.0 = 已发布 tag v0.95.0(非 draft)。重发必失败("version already consumed")。发布前 `npm version patch|minor`。**✅ 已解决(2026-10-28,PR #901):版本提交已 `npm version` 同步至 1.4.15,validate:versions 绿。**
+3. **F9 [P1] 版本未 bump** — 九处版本位一致停在 0.95.0 = 已发布 tag v0.95.0(非 draft)。重发必失败("version already consumed")。发布前 `npm version patch|minor`。**✅ 已裁定(2026-10-28,PR #901 rebase):PR 不再携带版本 bump——上游已自行发布 v1.4.15(#905)与 v1.5.0,版本位随 main 为 1.5.0、validate:versions 绿;发版归维护者 `chore(release)` 提交,本 PR 随合并后的下一个发版。**
 4. **F10/F11 [P2/P3] 提交卫生** — `.v2c/`(含本机插件缓存绝对路径)、`out/`、`docs/silent-startup-report.html`(1013 行生成态中文 HTML)未忽略;新源文件(settings.rs / SilentStart.cs / dev-cleanup.sh)须显式 add。
 
 ## 随本次 release 强烈建议

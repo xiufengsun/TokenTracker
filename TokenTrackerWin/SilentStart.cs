@@ -33,16 +33,28 @@ internal static class SilentStart
         }
     }
 
-    /// <summary>Read-modify-write so the other keys in the shared file survive.
-    /// Returns whether the write landed, so callers can avoid showing an unsaved
-    /// value; failures keep the swallow policy (never take the tray app down).</summary>
+    /// <summary>Read-modify-write so the other keys in the shared file survive;
+    /// a corrupted file is rebuilt instead of bricking the toggle until the user
+    /// deletes it by hand. Returns whether the write landed, so callers can avoid
+    /// showing an unsaved value; failures keep the swallow policy (never take the
+    /// tray app down).</summary>
     public static bool Set(bool value)
     {
         try
         {
-            var root = File.Exists(SettingsPath)
-                ? JsonNode.Parse(File.ReadAllText(SettingsPath))?.AsObject() ?? new JsonObject()
-                : new JsonObject();
+            var root = new JsonObject();
+            if (File.Exists(SettingsPath))
+            {
+                try
+                {
+                    root = JsonNode.Parse(File.ReadAllText(SettingsPath))?.AsObject() ?? root;
+                }
+                catch
+                {
+                    // Corrupted JSON: the keys are unreadable anyway, so rebuilding
+                    // beats refusing every future write of this switch.
+                }
+            }
             root[Key] = value;
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
             File.WriteAllText(SettingsPath, root.ToJsonString());

@@ -1,6 +1,6 @@
 # Spec:静默启动用户开关(Silent Start)
 
-版本:v1.4 · 日期:2026-10-28 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现,v1.1 设置页开关已实现,待发布
+版本:v1.5 · 日期:2026-10-28 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现,v1.1 设置页开关已实现,待发布
 评审史:R1 代码事实 / R2 语义规范 / R3 矛盾可实现性 / R4 冷读核验+验收审计,双审×4 轮已吸收
 关联文档:`docs/silent-startup.md`、`docs/silent-start-toggle-plan.md`
 **落盘路径(定稿)**:`docs/silent-start-toggle-spec.md`(`docs/plans/` 被 .gitignore 忽略,
@@ -68,9 +68,10 @@
 | resummon | 三端均弹 | 三端均弹 |
 
 > 冷启动注记:Windows 首实例启动即携带深链参数时,**deeplink 绕过静默门控必弹仪表盘**
-> (此时宠物按 §4.3 公式处理:`StoredVisible=true` 时仍恢复显示,仅无上退出记录时才被
-> `deepLink is null` 条件压制;v1.4 勘误,原措辞与 §4.3 公式矛盾)——该路径不受
-> `silent_effective` 影响。
+> (该路径不受 `silent_effective` 影响);**宠物不享受深链豁免,任何情况按 §4.3 门控**——
+> `silent_effective=true`(开关开或 `--startup`)时一律不弹,`StoredVisible=true` 亦不恢复;
+> 仅开关关且手动带深链时按 §4.3 公式正常处理(v1.5 勘误:v1.4 ② 未区分
+> `silent_effective` 分支,易误读为深链一律恢复宠物)。
 
 ### 4.3 宠物 / 辅助面板规则
 
@@ -281,13 +282,14 @@ webview 既无 `webkit.messageHandlers.nativeBridge` 也无 `chrome.webview` 桥
 - M5 Release 构建通过(见前置命令)。
 
 **Windows**
-- W1 开关关:manual 行为与现状一致;`--startup` 时宠物被压制(**宠物优先级修复**,即使
-  `PetVisible=true`);仪表盘从不自动弹(manual/login);deeplink 弹。login 模拟:直接运行
-  `TokenTracker.exe --startup`。
+- W1 开关关:manual 行为与现状一致(仪表盘 manual 弹 / login 不弹,#832 后基线,同 §4.2
+  矩阵);`--startup` 时宠物被压制(**宠物优先级修复**,即使 `PetVisible=true`);deeplink 弹。
+  login 模拟:直接运行 `TokenTracker.exe --startup`。
 - W2 开关开:manual 与 `--startup` 均不弹宠物、不弹仪表盘;deeplink(auth)弹(含冷启动带参);
   **无深链二次启动弹(新增 show 转发)**;`--startup` 二次启动不弹;`--startup`+深链的二次启动
   弹(深链规则);托盘点击弹。
-- W3 开关持久化于 native-settings.json(读-改-写保留其他键,切语言/宠物键不丢);托盘勾选态
+- W3 开关持久化于 native-settings.json(读-改-写保留其他键,切语言/宠物键不丢;JSON 损坏时
+  以新对象重建落盘,开关不再被损坏文件锁死);托盘勾选态
   跨启动保持;**运行中切换不改变当前可见性**;en/zh-Hans 文案与 §5.2 表一致
   (`ApplyLocaleToMenu`);菜单位置紧随 `_startupItem`(§5.1)。
 - W4 新二次实例 → 旧主实例:搭建方法 = 以旧版本 exe 为主实例运行,新版本 exe 无深链二次启动;
@@ -319,6 +321,13 @@ webview 既无 `webkit.messageHandlers.nativeBridge` 也无 `chrome.webview` 桥
 
 ## 修订记录(完整,定稿随文件入库)
 
+- v1.5(2026-10-28,CodeRabbit PR #901 第二轮行内评审吸收):① §4.2 冷启动注记二次勘误——
+  v1.4 ② 的「StoredVisible=true 时仍恢复显示」未区分 `silent_effective`,在开关开
+  (或 `--startup`)语境下与 §4.3 `!silent_effective &&` 外乘门控矛盾;改为深链仅豁免
+  仪表盘门控,宠物任何情况按 §4.3。② W1 验收标准同步 #832 基线:manual 弹 / login 不弹
+  (原「仪表盘从不自动弹(manual/login)」为 0.95.0 时代残留,与 §4.2 矩阵矛盾)。
+  ③ Windows `SilentStart.Set` 对损坏 JSON 以新对象重建(原仅只读回退 false,损坏文件
+  会把开关写路径锁死),W3 同步。
 - v1.4(2026-10-28,CodeRabbit PR #901 第二轮行外评审):① §4.2 manual 行与 §4.5 的
   Windows 基线勘误——#832(ActivateMessage 重构)之后 main 的实际行为是「manual 弹 /
   login 不弹」,原文「仪表盘从不自动弹」是 0.95.0 时代基线,已陈旧;**代码不动**(关闭时
