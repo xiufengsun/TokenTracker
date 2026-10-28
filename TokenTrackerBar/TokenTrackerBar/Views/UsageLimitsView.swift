@@ -189,7 +189,15 @@ struct UsageLimitsView: View {
             }
         case "zcode":
             if let zcode = limits.zcode, zcode.configured, zcode.error == nil {
-                return toolSection(id: id, title: planTitle("ZCode", zcode.planLabel), assetName: "ZcodeLogo", toolName: "ZCode", specs: zcodeSpecs(zcode))
+                return toolSection(
+                    id: id,
+                    title: planTitle("ZCode", zcode.planLabel),
+                    assetName: "ZcodeLogo",
+                    toolName: "ZCode",
+                    specs: zcodeSpecs(zcode),
+                    zcodeResetCredits: zcode.resetCredits,
+                    zcodeStartPlan: zcode.startPlan
+                )
             }
         case "opencodeGo":
             if let opencodeGo = limits.opencodeGo, opencodeGo.configured, opencodeGo.error == nil {
@@ -275,6 +283,8 @@ struct UsageLimitsView: View {
         specs: [LimitWindowSpec],
         resetRows: [CodexResetRowSpec] = [],
         resetStatus: String? = nil,
+        zcodeResetCredits: ZcodeResetCredits? = nil,
+        zcodeStartPlan: ZcodeStartPlan? = nil,
         /// Inline plan-spec text pinned to the right of the title (e.g. Kimi's
         /// "· Parallel: 20" concurrency cap). Renders caption2/tertiary so it
         /// reads as metadata, not part of the provider name.
@@ -291,16 +301,19 @@ struct UsageLimitsView: View {
         serviceStatus: ProviderServiceStatus? = nil
     ) -> AnyView? {
         let subscription = subscriptionByProvider[id]
+        let hasZcodeReset = zcodeResetBankHasContent(zcodeResetCredits)
+        let hasZcodeStart = zcodeStartPlan?.configured == true
         // No quota rows and no subscription/reset/status content means there is
         // nothing meaningful under the heading — return nil rather than render
         // a bare provider title.
         guard !specs.isEmpty || subscription != nil || !resetRows.isEmpty
-            || resetStatus != nil || serviceStatus != nil else {
+            || resetStatus != nil || serviceStatus != nil
+            || hasZcodeReset || hasZcodeStart else {
             return nil
         }
         if subscription != nil && SubscriptionSectionPolicy.usesSubscriptionOnly(
             hasQuotaRows: !specs.isEmpty,
-            hasResetContent: !resetRows.isEmpty || resetStatus != nil,
+            hasResetContent: !resetRows.isEmpty || resetStatus != nil || hasZcodeReset || hasZcodeStart,
             hasServiceStatus: serviceStatus != nil
         ) {
             return subscriptionOnlySection(id: id)
@@ -346,6 +359,12 @@ struct UsageLimitsView: View {
             }
             if !resetRows.isEmpty || resetStatus != nil {
                 resetSection(rows: resetRows, status: resetStatus)
+            }
+            if hasZcodeReset {
+                zcodeResetBankSection(zcodeResetCredits)
+            }
+            if hasZcodeStart, let startPlan = zcodeStartPlan {
+                zcodeStartPlanSection(startPlan, toolName: toolName)
             }
             if let serviceStatus {
                 serviceStatusRow(serviceStatus)
@@ -828,7 +847,158 @@ struct UsageLimitsView: View {
         )
     }
 
+    /// True when ZCode reset inventory should occupy space (error banner or any group).
+    private func zcodeResetBankHasContent(_ resetCredits: ZcodeResetCredits?) -> Bool {
+        guard let resetCredits else { return false }
+        if let error = resetCredits.error, !error.isEmpty { return true }
+        return !zcodeResetBankGroups(resetCredits).isEmpty
+    }
+
+    private struct ZcodeResetGroupSpec: Identifiable {
+        let id: String
+        let label: String
+        let count: Int
+        let earliest: String?
+        let earliestHelp: String?
+    }
+
+    private func zcodeResetBankGroups(_ resetCredits: ZcodeResetCredits, now: Date = Date()) -> [ZcodeResetGroupSpec] {
+        let pairs: [(String, String, [ZcodeResetCard]?)] = [
+            ("five_hour", "5h", resetCredits.fiveHour),
+            ("weekly", "Weekly", resetCredits.weekly),
+        ]
+        return pairs.map { id, label, cards in
+            let live = (cards ?? []).compactMap { card -> (Date, String)? in
+                guard let date = resetDate(iso: card.expiresAt), date > now else { return nil }
+                return (date, card.expiresAt)
+            }.sorted { $0.0 < $1.0 }
+            let earliest = live.first.map { Strings.codexResetBankExpiryDateTime($0.0) }
+            let help = live.map { Strings.codexResetBankExpiryDateTime($0.0) }.joined(separator: "\n")
+            return ZcodeResetGroupSpec(
+                id: id,
+                label: label,
+                count: live.count,
+                earliest: earliest.map { Strings.zcodeResetBankEarliest($0) },
+                earliestHelp: help.isEmpty ? nil : help
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func zcodeResetBankSection(_ resetCredits: ZcodeResetCredits?) -> some View {
+        let groups = resetCredits.map { zcodeResetBankGroups($0) } ?? []
+        VStack(alignment: .leading, spacing: 4) {
+            Text(Strings.zcodeResetBankSectionTitle)
+                .font(.system(.caption2, design: .default))
+                .modifier(FontWeightModifier(weight: .medium))
+                .foregroundStyle(.tertiary)
+            if let error = resetCredits?.error, !error.isEmpty {
+                Text(error)
+                    .font(.system(.caption2, design: .default))
+                    .foregroundStyle(.red)
+            } else {
+                ForEach(groups) { group in
+                    HStack(spacing: Self.rowColumnSpacing) {
+                        rowLabel(group.label)
+                        Text(Strings.zcodeResetBankCount(group.count))
+                            .font(.system(.caption2, design: .default))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Color.primary.opacity(0.06), in: Capsule())
+                        Spacer(minLength: 0)
+                        if let earliest = group.earliest {
+                            Text(earliest)
+                                .font(.system(.caption2, design: .default))
+                                .monospacedDigit()
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                    }
+                    .help(group.earliestHelp ?? "")
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(group.label), \(Strings.zcodeResetBankCount(group.count))\(group.earliest.map { ", \($0)" } ?? "")")
+                }
+            }
+        }
+        .padding(.top, 1)
+    }
+
+    @ViewBuilder
+    private func zcodeStartPlanSection(_ startPlan: ZcodeStartPlan, toolName: String) -> some View {
+        let planNames = Array(Set((startPlan.buckets ?? []).compactMap { bucket -> String? in
+            guard let name = bucket.planName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return nil }
+            return name
+        })).sorted()
+        let title = planNames.isEmpty ? Strings.zcodeStartGrantsTitle : planNames.joined(separator: " · ")
+        let specs = zcodeStartPlanSpecs(startPlan)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(.caption2, design: .default))
+                .modifier(FontWeightModifier(weight: .medium))
+                .foregroundStyle(.tertiary)
+                .padding(.top, 2)
+            if let error = startPlan.error, !error.isEmpty {
+                Text(error)
+                    .font(.system(.caption2, design: .default))
+                    .foregroundStyle(.red)
+            } else {
+                ForEach(specs) { spec in
+                    limitRow(
+                        label: spec.label,
+                        pct: spec.pct,
+                        reset: spec.resetText,
+                        toolName: toolName,
+                        windowSeconds: spec.windowSeconds,
+                        resetDate: spec.resetDate,
+                        segments: spec.segments,
+                        showSegments: false,
+                        productPool: spec.productPool,
+                        creditsDetail: spec.creditsDetail
+                    )
+                }
+                ForEach(Array((startPlan.buckets ?? []).enumerated()), id: \.offset) { _, bucket in
+                    if let remaining = bucket.remainingUnits, let total = bucket.totalUnits,
+                       remaining.isFinite, total.isFinite {
+                        Text(Strings.zcodeGrantAmount(
+                            remaining: formatZcodeUnits(remaining),
+                            total: formatZcodeUnits(total)
+                        ))
+                        .font(.system(.caption2, design: .default))
+                        .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+    }
+
+    private func zcodeStartPlanSpecs(_ startPlan: ZcodeStartPlan) -> [LimitWindowSpec] {
+        var specs: [LimitWindowSpec] = []
+        let labeled = (startPlan.buckets ?? []).compactMap { bucket -> (String, GenericLimitWindow)? in
+            guard let label = bucket.label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty,
+                  let window = bucket.window else { return nil }
+            return (label, window)
+        }
+        if !labeled.isEmpty {
+            var seen = Set<String>()
+            for (label, window) in labeled where seen.insert(label).inserted {
+                specs.append(makeSpec(label, window.usedPercent, iso: window.resetAt))
+            }
+        }
+        return specs
+    }
+
+    private func formatZcodeUnits(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        return formatter.string(from: NSNumber(value: value)) ?? String(Int(value))
+    }
+
     private func resetSection(rows: [CodexResetRowSpec], status: String?) -> some View {
+
         VStack(alignment: .leading, spacing: 4) {
             Text(Strings.codexResetBankSectionTitle)
                 .font(.system(.caption2, design: .default))

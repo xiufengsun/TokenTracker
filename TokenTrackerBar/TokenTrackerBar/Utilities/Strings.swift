@@ -129,6 +129,27 @@ enum Strings {
     static var codexResetBankSectionTitle: String {
         t("Resets", "重置权益", "重置權益", "リセット", "리셋")
     }
+    static var zcodeResetBankSectionTitle: String {
+        t("Quota resets", "额度重置", "額度重設", "使用枠のリセット", "한도 초기화")
+    }
+    static func zcodeResetBankCount(_ count: Int) -> String {
+        t("\(count) available", "\(count) 次可用", "\(count) 次可用", "\(count) 回利用可能", "\(count)회 사용 가능")
+    }
+    static func zcodeResetBankEarliest(_ time: String) -> String {
+        t("Earliest expiry: \(time)", "最早 \(time) 到期", "最早 \(time) 到期", "最も早い有効期限: \(time)", "가장 빠른 만료: \(time)")
+    }
+    static var zcodeStartGrantsTitle: String {
+        t("Start Plan", "Start 套餐", "Start 方案", "Start プラン", "Start 플랜")
+    }
+    static func zcodeGrantAmount(remaining: String, total: String) -> String {
+        t(
+            "\(remaining) / \(total) tokens remaining",
+            "剩余 \(remaining) / \(total) Token",
+            "剩餘 \(remaining) / \(total) Token",
+            "残り \(remaining) / \(total) トークン",
+            "남은 토큰 \(remaining) / \(total)"
+        )
+    }
     static func codexResetBankLabel(_ index: Int) -> String {
         t("Reset \(index)", "重置 \(index)", "重置 \(index)", "リセット \(index)", "리셋 \(index)")
     }

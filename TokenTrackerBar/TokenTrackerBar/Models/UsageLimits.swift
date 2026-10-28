@@ -525,6 +525,10 @@ struct ZcodeLimits: Codable, Equatable {
     let secondaryWindow: GenericLimitWindow?
     let tertiaryWindow: GenericLimitWindow?
     let buckets: [ZcodeBucket]?
+    /// Inventory of unused 5h / weekly reset cards (dashboard `reset_credits`).
+    let resetCredits: ZcodeResetCredits?
+    /// Separate Start-plan grant payload (dashboard `start_plan`).
+    let startPlan: ZcodeStartPlan?
 
     enum CodingKeys: String, CodingKey {
         case configured, error, buckets
@@ -533,10 +537,68 @@ struct ZcodeLimits: Codable, Equatable {
         case primaryWindow = "primary_window"
         case secondaryWindow = "secondary_window"
         case tertiaryWindow = "tertiary_window"
+        case resetCredits = "reset_credits"
+        case startPlan = "start_plan"
     }
 }
 
-/// One ZCode start-plan balance (daily allowance or one-time promotional grant).
+/// Unused ZCode reset-card inventory. Cards with a past `expires_at` are filtered
+/// at render time so a stale payload still decodes.
+struct ZcodeResetCredits: Codable, Equatable {
+    let error: String?
+    let fiveHour: [ZcodeResetCard]?
+    let weekly: [ZcodeResetCard]?
+
+    enum CodingKeys: String, CodingKey {
+        case error
+        case fiveHour = "five_hour"
+        case weekly
+    }
+}
+
+struct ZcodeResetCard: Codable, Equatable {
+    let expiresAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case expiresAt = "expires_at"
+    }
+}
+
+/// Start-plan grants shipped beside a coding-plan ZCode card.
+struct ZcodeStartPlan: Codable, Equatable {
+    let configured: Bool
+    let error: String?
+    let planLabel: String?
+    let planKind: String?
+    let buckets: [ZcodeStartPlanBucket]?
+
+    enum CodingKeys: String, CodingKey {
+        case configured, error, buckets
+        case planLabel = "plan_label"
+        case planKind = "plan_kind"
+    }
+}
+
+struct ZcodeStartPlanBucket: Codable, Equatable {
+    let label: String?
+    let entitlementId: String?
+    let planName: String?
+    let period: String?
+    let remainingUnits: Double?
+    let totalUnits: Double?
+    let window: GenericLimitWindow?
+
+    enum CodingKeys: String, CodingKey {
+        case label, window, period
+        case entitlementId = "entitlement_id"
+        case planName = "plan_name"
+        case remainingUnits = "remaining_units"
+        case totalUnits = "total_units"
+    }
+}
+
+/// One ZCode start-plan balance (daily allowance or one-time promotional grant)
+/// when the server still nests balances under top-level `buckets` (legacy).
 struct ZcodeBucket: Codable, Equatable {
     let label: String?
     let entitlementId: String?
