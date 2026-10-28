@@ -17039,7 +17039,9 @@ function ompEntryTimestampMs(msg, entry) {
 // records are orders of magnitude smaller.
 const OMP_LIKE_MAX_RECORD_BYTES = 64 * 1024 * 1024;
 
-async function scanOmpLikeTranscript(filePath, startOffset, maxRecordBytes, onEntry, { recoverReadErrors = false } = {}) {
+const OMP_USAGE_KEY_BYTES = Buffer.from('"usage"');
+
+async function scanOmpLikeTranscript(filePath, startOffset, maxRecordBytes, onEntry, { mustContain = null, recoverReadErrors = false } = {}) {
   let stream;
   try {
     stream = fssync.createReadStream(filePath, { start: startOffset });
@@ -17052,6 +17054,7 @@ async function scanOmpLikeTranscript(filePath, startOffset, maxRecordBytes, onEn
     for await (const record of physicalJsonlRecords(stream, {
       invalidUtf8: "record",
       maxRecordBytes,
+      mustContain,
     })) {
       scannedEndOffset += record.physicalBytes;
       if (record.terminated) {
@@ -17261,7 +17264,7 @@ async function parseOmpLikeIncremental({
           bucketsQueued: touchedBuckets.size,
         });
       }
-    });
+    }, { mustContain: OMP_USAGE_KEY_BYTES });
 
     fileOffsets[filePath] = {
       size: committedEndOffset,
@@ -17359,7 +17362,7 @@ async function parseOmpLikeIncremental({
           addTotals(projectBucket.totals, delta);
           projectTouchedBuckets.add(projectBucketKey(projectKey, source, bucketStart));
           projectSeenIds.add(entryId);
-        });
+        }, { mustContain: OMP_USAGE_KEY_BYTES });
       }
 
       projectFileOffsets[filePath] = {

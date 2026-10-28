@@ -66,6 +66,28 @@ test("physicalJsonlRecords skips an oversized record and resumes at the next LF 
   ]);
 });
 
+test("physicalJsonlRecords mustContain skips terminated records without decoding but always decodes the unterminated tail", async () => {
+  // The needle straddles a chunk boundary; a skipped record must not be
+  // decoded (its invalid UTF-8 would otherwise surface as utf8Valid:false);
+  // the tail lacks the needle because it may still be mid-write.
+  const chunks = [
+    Buffer.from('{"usa'),
+    Buffer.from('ge":1}\n'),
+    Buffer.concat([Buffer.from('{"tool":"'), Buffer.from([0xff]), Buffer.from('"}\n')]),
+    Buffer.from('{"role":"assistant"'),
+  ];
+  const records = [];
+  for await (const record of physicalJsonlRecords(chunks, { invalidUtf8: "record", mustContain: Buffer.from('"usage"') })) {
+    records.push(record);
+  }
+
+  assert.deepEqual(records, [
+    { line: '{"usage":1}', utf8Valid: true, oversized: false, physicalBytes: 12, terminated: true },
+    { line: null, utf8Valid: null, oversized: false, physicalBytes: 13, terminated: true },
+    { line: '{"role":"assistant"', utf8Valid: true, oversized: false, physicalBytes: 19, terminated: false },
+  ]);
+});
+
 test("physicalJsonlRecords reports an oversized unterminated tail without losing its byte count", async () => {
   const chunks = ["ok\n", "0123456789", "0123"].map((chunk) => Buffer.from(chunk));
   const records = [];
