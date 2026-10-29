@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace TokenTrackerWin;
@@ -38,26 +39,31 @@ internal static class SilentStart
     /// deletes it by hand. Returns whether the write landed, so callers can avoid
     /// showing an unsaved value; failures keep the swallow policy (never take the
     /// tray app down).</summary>
-    public static bool Set(bool value)
+    public static bool Set(bool value) => Set(value, SettingsPath);
+
+    internal static bool Set(bool value, string settingsPath)
     {
         try
         {
             var root = new JsonObject();
-            if (File.Exists(SettingsPath))
+            if (File.Exists(settingsPath))
             {
+                // Read failures must reach the outer catch without writing: a
+                // temporarily unreadable file can still be writable and valid.
+                var json = File.ReadAllText(settingsPath);
                 try
                 {
-                    root = JsonNode.Parse(File.ReadAllText(SettingsPath))?.AsObject() ?? root;
+                    root = JsonNode.Parse(json) as JsonObject ?? root;
                 }
-                catch
+                catch (JsonException)
                 {
                     // Corrupted JSON: the keys are unreadable anyway, so rebuilding
                     // beats refusing every future write of this switch.
                 }
             }
             root[Key] = value;
-            Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
-            File.WriteAllText(SettingsPath, root.ToJsonString());
+            Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+            File.WriteAllText(settingsPath, root.ToJsonString());
             return true;
         }
         catch
