@@ -1124,6 +1124,68 @@ test("fetchQoderLimits keeps scanning when the newest log cannot beat the cache"
   assert.equal(refreshed.tertiary_window.limit_credits, 1300);
 });
 
+test("fetchQoderLimits picks the newest summary when mtime and line order disagree", async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-qoder-newest-line-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const nowMs = Date.parse("2030-07-29T12:00:00.000Z");
+  writeQoderLimitsCache({
+    configured: true,
+    error: null,
+    plan_label: "personal_standard",
+    primary_window: {
+      used_percent: 25, reset_at: null, used_credits: 25, limit_credits: 100, remaining_credits: 75, unit: "credits",
+    },
+    tertiary_window: {
+      used_percent: 10, reset_at: null, used_credits: 123, limit_credits: 1234, remaining_credits: 1111, unit: "credits",
+    },
+  }, { home, nowMs: nowMs - 3600_000 });
+
+  // Touched most recently, yet carries the older summary line (11:20).
+  const lateMtime = writeQoderDesktopMainLog(home, "com.qoder.app.stable", "late-mtime-session", {
+    used: 10,
+    total: 100,
+    observedAt: new Date(nowMs - 40 * 60_000).toISOString(),
+    addOn: { total: 1100, used: 0, remaining: 1100 },
+  });
+  fs.utimesSync(lateMtime, new Date(nowMs - 60_000), new Date(nowMs - 60_000));
+  // Touched a minute earlier, with the newer summary line (11:50).
+  const earlyMtime = writeQoderDesktopMainLog(home, "com.qoder.app.stable", "early-mtime-session", {
+    used: 0,
+    total: 0,
+    observedAt: new Date(nowMs - 10 * 60_000).toISOString(),
+    addOn: { total: 1300, used: 0, remaining: 1300 },
+  });
+  fs.utimesSync(earlyMtime, new Date(nowMs - 2 * 60_000), new Date(nowMs - 2 * 60_000));
+
+  const limits = await fetchQoderLimits({
+    home,
+    platform: "darwin",
+    env: {},
+    nowMs,
+    rpcRequest: async () => {
+      throw new Error("Qoder local service is not running.");
+    },
+  });
+
+  assert.equal(limits.source, "local-log");
+  assert.equal(limits.tertiary_window.limit_credits, 1300);
+  assert.equal(limits.primary_window.limit_credits, 0);
+
+  // The cache snapshot advanced past both files, so the next fetch reads it
+  // — and it must hold the newest summary, not the first-eligible one.
+  const second = await fetchQoderLimits({
+    home,
+    platform: "darwin",
+    env: {},
+    nowMs: nowMs + 60_000,
+    rpcRequest: async () => {
+      throw new Error("Qoder local service is not running.");
+    },
+  });
+  assert.equal(second.source, "disk-cache");
+  assert.equal(second.tertiary_window.limit_credits, 1300);
+});
+
 test("fetchQoderLimits prefers a configured manual cookie over a local summary when no cache exists", async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-qoder-cookie-first-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

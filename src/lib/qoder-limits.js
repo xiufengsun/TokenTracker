@@ -806,6 +806,7 @@ function readQoderLocalQuotaWithAge({
   candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
   const scanned = candidates.slice(0, QODER_LOG_MAX_FILES);
   const seenPaths = new Set();
+  let best = null;
   for (const { full, mtimeMs, size } of scanned) {
     seenPaths.add(full);
     const signature = `${size}:${mtimeMs}`;
@@ -828,15 +829,23 @@ function readQoderLocalQuotaWithAge({
     }
     const observedAtMs = parsed.observedAtMs ?? mtimeMs;
     if (nowMs - observedAtMs > maxAgeMs) continue;
-    // A summary that cannot beat the cache cutoff must not end the scan: a
-    // deeper file may still hold a newer line that can.
+    // A summary that cannot beat the cache cutoff is not eligible: keep
+    // scanning, a deeper file may still hold a newer line that can.
     if ((parsed.lineObservedAtMs ?? 0) <= olderThanMs) continue;
-    return { limits: parsed.limits, lineObservedAtMs: parsed.lineObservedAtMs ?? null };
+    // A file's mtime order need not match its summary-line order: an append
+    // without a fresh summary leaves an old line in a freshly touched file.
+    // Keep the newest eligible line across the whole scan instead of the
+    // first hit — advancing the cache cutoff afterwards must not lock out a
+    // summary that was newer all along.
+    const lineObservedAtMs = parsed.lineObservedAtMs ?? null;
+    if (!best || (lineObservedAtMs ?? 0) > (best.lineObservedAtMs ?? 0)) {
+      best = { limits: parsed.limits, lineObservedAtMs };
+    }
   }
   for (const cachedPath of qoderNoSummaryScans.keys()) {
     if (!seenPaths.has(cachedPath)) qoderNoSummaryScans.delete(cachedPath);
   }
-  return null;
+  return best;
 }
 
 function readQoderLocalQuota(options = {}) {
