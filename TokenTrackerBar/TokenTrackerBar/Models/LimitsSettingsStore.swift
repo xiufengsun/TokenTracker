@@ -36,7 +36,7 @@ final class LimitsSettingsStore: ObservableObject {
     static let shared = LimitsSettingsStore(userDefaults: .standard)
 
     /// All known provider identifiers, in default display order.
-    static let allProviders: [String] = ["claude", "codex", "cursor", "gemini", "kimi", "kiro", "grok", "copilot", "antigravity", "zcode", "opencodeGo", "commandCode", "qoder", "qoderCn", "codingPlan", "agentPlan", "devin", "workbuddy"]
+    static let allProviders: [String] = ["claude", "codex", "cursor", "gemini", "kimi", "kiro", "grok", "copilot", "antigravity", "zcode", "opencodeGo", "commandCode", "qoder", "qoderCn", "codingPlan", "agentPlan", "devin", "workbuddy", "workbuddyAi"]
 
     static let displayNames: [String: String] = [
         "claude": "Claude",
@@ -57,6 +57,7 @@ final class LimitsSettingsStore: ObservableObject {
         "agentPlan": "Ark Agent Plan",
         "devin": "Devin",
         "workbuddy": "WorkBuddy",
+        "workbuddyAi": "WorkBuddy AI",
     ]
 
     /// Providers whose visibility switch is also the consent to fetch them.
@@ -347,10 +348,9 @@ final class LimitsSettingsStore: ObservableObject {
         var seen = Set<String>()
         var ordered: [String] = []
         for rawId in raw ?? [] {
-            let id = rawId == "workbuddyAi" ? "workbuddy" : rawId
-            guard allProviders.contains(id), !seen.contains(id) else { continue }
-            ordered.append(id)
-            seen.insert(id)
+            guard allProviders.contains(rawId), !seen.contains(rawId) else { continue }
+            ordered.append(rawId)
+            seen.insert(rawId)
         }
         for id in allProviders where !seen.contains(id) {
             ordered.append(id)
@@ -362,8 +362,15 @@ final class LimitsSettingsStore: ObservableObject {
         var visibility = Dictionary(uniqueKeysWithValues: allProviders.map { id in
             (id, rawBool(raw?[id]) ?? defaultVisibility(forProvider: id))
         })
-        if let legacy = rawBool(raw?["workbuddyAi"]) {
-            visibility["workbuddy"] = rawBool(raw?["workbuddy"]) == true || legacy
+        // The unified-row era folded both editions into one `workbuddy`
+        // switch. The split rows keep an explicitly stored AI value; without
+        // one the AI row inherits the unified switch so a user who had
+        // WorkBuddy visible keeps seeing both editions, and a user who had
+        // it hidden keeps both hidden.
+        if let explicitAi = rawBool(raw?["workbuddyAi"]) {
+            visibility["workbuddyAi"] = explicitAi
+        } else if let unified = rawBool(raw?["workbuddy"]) {
+            visibility["workbuddyAi"] = unified
         }
         return visibility
     }

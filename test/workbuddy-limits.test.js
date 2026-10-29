@@ -6,9 +6,11 @@ const test = require("node:test");
 
 const {
   collectPackageRows,
+  collectResourceGroups,
   fetchWorkbuddyAiLimits,
   fetchWorkbuddyLimits,
   originAllowed,
+  resourceWindow,
   selectWorkbuddyPlanQuota,
   selectWorkbuddyLimits,
   VARIANTS,
@@ -227,4 +229,226 @@ test("a plaintext china session is sent only to the china host", async () => {
   assert.equal(result.configured, true);
   assert.equal(result.error, null);
   assert.ok(urls.every((url) => url.startsWith("https://www.workbuddy.cn/")));
+});
+
+// The live summary shape (China 5.9.3): plan_base exhausted, a partially used
+// platform-reward group, and empty gift/add-on groups.
+const CREDIT_GROUPS_SUMMARY = {
+  code: 0,
+  data: {
+    SubscriptionPackageName: "体验版",
+    TotalCredits: 3831.03,
+    Packages: [trialRow({
+      CycleTotalCapacity: 500,
+      CycleRemainCapacity: 0,
+      CycleUsedCapacity: 500,
+    })],
+    CreditGroups: [
+      { Kind: "plan_base", Name: "套餐基础积分", CycleTotalCapacity: "500", CycleRemainCapacity: "0", CycleUsedCapacity: "500" },
+      { Kind: "plan_bonus", Name: "套餐赠送积分", CycleTotalCapacity: "0", CycleRemainCapacity: "0", CycleUsedCapacity: "0" },
+      { Kind: "addon", Name: "购买积分", CycleTotalCapacity: "0", CycleRemainCapacity: "0", CycleUsedCapacity: "0" },
+      { Kind: "benefit", Name: "平台奖励积分", CycleTotalCapacity: "6038", CycleRemainCapacity: "3831.03000062", CycleUsedCapacity: "2206.96999938" },
+    ],
+  },
+};
+
+test("resource window pools every non-plan credit group without a reset", () => {
+  const pool = collectResourceGroups(CREDIT_GROUPS_SUMMARY);
+  const window = resourceWindow(pool);
+  assert.ok(window);
+  assert.equal(window.limit_credits, 6038);
+  assert.ok(Math.abs(window.used_credits - 2206.96999938) < 1e-9);
+  assert.ok(Math.abs(window.remaining_credits - 3831.03000062) < 1e-9);
+  assert.ok(Math.abs(window.used_percent - (2206.96999938 / 6038) * 100) < 1e-9);
+  assert.equal(window.reset_at, null);
+});
+
+test("an all-zero resource pool yields no window", () => {
+  const summary = {
+    code: 0,
+    data: {
+      Packages: [trialRow()],
+      CreditGroups: [
+        { Kind: "plan_base", CycleTotalCapacity: "500", CycleRemainCapacity: "251.71", CycleUsedCapacity: "248.29" },
+        { Kind: "benefit", CycleTotalCapacity: "0", CycleRemainCapacity: "0", CycleUsedCapacity: "0" },
+      ],
+    },
+  };
+  const pool = collectResourceGroups(summary);
+  assert.ok(pool);
+  assert.equal(pool.total, 0);
+  assert.equal(resourceWindow(pool), null);
+  assert.equal(resourceWindow({ total: 0, used: 0, remain: 0, seen: true }), null);
+});
+
+test("groups that omit CycleRemainCapacity keep remaining_credits exact", () => {
+  const summary = {
+    code: 0,
+    data: {
+      CreditGroups: [
+        { Kind: "benefit", CycleTotalCapacity: "100", CycleUsedCapacity: "30" },
+        { Kind: "addon", CycleTotalCapacity: "50", CycleRemainCapacity: "50", CycleUsedCapacity: "0" },
+      ],
+    },
+  };
+  const window = resourceWindow(collectResourceGroups(summary));
+  assert.ok(window);
+  assert.equal(window.limit_credits, 150);
+  assert.equal(window.used_credits, 30);
+  assert.equal(window.remaining_credits, 120);
+});
+
+test("a pool that reports total but no usage stays hidden", () => {
+  const summary = {
+    code: 0,
+    data: {
+      CreditGroups: [{ Kind: "benefit", CycleTotalCapacity: "100" }],
+    },
+  };
+  const pool = collectResourceGroups(summary);
+  assert.ok(pool);
+  assert.equal(resourceWindow(pool), null);
+});
+
+test("plan_base kind matches case-insensitively so plan credits never double-count", () => {
+  const summary = {
+    code: 0,
+    data: {
+      CreditGroups: [
+        { Kind: "PLAN_BASE", CycleTotalCapacity: "500", CycleRemainCapacity: "0", CycleUsedCapacity: "500" },
+        { Kind: "benefit", CycleTotalCapacity: "100", CycleRemainCapacity: "70", CycleUsedCapacity: "30" },
+      ],
+    },
+  };
+  const window = resourceWindow(collectResourceGroups(summary));
+  assert.ok(window);
+  assert.equal(window.limit_credits, 100);
+  assert.equal(window.used_credits, 30);
+});
+
+test("a pool made only of plan_base groups yields no window", () => {
+  const summary = {
+    code: 0,
+    data: {
+      CreditGroups: [
+        { Kind: "plan_base", CycleTotalCapacity: "500", CycleRemainCapacity: "0", CycleUsedCapacity: "500" },
+      ],
+    },
+  };
+  assert.equal(resourceWindow(collectResourceGroups(summary)), null);
+});
+
+test("an exhausted resource pool with only remain reported stays visible at 100%", () => {
+  const summary = {
+    code: 0,
+    data: {
+      CreditGroups: [
+        { Kind: "benefit", CycleTotalCapacity: "100", CycleRemainCapacity: "0" },
+      ],
+    },
+  };
+  const window = resourceWindow(collectResourceGroups(summary));
+  assert.ok(window);
+  assert.equal(window.used_percent, 100);
+  assert.equal(window.used_credits, 100);
+  assert.equal(window.remaining_credits, 0);
+});
+
+test("overflowing credit sums yield no window instead of Infinity", () => {
+  const summary = {
+    code: 0,
+    data: {
+      CreditGroups: [
+        { Kind: "benefit", CycleTotalCapacity: "1e308", CycleRemainCapacity: "1e308", CycleUsedCapacity: "0" },
+        { Kind: "addon", CycleTotalCapacity: "1e308", CycleRemainCapacity: "1e308", CycleUsedCapacity: "0" },
+      ],
+    },
+  };
+  assert.equal(resourceWindow(collectResourceGroups(summary)), null);
+});
+
+test("an overflowing remaining sum yields no window even when total stays finite", () => {
+  const summary = {
+    code: 0,
+    data: {
+      CreditGroups: [
+        { Kind: "benefit", CycleTotalCapacity: "100", CycleUsedCapacity: "5", CycleRemainCapacity: "1e308" },
+        { Kind: "addon", CycleRemainCapacity: "1e308" },
+      ],
+    },
+  };
+  assert.equal(resourceWindow(collectResourceGroups(summary)), null);
+});
+
+test("summaries without CreditGroups pool non-plan package rows instead", () => {
+  const summary = {
+    code: 0,
+    data: {
+      Packages: [trialRow(), {
+        PackageCode: REWARD,
+        PackageName: "官方活动发放",
+        CycleTotalCapacity: 1500,
+        CycleRemainCapacity: 1500,
+        CycleUsedCapacity: 0,
+      }],
+    },
+  };
+  const window = resourceWindow(collectResourceGroups(summary));
+  assert.ok(window);
+  assert.equal(window.limit_credits, 1500);
+  assert.equal(window.used_percent, 0);
+  assert.equal(window.remaining_credits, 1500);
+});
+
+test("both editions publish the plan window and the resource window", async () => {
+  const summaryFixture = () => ({
+    ok: true,
+    status: 200,
+    json: async () => CREDIT_GROUPS_SUMMARY,
+  });
+  const cn = await fetchWorkbuddyLimits({
+    env: { HOME: os.tmpdir(), WORKBUDDY_ACCESS_TOKEN: "cn-token" },
+    origin: "https://www.workbuddy.cn",
+    fetchImpl: async (url) => (
+      url.endsWith("get-user-resource-summary") ? summaryFixture()
+        : { ok: true, status: 200, json: async () => ({ code: 0, data: { Accounts: [] } }) }
+    ),
+  });
+  assert.equal(cn.plan_label, "Free");
+  assert.equal(cn.primary_window.limit_credits, 500);
+  assert.equal(cn.primary_window.used_percent, 100);
+  assert.equal(cn.secondary_window.limit_credits, 6038);
+  assert.equal(cn.secondary_window.reset_at, null);
+
+  const ai = await fetchWorkbuddyAiLimits({
+    env: { HOME: os.tmpdir(), WORKBUDDY_AI_ACCESS_TOKEN: "ai-token" },
+    origin: "https://www.workbuddy.ai",
+    fetchImpl: async (url) => (
+      url.endsWith("get-user-resource-summary")
+        ? {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              code: 0,
+              data: {
+                SubscriptionPackageName: "Free",
+                Packages: [trialRow({
+                  PackageCode: "TCACA_code_035_ArVxJcGDsm",
+                  CycleTotalCapacity: 100,
+                  CycleRemainCapacity: 100,
+                  CycleUsedCapacity: 0,
+                })],
+                CreditGroups: [
+                  { Kind: "plan_base", CycleTotalCapacity: "100", CycleRemainCapacity: "100", CycleUsedCapacity: "0" },
+                  { Kind: "benefit", CycleTotalCapacity: "0", CycleRemainCapacity: "0", CycleUsedCapacity: "0" },
+                ],
+              },
+            }),
+          }
+        : { ok: true, status: 200, json: async () => ({ code: 0, data: { Accounts: [] } }) }
+    ),
+  });
+  assert.equal(ai.plan_label, "Free");
+  assert.equal(ai.primary_window.limit_credits, 100);
+  assert.equal(ai.secondary_window, null);
 });

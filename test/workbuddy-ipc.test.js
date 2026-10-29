@@ -85,7 +85,11 @@ test("the limits aggregation retains Free and cancels IPC when the provider budg
   const result = await getUsageLimits(options);
   assert.equal(result.workbuddy.plan_label, "Free");
   assert.equal(result.workbuddy.source, "ipc");
-  assert.equal(Object.hasOwn(result, "workbuddyAi"), false);
+  // Each edition is its own aggregation entry now; the AI edition has no
+  // broker here, so it publishes the bare unconfigured shape (plus the
+  // aggregation's shared provenance block).
+  assert.equal(result.workbuddyAi.configured, false);
+  assert.equal(result.workbuddyAi.primary_window, undefined);
   assert.equal(result.workbuddy.primary_window.limit_credits, 500);
 
   const stalled = await createWorkbuddyBroker(t, { stallRequest: true });

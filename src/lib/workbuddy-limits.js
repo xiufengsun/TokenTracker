@@ -12,10 +12,11 @@
 // WorkBuddy adds its own credentials, including encrypted desktop sessions.
 // Legacy plaintext credentials remain a fallback when no local IPC exists.
 //
-// Only the subscription plan package is returned — the row the app calls
-// 套餐基础积分, with that package's cycle end as the reset. Reward grants
-// (活动 / 成长计划 / bonus / extra / gift) are dropped. Display names are
-// English regardless of the backend's localized package names.
+// Only two windows are returned, mirroring the desktop app's own split:
+// the subscription plan package (the row the app calls 套餐基础积分, with that
+// package's cycle end as the reset) and one pooled resource-package window
+// for every non-plan credit group (套餐赠送积分 / 购买积分 / 平台奖励积分).
+// Display names are English regardless of the backend's localized names.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -278,8 +279,8 @@ function planWindow(row) {
   };
 }
 
-// One product row, one account's balance. Prefer a usable quota; when both
-// editions are connected China wins deterministically. Never add their pools.
+// Legacy merge for the pre-split unified row. The local app now publishes
+// both editions side by side; cloud mirrors of this module still merge.
 function selectWorkbuddyLimits(china, international) {
   const editions = [china, international].filter(Boolean);
   const usable = (value) => value.configured === true && !value.error;
@@ -289,9 +290,10 @@ function selectWorkbuddyLimits(china, international) {
     || { configured: false };
 }
 
-// Pick the one subscription-plan package. Reward rows are ignored. When
-// several plan packages exist, the highest tier that still has credit wins,
-// matching the desktop app's pickActivePlanBase.
+// Pick the one subscription-plan package. Reward rows are ignored here — they
+// feed the resource-pool window instead. When several plan packages exist, the
+// highest tier that still has credit wins, matching the desktop app's
+// pickActivePlanBase.
 function selectWorkbuddyPlanQuota(rows, identity = {}, variantId = "workbuddy") {
   const merged = mergePackageRows(rows.filter(Boolean));
   const subscriptionPackageCode = identity.code || "";
@@ -306,6 +308,88 @@ function selectWorkbuddyPlanQuota(rows, identity = {}, variantId = "workbuddy") 
     plan_label: planLabel || null,
     primary_window: window,
     package_code: chosen.code,
+  };
+}
+
+// The desktop app's billing meter splits an account into CreditGroups:
+// plan_base (套餐基础积分) plus the non-plan pools plan_bonus (套餐赠送积分),
+// addon (购买积分) and benefit (平台奖励积分). The app shows those pools as
+// resource packages on top of the plan, so mirror that split: one window for
+// the plan cycle, one pooled window for everything else. Groups the summary
+// does not quantify are ignored; a pool with no credit at all stays null so
+// the UI drops it like a missing window.
+function collectResourceGroups(summary) {
+  const data = unwrapBillingBody(summary);
+  if (!data) return null;
+  const groups = [
+    data.CreditGroups,
+    data.creditGroups,
+    data.credit_groups,
+  ].find(Array.isArray);
+  if (groups) {
+    const pool = { total: 0, used: 0, remain: 0, remainDerived: 0, seen: false, usedSeen: false, remainSeen: false };
+    for (const group of groups) {
+      if (!group || typeof group !== "object") continue;
+      const kind = firstString(group, ["Kind", "kind"]);
+      if (kind && kind.toLowerCase() === "plan_base") continue;
+      const total = firstCount(group, ["CycleTotalCapacity", "total"]);
+      const used = firstCount(group, ["CycleUsedCapacity", "used"]);
+      const remain = firstCount(group, ["CycleRemainCapacity", "remain"]);
+      if (total === null && used === null && remain === null) continue;
+      pool.seen = true;
+      pool.usedSeen = pool.usedSeen || used !== null;
+      pool.remainSeen = pool.remainSeen || remain !== null;
+      pool.total += total ?? 0;
+      pool.used += used ?? 0;
+      if (remain === null) pool.remainDerived += Math.max(0, (total ?? 0) - (used ?? 0));
+      else pool.remain += remain;
+    }
+    return pool.seen ? pool : null;
+  }
+  // Older summaries predate CreditGroups. Their package rows carry the same
+  // pools one row per package — every row that cannot be the subscription
+  // plan is resource credit.
+  const identity = readSubscriptionIdentity(summary);
+  const rows = collectPackageRows(summary)
+    .filter((row) => !isSelectablePlan(row, identity.code));
+  if (rows.length === 0) return null;
+  return {
+    total: rows.reduce((sum, row) => sum + (row.total ?? 0), 0),
+    used: rows.reduce((sum, row) => sum + (row.used ?? 0), 0),
+    remain: rows.reduce((sum, row) => sum + (row.remain ?? 0), 0),
+    remainDerived: rows.reduce(
+      (sum, row) => sum + (row.remain === null ? Math.max(0, (row.total ?? 0) - (row.used ?? 0)) : 0),
+      0,
+    ),
+    seen: true,
+    usedSeen: rows.some((row) => row.used !== null),
+    remainSeen: rows.some((row) => row.remain !== null),
+  };
+}
+
+// Resource credits have no shared cycle: benefit and add-on packages carry
+// their own grants, so the pooled window has no reset. An empty pool (0/0)
+// yields no window instead of a full or zeroed bar.
+function resourceWindow(pool) {
+  if (!pool || !(pool.total > 0) || !Number.isFinite(pool.total)) return null;
+  // No group reported either side of the meter: usage is unknowable, not
+  // zero — hide the pool instead of rendering a full bar.
+  if (!pool.usedSeen && !pool.remainSeen) return null;
+  const used = pool.usedSeen || pool.used > 0
+    ? pool.used
+    : Math.max(0, pool.total - (pool.remain + pool.remainDerived));
+  const usedPercent = clampPercent((used / pool.total) * 100);
+  if (usedPercent === null) return null;
+  const remaining = pool.remainSeen
+    ? pool.remain + pool.remainDerived
+    : Math.max(0, pool.total - used);
+  if (!Number.isFinite(remaining)) return null;
+  return {
+    used_percent: usedPercent,
+    reset_at: null,
+    used_credits: used,
+    limit_credits: pool.total,
+    remaining_credits: remaining,
   };
 }
 
@@ -479,6 +563,7 @@ async function fetchPlanQuota(post, variantId) {
     configured: true, error: null,
     plan_label: quota?.plan_label || englishPlanLabel({ code: identity.code }, identity, variantId),
     primary_window: quota?.primary_window || null,
+    secondary_window: resourceWindow(collectResourceGroups(summary)),
   };
 }
 
@@ -556,6 +641,8 @@ module.exports = {
   selectWorkbuddyPlanQuota,
   selectWorkbuddyLimits,
   collectPackageRows,
+  collectResourceGroups,
+  resourceWindow,
   readSubscriptionIdentity,
   originAllowed,
   hostAllowed,

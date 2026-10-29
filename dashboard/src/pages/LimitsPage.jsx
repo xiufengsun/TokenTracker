@@ -317,6 +317,7 @@ export function LimitsPage() {
                 agentPlan={usageLimits?.agentPlan}
                 devin={usageLimits?.devin}
                 workbuddy={usageLimits?.workbuddy}
+                workbuddyAi={usageLimits?.workbuddyAi}
                 order={prefs.order}
                 visibility={prefs.visibility}
                 displayMode={prefs.displayMode}

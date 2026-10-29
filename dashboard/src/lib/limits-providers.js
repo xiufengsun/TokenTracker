@@ -20,6 +20,7 @@ export const LIMIT_PROVIDER_IDS = [
   "agentPlan",
   "devin",
   "workbuddy",
+  "workbuddyAi",
 ];
 
 /** Keys for ProviderIcon — mono logos use inline SVG; colored logos use /brand-logos/. */
@@ -50,8 +51,10 @@ export const LIMIT_PROVIDER_ICON_KEYS = {
   agentPlan: "VOLCANO-ARK",
   // Devin (devin.ai) — the three-hexagon "nodes" mark under /brand-logos/.
   devin: "DEVIN",
-  // WorkBuddy uses one product row for either regional edition.
+  // WorkBuddy China and WorkBuddy AI each publish their own signed-in row.
+  // Both share the CodeBuddy brand mark.
   workbuddy: "WORKBUDDY",
+  workbuddyAi: "WORKBUDDY",
 };
 
 export function limitProviderIconKey(id) {
@@ -96,6 +99,8 @@ export function limitProviderName(id) {
       return copy("limits.provider.devin");
     case "workbuddy":
       return copy("limits.provider.workbuddy");
+    case "workbuddyAi":
+      return copy("limits.provider.workbuddy_ai");
     default:
       return String(id || "");
   }

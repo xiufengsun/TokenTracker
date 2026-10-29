@@ -262,11 +262,21 @@ export const PROVIDER_LIMIT_SPECS = {
     },
   },
   workbuddy: {
-    // Subscription plan credits only. Reward grants are not a window.
+    // One row per signed-in edition, mirroring the desktop app's split: the
+    // subscription plan's base credits on the plan cycle, plus one pooled
+    // resource-package window for every non-plan credit group (gift, top-up,
+    // platform rewards). An empty 0/0 pool yields no window and drops out.
     windows(data) {
       return [
         { key: "plan", labelKey: "limits.label.workbuddy_plan", window: data.primary_window, creditPrecision: 2, showCreditDetail: true },
+        { key: "addon", labelKey: "limits.label.workbuddy_addon", window: data.secondary_window, creditPrecision: 2, showCreditDetail: true },
       ];
+    },
+  },
+  // WorkBuddy AI publishes the same two-window shape as the China edition.
+  workbuddyAi: {
+    windows(data) {
+      return PROVIDER_LIMIT_SPECS.workbuddy.windows(data);
     },
   },
 };
@@ -364,5 +374,7 @@ export function usageLimitsLabelCopyAnchor() {
     copy("limits.label.ark_agent_plan_monthly"),
     copy("limits.label.devin_daily"),
     copy("limits.label.devin_weekly"),
+    copy("limits.label.workbuddy_plan"),
+    copy("limits.label.workbuddy_addon"),
   ];
 }

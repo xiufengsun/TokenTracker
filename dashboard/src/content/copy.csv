@@ -1647,6 +1647,7 @@ limits.provider.devin,ui,LimitsPage,UsageLimitsPanel,provider_devin,"Devin",,act
 limits.provider.workbuddy,ui,LimitsPage,UsageLimitsPanel,provider_workbuddy,"WorkBuddy",,active
 limits.provider.workbuddy_ai,ui,LimitsPage,UsageLimitsPanel,provider_workbuddy_ai,"WorkBuddy AI",,active
 limits.label.workbuddy_plan,ui,LimitsPage,UsageLimitsPanel,workbuddy_plan,"Plan",,active
+limits.label.workbuddy_addon,ui,LimitsPage,UsageLimitsPanel,workbuddy_addon,Add-on Credits,,active
 limits.label.devin_daily,ui,LimitsPage,UsageLimitsPanel,devin_daily,"Daily",,active
 limits.label.devin_weekly,ui,LimitsPage,UsageLimitsPanel,devin_weekly,"Weekly",,active
 limits.devin.setupHint.title,ui,LimitsPage,UsageLimitsPanel,devin_hint_title,"Connect Devin",,active

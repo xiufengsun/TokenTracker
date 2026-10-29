@@ -74,8 +74,7 @@ function defaultVisibility() {
 function normalizeOrder(value) {
   const known = [];
   if (Array.isArray(value)) {
-    for (const rawId of value) {
-      const id = rawId === "workbuddyAi" ? "workbuddy" : rawId;
+    for (const id of value) {
       if (ALL_LIMIT_PROVIDERS.includes(id) && !known.includes(id)) {
         known.push(id);
       }
@@ -95,8 +94,11 @@ function normalizeVisibility(value) {
   for (const id of ALL_LIMIT_PROVIDERS) {
     if (typeof value[id] === "boolean") merged[id] = value[id];
   }
-  if (typeof value.workbuddyAi === "boolean") {
-    merged.workbuddy = value.workbuddy === true || value.workbuddyAi;
+  // The unified-row era folded both editions into one `workbuddy` switch.
+  // Without an explicit stored AI value the AI row inherits that switch, so
+  // nobody's WorkBuddy rows silently vanish (or reappear) across the split.
+  if (typeof value.workbuddyAi !== "boolean" && typeof value.workbuddy === "boolean") {
+    merged.workbuddyAi = value.workbuddy;
   }
   return merged;
 }

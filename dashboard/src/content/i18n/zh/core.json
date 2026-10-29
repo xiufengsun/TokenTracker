@@ -841,6 +841,7 @@
   "limits.provider.workbuddy": "WorkBuddy",
   "limits.provider.workbuddy_ai": "WorkBuddy AI",
   "limits.label.workbuddy_plan": "套餐",
+  "limits.label.workbuddy_addon": "资源包",
   "limits.label.devin_daily": "每日",
   "limits.label.devin_weekly": "每周",
   "limits.devin.setupHint.title": "连接 Devin",

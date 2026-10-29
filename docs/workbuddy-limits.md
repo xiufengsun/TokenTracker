@@ -3,10 +3,11 @@
 WorkBuddy China and WorkBuddy AI use separate local authenticated proxies:
 `~/.workbuddy/wbipc/endpoint.json` and `~/.workbuddy-ai/wbipc/endpoint.json`.
 `WORKBUDDY_HOME` and `WORKBUDDY_AI_HOME` override the respective directories.
-The UI exposes one **WorkBuddy** provider and one visibility switch for both editions.
-It chooses a successful quota over an unavailable edition; if both have usable
-quotas, China takes precedence. Balances from different accounts are never added.
-Legacy `workbuddyAi` display preferences migrate into the unified `workbuddy` switch.
+The UI exposes each edition as its own **WorkBuddy** / **WorkBuddy AI** row with
+its own visibility switch; balances from different accounts are never added or
+compared. The pre-split era folded both editions into one `workbuddy` switch:
+stored preferences without an explicit `workbuddyAi` value inherit that unified
+switch, so nobody's rows silently appear or disappear across the upgrade.
 
 The desktop app must be running and signed in. TokenTracker authenticates the
 local peer with the discovery ticket and the broker's HMAC challenge, then calls
@@ -19,11 +20,18 @@ Only three read-only billing operations are exposed by this integration:
 - `POST /billing/meter/get-user-resource-paid-packages`
 - `POST /billing/meter/get-user-resource-free-packages`
 
-The summary supplies the plan balance; package details supply `CycleEndTime`.
-The window also carries `used_credits`, `limit_credits` and `remaining_credits`
-for hover details, displayed to at most two decimal places. Only the subscription's
-base credits contribute to the displayed percentage.
-Reward, gift, bonus and extra-credit packages are excluded. Requests and sockets
+Each edition renders two windows, mirroring the desktop app's own split. The
+plan window is the subscription's base credits (套餐基础积分) with that
+package's `CycleEndTime` as the reset. The resource-package window pools every
+non-plan credit group from the summary's `CreditGroups` — 套餐赠送积分, 购买积分
+and 平台奖励积分 — and carries no reset, because those grants have no shared
+cycle. Both windows carry `used_credits`, `limit_credits` and
+`remaining_credits` for hover details, displayed to at most two decimal
+places; a group that omits its remaining count contributes `total - used` to
+the pool. An exhausted plan (total > 0) stays visible at 100% used; an empty
+0/0 pool yields no window at all, so the UI drops it like a missing window.
+Summaries that predate `CreditGroups` fall back to pooling every summary
+package row that cannot be the subscription plan. Requests and sockets
 are cancelled when the usage-limits provider budget expires. Tickets, backend
 credentials and full API responses are never persisted or logged. Legacy
 plaintext sessions and manually configured `WORKBUDDY_ACCESS_TOKEN` /

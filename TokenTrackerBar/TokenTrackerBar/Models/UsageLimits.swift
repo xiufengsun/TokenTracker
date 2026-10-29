@@ -20,10 +20,11 @@ struct UsageLimitsResponse: Codable, Equatable {
     let agentPlan: AgentPlanLimits?
     let devin: DevinLimits?
     let workbuddy: WorkbuddyLimits?
+    let workbuddyAi: WorkbuddyLimits?
 
     enum CodingKeys: String, CodingKey {
         case fetchedAt = "fetched_at"
-        case claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy
+        case claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi
         case opencodeGo = "opencodeGo"
         case commandCode = "commandCode"
     }
@@ -710,14 +711,16 @@ struct CodingPlanLimits: Codable, Equatable {
 
 typealias AgentPlanLimits = CodingPlanLimits
 
-/// WorkBuddy subscription-plan credits. China and international share one row.
-/// Only one account's plan package is published;
-/// reward grants are not a window.
+/// One WorkBuddy edition's credits (China and AI each publish their own row).
+/// The plan window is the subscription's base credits with its cycle reset;
+/// the secondary window pools every non-plan credit group (gift, top-up and
+/// platform rewards) and carries no reset, mirroring the desktop app's split.
 struct WorkbuddyLimits: Codable, Equatable {
     let configured: Bool
     let error: String?
     let planLabel: String?
     let primaryWindow: GenericLimitWindow?
+    let secondaryWindow: GenericLimitWindow?
     let cachedAt: String?
     let stale: Bool?
 
@@ -725,6 +728,7 @@ struct WorkbuddyLimits: Codable, Equatable {
         case configured, error, stale
         case planLabel = "plan_label"
         case primaryWindow = "primary_window"
+        case secondaryWindow = "secondary_window"
         case cachedAt = "cached_at"
     }
 }
@@ -813,6 +817,7 @@ extension UsageLimitsResponse {
             (agentPlan?.configured ?? false, agentPlan?.error),
             (devin?.configured ?? false, devin?.error),
             (workbuddy?.configured ?? false, workbuddy?.error),
+            (workbuddyAi?.configured ?? false, workbuddyAi?.error),
         ]
         return providers.contains { $0.0 && $0.1 == nil }
     }
@@ -852,7 +857,8 @@ extension UsageLimitsResponse {
             codingPlan: codingPlan,
             agentPlan: agentPlan,
             devin: .unconfigured,
-            workbuddy: workbuddy
+            workbuddy: workbuddy,
+            workbuddyAi: workbuddyAi
         )
     }
 }

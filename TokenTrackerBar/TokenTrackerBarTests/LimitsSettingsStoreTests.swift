@@ -8,19 +8,30 @@ final class LimitsSettingsStoreTests: XCTestCase {
     }
     private var cancellables: Set<AnyCancellable> = []
 
-    func testLegacyWorkbuddyEditionsMigrateIntoOneSwitch() {
+    func testWorkbuddyEditionsStaySplitWithExplicitSwitches() {
         let (store, _) = makeStore()
         XCTAssertTrue(store.applyBridgeSnapshot([
             "providerOrder": ["workbuddyAi", "claude", "workbuddy"],
             "providerVisibility": ["workbuddy": false, "workbuddyAi": true],
             "updatedAt": 100,
         ]))
-        XCTAssertEqual(Array(store.providerOrder.prefix(2)), ["workbuddy", "claude"])
-        XCTAssertEqual(store.providerOrder.filter { $0.hasPrefix("workbuddy") }, ["workbuddy"])
-        XCTAssertTrue(store.isVisible("workbuddy"))
-        XCTAssertNil(store.providerVisibility["workbuddyAi"])
-        store.setProviderVisibilityFromMenu("workbuddy", isVisible: false)
+        XCTAssertEqual(Array(store.providerOrder.prefix(3)), ["workbuddyAi", "claude", "workbuddy"])
         XCTAssertFalse(store.isVisible("workbuddy"))
+        XCTAssertTrue(store.isVisible("workbuddyAi"))
+        store.setProviderVisibilityFromMenu("workbuddyAi", isVisible: false)
+        XCTAssertFalse(store.isVisible("workbuddyAi"))
+        XCTAssertFalse(store.isVisible("workbuddy"))
+    }
+
+    func testUnifiedWorkbuddySwitchInheritsIntoAiRow() {
+        let (store, _) = makeStore()
+        XCTAssertTrue(store.applyBridgeSnapshot([
+            "providerOrder": ["workbuddy"],
+            "providerVisibility": ["workbuddy": false],
+            "updatedAt": 100,
+        ]))
+        XCTAssertFalse(store.isVisible("workbuddy"))
+        XCTAssertFalse(store.isVisible("workbuddyAi"))
     }
 
     func testWorkbuddyCreditAmountsDecodeWithoutAffectingOlderWindows() throws {

@@ -92,6 +92,9 @@ enum Strings {
     // render the same label.
     static var qoderPlanLabel: String { t("Plan", "套餐", "套餐", "プラン", "플랜") }
     static var workbuddyPlanLabel: String { t("Plan", "套餐", "套餐", "プラン", "플랜") }
+    // WorkBuddy resource packages: every non-plan credit group (gift, top-up
+    // and platform rewards) pooled into one window, as the desktop app shows.
+    static var workbuddyAddonLabel: String { t("Add-on", "资源包", "資源包", "リソースパック", "리소스 팩") }
     static var qoderBonusLabel: String { t("Bonus", "奖励", "獎勵", "ボーナス", "보너스") }
     static var grokMonthLabel: String { t("Month", "月度", "月度", "月間", "월간") }
     static var grokWeekLabel: String { t("Weekly", "周", "週", "週間", "주간") }
