@@ -1607,7 +1607,7 @@ struct ClawdCompanionView: View {
             // them too. Windows without credit fields are kept.
             generic("qoder", configured: qoder.configured, error: qoder.error, windows: [
                 ("Credits", qoder.primaryWindow),
-                ("Add-on", qoder.tertiaryWindow),
+                (Strings.qoderAddonLabel, qoder.tertiaryWindow),
                 ("Ultimate Free Calls", qoder.secondaryWindow)
             ].filter { $1?.limitCredits != 0 })
         }

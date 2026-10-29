@@ -828,6 +828,9 @@ function readQoderLocalQuotaWithAge({
     }
     const observedAtMs = parsed.observedAtMs ?? mtimeMs;
     if (nowMs - observedAtMs > maxAgeMs) continue;
+    // A summary that cannot beat the cache cutoff must not end the scan: a
+    // deeper file may still hold a newer line that can.
+    if ((parsed.lineObservedAtMs ?? 0) <= olderThanMs) continue;
     return { limits: parsed.limits, lineObservedAtMs: parsed.lineObservedAtMs ?? null };
   }
   for (const cachedPath of qoderNoSummaryScans.keys()) {
@@ -922,9 +925,9 @@ async function fetchQoderLimits({
   // page reloads, so the newest line can be newer than the last-good cache.
   // Compare the summary's own timestamp against the cache instead of always
   // trusting the cache: only a parseable line timestamp may win, and files
-  // last written before the cache are skipped without a scan. Once neither a
-  // fresh line nor a valid cache exists, fall through to the manual-cookie
-  // session (the only remaining remote source) before giving up.
+  // last written before the cache are skipped without a scan. Without a valid
+  // cache there is nothing to compare against, so the summary defers to the
+  // live manual-cookie session below and only serves as its fallback.
   const cachedLimits = readQoderLimitsCache({ home, nowMs, namespace: cacheNamespace });
   const cachedAtMs = Date.parse(cachedLimits?.cached_at || "");
   const cacheFloorMs = Number.isFinite(cachedAtMs) ? cachedAtMs : -Infinity;
@@ -937,7 +940,7 @@ async function fetchQoderLimits({
     nowMs,
     olderThanMs: cacheFloorMs,
   });
-  if (localScan && (localScan.lineObservedAtMs ?? 0) > cacheFloorMs) {
+  if (localScan && Number.isFinite(cacheFloorMs) && (localScan.lineObservedAtMs ?? 0) > cacheFloorMs) {
     const local = localScan.limits;
     if (activityWindow) {
       local.secondary_window = activityWindow;
@@ -971,6 +974,19 @@ async function fetchQoderLimits({
   for (const session of sessions) {
     try {
       const result = await fetchQoderUsage(session.cookieHeader, session.site, fetchImpl);
+      // Qoder 1.18 can return an all-zero active plan with usage_percentage=0
+      // while the desktop client separately marks the account quota-exceeded.
+      // Preserve that status as metadata, but match Qoder's Credits UI by
+      // rendering an empty 0/0 bucket as 0%, not a full red 100% bar. With no
+      // valid cache the log scan above only ran as a companion — it lost its
+      // spot ahead of this session — so its result is still available here.
+      const zeroPlanLocal = result.primary_window?.limit_credits === 0 ? localScan : null;
+      if (zeroPlanLocal) {
+        result.quota_exceeded = zeroPlanLocal.limits.quota_exceeded === true;
+        result.primary_window.reset_at = null;
+        result.source = "provider-api+local-log";
+        result.plan_label = zeroPlanLocal.limits.plan_label || null;
+      }
       if (activityWindow) {
         result.secondary_window = activityWindow;
         result.source += activitySource === "disk-cache" ? "+cached-activity" : "+activity";
@@ -985,6 +1001,16 @@ async function fetchQoderLimits({
     } catch (error) {
       lastError = error;
     }
+  }
+
+  if (localScan) {
+    const local = localScan.limits;
+    if (activityWindow) {
+      local.secondary_window = activityWindow;
+      local.source += activitySource === "disk-cache" ? "+cached-activity" : "+activity";
+    }
+    writeQoderLimitsCache(local, { home, nowMs, namespace: cacheNamespace });
+    return local;
   }
 
   if (activityWindow) {
