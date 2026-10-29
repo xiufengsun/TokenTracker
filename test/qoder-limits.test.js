@@ -433,6 +433,68 @@ test("readQoderLocalQuota rejects a stale legacy renderer.log", (t) => {
   }), null);
 });
 
+test("readQoderLocalQuota caches a summary-less log until its size or mtime changes", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-qoder-negative-cache-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = path.join(
+    home,
+    "Library",
+    "Application Support",
+    "com.qoder.app.stable",
+    "logs",
+    "session",
+    "main.log",
+  );
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const nowMs = Date.now();
+  const mtime = new Date(nowMs);
+  const summaryLine = `[${new Date(nowMs).toISOString()}] [INFO] [main] [Auth] [AccountUsage] usage summary ${JSON.stringify({
+    operation: "account.getQuotaUsage",
+    displayMode: "qoder",
+    hasQoderUsage: true,
+    qoderUsage: {
+      userType: "personal_standard",
+      usageType: "credits",
+      expiresAt: 253_402_214_400_000,
+      totalUsagePercentage: 25,
+      isQuotaExceeded: false,
+      userQuota: {
+        total: 100,
+        used: 25,
+        remaining: 75,
+        percentage: 25,
+        unit: "credits",
+      },
+    },
+  })}\n`;
+  const write = (content) => {
+    fs.writeFileSync(file, content);
+    fs.utimesSync(file, mtime, mtime);
+  };
+  const options = {
+    home,
+    platform: "darwin",
+    env: {},
+    appDir: "Qoder",
+    envPrefix: "QODER",
+    nowMs,
+  };
+
+  // First pass records the file's size:mtime signature as "no summary".
+  write("x".repeat(summaryLine.length));
+  assert.equal(readQoderLocalQuota(options), null);
+
+  // Same size and mtime: the cached negative result stands even though the
+  // content now holds a summary, proving the scan is skipped.
+  write(summaryLine);
+  assert.equal(readQoderLocalQuota(options), null);
+
+  // An append changes the signature, so the file gets rescanned.
+  fs.appendFileSync(file, "later log line\n");
+  const result = readQoderLocalQuota(options);
+  assert.equal(result.primary_window.remaining_credits, 75);
+});
+
 test("fetchQoderLimits falls back to a modern desktop main.log", async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-qoder-modern-fallback-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

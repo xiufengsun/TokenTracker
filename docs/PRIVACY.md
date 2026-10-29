@@ -139,7 +139,7 @@ Usage deletion and billing-record retention are different requests. Any transact
 | Direct WeChat Pay (historical compatibility only) | Existing Native payment/refund records and notifications | [WeChat Pay service agreement](https://posts.tenpay.com/posts/cbddf0af6088c4080432b952163ea238.html) |
 | Direct Alipay (historical compatibility only) | Existing web/WAP payment/refund records and notifications | [Alipay agreements and privacy policy](https://render.alipay.com/p/c/17qjvbnlkcw0) |
 
-AI providers whose quota endpoints TokenTracker reads (Anthropic, OpenAI, Cursor, GitHub Copilot, Google, Moonshot, Z.ai, Qoder, Devin, …) are governed by their own policies. TokenTracker acts on your behalf with credentials already on your machine; it does not create any new relationship with them. For Qoder Desktop 0.4.x, the limits fallback reads only the local account-usage summary line from `main.log`; it does not read Electron auth stores, cookies, or tokens.
+AI providers whose quota endpoints TokenTracker reads (Anthropic, OpenAI, Cursor, GitHub Copilot, Google, Moonshot, Z.ai, Qoder, Devin, …) are governed by their own policies. TokenTracker acts on your behalf with credentials already on your machine; it does not create any new relationship with them. For Qoder Desktop 0.4.x, the limits fallback scans the tails of local `main.log` and `renderer.log` files (at most 8 MiB per file) and extracts only the quota summary fields; no other log content is retained or transmitted, and Electron auth stores, cookies, and tokens are never read.
 
 ---
 

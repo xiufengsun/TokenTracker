@@ -201,7 +201,7 @@ brew install xiufengsun/tokentracker/tokentracker
 | **Mimo Code** (mimocode) | ✅ 自动 | 被动 SQLite 读取（`~/.local/share/mimocode/mimocode.db`，OpenCode-fork schema；仅统计 mimo 原生轮次——镜像进来的 Claude/claude-mem 历史已排除） |
 | **DuMate** (Baidu) | 自动 | 被动读取 OpenCode SQLite（`%APPDATA%/qianfan-desktop-app/qianfan_desk_xdg/*/data/opencode/opencode.db`）；独立 `dumate` 来源，重装复制去重。可用 `TOKENTRACKER_DUMATE_HOME` 覆盖目录。见 [DuMate 采集说明](docs/dumate.md) |
 | **ZCode** (Z.ai) | ✅ 自动 | 被动 SQLite 读取（`~/.zcode/cli/db/db.sqlite`，OpenCode-fork schema；仅统计 Z.ai/BigModel 的 GLM 轮次——内置的 Claude/Codex/Gemini 子 agent 已排除） |
-| **Qoder** | ✅ 自动 | 被动读取 SQLite（`Qoder/SharedClientCache/cache/db/local.db`；只读取 assistant 的 `token_info`，并单独统计缓存输入，不读取提示词或回复），并通过 Qoder 本地会话读取 Plan Credits 与 Ultimate 免费调用额度；Qoder Desktop 0.4.x 限额回退读取本地 `main.log` 账号用量摘要（见 [Qoder 桌面版限额](docs/qoder-desktop-limits.md)） |
+| **Qoder** | ✅ 自动 | 被动读取 SQLite（`Qoder/SharedClientCache/cache/db/local.db`；只读取 assistant 的 `token_info`，并单独统计缓存输入，不读取提示词或回复），并通过 Qoder 本地会话读取 Plan Credits 与 Ultimate 免费调用额度；Qoder Desktop 0.4.x 限额回退扫描本地 `main.log`/`renderer.log` 尾部提取账号用量摘要（见 [Qoder 桌面版限额](docs/qoder-desktop-limits.md)） |
 | **LM Studio** | ✅ 自动 | 被动递归读取 `~/.lmstudio/server-logs/**/*.log`；只读取 Chat Completions 和 Responses API 最终响应中的 ID、模型、时间戳与标量 `usage` 计数，并按响应 ID 去重，不保留提示词或回复正文。该数据源覆盖本地推理与 LM Link（API 边际成本为 $0），不包含 Bionic Secure Cloud 账单。 |
 | **Unsloth Studio** | ✅ 自动 | 被动读取 `$UNSLOTH_STUDIO_HOME/studio.db`（默认 `~/.unsloth/studio/studio.db`）；只投影标量 `contextUsage` 元数据和不含内容的 `api_usage_events`。不会读取提示词、回复、附件、API subject、凭据或训练指标；本地路由成本为 $0，已知付费 provider 路由按实际响应模型估算 token 成本。 |
 | **AnythingLLM Desktop** | ✅ 自动 | 被动 SQLite 读取（`anythingllm-desktop/storage/anythingllm.db`；只读取每条消息的 token 指标，不读取 prompt 或回复） |

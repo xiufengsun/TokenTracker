@@ -632,10 +632,13 @@ function listRecentQoderLogs(logRoot, maxFiles = QODER_LOG_MAX_FILES) {
         stack.push({ dir: full, depth: current.depth + 1 });
       } else if (entry.isFile() && (entry.name === "main.log" || entry.name === "renderer.log")) {
         let mtimeMs = 0;
+        let size = 0;
         try {
-          mtimeMs = fs.statSync(full).mtimeMs;
+          const stat = fs.statSync(full);
+          mtimeMs = stat.mtimeMs;
+          size = stat.size;
         } catch (_error) {}
-        files.push({ full, mtimeMs });
+        files.push({ full, mtimeMs, size });
       }
     }
   }
@@ -760,6 +763,12 @@ function parseQoderQuotaLog(text) {
   };
 }
 
+// Maps a log path to its "size:mtimeMs" signature from the last scan that
+// found no usage summary. Qoder only appends to these logs, so an unchanged
+// signature cannot have gained a summary; pruning to the current candidate
+// set keeps the map bounded.
+const qoderNoSummaryScans = new Map();
+
 function readQoderLocalQuota({
   home = os.homedir(),
   platform = process.platform,
@@ -777,17 +786,28 @@ function readQoderLocalQuota({
     }
   }
   candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  for (const { full, mtimeMs } of candidates.slice(0, QODER_LOG_MAX_FILES)) {
+  const scanned = candidates.slice(0, QODER_LOG_MAX_FILES);
+  const seenPaths = new Set();
+  for (const { full, mtimeMs, size } of scanned) {
+    seenPaths.add(full);
+    const signature = `${size}:${mtimeMs}`;
+    if (qoderNoSummaryScans.get(full) === signature) continue;
     const parsed = scanQoderLogFromEnd(full, (text) => {
       const accountUsage = parseQoderAccountUsageLog(text, { fallbackObservedAtMs: mtimeMs });
       if (accountUsage) return accountUsage;
       const legacy = parseQoderQuotaLog(text);
       return legacy ? { limits: legacy, observedAtMs: mtimeMs } : null;
     });
-    if (!parsed) continue;
+    if (!parsed) {
+      qoderNoSummaryScans.set(full, signature);
+      continue;
+    }
     const observedAtMs = parsed.observedAtMs ?? mtimeMs;
     if (nowMs - observedAtMs > maxAgeMs) continue;
     return parsed.limits;
+  }
+  for (const cachedPath of qoderNoSummaryScans.keys()) {
+    if (!seenPaths.has(cachedPath)) qoderNoSummaryScans.delete(cachedPath);
   }
   return null;
 }
