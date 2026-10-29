@@ -79,6 +79,21 @@ export const STATUS_PROVIDERS = [
     apiUrl: "https://status.zed.dev/summary.json",
     pageUrl: "https://status.zed.dev",
   },
+  {
+    id: "devin",
+    name: "Devin / Cognition",
+    icon: "DEVIN",
+    // status.devin.ai 302-redirects here; use the canonical host directly.
+    apiUrl: "https://www.devinstatus.com/api/v2/status.json",
+    pageUrl: "https://www.devinstatus.com",
+  },
+  {
+    id: "factory",
+    name: "Factory / Droid",
+    icon: "DROID",
+    apiUrl: "https://status.factory.ai/api/v2/status.json",
+    pageUrl: "https://status.factory.ai",
+  },
 ];
 
 const REFRESH_INTERVAL_MS = 60_000;
