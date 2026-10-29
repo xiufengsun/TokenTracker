@@ -647,6 +647,9 @@ function listRecentQoderLogs(logRoot, maxFiles = QODER_LOG_MAX_FILES) {
     .slice(0, maxFiles);
 }
 
+// Returns a parse hit, or null after a completed scan with no hit; undefined
+// means the scan itself failed (open/read) so callers must not treat it as
+// "no summary".
 function scanQoderLogFromEnd(logPath, parse, {
   maxBytes = QODER_LOG_SCAN_MAX_BYTES,
   chunkBytes = QODER_LOG_SCAN_CHUNK_BYTES,
@@ -656,7 +659,7 @@ function scanQoderLogFromEnd(logPath, parse, {
   try {
     fd = fs.openSync(logPath, "r");
   } catch (_error) {
-    return null;
+    return undefined;
   }
   try {
     const size = fs.fstatSync(fd).size;
@@ -677,7 +680,7 @@ function scanQoderLogFromEnd(logPath, parse, {
       end = start;
     }
   } catch (_error) {
-    return null;
+    return undefined;
   } finally {
     fs.closeSync(fd);
   }
@@ -763,10 +766,10 @@ function parseQoderQuotaLog(text) {
   };
 }
 
-// Maps a log path to its "size:mtimeMs" signature from the last scan that
-// found no usage summary. Qoder only appends to these logs, so an unchanged
-// signature cannot have gained a summary; pruning to the current candidate
-// set keeps the map bounded.
+// Maps a log path to its "size:mtimeMs" signature from the last completed
+// scan that found no usable summary (failed I/O is never recorded). Qoder
+// only appends to these logs, so an unchanged signature cannot have gained
+// one; pruning to the current candidate set keeps the map bounded.
 const qoderNoSummaryScans = new Map();
 
 function readQoderLocalQuota({
@@ -792,12 +795,18 @@ function readQoderLocalQuota({
     seenPaths.add(full);
     const signature = `${size}:${mtimeMs}`;
     if (qoderNoSummaryScans.get(full) === signature) continue;
+    // A stale modern summary must not end the scan: fall through so a legacy
+    // match in the same chunk — or deeper — can still be used; only a fresh
+    // modern result returns early.
     const parsed = scanQoderLogFromEnd(full, (text) => {
       const accountUsage = parseQoderAccountUsageLog(text, { fallbackObservedAtMs: mtimeMs });
-      if (accountUsage) return accountUsage;
+      if (accountUsage && nowMs - (accountUsage.observedAtMs ?? mtimeMs) <= maxAgeMs) {
+        return accountUsage;
+      }
       const legacy = parseQoderQuotaLog(text);
       return legacy ? { limits: legacy, observedAtMs: mtimeMs } : null;
     });
+    if (parsed === undefined) continue; // Scan failed (I/O); retry on the next call.
     if (!parsed) {
       qoderNoSummaryScans.set(full, signature);
       continue;
