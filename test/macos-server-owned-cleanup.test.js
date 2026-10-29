@@ -42,7 +42,8 @@ test("macOS embedded startup leaves an unrelated listener alive", { skip: proces
     </dict></plist>`);
   // A harmless child stands in for the CLI. Its own process exits immediately;
   // the real CLI's identity-filtered port handling has separate integration tests.
-  fs.symlinkSync(process.execPath, path.join(resources, "node"));
+  const embeddedNode = path.join(resources, "node");
+  fs.copyFileSync(process.execPath, embeddedNode);
   fs.writeFileSync(path.join(resources, "tokentracker/bin/tracker.js"), "");
   const verifierDirectory = path.join(resources, "tokentracker/src/commands");
   fs.mkdirSync(verifierDirectory, { recursive: true });
@@ -104,7 +105,7 @@ test("macOS embedded startup leaves an unrelated listener alive", { skip: proces
     fs.mkdirSync(path.dirname(entry), { recursive: true });
     fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: packageName }));
     fs.writeFileSync(entry, "require('node:net').createServer().listen(0, '127.0.0.1', function () { process.stdout.write(String(this.address().port)); });");
-    const candidate = spawn(process.execPath, [entry, "serve", "--port", "0"], { stdio: ["ignore", "pipe", "pipe"] });
+    const candidate = spawn(embeddedNode, [entry, "serve", "--port", "0"], { stdio: ["ignore", "pipe", "pipe"] });
     t.after(() => candidate.kill("SIGKILL"));
     const candidatePort = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("candidate did not start")), 10_000);
@@ -112,6 +113,9 @@ test("macOS embedded startup leaves an unrelated listener alive", { skip: proces
       candidate.once("exit", code => { clearTimeout(timer); reject(new Error(`candidate exited: ${code}`)); });
       candidate.stdout.once("data", data => { clearTimeout(timer); resolve(Number(String(data).trim())); });
     });
+    const command = spawnSync("/bin/ps", ["-ww", "-p", String(candidate.pid), "-o", "command="], { encoding: "utf8", timeout: 5000 });
+    assert.equal(command.status, 0, command.stderr);
+    assert.ok(command.stdout.trim().startsWith(embeddedNode + " "), "candidate must actually run through the spaced embedded Node path");
     const probe = spawnSync(binary, [], {
       env: { ...process.env, FIXTURE_PORT: String(candidatePort) }, encoding: "utf8", timeout: 20_000,
     });
