@@ -21,7 +21,7 @@ test("macOS app launches local CLI on the same fixed port that WKWebView loads",
 
   assert.match(
     source,
-    /process\.arguments\s*=\s*\[entryPath,\s*"serve",\s*"--port",\s*"\\\(Constants\.serverPort\)",\s*"--no-sync",\s*"--no-open"\]/,
+    /(?:ServerLaunchConfig\.buildArguments\(entryPath:\s*entryPath,\s*port:\s*Constants\.serverPort\)|process\.arguments\s*=\s*\[(?:"--optimize-for-size",\s*)?entryPath,\s*"serve",\s*"--port",\s*"\\\(Constants\.serverPort\)",\s*"--no-sync",\s*"--no-open"\])/,
     "embedded server launch should explicitly bind Constants.serverPort",
   );
   assert.match(

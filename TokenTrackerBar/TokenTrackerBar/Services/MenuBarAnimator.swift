@@ -39,6 +39,8 @@ final class MenuBarAnimator {
     private let petFrameProvider = MenuBarPetFrameProvider()
     private let botFrameProvider = MenuBarBotFrameProvider()
     private var sprintUntil: Date = .distantPast
+    private(set) var isScreenAsleep = false
+    private var sleepObservers: [NSObjectProtocol] = []
 
     /// Static fallback icon (original lightning bolt)
     private let fallbackIcon: NSImage
@@ -90,7 +92,18 @@ final class MenuBarAnimator {
         icon.isTemplate = true
         self.fallbackIcon = icon
         self.renderedImage = icon
+        registerSleepObservers()
         applyCurrentState()
+    }
+
+    deinit {
+        let notificationCenter = NSWorkspace.shared.notificationCenter
+        for observer in sleepObservers {
+            notificationCenter.removeObserver(observer)
+        }
+        animationTimer?.invalidate()
+        blinkTimer?.invalidate()
+        sprintTimer?.invalidate()
     }
 
     // MARK: - Public
@@ -107,6 +120,8 @@ final class MenuBarAnimator {
         let wasSprinting = isSprinting
         sprintUntil = Date().addingTimeInterval(MenuBarRunnerPace.sprintWindow)
         sprintTimer?.invalidate()
+        sprintTimer = nil
+        guard !isScreenAsleep else { return }
         sprintTimer = Timer.scheduledTimer(
             withTimeInterval: MenuBarRunnerPace.sprintWindow + 0.1,
             repeats: false
@@ -120,6 +135,8 @@ final class MenuBarAnimator {
         frameIndex = 0
         stopAnimation()
         cancelBlink()
+
+        guard !isScreenAsleep else { return }
 
         switch iconStyle {
         case .static:
@@ -272,6 +289,7 @@ final class MenuBarAnimator {
     // MARK: - Animation Loop
 
     private func startAnimation(frames: [NSImage], interval: TimeInterval) {
+        guard !isScreenAsleep else { return }
         loopFrames = frames
         tick()
         animationTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
@@ -286,7 +304,7 @@ final class MenuBarAnimator {
     }
 
     private func tick() {
-        guard !loopFrames.isEmpty else { return }
+        guard !isScreenAsleep, !loopFrames.isEmpty else { return }
         setButtonImage(loopFrames[frameIndex % loopFrames.count])
         frameIndex += 1
     }
@@ -295,6 +313,7 @@ final class MenuBarAnimator {
 
     private func scheduleNextBlink() {
         cancelBlink()
+        guard !isScreenAsleep else { return }
         let delay = TimeInterval.random(in: 3...6)
         blinkTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.playBlink() }
@@ -307,15 +326,58 @@ final class MenuBarAnimator {
     }
 
     private func playBlink() {
+        guard !isScreenAsleep else { return }
         guard currentState == .idle || currentState == .sleeping,
               !reduceMotion, iconStyle == .clawd else { return }
         setButtonImage(blinkFrame)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let self, self.currentState == .idle || self.currentState == .sleeping,
+            guard let self, !self.isScreenAsleep,
+                  self.currentState == .idle || self.currentState == .sleeping,
                   self.iconStyle == .clawd else { return }
             self.setButtonImage(self.idleFrame)
             self.scheduleNextBlink()
         }
+    }
+
+    // MARK: - Sleep / Wake Observers
+
+    private func registerSleepObservers() {
+        let notificationCenter = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
+            let observer = notificationCenter.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.handleScreenSleep() }
+            }
+            sleepObservers.append(observer)
+        }
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+            let observer = notificationCenter.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.handleScreenWake() }
+            }
+            sleepObservers.append(observer)
+        }
+    }
+
+    private func handleScreenSleep() {
+        guard !isScreenAsleep else { return }
+        isScreenAsleep = true
+        stopAnimation()
+        cancelBlink()
+        sprintTimer?.invalidate()
+        sprintTimer = nil
+    }
+
+    private func handleScreenWake() {
+        guard isScreenAsleep else { return }
+        isScreenAsleep = false
+        applyCurrentState()
     }
 
     // MARK: - Sync Frames
