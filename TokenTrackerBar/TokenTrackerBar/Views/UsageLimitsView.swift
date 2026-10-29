@@ -75,6 +75,7 @@ struct UsageLimitsView: View {
         "workbuddy": "CodeBuddyLogo",
         "workbuddyAi": "CodeBuddyLogo",
         "deepseek": "DeepseekLogo",
+        "doubao": "DoubaoLogo",
     ]
 
     var body: some View {
@@ -242,6 +243,10 @@ struct UsageLimitsView: View {
             // the section renders balance rows via the dedicated extra (#960).
             if let deepseek = limits.deepseek, deepseek.configured, deepseek.error == nil {
                 return toolSection(id: id, title: "DeepSeek", assetName: "DeepseekLogo", toolName: "DeepSeek", specs: [], deepseekBalance: deepseek, updatedAtISO: deepseek.cachedAt, isStale: deepseek.stale ?? false)
+            }
+        case "doubao":
+            if let doubao = limits.doubao, doubao.configured, doubao.error == nil {
+                return toolSection(id: id, title: planTitle("Doubao", doubao.planLabel), assetName: "DoubaoLogo", toolName: "Doubao", specs: doubaoSpecs(doubao), updatedAtISO: doubao.cachedAt, isStale: doubao.stale ?? false)
             }
         default:
             break
@@ -628,6 +633,23 @@ struct UsageLimitsView: View {
             var spec = makeSpec(Strings.workbuddyAddonLabel, window.usedPercent, iso: window.resetAt)
             spec.creditsDetail = window.creditsDetail
             specs.append(spec)
+        }
+        return specs
+    }
+
+    private func doubaoSpecs(_ d: DoubaoLimits) -> [LimitWindowSpec] {
+        var specs: [LimitWindowSpec] = []
+        // Empty 0/0 buckets (free account / unverified window shape) have no
+        // quota to read and would render as a full bar in remaining mode —
+        // drop them like a missing window. Windows without credit fields are kept.
+        if let window = d.primaryWindow, window.limitCredits != 0 {
+            specs.append(makeSpec("5h", window.usedPercent, windowSeconds: 5 * 3600, iso: window.resetAt))
+        }
+        if let window = d.secondaryWindow, window.limitCredits != 0 {
+            specs.append(makeSpec("7d", window.usedPercent, windowSeconds: 7 * 86400, iso: window.resetAt))
+        }
+        if let window = d.tertiaryWindow, window.limitCredits != 0 {
+            specs.append(makeSpec("Monthly", window.usedPercent, iso: window.resetAt))
         }
         return specs
     }
@@ -1241,7 +1263,7 @@ struct UsageLimitsView: View {
     @ViewBuilder
     private func brandIcon(_ name: String) -> some View {
         switch name {
-        case "CursorLogo", "KimiLogo", "KiroLogo", "GrokLogo", "CopilotLogo", "ZcodeLogo", "OpenCodeLogo", "CommandCodeLogo", "QoderLogo", "QoderCnLogo", "VolcanoArkLogo", "DevinLogo", "CodeBuddyLogo", "DeepseekLogo":
+        case "CursorLogo", "KimiLogo", "KiroLogo", "GrokLogo", "CopilotLogo", "ZcodeLogo", "OpenCodeLogo", "CommandCodeLogo", "QoderLogo", "QoderCnLogo", "VolcanoArkLogo", "DevinLogo", "CodeBuddyLogo", "DeepseekLogo", "DoubaoLogo":
             let filename: String = {
                 switch name {
                 case "CursorLogo": return "cursor.svg"
@@ -1257,6 +1279,7 @@ struct UsageLimitsView: View {
                 case "DevinLogo": return "devin.svg"
                 case "CodeBuddyLogo": return "codebuddy.svg"
                 case "DeepseekLogo": return "deepseek.svg"
+                case "DoubaoLogo": return "doubao.svg"
                 default: return "copilot.svg"
                 }
             }()

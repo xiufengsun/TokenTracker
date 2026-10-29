@@ -42,6 +42,7 @@ enum LimitResetProviderIconCatalog {
         case "devin": return "devin.svg"
         case "workbuddy": return "codebuddy.svg"
         case "workbuddyAi": return "codebuddy.svg"
+        case "doubao": return "doubao.svg"
         default: return nil
         }
     }
@@ -303,6 +304,13 @@ extension UsageLimitsResponse {
             addGeneric("workbuddyAi", workbuddyAi.configured, workbuddyAi.error, [
                 ("primary", Strings.workbuddyPlanLabel, workbuddyAi.primaryWindow),
                 ("secondary", Strings.workbuddyAddonLabel, workbuddyAi.secondaryWindow),
+            ])
+        }
+        if let doubao {
+            addGeneric("doubao", doubao.configured, doubao.error, [
+                ("primary", "5h", doubao.primaryWindow),
+                ("secondary", "7d", doubao.secondaryWindow),
+                ("tertiary", "Monthly", doubao.tertiaryWindow),
             ])
         }
 
