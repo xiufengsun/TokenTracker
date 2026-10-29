@@ -188,6 +188,8 @@ targets:
       - path: TokenTrackerBar/Services/QueueActivityMonitor.swift
       - path: TokenTrackerBar/Models/CompanionAnimationPolicy.swift
       - path: TokenTrackerBar/Models/ServerHealthCheckPolicy.swift
+      - path: TokenTrackerBar/Models/ServerLaunchConfig.swift
+      - path: TokenTrackerBar/Services/WeakScriptMessageHandler.swift
       - path: TokenTrackerBar/Utilities/DateHelpers.swift
       - path: TokenTrackerBar/Utilities/TokenFormatter.swift
       - path: TokenTrackerBar/Models/AutoUpdatePolicy.swift

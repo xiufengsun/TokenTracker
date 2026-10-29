@@ -46,9 +46,8 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
     private var retryCount = 0
     private let maxRetries = 5
 
-    /// Shared process pool — ensures cookies are consistent across webView recreations
-    private static let sharedProcessPool = WKProcessPool()
-    private static let qaDataStore = WKWebsiteDataStore.nonPersistent()
+    /// Non-persistent data store for Native QA testing. Created lazily only during QA runs.
+    private var qaDataStore: WKWebsiteDataStore?
 
     private override init() {
         super.init()
@@ -97,8 +96,8 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
             guard let script = try? profile.transportScript() else { fatalError("Native QA transport unavailable") }
             contentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
-        contentController.add(self, name: "nativeOAuth")
-        contentController.add(self, name: "nativeBridge")
+        contentController.add(WeakScriptMessageHandler(self), name: "nativeOAuth")
+        contentController.add(WeakScriptMessageHandler(self), name: "nativeBridge")
         // Earliest paint: transparent root so NSVisualEffectView is visible (index.html also sets native-app via nativeBridge).
         let transparencyBootstrap = """
         (function(){
@@ -118,8 +117,13 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         contentController.addUserScript(bootstrapScript)
         let webConfig = WKWebViewConfiguration()
         webConfig.userContentController = contentController
-        webConfig.processPool = Self.sharedProcessPool
-        webConfig.websiteDataStore = NativeQAProfile.current == nil ? WKWebsiteDataStore.default() : Self.qaDataStore
+        if let _ = NativeQAProfile.current {
+            let dataStore = qaDataStore ?? WKWebsiteDataStore.nonPersistent()
+            self.qaDataStore = dataStore
+            webConfig.websiteDataStore = dataStore
+        } else {
+            webConfig.websiteDataStore = WKWebsiteDataStore.default()
+        }
         let webView = WKWebView(frame: .zero, configuration: webConfig)
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -489,6 +493,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
 
         if let webView {
             webView.stopLoading()
+            webView.loadHTMLString("", baseURL: nil)
             webView.navigationDelegate = nil
             webView.uiDelegate = nil
             webView.configuration.userContentController.removeScriptMessageHandler(forName: "nativeOAuth")
@@ -503,6 +508,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         loadFailureOverlay = nil
         loadFailureHostingController = nil
         pendingDashboardURL = nil
+        self.qaDataStore = nil
         self.webView = nil
         self.window = nil
     }

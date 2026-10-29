@@ -4532,10 +4532,20 @@ async function fetchUsageLimitsUncached({
   }
 
   if (cacheGeneration === usageLimitsCacheGeneration) {
-    cacheBySelection[selectionKey || usageLimitsSelectionKey({ devinEnabled })] = {
+    const key = selectionKey || usageLimitsSelectionKey({ devinEnabled });
+    cacheBySelection[key] = {
       data,
       expiresAtMs: cacheExpiresAtMs(data, nowMs),
     };
+    // Prune expired or excessive selection keys (max 64)
+    const keys = Object.keys(cacheBySelection);
+    if (keys.length > 64) {
+      for (const k of keys) {
+        if (!USAGE_LIMITS_SELECTION_KEYS.includes(k) && (nowMs > (cacheBySelection[k]?.expiresAtMs || 0) || Object.keys(cacheBySelection).length > 64)) {
+          delete cacheBySelection[k];
+        }
+      }
+    }
   }
   return data;
 }

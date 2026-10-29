@@ -148,7 +148,125 @@ async function readProjectUsageContext(qp, url) {
 // Same signature-based caching as readQueueData: the project-usage endpoints
 // all fan out from one dashboard refresh, so without this every request
 // re-read and re-parsed the whole append-only project queue.
-const readProjectQueueData = createAsyncQueueReader({
+function createIncrementalQueueReader({ parseRow, label }) {
+  const cache = new Map();
+
+  return async function readQueue(filePath) {
+    if (!filePath || typeof filePath !== "string") return [];
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch (err) {
+      if (err.code === "ENOENT") {
+        cache.delete(filePath);
+        return [];
+      }
+      throw err;
+    }
+
+    const mtimeMs = stat.mtimeMs;
+    const size = stat.size;
+    const inode = `${stat.dev}:${stat.ino}`;
+
+    const cached = cache.get(filePath);
+
+    if (cached && cached.inode === inode && cached.size === size && cached.mtimeMs === mtimeMs) {
+      return cached.cachedRows;
+    }
+
+    if (cached && cached.inode === inode && size > cached.size) {
+      let fd = null;
+      try {
+        const appendedBytes = size - cached.size;
+        const buffer = Buffer.allocUnsafe(appendedBytes);
+        fd = fs.openSync(filePath, "r");
+        let bytesRead = 0;
+        while (bytesRead < appendedBytes) {
+          const n = fs.readSync(fd, buffer, bytesRead, appendedBytes - bytesRead, cached.size + bytesRead);
+          if (n === 0) break;
+          bytesRead += n;
+        }
+
+        const lines = buffer.subarray(0, bytesRead).toString("utf8").split("\n");
+        const bucketMap = cached.bucketMap;
+        for (let i = 0; i < lines.length; i++) {
+          const trimmed = lines[i].trim();
+          if (!trimmed) continue;
+          try {
+            const entry = parseRow(JSON.parse(trimmed));
+            if (entry && entry.key) {
+              bucketMap.set(entry.key, entry.row);
+            }
+          } catch {
+            // skip malformed lines
+          }
+        }
+
+        const cachedRows = Array.from(bucketMap.values());
+        cached.mtimeMs = mtimeMs;
+        cached.size = size;
+        cached.cachedRows = cachedRows;
+        return cachedRows;
+      } catch (_err) {
+        // Fallback to full reload on error
+      } finally {
+        if (fd !== null) {
+          try { fs.closeSync(fd); } catch {}
+        }
+      }
+    }
+
+    // Full reload: truncated, compacted, replaced, or first read
+    const bucketMap = new Map();
+    let fd = null;
+    try {
+      if (size > 0) {
+        const buffer = Buffer.allocUnsafe(size);
+        fd = fs.openSync(filePath, "r");
+        let bytesRead = 0;
+        while (bytesRead < size) {
+          const n = fs.readSync(fd, buffer, bytesRead, size - bytesRead, bytesRead);
+          if (n === 0) break;
+          bytesRead += n;
+        }
+        const lines = buffer.subarray(0, bytesRead).toString("utf8").split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          const trimmed = lines[i].trim();
+          if (!trimmed) continue;
+          try {
+            const entry = parseRow(JSON.parse(trimmed));
+            if (entry && entry.key) {
+              bucketMap.set(entry.key, entry.row);
+            }
+          } catch {
+            // skip malformed lines
+          }
+        }
+      }
+      const cachedRows = Array.from(bucketMap.values());
+      cache.set(filePath, {
+        mtimeMs,
+        size,
+        inode,
+        bucketMap,
+        cachedRows,
+      });
+      return cachedRows;
+    } catch (err) {
+      if (err.code === "ENOENT") {
+        cache.delete(filePath);
+        return [];
+      }
+      throw err;
+    } finally {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch {}
+      }
+    }
+  };
+}
+
+const readProjectQueueData = createIncrementalQueueReader({
   label: "readProjectQueueData",
   parseRow(row) {
     return {
@@ -205,7 +323,7 @@ function normalizeQueueRow(row) {
   return normalized;
 }
 
-const readQueueData = createAsyncQueueReader({
+const readQueueData = createIncrementalQueueReader({
   label: "readQueueData",
   parseRow(row) {
     if (row?.kind === "account_session_state" || row?.kind === "account_sync_watermark") return null;

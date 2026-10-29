@@ -192,7 +192,7 @@ final class ServerManager: ObservableObject {
     private func launchServer(nodePath: String, entryPath: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: nodePath)
-        process.arguments = [entryPath, "serve", "--port", "\(Constants.serverPort)", "--no-sync", "--no-open"]
+        process.arguments = ServerLaunchConfig.buildArguments(entryPath: entryPath, port: Constants.serverPort)
         process.currentDirectoryURL = FileManager.default.temporaryDirectory
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -201,6 +201,7 @@ final class ServerManager: ObservableObject {
         env["NODE_ENV"] = "production"
         env["HOME"] = NSHomeDirectory()
         env["TOKENTRACKER_APP_SHELL"] = "macos"
+        env["NODE_OPTIONS"] = ServerLaunchConfig.mergeNodeOptions(existing: env["NODE_OPTIONS"])
         process.environment = env
 
         process.terminationHandler = { [weak self] _ in
@@ -231,6 +232,7 @@ final class ServerManager: ObservableObject {
         process.standardError = FileHandle.nullDevice
         var fallbackEnv = ProcessInfo.processInfo.environment
         fallbackEnv["TOKENTRACKER_APP_SHELL"] = "macos"
+        fallbackEnv["NODE_OPTIONS"] = ServerLaunchConfig.mergeNodeOptions(existing: fallbackEnv["NODE_OPTIONS"])
         process.environment = fallbackEnv
 
         // Clean up if process dies unexpectedly

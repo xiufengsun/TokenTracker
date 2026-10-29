@@ -64,15 +64,97 @@ function isNodeSqliteUnavailable(err) {
   );
 }
 
+function shouldUseNodeSqlite(env = process.env) {
+  if (!env) return true;
+  if (env.TOKENTRACKER_FORCE_SQLITE_CLI === "1" || env.TOKENTRACKER_FORCE_SQLITE_CLI === "true") {
+    return false;
+  }
+  const val = String(env.TOKENTRACKER_USE_NODE_SQLITE || "").toLowerCase().trim();
+  if (val === "0" || val === "false") {
+    return false;
+  }
+  return true;
+}
+
+function normalizeRow(row) {
+  const plain = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (value instanceof Uint8Array) {
+      plain[key] = Buffer.from(value).toString("latin1");
+    } else if (typeof value === "bigint") {
+      plain[key] = Number(value);
+    } else {
+      plain[key] = value;
+    }
+  }
+  return plain;
+}
+
+let cachedDatabaseSync = null;
+
+function isSqliteExperimentalWarning(warning, type) {
+  const isTypeMatch =
+    type === "ExperimentalWarning" ||
+    (warning && typeof warning === "object" && warning.name === "ExperimentalWarning");
+  const msg = typeof warning === "string" ? warning : (warning && warning.message);
+  const isMessageMatch = typeof msg === "string" && msg.includes("SQLite is an experimental feature");
+  return Boolean(isTypeMatch && isMessageMatch);
+}
+
+function getDatabaseSync(requireFn) {
+  if (cachedDatabaseSync && !requireFn) {
+    return cachedDatabaseSync;
+  }
+  const origEmitWarning = process.emitWarning;
+  if (typeof origEmitWarning === "function") {
+    process.emitWarning = function (warning, ...args) {
+      const type = typeof args[0] === "string" ? args[0] : (args[0] && args[0].type);
+      if (isSqliteExperimentalWarning(warning, type)) {
+        return;
+      }
+      return origEmitWarning.apply(process, [warning, ...args]);
+    };
+  }
+  try {
+    const sqlite = (requireFn || require)("node:sqlite");
+    const dbSync = sqlite ? sqlite.DatabaseSync : null;
+    if (!requireFn) {
+      cachedDatabaseSync = dbSync;
+    }
+    return dbSync;
+  } finally {
+    if (typeof origEmitWarning === "function") {
+      process.emitWarning = origEmitWarning;
+    }
+  }
+}
+
 function readSqliteRowsWithNode(dbPath, sql, { requireFn }) {
-  const { DatabaseSync } = requireFn("node:sqlite");
+  const DatabaseSync = getDatabaseSync(requireFn);
   if (typeof DatabaseSync !== "function") {
     throw new Error("node:sqlite DatabaseSync is unavailable");
   }
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    const rows = db.prepare(sql).all();
-    return Array.isArray(rows) ? rows : [];
+    const stmt = db.prepare(sql);
+    let rows;
+    try {
+      rows = stmt.all();
+    } catch (err) {
+      if (err && err.code === "ERR_OUT_OF_RANGE" && typeof stmt.setReadBigInts === "function") {
+        stmt.setReadBigInts(true);
+        rows = stmt.all();
+      } else {
+        throw err;
+      }
+    }
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+    const count = rows.length;
+    const plain = new Array(count);
+    for (let i = 0; i < count; i++) {
+      plain[i] = normalizeRow(rows[i]);
+    }
+    return plain;
   } finally {
     db.close();
   }
@@ -92,18 +174,45 @@ function readSqliteJsonRows(dbPath, sql, options = {}) {
   const maxBuffer = Number.isFinite(options.maxBuffer) ? options.maxBuffer : 50 * 1024 * 1024;
   const label = options.label || "local";
 
-  let cliError = null;
-  try {
-    return readSqliteRowsWithCli(dbPath, sql, { execFileSync, timeout, maxBuffer, readOnly: Boolean(options.readOnly) });
-  } catch (err) {
-    cliError = err;
-  }
+  const preferNode = shouldUseNodeSqlite(env);
 
   let nodeSqliteError = null;
-  try {
-    return readSqliteRowsWithNode(dbPath, sql, { requireFn });
-  } catch (err) {
-    nodeSqliteError = err;
+  let cliError = null;
+
+  if (preferNode) {
+    try {
+      return readSqliteRowsWithNode(dbPath, sql, { requireFn });
+    } catch (err) {
+      nodeSqliteError = err;
+    }
+
+    try {
+      return readSqliteRowsWithCli(dbPath, sql, {
+        execFileSync,
+        timeout,
+        maxBuffer,
+        readOnly: Boolean(options.readOnly),
+      });
+    } catch (err) {
+      cliError = err;
+    }
+  } else {
+    try {
+      return readSqliteRowsWithCli(dbPath, sql, {
+        execFileSync,
+        timeout,
+        maxBuffer,
+        readOnly: Boolean(options.readOnly),
+      });
+    } catch (err) {
+      cliError = err;
+    }
+
+    try {
+      return readSqliteRowsWithNode(dbPath, sql, { requireFn });
+    } catch (err) {
+      nodeSqliteError = err;
+    }
   }
 
   if (isSqliteCliUnavailable(cliError) && isNodeSqliteUnavailable(nodeSqliteError)) {
@@ -140,11 +249,6 @@ async function readSqliteRowsWithCliAsync(dbPath, sql, { execFile, timeout, maxB
   return Array.isArray(rows) ? rows : [];
 }
 
-// Async twin of readSqliteJsonRows for hot paths that must not block the event
-// loop (e.g. the usage-limits poll — see the "limits 路径 spawnSync 冻结全端点"
-// lesson). The CLI path runs via async execFile; the node:sqlite fallback is
-// synchronous (no async API exists), but it only runs when the sqlite3 CLI is
-// absent — uncommon on macOS/Linux, where the async path keeps the loop free.
 async function readSqliteJsonRowsAsync(dbPath, sql, options = {}) {
   if (!dbPath || !sql) return [];
   try {
@@ -159,18 +263,45 @@ async function readSqliteJsonRowsAsync(dbPath, sql, options = {}) {
   const maxBuffer = Number.isFinite(options.maxBuffer) ? options.maxBuffer : 50 * 1024 * 1024;
   const label = options.label || "local";
 
-  let cliError = null;
-  try {
-    return await readSqliteRowsWithCliAsync(dbPath, sql, { execFile, timeout, maxBuffer, readOnly: Boolean(options.readOnly) });
-  } catch (err) {
-    cliError = err;
-  }
+  const preferNode = shouldUseNodeSqlite(env);
 
   let nodeSqliteError = null;
-  try {
-    return readSqliteRowsWithNode(dbPath, sql, { requireFn });
-  } catch (err) {
-    nodeSqliteError = err;
+  let cliError = null;
+
+  if (preferNode) {
+    try {
+      return readSqliteRowsWithNode(dbPath, sql, { requireFn });
+    } catch (err) {
+      nodeSqliteError = err;
+    }
+
+    try {
+      return await readSqliteRowsWithCliAsync(dbPath, sql, {
+        execFile,
+        timeout,
+        maxBuffer,
+        readOnly: Boolean(options.readOnly),
+      });
+    } catch (err) {
+      cliError = err;
+    }
+  } else {
+    try {
+      return await readSqliteRowsWithCliAsync(dbPath, sql, {
+        execFile,
+        timeout,
+        maxBuffer,
+        readOnly: Boolean(options.readOnly),
+      });
+    } catch (err) {
+      cliError = err;
+    }
+
+    try {
+      return readSqliteRowsWithNode(dbPath, sql, { requireFn });
+    } catch (err) {
+      nodeSqliteError = err;
+    }
   }
 
   if (isSqliteCliUnavailable(cliError) && isNodeSqliteUnavailable(nodeSqliteError)) {
@@ -212,4 +343,7 @@ module.exports = {
   readSqliteJsonRowsAsync,
   readSqliteFirstValue,
   resetSqliteReaderWarningsForTests,
+  shouldUseNodeSqlite,
+  isSqliteExperimentalWarning,
+  getDatabaseSync,
 };

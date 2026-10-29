@@ -111,6 +111,10 @@ async function cmdServe(argv) {
       process.stdout.write("Sync done.\n");
     } catch (e) {
       process.stdout.write(`Sync warning: ${e?.message || e}\n`);
+    } finally {
+      if (typeof global.gc === "function") {
+        try { global.gc(); } catch {}
+      }
     }
   }
 
@@ -347,6 +351,9 @@ function startNativeBackgroundSync({
       })
       .finally(() => {
         if (inFlight === pending) inFlight = null;
+        if (typeof global.gc === "function") {
+          try { global.gc(); } catch {}
+        }
       });
     inFlight = pending;
     return pending;
