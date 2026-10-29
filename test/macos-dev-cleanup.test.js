@@ -38,6 +38,7 @@ if (command === 'osascript' && process.env.FAIL_QUIT) process.exit(1);
 if (command === 'rm') for (const arg of args.filter(a => !a.startsWith('-'))) {
   if (!path.resolve(arg).startsWith(process.env.HOME + path.sep)) throw Error('Unsafe removal: ' + arg);
   if (process.env.FAIL_WIDGET && arg.endsWith('com.tokentracker.bar.dev.widget')) process.exit(1);
+  if (process.env.FAIL_PRODUCT === arg) process.exit(1);
   fs.rmSync(arg, {recursive: args.includes('-rf'), force: true});
 }
 `;
@@ -87,6 +88,20 @@ test("Dev widget container deletion failures produce a nonzero exit", { skip: pr
   assert.ok(result.stderr.includes(f.widget));
   assert.equal(fs.existsSync(f.widget), true);
 });
+
+for (const suffix of ["aaa-failed", "zzz-failed"]) {
+  test(`Dev product deletion failure wins over success (${suffix})`, { skip: process.platform === "win32" }, t => {
+    const f = fixture(t);
+    const failedProduct = f.product.replace("TokenTrackerBar-fixture", `TokenTrackerBar-${suffix}`);
+    fs.mkdirSync(failedProduct, { recursive: true });
+    const result = f.run({ FAIL_PRODUCT: failedProduct });
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /Debug 产物删除失败/);
+    assert.doesNotMatch(result.stdout, /Debug 产物已删除/);
+    assert.equal(fs.existsSync(failedProduct), true);
+    assert.equal(fs.existsSync(f.product), false);
+  });
+}
 
 function runQuit(apps, delay = () => {}) {
   const match = source.match(/<<'JXA'\n([\s\S]*?)\nJXA/);

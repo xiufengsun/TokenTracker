@@ -41,7 +41,7 @@ internal static class SilentStart
     /// tray app down).</summary>
     public static bool Set(bool value) => Set(value, SettingsPath);
 
-    internal static bool Set(bool value, string settingsPath)
+    internal static bool Set(bool value, string settingsPath, Func<string, string>? readAllText = null)
     {
         try
         {
@@ -50,7 +50,7 @@ internal static class SilentStart
             {
                 // Read failures must reach the outer catch without writing: a
                 // temporarily unreadable file can still be writable and valid.
-                var json = File.ReadAllText(settingsPath);
+                var json = (readAllText ?? File.ReadAllText)(settingsPath);
                 try
                 {
                     root = JsonNode.Parse(json) as JsonObject ?? root;

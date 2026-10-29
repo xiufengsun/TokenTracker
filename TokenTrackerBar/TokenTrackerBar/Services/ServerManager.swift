@@ -35,8 +35,8 @@ final class ServerManager: ObservableObject {
 
         // Try embedded server first
         if let embedded = findEmbeddedServer() {
-            // Kill any stale server on the port so we always run the bundled version
-            await killExistingServerOnPort()
+            // Replace a stale TokenTracker server, never an unknown listener.
+            await killExistingServerOnPort(nodePath: embedded.nodePath, entryPath: embedded.entryPath)
             launchServer(nodePath: embedded.nodePath, entryPath: embedded.entryPath)
         } else if await APIClient.shared.checkServerHealth() {
             // No embedded server, but an external one is already running — reuse it
@@ -80,12 +80,10 @@ final class ServerManager: ObservableObject {
 
     // MARK: - Kill Stale Server
 
-    /// Kill any existing process listening on the server port so the embedded server can bind.
-    /// Matches LISTEN sockets only: a bare `lsof -ti tcp:<port>` also lists processes with
-    /// *client* connections to the port — including this app's own URLSession keep-alive
-    /// sockets — and SIGTERMing that list makes the app kill itself. Its own PID is
-    /// excluded as a second line of defense.
-    private nonisolated func killExistingServerOnPort() async {
+    /// Only LISTEN sockets are candidates. Reuse the bundled CLI's package-identity
+    /// check rather than treating a port or a tracker.js filename as ownership.
+    /// Missing process metadata or a failed verifier leaves the listener untouched.
+    private nonisolated func killExistingServerOnPort(nodePath: String, entryPath: String) async {
         guard let output = shellOutput("/usr/sbin/lsof", args: ["-ti", "tcp:\(Constants.serverPort)", "-sTCP:LISTEN"]) else { return }
         let ownPid = ProcessInfo.processInfo.processIdentifier
         let pids = output
@@ -93,11 +91,20 @@ final class ServerManager: ObservableObject {
             .split(separator: "\n")
             .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
             .filter { $0 != ownPid }
+        let verifierModule = URL(fileURLWithPath: entryPath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("src/commands/serve.js").path
+        let verifier = "process.stdout.write(require(process.argv[1]).isTokenTrackerServeCommand(process.argv[2]) ? 'verified' : '')"
+        var signalled = false
         for pid in pids {
-            kill(pid, SIGTERM)
+            guard let command = shellOutput("/bin/ps", args: ["-ww", "-p", "\(pid)", "-o", "command="]),
+                  shellOutput(nodePath, args: ["-e", verifier, verifierModule, command]) == "verified"
+            else { continue }
+            // Discard a changed/exited process after verification, before signalling.
+            guard shellOutput("/bin/ps", args: ["-ww", "-p", "\(pid)", "-o", "command="]) == command else { continue }
+            if kill(pid, SIGTERM) == 0 { signalled = true }
         }
-        // Brief wait for the port to be released
-        if !pids.isEmpty {
+        if signalled {
             try? await Task.sleep(nanoseconds: 500 * 1_000_000)
         }
     }
@@ -178,8 +185,10 @@ final class ServerManager: ObservableObject {
         process.environment = ProcessInfo.processInfo.environment
         do {
             try process.run()
-            process.waitUntilExit()
+            // Drain first: wide process arguments can exceed the pipe buffer.
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
             return String(data: data, encoding: .utf8)
         } catch {
             return nil
