@@ -298,6 +298,49 @@ test("groups that omit CycleRemainCapacity keep remaining_credits exact", () => 
   assert.equal(window.remaining_credits, 120);
 });
 
+test("a group that omits CycleUsedCapacity still counts its usage in the pool", () => {
+  const summary = {
+    code: 0,
+    data: {
+      CreditGroups: [
+        { Kind: "benefit", CycleTotalCapacity: "100", CycleRemainCapacity: "0" },
+        { Kind: "addon", CycleTotalCapacity: "50", CycleRemainCapacity: "40", CycleUsedCapacity: "10" },
+      ],
+    },
+  };
+  const window = resourceWindow(collectResourceGroups(summary));
+  assert.ok(window);
+  assert.equal(window.limit_credits, 150);
+  assert.equal(window.used_credits, 110);
+  assert.equal(window.remaining_credits, 40);
+  assert.ok(Math.abs(window.used_percent - (110 / 150) * 100) < 1e-9);
+});
+
+test("package rows that omit CycleUsedCapacity are derived in the pooled fallback", () => {
+  const summary = {
+    code: 0,
+    data: {
+      Packages: [{
+        PackageCode: REWARD,
+        PackageName: "官方活动发放",
+        CycleTotalCapacity: 100,
+        CycleRemainCapacity: 0,
+      }, {
+        PackageCode: REWARD,
+        PackageName: "官方活动发放",
+        CycleTotalCapacity: 50,
+        CycleRemainCapacity: 40,
+        CycleUsedCapacity: 10,
+      }],
+    },
+  };
+  const window = resourceWindow(collectResourceGroups(summary));
+  assert.ok(window);
+  assert.equal(window.limit_credits, 150);
+  assert.equal(window.used_credits, 110);
+  assert.equal(window.remaining_credits, 40);
+});
+
 test("a pool that reports total but no usage stays hidden", () => {
   const summary = {
     code: 0,

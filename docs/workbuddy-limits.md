@@ -28,7 +28,8 @@ and 平台奖励积分 — and carries no reset, because those grants have no sh
 cycle. Both windows carry `used_credits`, `limit_credits` and
 `remaining_credits` for hover details, displayed to at most two decimal
 places; a group that omits its remaining count contributes `total - used` to
-the pool. An exhausted plan (total > 0) stays visible at 100% used; an empty
+the pool, and a group that omits its usage count is derived as `total - remain`
+in the same spirit. An exhausted plan (total > 0) stays visible at 100% used; an empty
 0/0 pool yields no window at all, so the UI drops it like a missing window.
 Summaries that predate `CreditGroups` fall back to pooling every summary
 package row that cannot be the subscription plan. Requests and sockets

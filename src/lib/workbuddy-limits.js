@@ -337,10 +337,13 @@ function collectResourceGroups(summary) {
       const remain = firstCount(group, ["CycleRemainCapacity", "remain"]);
       if (total === null && used === null && remain === null) continue;
       pool.seen = true;
-      pool.usedSeen = pool.usedSeen || used !== null;
+      // A group that omits its usage is still counted: derive it from the
+      // capacity identity, the way planWindow does for the plan row.
+      const knownUsed = used ?? (total !== null && remain !== null ? Math.max(0, total - remain) : null);
+      pool.usedSeen = pool.usedSeen || knownUsed !== null;
       pool.remainSeen = pool.remainSeen || remain !== null;
       pool.total += total ?? 0;
-      pool.used += used ?? 0;
+      pool.used += knownUsed ?? 0;
       if (remain === null) pool.remainDerived += Math.max(0, (total ?? 0) - (used ?? 0));
       else pool.remain += remain;
     }
@@ -353,16 +356,18 @@ function collectResourceGroups(summary) {
   const rows = collectPackageRows(summary)
     .filter((row) => !isSelectablePlan(row, identity.code));
   if (rows.length === 0) return null;
+  const derivedUsed = (row) =>
+    row.used ?? (row.total !== null && row.remain !== null ? Math.max(0, row.total - row.remain) : null);
   return {
     total: rows.reduce((sum, row) => sum + (row.total ?? 0), 0),
-    used: rows.reduce((sum, row) => sum + (row.used ?? 0), 0),
+    used: rows.reduce((sum, row) => sum + (derivedUsed(row) ?? 0), 0),
     remain: rows.reduce((sum, row) => sum + (row.remain ?? 0), 0),
     remainDerived: rows.reduce(
       (sum, row) => sum + (row.remain === null ? Math.max(0, (row.total ?? 0) - (row.used ?? 0)) : 0),
       0,
     ),
     seen: true,
-    usedSeen: rows.some((row) => row.used !== null),
+    usedSeen: rows.some((row) => derivedUsed(row) !== null),
     remainSeen: rows.some((row) => row.remain !== null),
   };
 }
