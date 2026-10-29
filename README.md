@@ -159,7 +159,7 @@ An Arch `PKGBUILD` for a local pacman install lives in `TokenTrackerLinux/packag
 - 🐾 **Desktop pet** — A pixel companion powered by real coding activity: it works when you work, celebrates streaks, and sleeps when you rest
 - 🎨 **4 desktop widgets** — Pin Usage / Activity Heatmap / Top Models / Usage Limits to your desktop
 - 🏆 **15 achievement tracks** — Turn daily usage, streaks, tools, models, and milestones into collectible badges worth sharing
-- 📈 **Real-time usage limits** — Claude / Codex / Cursor / Gemini / Kimi / Kiro / Grok / Copilot / Antigravity / ZCode / OpenCode Go / Qoder / Qoder CN / Command Code / Ark Coding Plan / Ark Agent Plan / Devin quota windows, with last-good caching when a local provider app is temporarily closed
+- 📈 **Real-time usage limits** — Claude / Codex / Cursor / Gemini / Kimi / Kiro / Grok / Copilot / Antigravity / ZCode / OpenCode Go / Qoder / Qoder CN / Command Code / Ark Coding Plan / Ark Agent Plan / Devin / Doubao quota windows, with last-good caching when a local provider app is temporarily closed
 - 🟢 **Service Status page** — live operational and incident status from 8 official provider status pages
 - 💰 **Cost engine** — 2,200+ models priced via [LiteLLM](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) (auto-refreshed daily) + curated overrides for niche tools (Kiro, Cursor Composer, Kimi, CodeBuddy hy3); 24h disk cache + bundled offline snapshot mean accurate USD without an internet connection. Models without published vendor pricing (e.g. Tencent hy3-preview) are tracked by tokens but show $0 cost until the vendor publishes a rate.
 - 🌐 **Optional leaderboard** — Compare with developers worldwide; drag-to-reorder columns to focus on the providers you care about (opt-in, sign in to participate)
@@ -287,6 +287,7 @@ An Arch `PKGBUILD` for a local pacman install lives in `TokenTrackerLinux/packag
 | **DeepSeek Harness** | ✅ Auto | Passive session reader (`~/.dsh/sessions/**/session[.vN].jsonl[.zstd]`; parses session header and assistant events, handles multi-frame zstd decompression). Also feeds the Sessions browser with one row per session: subagent sessions nest under their parent, a seeded fork is reported as a branch, and replayed messages are attributed to the log that created them so a fork never bills its parent's tokens twice in the Sessions browser |
 | **TRAE (international)** | ✅ Auto | Local TRAE / TRAE SOLO SQLCipher usage metadata with the shared application key by default; optional `TOKENTRACKER_TRAE_SQLCIPHER_KEY` override. No vendor API calls. See [setup and limitations](docs/trae.md). |
 | **TRAE Work CN** | ✅ Auto | **Requires an explicit opt-in: set `TOKENTRACKER_TRAE_CN_USAGE=1`.** Reading usage transmits the locally stored sign-in authorization to TRAE's internal API, so nothing is sent until you turn it on. Once opted in: during eligible non-background sync when local TRAE Work CN auth exists, reads session-token usage from the locally signed-in macOS / Windows app; its internal API may change |
+| **Doubao** (豆包 desktop) | ✅ Limits only | Reuses the Doubao desktop app's local login: decrypts its Chromium cookie store (`~/Library/Application Support/Doubao/**/Cookies`, unlocked via the `Doubao Safe Storage` keychain item — macOS asks once to authorize) and calls Doubao's own subscription-quota endpoints. Reports the 5-hour / 7-day / plan-month credit windows. Doubao exposes no token-level accounting anywhere, so this provider contributes no token usage. Override with `DOUBAO_COOKIE` (manual cookie, takes precedence) or `DOUBAO_HOME` (data dir). See [Doubao limits](docs/doubao-limits.md) |
 
 > **Do I need to install any plugin or hook manually?** No. `tokentracker` (or `tokentracker init`) handles everything on first run:
 > - **Hook-based** tools (Claude Code, Codex, AStudio, Gemini, Every Code, **CodeBuddy**, **WorkBuddy**, **Grok Build**) — we write a SessionEnd hook or TOML notify entry into the tool's own config.
@@ -317,7 +318,7 @@ Missing your tool? [Open an issue](https://github.com/xiufengsun/TokenTracker/is
 | **Local analysis** | ✅ | ✅ | ✅ |
 | **Native desktop apps** | ✅ macOS, Windows, Linux | ❌ | ❌ |
 | **Desktop widgets** | ✅ 4 widgets | ❌ | ❌ |
-| **Rate-limit tracking** | ✅ 18 providers | Limited (Claude blocks) | Multiple providers |
+| **Rate-limit tracking** | ✅ 19 providers | Limited (Claude blocks) | Multiple providers |
 | **Terminal analytics** | Basic CLI (`status`, `--json`) | Strong CLI reporting | Interactive TUI & CLI |
 | **JSON export** | ✅ | ✅ | ✅ |
 | **Public leaderboard** | Optional (opt-in) | ❌ | Optional (`submit`) |
