@@ -863,7 +863,7 @@ describe("UsageLimitsPanel", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent(/25.*100.*75/);
   });
 
-  it("renders Qoder Ultimate Free Calls separately from Plan Credits", () => {
+  it("drops an empty Plan Credits row and keeps Ultimate Free Calls", () => {
     render(
       <UsageLimitsPanel
         qoder={{
@@ -889,7 +889,7 @@ describe("UsageLimitsPanel", () => {
       />,
     );
 
-    expect(screen.getByText("Credits")).toBeInTheDocument();
+    expect(screen.queryByText("Credits")).not.toBeInTheDocument();
     expect(screen.getByText("Ultimate Free Calls")).toBeInTheDocument();
     expect(screen.getByText("66%")).toBeInTheDocument();
     expect(screen.getAllByRole("tooltip").some((tip) => /789[\s\S]*1200[\s\S]*411/.test(tip.textContent))).toBe(true);
@@ -961,6 +961,17 @@ describe("UsageLimitsPanel", () => {
     expect(details.some((text) => /80[\s\S]*200[\s\S]*120/.test(text))).toBe(true);
     rerender(<UsageLimitsPanel qoder={{ ...data, tertiary_window: undefined }} order={["qoder"]} />);
     expect(screen.queryByText(copy("limits.label.qoder_addon_credits"))).not.toBeInTheDocument();
+  });
+
+  it("drops Qoder windows with no quota instead of rendering empty bars", () => {
+    const data = {
+      configured: true,
+      primary_window: { used_percent: 0, used_credits: 0, limit_credits: 0, remaining_credits: 0 },
+      tertiary_window: { used_percent: 6.09, used_credits: 67, limit_credits: 1100, remaining_credits: 1033 },
+    };
+    render(<UsageLimitsPanel qoder={data} order={["qoder"]} />);
+    expect(screen.queryByText(copy("limits.label.qoder_credits"))).not.toBeInTheDocument();
+    expect(screen.getByText(copy("limits.label.qoder_addon_credits"))).toBeInTheDocument();
   });
 
   it("appends plan_label to the provider title when present", () => {

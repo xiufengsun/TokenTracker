@@ -105,7 +105,10 @@ function normalizeQuotaSummary(summary) {
   if (total === 0 && (used !== 0 || remaining !== 0)) {
     throw new Error("Qoder zero total quota must have zero usage and remaining.");
   }
-  const usagePercentage = providedPercentage ?? (total > 0 ? (used / total) * 100 : 100);
+  // An empty 0/0 quota (no active plan) renders as 0%, matching Qoder's own
+  // Credits UI and the desktop/CLI paths; a server-provided percentage still
+  // wins when present.
+  const usagePercentage = providedPercentage ?? (total > 0 ? (used / total) * 100 : 0);
   return {
     used,
     total,
@@ -131,7 +134,7 @@ function normalizeQoderUsageResponse(response) {
   const usedPercent = shared
     ? total > 0
       ? (used / total) * 100
-      : 100
+      : 0
     : base.usagePercentage;
 
   return {

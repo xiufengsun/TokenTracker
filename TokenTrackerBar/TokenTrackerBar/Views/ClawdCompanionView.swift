@@ -1602,11 +1602,14 @@ struct ClawdCompanionView: View {
             ])
         }
         if let qoder = limits.qoder {
+            // Empty 0/0 buckets (no active plan / no add-on pack) show no
+            // quota — keep this card in step with the popover, which drops
+            // them too. Windows without credit fields are kept.
             generic("qoder", configured: qoder.configured, error: qoder.error, windows: [
                 ("Credits", qoder.primaryWindow),
                 ("Add-on", qoder.tertiaryWindow),
                 ("Ultimate Free Calls", qoder.secondaryWindow)
-            ])
+            ].filter { $1?.limitCredits != 0 })
         }
         if let devin = limits.devin {
             generic("devin", configured: devin.configured, error: devin.error, windows: [

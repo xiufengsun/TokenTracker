@@ -614,10 +614,13 @@ struct UsageLimitsView: View {
 
     private func qoderSpecs(_ q: QoderLimits) -> [LimitWindowSpec] {
         var specs: [LimitWindowSpec] = []
-        if let window = q.primaryWindow {
+        // Empty 0/0 buckets (no active plan / no add-on pack) have no quota to
+        // read and would render as a full bar in remaining mode — drop them
+        // like a missing window. Windows without credit fields are kept.
+        if let window = q.primaryWindow, window.limitCredits != 0 {
             specs.append(makeSpec(Strings.qoderPlanLabel, window.usedPercent, iso: window.resetAt))
         }
-        if let window = q.tertiaryWindow {
+        if let window = q.tertiaryWindow, window.limitCredits != 0 {
             specs.append(makeSpec(Strings.qoderAddonLabel, window.usedPercent, iso: window.resetAt))
         }
         if let window = q.secondaryWindow {

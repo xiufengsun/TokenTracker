@@ -102,7 +102,7 @@ test("normalizeQoderUsageResponse merges camel-case base and shared quotas", () 
   assert.equal(result.primary_window.reset_at, "2026-08-01T00:00:00.000Z");
 });
 
-test("normalizeQoderUsageResponse accepts snake case and exhausted zero quota", () => {
+test("normalizeQoderUsageResponse accepts snake case and renders an empty zero quota at 0%", () => {
   const result = normalizeQoderUsageResponse({
     total_quota: {
       quota_summary: {
@@ -114,7 +114,7 @@ test("normalizeQoderUsageResponse accepts snake case and exhausted zero quota", 
     },
     next_reset_at: 1_785_542_400_000,
   });
-  assert.equal(result.primary_window.used_percent, 100);
+  assert.equal(result.primary_window.used_percent, 0);
   assert.equal(result.primary_window.reset_at, "2026-08-01T00:00:00.000Z");
 });
 
