@@ -42,36 +42,42 @@ public sealed class SilentStartTests : IDisposable
         Assert.False(JsonNode.Parse(File.ReadAllText(SettingsPath))!["StartSilently"]!.GetValue<bool>());
     }
 
-    [Fact]
-    public void SetDoesNotOverwriteWritableSettingsWhenReadingIsDenied()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SetDoesNotOverwriteWritableSettingsWhenReadingFails(bool unauthorized)
     {
         const string original = "{\"Locale\":\"zh\",\"PetVisible\":true,\"StartSilently\":false}";
         File.WriteAllText(SettingsPath, original);
-        bool saved;
-        if (OperatingSystem.IsWindows())
+        var reads = 0;
+        string? requestedPath = null;
+        // Deterministic even in privileged containers that bypass Unix modes.
+        // Writing still uses the real writable fixture file.
+        var saved = SilentStart.Set(true, SettingsPath, file =>
         {
-            // Deny readers while allowing writers: the old broad catch would
-            // swallow the read failure, overwrite the file, and return true.
-            using var denyOtherReaders = new FileStream(SettingsPath, FileMode.Open, FileAccess.Read, FileShare.Write);
-            Assert.ThrowsAny<IOException>(() => File.ReadAllText(SettingsPath));
-            saved = SilentStart.Set(true, SettingsPath);
-        }
-        else
-        {
-            var mode = File.GetUnixFileMode(SettingsPath);
-            File.SetUnixFileMode(SettingsPath, UnixFileMode.UserWrite);
-            try
-            {
-                Assert.Throws<UnauthorizedAccessException>(() => File.ReadAllText(SettingsPath));
-                saved = SilentStart.Set(true, SettingsPath);
-            }
-            finally
-            {
-                File.SetUnixFileMode(SettingsPath, mode);
-            }
-        }
+            requestedPath = file;
+            reads++;
+            if (unauthorized) throw new UnauthorizedAccessException("Injected read denial");
+            throw new IOException("Injected transient read error");
+        });
 
+        Assert.Equal(1, reads);
+        Assert.Equal(SettingsPath, requestedPath);
         Assert.False(saved);
+        Assert.Equal(original, File.ReadAllText(SettingsPath));
+    }
+
+    [Fact]
+    public void SetPreservesReadLockedWindowsSettings()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        const string original = "{\"Locale\":\"zh\",\"PetVisible\":true}";
+        File.WriteAllText(SettingsPath, original);
+        using (var denyOtherReaders = new FileStream(SettingsPath, FileMode.Open, FileAccess.Read, FileShare.Write))
+        {
+            Assert.ThrowsAny<IOException>(() => File.ReadAllText(SettingsPath));
+            Assert.False(SilentStart.Set(true, SettingsPath));
+        }
         Assert.Equal(original, File.ReadAllText(SettingsPath));
     }
 
