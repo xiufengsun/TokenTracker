@@ -1,6 +1,6 @@
 # Spec:静默启动用户开关(Silent Start)
 
-版本:v1.5 · 日期:2026-10-28 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现,v1.1 设置页开关已实现,待发布
+版本:v1.6 · 日期:2026-10-29 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现,v1.1 设置页开关已实现,待发布
 评审史:R1 代码事实 / R2 语义规范 / R3 矛盾可实现性 / R4 冷读核验+验收审计,双审×4 轮已吸收
 关联文档:`docs/silent-startup.md`、`docs/silent-start-toggle-plan.md`
 **落盘路径(定稿)**:`docs/silent-start-toggle-spec.md`(`docs/plans/` 被 .gitignore 忽略,
@@ -22,9 +22,9 @@
   LaunchAtLogin-Modern(P1,显式延后以防遗失)**、全局热键(P3)、轻量模式(独立评审)、
   窗口几何持久化、**Windows 自启状态再同步(读 `StartupApproved`,P2)**;
   **本开关不新增任何可见性持久化**(既有 `PetVisible` 行为不变,仅受 §4.3 门控)。
-- **实现形态铁律:静默 = 窗口"创建但隐藏"或(macOS 情形)压根不创建仪表盘窗口——两者都合法;
+- **实现形态铁律:静默 = 窗口"创建但隐藏"或(macOS/Windows 情形)压根不创建仪表盘窗口——两者都合法;
   禁止"先创建再销毁"的轻量化实现**(Linux WebKitWebProcess 孤儿泄漏先例 clash-verge #6874)。
-  本铁律约束 Windows/Linux 的窗口生命周期;macOS 的懒创建(不 show 即不存在)视为等价合法形态。
+  Linux 主窗口创建但隐藏;macOS/Windows 的仪表盘懒创建(首次打开或处理深链时才创建)视为等价合法形态。
 - 不移除 Windows 既有 `--startup` 参数;持久化开关与参数取"或"(§3)。
 - macOS 的菜单栏 popover、灵动岛、桌面宠物的既有行为不受本开关影响(§4.3)。
 
@@ -93,11 +93,11 @@
 2. deeplink → 弹。Windows 仅处理 `auth/callback` 主机(现状);macOS `open|dashboard|auth/*`(现状);
    Linux 由 `oauth::deliver_pending_callback` 成功路径的 `show()+set_focus()` 保证(现状,勿动)。
    Windows 冷启动带深链参数同样必弹(§4.2 注记)。
-3. 二次启动转发 → 弹,但 **Windows 携带 `--startup` 的二次实例不发 `show`**(login 静默优先;
-   此时若同时携带深链,深链转发照常、弹窗由深链规则决定)。无深链二次启动发 `show` 并弹面板
+3. 二次启动转发 → 弹,但 **Windows 携带 `--startup` 的二次实例不发 `activate`**(login 静默优先;
+   此时若同时携带深链,深链转发照常、弹窗由深链规则决定)。无深链二次启动发 `activate` 并弹面板
    (修复"静默开 + 再次双击 = 什么都不发生");Linux 单实例回调已弹;macOS reopen 已弹。
 4. 后台服务器 / 同步 / 刷新 / 小组件零影响。
-5. 静默实现形态见 §2 铁律(创建但隐藏 / macOS 懒创建;禁止销毁)。
+5. 静默实现形态见 §2 铁律(创建但隐藏 / macOS、Windows 懒创建;禁止销毁)。
 
 ### 4.5 现状基线(开关关闭时逐字保持,唯 §4.3 宠物修复除外)
 
@@ -182,8 +182,8 @@ webview 既无 `webkit.messageHandlers.nativeBridge` 也无 `chrome.webview` 桥
   (`NativeLocalization.cs:19-22`、`PetWindow.cs:902-904`),并非共享符号——新访问器采用同构做法:
   静态类 `SilentStart`(同值私有常量 + `Enabled` / `Set(bool)`)。读取损坏 / 缺失回落 false
   (与 `StoredVisible` 的 catch→null 模式一致)。
-- 写入**读-改-写保留其他键**:既有 `WriteSettings` 在 JSON 不可读时会从空对象重建、静默丢弃其他键
-  ——新写入沿用同构 read-modify-write(读整体对象 → 改单键 → 写回),不放大该缺陷。写入发生在
+- 写入**读-改-写保留其他键**:读取文件失败时返回 false,不写入;仅在成功读取但 JSON 损坏或
+  根节点不是对象时重建对象。有效 JSON 沿用 read-modify-write(读整体对象 → 改单键 → 写回)。写入发生在
   UI 线程(托盘处理器,与其他 helper 天然串行);temp + `File.Replace` 原子替换为推荐加固,非强制。
 - 启动:`Program.Main` **读取一次** `SilentStart.Enabled` 得快照,计算 `silent_effective` 与
   `showPetOnLaunch` 传参(§4.3);仪表盘路径零改动(冷启动带深链参数时照常必弹,§4.2 注记)。
@@ -191,14 +191,14 @@ webview 既无 `webkit.messageHandlers.nativeBridge` 也无 `chrome.webview` 桥
   处理器 + 手动 `Checked` 管理,非 `CheckOnClick`),**接入 `ApplyLocaleToMenu`**,文案
   `Silent Start`;处理器:`Set(v)` → 立即置 `_silentItem.Checked = v`(`Set` 本身不碰 UI)。
   不做 tooltip(§5.2)。
-- 二次启动:`SingleInstance` 管道协议(单行文本)扩展消息,**线格式字面量恰为 `show`**。
-  分支位置钉死:监听回调以 lambda 包装——`payload == "show"` → `ctx.OpenDashboard()`;
-  否则 `ctx.HandleDeepLink(payload)`(即分支位于 `HandleDeepLink` 之前,保住 W4 的安全论证:
-  旧主实例无此 lambda,`"show"` 走 `HandleDeepLink` → `new Uri` 抛异常被既有 try 捕获静默返回)。
-**`OpenDashboard` 必须经 `PostToUi` 自 marshal**(show 消息自管道线程到达;其 CheckAccess 快路径保持托盘调用同步,§6.2 硬要求)。
-  二次实例侧:`Program.Main` 单实例分支中,**非 `--startup` 且无深链 → 发送 `show`**;失败语义与
-  既有深链转发一致(fire-and-forget,失败即无 surface,二次实例照常退出);`show` 与深链幂等
-  (最终只弹一次);**携带 `--startup` 的二次实例不发 `show`**(§4.4-3)。
+- 二次启动:复用 `SingleInstance` 管道协议(单行文本),激活消息为
+  **`SingleInstance.ActivateMessage`(线格式字面量恰为 `activate`)**。
+  `SingleInstance.StartListener` 先判断 `line == ActivateMessage` 并调用 `onActivate`,
+  其余非空 payload 调用 `onDeepLink`。`Program.Main` 提供的两个回调经 WPF Dispatcher
+  分别调度 `trayContext.ActivateDashboard()` 与 `trayContext.HandleDeepLink(payload)`。
+  二次实例侧:`Program.Main` 单实例分支中,**非 `--startup` 且无深链 → 发送 `ActivateMessage`**;
+  失败语义与既有深链转发一致(fire-and-forget,失败即无 surface,二次实例照常退出);
+  激活与深链最终只显示同一个仪表盘;**携带 `--startup` 的二次实例不发激活消息**(§4.4-3)。
 
 ### 6.3 Linux
 - 新模块 `settings.rs`:在 `lib.rs` 增加 `pub mod settings;`(与 paths/server 并列)。
@@ -286,14 +286,15 @@ webview 既无 `webkit.messageHandlers.nativeBridge` 也无 `chrome.webview` 桥
   矩阵);`--startup` 时宠物被压制(**宠物优先级修复**,即使 `PetVisible=true`);deeplink 弹。
   login 模拟:直接运行 `TokenTracker.exe --startup`。
 - W2 开关开:manual 与 `--startup` 均不弹宠物、不弹仪表盘;deeplink(auth)弹(含冷启动带参);
-  **无深链二次启动弹(新增 show 转发)**;`--startup` 二次启动不弹;`--startup`+深链的二次启动
+  **无深链二次启动弹(既有 activate 转发)**;`--startup` 二次启动不弹;`--startup`+深链的二次启动
   弹(深链规则);托盘点击弹。
 - W3 开关持久化于 native-settings.json(读-改-写保留其他键,切语言/宠物键不丢;JSON 损坏时
-  以新对象重建落盘,开关不再被损坏文件锁死);托盘勾选态
+  以新对象重建落盘,开关不再被损坏文件锁死;读取失败时返回 false 且文件内容不变);托盘勾选态
   跨启动保持;**运行中切换不改变当前可见性**;en/zh-Hans 文案与 §5.2 表一致
   (`ApplyLocaleToMenu`);菜单位置紧随 `_startupItem`(§5.1)。
 - W4 新二次实例 → 旧主实例:搭建方法 = 以旧版本 exe 为主实例运行,新版本 exe 无深链二次启动;
-  预期旧主实例忽略 `show` 消息、不崩溃。
+  #832 起已支持 `activate` 的主实例应激活仪表盘;更早且未识别此消息的主实例将其交给
+  深链处理器后忽略,不得崩溃。按旧版本实际协议能力分别验收。
 - W5 构建通过,现有测试不回归。
 
 **Linux**
@@ -321,6 +322,9 @@ webview 既无 `webkit.messageHandlers.nativeBridge` 也无 `chrome.webview` 桥
 
 ## 修订记录(完整,定稿随文件入库)
 
+- v1.6(2026-10-29,PR #901 最新评审核实):§2/§4.4 允许 Windows 仪表盘懒创建;
+  §4.4/§6.2/W2/W4 对齐既有 `activate` 消息及独立激活/深链回调;
+  §6.2/W3 区分文件读取失败与 JSON 损坏,前者不写回、后者可重建。
 - v1.5(2026-10-28,CodeRabbit PR #901 第二轮行内评审吸收):① §4.2 冷启动注记二次勘误——
   v1.4 ② 的「StoredVisible=true 时仍恢复显示」未区分 `silent_effective`,在开关开
   (或 `--startup`)语境下与 §4.3 `!silent_effective &&` 外乘门控矛盾;改为深链仅豁免

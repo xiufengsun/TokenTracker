@@ -1,6 +1,6 @@
 # Spec:Dev 变体隔离(Dev Variant Isolation)
 
-版本:v1.2 · 日期:2026-10-28 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现(2026-09-05),v1.1 缺口补全 + v1.2 清理状态语义细化(2026-10-28),开发痕迹已清理
+版本:v1.3 · 日期:2026-10-29 · 状态:定稿(5 轮双审通过,R5 双 SHIP)· P0 已实现(2026-09-05),清理流程补全(2026-10-29)
 评审史:R1 代码事实+契约清理 / R2 XcodeGen 精度+一致性 / R3 矛盾+可实现性 / R4 冷读+QA 审计,双审×4 轮已吸收,见文末修订记录
 关联:`docs/silent-start-toggle-spec.md`、`docs/silent-startup.md`
 范围:仅 macOS `TokenTrackerBar/` P0。决策记录:dev 端口 **7681**;**Dev 不写 Widget 快照**
@@ -108,7 +108,8 @@
 2. `~/Library/Preferences/com.tokentracker.bar.dev.plist`(standard 域)。
 3. `~/Library/Preferences/group.com.tokentracker.bar.dev.plist`(suite 域;非沙盒应用
    suite plist 落 Preferences,`defaults delete group.…` 经 cfprefsd 安全删除)。
-4. `~/Library/Group Containers/group.com.tokentracker.bar.dev/`(若被创建;正常路径不创建)。
+4. `~/Library/Group Containers/group.com.tokentracker.bar.dev/`(若被创建;正常路径不创建),
+   以及 Dev widget 的独立沙盒容器 `~/Library/Containers/com.tokentracker.bar.dev.widget/`。
 5. SMAppService 登录项(仅当在 Dev 里开启过):系统设置 → 通用 → 登录项显示为
    **TokenTracker Dev**;须在 Dev 仍安装时经菜单关闭,或手动移除。
 6. WebKit/缓存类:`~/Library/WebKit/com.tokentracker.bar.dev/`、
@@ -122,7 +123,10 @@
 
 ## 7. 清理脚本契约(`scripts/dev-cleanup.sh`)
 
-1. 退出运行中的 Dev app(按可执行路径含 `Build/Products/Debug` 匹配)。
+1. 用 AppKit 查询 bundle id 恰为 `com.tokentracker.bar.dev` 的已运行实例并请求正常退出,
+   不启动缺席应用、不按路径或端口批量杀进程。等待退出至多 10 秒,由
+   `applicationWillTerminate` → `ServerManager.stopServer()` 停止自有服务(含包外 CLI fallback)。
+   退出请求失败或超时必须以非零退出,且不继续删除偏好/容器/产物。
 2. `defaults delete <域> 2>/dev/null || true`(两域各一次;域不存在时 defaults 以
    非零退出,脚本须容忍。**不得 killall cfprefsd**)。defaults delete 后 cfprefsd 会
    留下空 dict 的孤儿 plist;**域已删除之后,允许 rm 仅限两个 `.dev` 域的孤儿
@@ -185,6 +189,9 @@ showBuildSettings 命令同目录运行。
 
 ## 修订记录
 
+- v1.3(2026-10-29,PR #901 最新评审核实):§7-1 改为按精确 Dev bundle id 对已运行实例
+  请求正常退出并等待,保留应用自身的 CLI 子进程清理;失败即停止删除。
+  §6-4/§7-3 补入 Dev widget 的独立沙盒容器,与 App Group 容器分别清理。
 - v1.2(2026-10-28,CodeRabbit PR #901 第二轮行内评审吸收):§7-4 产物状态行三态化——
   产物删除失败由专属 `PRODUCT_FAILED` 标志驱动,偏好/缓存/容器失败不再令「未找到
   Debug 产物」误报为「Debug 产物删除失败」;`CLEANUP_FAILED` 仅作总退出信号。

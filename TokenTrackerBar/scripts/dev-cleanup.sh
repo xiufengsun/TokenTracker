@@ -24,11 +24,33 @@ remove_path() {
   fi
 }
 
-# 1. Quit the Dev app. Path-scoped match: only the DerivedData Debug product
-#    and its embedded node — other projects' Debug processes are unaffected.
-#    (No osascript quit-by-name: it would LAUNCH the app if it isn't running.)
-pkill -f "TokenTrackerBar-[^/]*/Build/Products/Debug/TokenTracker Dev.app" 2>/dev/null || true
-sleep 2
+# 1. Ask only already-running Dev instances to quit normally, so
+#    applicationWillTerminate stops their owned server (including CLI fallback
+#    processes outside the app bundle). Never launch an absent app or signal
+#    processes by a broad path/port match. Abort before deleting if quit fails.
+if ! osascript -l JavaScript <<'JXA'
+ObjC.import("AppKit");
+var apps = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.tokentracker.bar.dev");
+for (var i = 0; i < apps.count; i++) {
+    var app = apps.objectAtIndex(i);
+    if (!app.terminated && !app.terminate) throw new Error("Dev app quit request failed");
+}
+for (var attempt = 0; attempt < 100; attempt++) {
+    var running = false;
+    for (var i = 0; i < apps.count; i++) {
+        if (!apps.objectAtIndex(i).terminated) running = true;
+    }
+    if (!running) break;
+    delay(0.1);
+}
+for (var i = 0; i < apps.count; i++) {
+    if (!apps.objectAtIndex(i).terminated) throw new Error("Dev app quit timeout");
+}
+JXA
+then
+  echo "⚠️  Dev app 未能正常退出,已停止清理;请先退出 Dev app 后重试。" >&2
+  exit 1
+fi
 
 # 2. Preferences: standard domain + shared-suite domain. `defaults delete`
 #    exits nonzero when the domain is missing — tolerated. Never `killall
@@ -45,6 +67,7 @@ fi
 
 # 3. Containers / WebKit / caches (tolerate absence, report real failures).
 remove_path "$HOME/Library/Group Containers/$DEV_SUITE"
+remove_path "$HOME/Library/Containers/$DEV_DOMAIN.widget"
 remove_path "$HOME/Library/WebKit/$DEV_DOMAIN"
 remove_path "$HOME/Library/Caches/$DEV_DOMAIN"
 remove_path "$HOME/Library/HTTPStorages/$DEV_DOMAIN"
