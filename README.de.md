@@ -240,7 +240,7 @@ Fehlt dein Tool? [Erstelle ein Issue](https://github.com/xiufengsun/TokenTracker
 | **Local-First-Analyse** | ✅ | ✅ | ✅ |
 | **Native Desktop-Apps** | ✅ macOS, Windows, Linux | ❌ | ❌ |
 | **Desktop-Widgets** | ✅ 4 Widgets | ❌ | ❌ |
-| **Rate-Limit-Tracking** | ✅ 18 Provider | Eingeschränkt (Claude-Blocks) | Mehrere Provider |
+| **Rate-Limit-Tracking** | ✅ 19 Provider | Eingeschränkt (Claude-Blocks) | Mehrere Provider |
 | **Terminal-Analytics** | Basis-CLI (`status`, `--json`) | Starkes CLI-Reporting | Umfangreiche interaktive TUI & CLI |
 | **JSON-Export** | ✅ | ✅ | ✅ |
 | **Öffentliches Leaderboard** | Optional (Opt-in) | ❌ | Optional (`submit`) |

@@ -125,6 +125,19 @@ interface UsageLimitsData {
     stale?: boolean;
     cached_at?: string | null;
   };
+  doubao: {
+    configured: boolean;
+    error?: string | null;
+    plan_label?: string | null;
+    auth_action_required?: string | null;
+    primary_window?: CodexCreditWindow | null;
+    secondary_window?: CodexCreditWindow | null;
+    tertiary_window?: CodexCreditWindow | null;
+    cached?: boolean;
+    stale?: boolean;
+    cached_at?: string | null;
+    source?: string | null;
+  };
 }
 
 interface UsageLimitsInitialState {

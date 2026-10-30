@@ -33,6 +33,7 @@ const { fetchOpencodeGoLimits } = require("./opencode-go-limits");
 const { fetchCommandcodeLimits } = require("./commandcode-limits");
 const { fetchDevinLimits } = require("./devin-limits");
 const { fetchQoderLimits, fetchQoderCnLimits } = require("./qoder-limits");
+const { fetchDoubaoLimits, readDoubaoLimitsFallback } = require("./doubao-limits");
 const { fetchArkCodingPlanLimits } = require("./ark-coding-plan-limits");
 const { fetchArkAgentPlanLimits } = require("./ark-agent-plan-limits");
 const { fetchWorkbuddyLimits, fetchWorkbuddyAiLimits } = require("./workbuddy-limits");
@@ -4107,7 +4108,7 @@ async function fetchUsageLimitsUncached({
     : null;
 
   const providerFetch = withFetchTimeout(fetchImpl, providerTimeoutMs);
-  const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, devinRaw, workbuddy, workbuddyAi, claudeServiceStatus] = await Promise.all([
+  const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, devinRaw, workbuddy, workbuddyAi, doubao, claudeServiceStatus] = await Promise.all([
     claudeToken && !freshClaudeCache && !claudeRetryAtMs
       ? withProviderTimeout(fetchClaudeUsageLimits(claudeToken, { fetchImpl: providerFetch, maxAttempts: 1 }), "Claude", providerTimeoutMs).then(
           (value) => ({ status: "fulfilled", value }),
@@ -4239,6 +4240,20 @@ async function fetchUsageLimitsUncached({
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
     withAbortableProviderTimeout((signal) => fetchWorkbuddyAiLimits({ home, env, fetchImpl: providerFetch, signal }), "WorkBuddy AI", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
+    // Doubao (豆包): subscription credits windows from Doubao's web endpoints,
+    // keyed by the desktop app's local session (DOUBAO_COOKIE env or decrypted
+    // Chromium cookies). Limits-only — Doubao exposes no token accounting.
+    withProviderTimeout(
+      fetchDoubaoLimits({ home, env, platform, fetchImpl: providerFetch, securityRunner, nowMs }),
+      "Doubao",
+      providerTimeoutMs,
+    ).catch(async (reason) => {
+      // The timeout race discards fetchDoubaoLimits' own cache fallback, so
+      // re-serve it here (readDoubaoLimitsFallback binds it to the active
+      // session); otherwise the error result keeps the section actionable.
+      const cached = await readDoubaoLimitsFallback({ home, env, platform, securityRunner, nowMs });
+      return cached || { configured: true, error: reason?.message || "Unknown error" };
+    }),
     // Public status-page probe (fail-soft, own 5-min cache in provider-status.js).
     // Only probed for configured accounts — without a token the Claude section
     // never renders, so the reading would have nowhere to go.
@@ -4510,6 +4525,7 @@ async function fetchUsageLimitsUncached({
     // as separate providers — one row per signed-in edition, never merged.
     workbuddy,
     workbuddyAi,
+    doubao: withPlanLabel(doubao, doubao?.plan_label, "Doubao"),
   };
 
   for (const [providerName, provider] of Object.entries(data)) {
@@ -4599,6 +4615,7 @@ module.exports = {
   fetchCommandcodeLimits,
   fetchQoderLimits,
   fetchQoderCnLimits,
+  readMacosKeychainGenericPasswordAsync,
   fetchWorkbuddyLimits,
   fetchWorkbuddyAiLimits,
 };

@@ -289,6 +289,20 @@ export const PROVIDER_LIMIT_SPECS = {
       return PROVIDER_LIMIT_SPECS.workbuddy.windows(data);
     },
   },
+  doubao: {
+    // Doubao subscription credits: 5-hour + 7-day rolling windows plus the
+    // plan-month window, straight from the usage_detail endpoint. Windows
+    // without credit numbers carry no empty-bucket risk, but a server 0/0
+    // bucket is dropped like Qoder's (no quota to read, full bar in
+    // remaining mode). Free accounts send empty groups → every row drops.
+    windows(data) {
+      return [
+        { key: "5h", labelKey: "limits.label.doubao_5h", window: dropEmptyQoderWindow(data.primary_window), windowSeconds: 5 * 3600 },
+        { key: "7d", labelKey: "limits.label.doubao_7d", window: dropEmptyQoderWindow(data.secondary_window), windowSeconds: 7 * 86400 },
+        { key: "monthly", labelKey: "limits.label.doubao_monthly", window: dropEmptyQoderWindow(data.tertiary_window) },
+      ];
+    },
+  },
 };
 
 const GROK_PRODUCT_LABEL_KEYS = {
@@ -386,5 +400,8 @@ export function usageLimitsLabelCopyAnchor() {
     copy("limits.label.devin_weekly"),
     copy("limits.label.workbuddy_plan"),
     copy("limits.label.workbuddy_addon"),
+    copy("limits.label.doubao_5h"),
+    copy("limits.label.doubao_7d"),
+    copy("limits.label.doubao_monthly"),
   ];
 }

@@ -21,10 +21,11 @@ struct UsageLimitsResponse: Codable, Equatable {
     let devin: DevinLimits?
     let workbuddy: WorkbuddyLimits?
     let workbuddyAi: WorkbuddyLimits?
+    let doubao: DoubaoLimits?
 
     enum CodingKeys: String, CodingKey {
         case fetchedAt = "fetched_at"
-        case claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi
+        case claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi, doubao
         case opencodeGo = "opencodeGo"
         case commandCode = "commandCode"
     }
@@ -691,6 +692,29 @@ struct QoderLimits: Codable, Equatable {
     }
 }
 
+/// Doubao (豆包) subscription credits windows, read from Doubao's web
+/// endpoints with the desktop app's local session. Three rolling windows
+/// (5-hour, 7-day, per-plan-month); limits-only — no token accounting exists.
+struct DoubaoLimits: Codable, Equatable {
+    let configured: Bool
+    let error: String?
+    let planLabel: String?
+    let primaryWindow: GenericLimitWindow?
+    let secondaryWindow: GenericLimitWindow?
+    let tertiaryWindow: GenericLimitWindow?
+    let cachedAt: String?
+    let stale: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case configured, error, stale
+        case planLabel = "plan_label"
+        case primaryWindow = "primary_window"
+        case secondaryWindow = "secondary_window"
+        case tertiaryWindow = "tertiary_window"
+        case cachedAt = "cached_at"
+    }
+}
+
 struct CodingPlanLimits: Codable, Equatable {
     let configured: Bool
     let error: String?
@@ -820,6 +844,7 @@ extension UsageLimitsResponse {
             (devin?.configured ?? false, devin?.error),
             (workbuddy?.configured ?? false, workbuddy?.error),
             (workbuddyAi?.configured ?? false, workbuddyAi?.error),
+            (doubao?.configured ?? false, doubao?.error),
         ]
         return providers.contains { $0.0 && $0.1 == nil }
     }
@@ -860,7 +885,8 @@ extension UsageLimitsResponse {
             agentPlan: agentPlan,
             devin: .unconfigured,
             workbuddy: workbuddy,
-            workbuddyAi: workbuddyAi
+            workbuddyAi: workbuddyAi,
+            doubao: doubao
         )
     }
 }

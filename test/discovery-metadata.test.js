@@ -24,31 +24,31 @@ const README_EXPECTATIONS = [
     "README.md",
     () => new RegExp(`${TOOL_COUNT} AI coding tools`),
     () => new RegExp(`\\|\\s+\\*\\*AI tools supported\\*\\*\\s+\\|\\s+\\*\\*${TOOL_COUNT}\\*\\*`),
-    /Rate-limit tracking.*✅ 18 providers/,
+    /Rate-limit tracking.*✅ 19 providers/,
   ],
   [
     "README.zh-CN.md",
     () => new RegExp(`${TOOL_COUNT} 款 AI 编码工具`),
     () => new RegExp(`\\|\\s+\\*\\*支持的 AI 工具数\\*\\*\\s+\\|\\s+\\*\\*${TOOL_COUNT}\\*\\*`),
-    /限额追踪.*✅ 18 家 provider/,
+    /限额追踪.*✅ 19 家 provider/,
   ],
   [
     "README.ja.md",
     () => new RegExp(`${TOOL_COUNT} 種類の AI コーディングツール`),
     () => new RegExp(`\\|\\s+\\*\\*対応 AI ツール数\\*\\*\\s+\\|\\s+\\*\\*${TOOL_COUNT}\\*\\*`),
-    /レート制限トラッキング.*✅ 18 プロバイダー/,
+    /レート制限トラッキング.*✅ 19 プロバイダー/,
   ],
   [
     "README.ko.md",
     () => new RegExp(`${TOOL_COUNT}개의 AI 코딩 도구`),
     () => new RegExp(`\\|\\s+\\*\\*지원하는 AI 도구 수\\*\\*\\s+\\|\\s+\\*\\*${TOOL_COUNT}\\*\\*`),
-    /레이트 제한 추적.*✅ 18개 프로바이더/,
+    /레이트 제한 추적.*✅ 19개 프로바이더/,
   ],
   [
     "README.de.md",
     () => new RegExp(`${TOOL_COUNT} KI-Coding-Tools`),
     () => new RegExp(`\\|\\s+\\*\\*Unterstützte KI-Tools\\*\\*\\s+\\|\\s+\\*\\*${TOOL_COUNT}\\*\\*`),
-    /Rate-Limit-Tracking.*✅ 18 Provider/,
+    /Rate-Limit-Tracking.*✅ 19 Provider/,
   ],
 ];
 
@@ -95,7 +95,7 @@ test("public discovery surfaces describe every supported tool", () => {
   assert.match(index, /Achievements/);
   assert.match(index, /Service Status page/);
   assert.match(index, /__TOKENTRACKER_DISCOVERY_TRACKED_USAGE__/);
-  assert.match(read("dashboard/src/content/copy.csv"), /landing\.discovery\.tracked_usage,.*usage limits for 18 providers/i);
+  assert.match(read("dashboard/src/content/copy.csv"), /landing\.discovery\.tracked_usage,.*usage limits for 19 providers/i);
 
   const llms = read("dashboard/public/llms.txt");
   assert.match(llms, new RegExp(`Supported AI coding tools \\(${TOOL_COUNT}\\)`));

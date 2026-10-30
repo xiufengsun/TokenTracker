@@ -444,6 +444,8 @@ const PROVIDER_LOGO_MAP = {
   DOTS: "/brand-logos/dots.png",
   "PI-DOTS": "/brand-logos/dots.png",
   QODER: "/brand-logos/qoder.svg",
+  // Doubao (豆包) — mono 豆 glyph mark, traced currentColor like Qoder/Devin.
+  DOUBAO: "/brand-logos/doubao.svg",
   // Devin (devin.ai) — the three-hexagon "nodes" mark, mono like Qoder.
   DEVIN: "/brand-logos/devin.svg",
   REASONIX: "/brand-logos/reasonix.png",
@@ -472,6 +474,9 @@ const PROVIDER_LOGO_CLASS_MAP = {
   // The Devin nodes mark ships as a black currentColor trace — same
   // dark-mode inversion treatment as the Qoder mark.
   DEVIN: "dark:invert",
+  // Doubao's mono 豆 mark is a black currentColor trace — same dark-mode
+  // inversion treatment as Qoder/Devin.
+  DOUBAO: "dark:invert",
   // The sail PNG is solid black on transparent — invert to white in dark
   // mode so it doesn't disappear against the dark dashboard background.
   DOTS: "dark:invert",

@@ -89,6 +89,24 @@ describe("UsageLimitsPanel", () => {
     expect(screen.getAllByRole("button", { name: /^WorkBuddy/ })).toHaveLength(1);
   });
 
+  it("renders the Doubao row with its credit windows when wired through", async () => {
+    render(
+      <UsageLimitsPanel
+        order={["doubao"]}
+        doubao={{
+          configured: true,
+          plan_label: "个人订阅",
+          primary_window: { used_percent: 40, used_credits: 40, limit_credits: 100, remaining_credits: 60, reset_at: "2030-07-29T05:00:00.000Z" },
+          secondary_window: { used_percent: 10, used_credits: 100, limit_credits: 1000, remaining_credits: 900 },
+        }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /^Doubao 个人订阅/ })).toBeInTheDocument();
+    expect(screen.getByText("40%")).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("button", { name: /^Doubao 个人订阅/ }), { key: "Enter" });
+    await waitFor(() => expect(screen.getByText(/40 \/ 100/)).toBeVisible());
+  });
+
   it("keeps Start grants collapsed inside the Pro row and expands them independently", () => {
     render(
       <UsageLimitsPanel

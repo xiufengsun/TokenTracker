@@ -21,6 +21,7 @@ export const LIMIT_PROVIDER_IDS = [
   "devin",
   "workbuddy",
   "workbuddyAi",
+  "doubao",
 ];
 
 /** Keys for ProviderIcon — mono logos use inline SVG; colored logos use /brand-logos/. */
@@ -55,6 +56,8 @@ export const LIMIT_PROVIDER_ICON_KEYS = {
   // Both share the CodeBuddy brand mark.
   workbuddy: "WORKBUDDY",
   workbuddyAi: "WORKBUDDY",
+  // Doubao (豆包) desktop — mono 豆 glyph mark under /brand-logos/.
+  doubao: "DOUBAO",
 };
 
 export function limitProviderIconKey(id) {
@@ -101,6 +104,8 @@ export function limitProviderName(id) {
       return copy("limits.provider.workbuddy");
     case "workbuddyAi":
       return copy("limits.provider.workbuddy_ai");
+    case "doubao":
+      return copy("limits.provider.doubao");
     default:
       return String(id || "");
   }

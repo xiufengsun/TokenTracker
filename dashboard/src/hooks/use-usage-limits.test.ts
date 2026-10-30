@@ -57,6 +57,7 @@ const existingLimits = {
   codingPlan: { configured: false },
   agentPlan: { configured: false },
   devin: { configured: false },
+  doubao: { configured: false },
 };
 
 const freshLimits = {
