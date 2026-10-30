@@ -656,6 +656,8 @@ test("parseCommandCodeIncremental reconciles a rewritten transcript (resume/comp
       ].join("\n") + "\n",
       "utf8",
     );
+    const rewriteStat = fs.statSync(filePath);
+    fs.utimesSync(filePath, rewriteStat.atime, new Date(rewriteStat.mtimeMs + 2000));
     await parseCommandCodeIncremental({ sessionFiles: [filePath], cursors, queuePath });
 
     const buckets = latestCommandCodeRows(queuePath);

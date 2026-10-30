@@ -37,6 +37,34 @@ const DEEPSEEK_TIME_PRICED_MODELS = [
   "deepseek-flash",
   "deepseek-v4-pro",
 ];
+// Strip all non-pricing fields on load (keep only the 4 numeric rate fields)
+// so V8 does not retain unused string/object properties across 2,200+ keys.
+function slimRawPricingMap(parsed) {
+  if (!parsed || typeof parsed !== "object") return {};
+  const slim = {};
+  for (const [key, entry] of Object.entries(parsed)) {
+    if (key.startsWith("_") || !entry || typeof entry !== "object") continue;
+    const item = {};
+    let hasAny = false;
+    for (const f of [
+      "input_cost_per_token",
+      "output_cost_per_token",
+      "cache_read_input_token_cost",
+      "cache_creation_input_token_cost",
+    ]) {
+      const v = entry[f];
+      if (typeof v === "number" && Number.isFinite(v)) {
+        item[f] = v;
+        hasAny = true;
+      }
+    }
+    if (hasAny) {
+      slim[key] = item;
+    }
+  }
+  return slim;
+}
+
 // Sync seed load. Done at require-time so callers that haven't awaited
 // ensurePricingLoaded() (e.g. tests, vite mock startup, edge functions) still
 // get LiteLLM-backed pricing instead of all-zero. ensurePricingLoaded() will
@@ -45,14 +73,21 @@ function loadSeedSync() {
   try {
     const raw = fs.readFileSync(SEED_SNAPSHOT_PATH, "utf8");
     const parsed = JSON.parse(raw);
-    delete parsed._meta;
-    return parsed;
+    const slim = slimRawPricingMap(parsed);
+    try {
+      const resolved = require.resolve(SEED_SNAPSHOT_PATH);
+      if (require.cache[resolved]) delete require.cache[resolved];
+    } catch {}
+    return slim;
   } catch (e) {
     return {};
   }
 }
 
 const seedRaw = loadSeedSync();
+
+const RESOLVED_PRICING_CACHE_MAX = 256;
+const resolvedPricingCache = new Map();
 
 const state = {
   loaded: false,
@@ -78,12 +113,13 @@ async function ensurePricingLoaded(opts = {}) {
     try {
       const cachePath = opts.cachePath || defaultCachePath();
       const { data, source } = await loadLitellmData({ ...opts, cachePath });
-      state.litellmRawMap = data || {};
+      state.litellmRawMap = slimRawPricingMap(data || {});
       state.litellmPerMillionMap = buildLitellmPerMillionMap(state.litellmRawMap);
       state.source = source;
       state.loaded = true;
       state.revision += 1;
       state.negativeCache.clear();
+      resolvedPricingCache.clear();
       return state;
     } finally {
       state.loadingPromise = null;
@@ -103,6 +139,7 @@ function resetPricingForTests() {
   state.source = Object.keys(seedRaw).length ? "seed-snapshot:sync" : null;
   state.revision += 1;
   state.negativeCache.clear();
+  resolvedPricingCache.clear();
 }
 
 function getPricingRevision() {
@@ -118,6 +155,10 @@ function getModelPricing(model, opts = {}) {
     lookupSource = opts.source.toLowerCase();
   }
   const cacheKey = lookupSource ? `${lookupSource}\0${model}` : model;
+
+  const memoized = resolvedPricingCache.get(cacheKey);
+  if (memoized) return memoized;
+
   if (state.negativeCache.has(cacheKey)) return ZERO_PRICING;
 
   const result = lookupPricing(model, {
@@ -125,7 +166,14 @@ function getModelPricing(model, opts = {}) {
     litellm: state.litellmPerMillionMap,
     source: lookupSource,
   });
-  if (result.hit) return result.value;
+  if (result.hit) {
+    if (resolvedPricingCache.size >= RESOLVED_PRICING_CACHE_MAX) {
+      const oldestKey = resolvedPricingCache.keys().next().value;
+      resolvedPricingCache.delete(oldestKey);
+    }
+    resolvedPricingCache.set(cacheKey, result.value);
+    return result.value;
+  }
 
   state.negativeCache.add(cacheKey);
   return ZERO_PRICING;

@@ -159,9 +159,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerWakeCatchUpObservers()
 
         // A normal Finder/Dock launch should behave like opening an app, while
-        // an SMAppService login launch should remain a quiet menu bar startup.
-        if NSAppleEventManager.shared().currentAppleEvent?
-            .attributeDescriptor(forKeyword: keyAELaunchedAsLogInItem) == nil {
+        // an SMAppService login launch or --menu-only argument should remain a quiet menu bar startup.
+        let isLoginItem = NSAppleEventManager.shared().currentAppleEvent?
+            .attributeDescriptor(forKeyword: keyAELaunchedAsLogInItem) != nil
+        let isMenuOnly = CommandLine.arguments.contains("--menu-only") || isLoginItem
+        if !isMenuOnly {
             DashboardPresentationCoordinator.shared.showDashboard()
         }
 

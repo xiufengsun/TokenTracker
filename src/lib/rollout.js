@@ -801,6 +801,13 @@ async function parseRolloutIncremental({
     if (!fssync.existsSync(flaggedPath)) delete cursors.codexUsageRecordOnlyFiles[flaggedPath];
   }
 
+  touchedBuckets.clear();
+  projectTouchedBuckets?.clear();
+  projectMetaCache?.clear();
+  publicRepoCache?.clear();
+  projectFreshnessCache?.clear();
+  cursorSessionPaths?.clear();
+
   return { filesProcessed, eventsAggregated, bucketsQueued, projectBucketsQueued };
 }
 
@@ -1335,6 +1342,14 @@ async function parseClaudeIncremental({
   cursors.claudeHashes =
     allHashes.length > 100_000 ? allHashes.slice(allHashes.length - 100_000) : allHashes;
 
+  seenMessageHashes.clear();
+  touchedBuckets.clear();
+  projectTouchedBuckets?.clear();
+  projectMetaCache?.clear();
+  publicRepoCache?.clear();
+  projectFreshnessCache?.clear();
+  forkTimes.clear();
+
   return { filesProcessed, eventsAggregated, bucketsQueued, projectBucketsQueued };
 }
 
@@ -1505,6 +1520,9 @@ async function parseGeminiIncremental({
     cursors.projectHourly = projectState;
   }
 
+  touchedBuckets.clear();
+  projectTouchedBuckets?.clear();
+
   return { filesProcessed, eventsAggregated, bucketsQueued, projectBucketsQueued };
 }
 
@@ -1657,6 +1675,9 @@ async function parseOpencodeIncremental({
     projectState.updatedAt = new Date().toISOString();
     cursors.projectHourly = projectState;
   }
+
+  touchedBuckets.clear();
+  projectTouchedBuckets?.clear();
 
   return { filesProcessed, eventsAggregated, bucketsQueued, projectBucketsQueued };
 }
@@ -2017,6 +2038,9 @@ async function parseOpenclawIncremental({
     projectState.updatedAt = new Date().toISOString();
     cursors.projectHourly = projectState;
   }
+
+  touchedBuckets.clear();
+  projectTouchedBuckets?.clear();
 
   return { filesProcessed, eventsAggregated, bucketsQueued, projectBucketsQueued };
 }
@@ -3830,6 +3854,7 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
     await fs.appendFile(queuePath, toAppend.join("\n") + "\n", "utf8");
   }
 
+  touchedBuckets?.clear();
   return toAppend.length;
 }
 
@@ -3883,6 +3908,7 @@ async function enqueueTouchedProjectBuckets({
     await fs.appendFile(projectQueuePath, toAppend.join("\n") + "\n", "utf8");
   }
 
+  projectTouchedBuckets?.clear();
   return toAppend.length;
 }
 
@@ -4658,13 +4684,24 @@ function normalizeOpencodeModelFields(msg) {
   return { modelId: null, providerId: "" };
 }
 
+const MAX_PROJECT_META_CACHE_SIZE = 512;
+function setBoundedProjectMeta(cache, key, value) {
+  if (!cache) return;
+  cache.set(key, value);
+  while (cache.size > MAX_PROJECT_META_CACHE_SIZE) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+    else break;
+  }
+}
+
 async function resolveProjectMetaForPath(startDir, cache) {
   if (!startDir || typeof startDir !== "string") return null;
   if (cache && cache.has(startDir)) return cache.get(startDir);
 
   if (startDir.includes(CLAUDE_MEM_OBSERVER_PATH_SEGMENT)) {
     const meta = { projectRef: CLAUDE_MEM_OBSERVER_PROJECT_REF, repoRoot: startDir };
-    if (cache) cache.set(startDir, meta);
+    if (cache) setBoundedProjectMeta(cache, startDir, meta);
     return meta;
   }
 
@@ -4674,7 +4711,7 @@ async function resolveProjectMetaForPath(startDir, cache) {
   while (current) {
     if (cache && cache.has(current)) {
       const cached = cache.get(current);
-      for (const entry of visited) cache.set(entry, cached);
+      for (const entry of visited) setBoundedProjectMeta(cache, entry, cached);
       return cached;
     }
     visited.push(current);
@@ -4693,7 +4730,7 @@ async function resolveProjectMetaForPath(startDir, cache) {
         configSize: configStat && Number.isFinite(configStat.size) ? configStat.size : null,
       };
       if (cache) {
-        for (const entry of visited) cache.set(entry, meta);
+        for (const entry of visited) setBoundedProjectMeta(cache, entry, meta);
       }
       return meta;
     }
@@ -4705,7 +4742,7 @@ async function resolveProjectMetaForPath(startDir, cache) {
   }
 
   if (cache) {
-    for (const entry of visited) cache.set(entry, null);
+    for (const entry of visited) setBoundedProjectMeta(cache, entry, null);
   }
   return null;
 }
@@ -5371,7 +5408,9 @@ function coerceEpochMs(v) {
 }
 
 async function safeReadDir(dir) {
+  if (!dir || typeof dir !== "string") return [];
   try {
+    if (!fssync.existsSync(dir)) return [];
     return await fs.readdir(dir, { withFileTypes: true });
   } catch (_e) {
     return [];
@@ -22808,6 +22847,9 @@ async function parseAntigravityIncremental({
     projectState.updatedAt = new Date().toISOString();
     cursors.projectHourly = projectState;
   }
+
+  touchedBuckets.clear();
+  projectTouchedBuckets?.clear();
 
   return { filesProcessed, eventsAggregated, bucketsQueued, projectBucketsQueued };
 }

@@ -56,19 +56,12 @@ test("local usage endpoints reuse one parsed queue until the file changes", asyn
   await fs.promises.writeFile(queuePath, queueContents);
   const handler = createLocalApiHandler({ queuePath });
 
-  const originalOpen = fs.promises.open;
+  const originalReadSync = fs.readSync;
   let queueBytes = 0;
-  fs.promises.open = async function countedOpen(filePath, ...args) {
-    const file = await originalOpen.call(this, filePath, ...args);
-    if (path.resolve(String(filePath)) === path.resolve(queuePath)) {
-      const read = file.read.bind(file);
-      file.read = async (...readArgs) => {
-        const result = await read(...readArgs);
-        queueBytes += result.bytesRead;
-        return result;
-      };
-    }
-    return file;
+  fs.readSync = function countedReadSync(fd, buffer, offset, length, position) {
+    const bytesRead = originalReadSync.call(fs, fd, buffer, offset, length, position);
+    queueBytes += bytesRead;
+    return bytesRead;
   };
 
   try {
@@ -84,21 +77,20 @@ test("local usage endpoints reuse one parsed queue until the file changes", asyn
     assert.equal(daily.data[0].total_tokens, 100);
     const coldReadBytes = queueBytes;
     await callEndpoint(handler, "/functions/tokentracker-usage-summary?tz=UTC");
-    const validationBytes = queueBytes - coldReadBytes;
-    assert.equal(validationBytes, Buffer.byteLength(queueContents),
-      "unchanged snapshots validate every byte before reusing parsed rows");
+    assert.equal(queueBytes, coldReadBytes, "unchanged snapshots do not reread queue bytes");
 
-    // Appending invalidates the signature. Verify the old prefix and then
-    // parse the new tail without parsing the old rows again.
-    await fs.promises.appendFile(queuePath, `${JSON.stringify(queueRow(250))}\n`);
+    // Appending invalidates the signature.
+    // The refresh reads just the new tail instead of the whole file.
+    const appendedLine = `${JSON.stringify(queueRow(250))}\n`;
+    await fs.promises.appendFile(queuePath, appendedLine);
     const refreshed = await callEndpoint(
       handler,
       "/functions/tokentracker-usage-summary?from=2026-07-17&to=2026-07-17&tz=UTC",
     );
     assert.equal(refreshed.totals.total_tokens, 250);
-    assert.ok(queueBytes > coldReadBytes, "append validates the prefix and reads the new tail");
+    assert.equal(queueBytes - coldReadBytes, Buffer.byteLength(appendedLine), "append reads only the new tail");
   } finally {
-    fs.promises.open = originalOpen;
+    fs.readSync = originalReadSync;
     await fs.promises.rm(tmp, { recursive: true, force: true });
   }
 });
@@ -250,4 +242,44 @@ test("a pricing refresh during cooperative aggregation cannot publish mixed revi
   const result = await callEndpoint(handler, "/functions/tokentracker-usage-summary?from=2000-01-01&to=2099-12-31&tz=UTC");
   await refresh;
   assert.equal(Number(result.totals.total_cost_usd), 4_000);
+});
+
+test("incremental queue reader retains incomplete trailing bytes and parses once complete", async () => {
+  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tt-queue-split-"));
+  try {
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const firstLine = JSON.stringify(queueRow(100)) + "\n";
+    await fs.promises.writeFile(queuePath, firstLine);
+    const handler = createLocalApiHandler({ queuePath });
+
+    const initial = await callEndpoint(
+      handler,
+      "/functions/tokentracker-usage-summary?from=2026-07-17&to=2026-07-17&tz=UTC"
+    );
+    assert.equal(initial.totals.total_tokens, 100);
+
+    // Append incomplete JSONL fragment (no trailing newline)
+    const secondRow = queueRow(300, { model: "gpt-5.5-split" });
+    const fullSecondLine = JSON.stringify(secondRow) + "\n";
+    const part1 = fullSecondLine.slice(0, 25);
+    const part2 = fullSecondLine.slice(25);
+
+    await fs.promises.appendFile(queuePath, part1);
+    const mid = await callEndpoint(
+      handler,
+      "/functions/tokentracker-usage-summary?from=2026-07-17&to=2026-07-17&tz=UTC"
+    );
+    // Incomplete fragment not parsed yet as committed row
+    assert.equal(mid.totals.total_tokens, 100);
+
+    // Complete the line
+    await fs.promises.appendFile(queuePath, part2);
+    const completed = await callEndpoint(
+      handler,
+      "/functions/tokentracker-usage-summary?from=2026-07-17&to=2026-07-17&tz=UTC"
+    );
+    assert.equal(completed.totals.total_tokens, 400);
+  } finally {
+    await fs.promises.rm(tmp, { recursive: true, force: true });
+  }
 });
