@@ -156,6 +156,10 @@ test("readDoubaoCookieSession picks the most recently used signed-in profile", a
     const session = await readDoubaoCookieSession({
       home,
       env: {},
+      // The fixtures below build the macOS data-dir layout; pin the platform so
+      // this unit test is deterministic on Linux/Windows runners too. Path
+      // resolution itself is covered by the resolveDoubaoDataDir test above.
+      platform: "darwin",
       keychainReader: async (args) => {
         capturedArgs = args;
         return secret;
@@ -188,6 +192,7 @@ test("readDoubaoCookieSession distinguishes no-session, keychain and decrypt fai
     const noSession = await readDoubaoCookieSession({
       home: noSessionHome,
       env: {},
+      platform: "darwin",
       keychainReader: async () => "secret",
       sqliteReader: { readJsonRowsAsync: async () => [{ name: "ttwid", encrypted_value_hex: "aa", last_access_utc: 1 }] },
     });
@@ -197,6 +202,7 @@ test("readDoubaoCookieSession distinguishes no-session, keychain and decrypt fai
     const keychainDenied = await readDoubaoCookieSession({
       home: keychainHome,
       env: {},
+      platform: "darwin",
       keychainReader: async () => null,
       sqliteReader: {
         ...emptyRows,
@@ -210,6 +216,7 @@ test("readDoubaoCookieSession distinguishes no-session, keychain and decrypt fai
     const decryptFailed = await readDoubaoCookieSession({
       home: decryptHome,
       env: {},
+      platform: "darwin",
       keychainReader: async () => "wrong-keychain-secret",
       sqliteReader: {
         readJsonRowsAsync: async () => [

@@ -212,6 +212,9 @@ test("fetchDoubaoLimits reports sign-in, keychain and decrypt failures distinctl
     const noSession = await fetchDoubaoLimits({
       home,
       env: {},
+      // makeDoubaoHome() builds the macOS data-dir layout; pin the platform so
+      // these tests are deterministic on Linux/Windows runners too.
+      platform: "darwin",
       sqliteReader: { readJsonRowsAsync: async () => [{ name: "ttwid", encrypted_value_hex: "aa", last_access_utc: 1 }] },
       keychainReader: async () => KW_SECRET,
     });
@@ -221,6 +224,7 @@ test("fetchDoubaoLimits reports sign-in, keychain and decrypt failures distinctl
     const noKeychain = await fetchDoubaoLimits({
       home,
       env: {},
+      platform: "darwin",
       sqliteReader: sessionSqliteReader(),
       keychainReader: async () => null,
     });
@@ -229,6 +233,7 @@ test("fetchDoubaoLimits reports sign-in, keychain and decrypt failures distinctl
     const decryptFailed = await fetchDoubaoLimits({
       home,
       env: {},
+      platform: "darwin",
       sqliteReader: sessionSqliteReader(),
       keychainReader: async () => "unrelated-secret",
     });
@@ -266,6 +271,7 @@ test("fetchDoubaoLimits returns quota windows from the live endpoints and caches
     const result = await fetchDoubaoLimits({
       home,
       env: {},
+      platform: "darwin",
       fetchImpl,
       sqliteReader: sessionSqliteReader(),
       keychainReader: async () => KW_SECRET,
@@ -308,6 +314,7 @@ test("fetchDoubaoLimits falls back to the disk cache when the API fails", async 
     const result = await fetchDoubaoLimits({
       home,
       env: {},
+      platform: "darwin",
       fetchImpl: async () => jsonResponse({ code: 0, data: {} }, 500),
       sqliteReader: sessionSqliteReader(),
       keychainReader: async () => KW_SECRET,
@@ -326,6 +333,7 @@ test("fetchDoubaoLimits surfaces auth expiry from the API without serving cache"
     const result = await fetchDoubaoLimits({
       home,
       env: {},
+      platform: "darwin",
       fetchImpl: async () => jsonResponse({ code: DOUBAO_AUTH_EXPIRED_CODE, msg: "登录已过期" }),
       sqliteReader: sessionSqliteReader(),
       keychainReader: async () => KW_SECRET,
@@ -344,6 +352,7 @@ test("fetchDoubaoLimits prefers DOUBAO_COOKIE over local decryption", async () =
     const result = await fetchDoubaoLimits({
       home,
       env: { DOUBAO_COOKIE: "sessionid=manual" },
+      platform: "darwin",
       fetchImpl: async (url, options) => {
         sawCookie = options.headers.Cookie;
         return jsonResponse({ code: 0, data: { window_limit_groups: [] } });
