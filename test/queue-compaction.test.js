@@ -117,6 +117,42 @@ test("compactQueueFile skips compaction when upload state offset is partial", ()
   }
 });
 
+test("compactQueueFile rewrites upload state offset when fully caught up", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-compact-full-offset-"));
+  const queuePath = path.join(tmpDir, "queue.jsonl");
+  const statePath = path.join(tmpDir, "queue.state.json");
+
+  try {
+    const lines = [];
+    for (let round = 1; round <= 3; round++) {
+      for (let i = 0; i < 50; i++) {
+        lines.push(JSON.stringify({
+          source: "codex",
+          model: `model-${i}`,
+          hour_start: "2026-07-17T00:00:00.000Z",
+          total_tokens: round * 100,
+        }));
+      }
+    }
+    const content = lines.join("\n") + "\n";
+    fs.writeFileSync(queuePath, content, "utf8");
+    const originalSize = Buffer.byteLength(content, "utf8");
+    fs.writeFileSync(statePath, JSON.stringify({ offset: originalSize }), "utf8");
+
+    const compacted = compactQueueFile(queuePath, false, statePath);
+    assert.equal(compacted, true, "should compact queue when redundant rows exist and offset is caught up");
+
+    const compactedContent = fs.readFileSync(queuePath, "utf8");
+    const compactedSize = Buffer.byteLength(compactedContent, "utf8");
+    assert.ok(compactedSize < originalSize, "compacted size should be smaller than original");
+
+    const savedState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    assert.equal(savedState.offset, compactedSize, "saved state offset should equal compacted file size");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("compactQueueFile selects strictly newer snapshot_verified_at for account_session_state and keeps first on ties", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-compact-session-state-"));
   const queuePath = path.join(tmpDir, "queue.jsonl");
