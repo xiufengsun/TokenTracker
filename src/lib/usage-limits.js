@@ -33,7 +33,7 @@ const { fetchOpencodeGoLimits } = require("./opencode-go-limits");
 const { fetchCommandcodeLimits } = require("./commandcode-limits");
 const { fetchDevinLimits } = require("./devin-limits");
 const { fetchQoderLimits, fetchQoderCnLimits } = require("./qoder-limits");
-const { fetchDoubaoLimits } = require("./doubao-limits");
+const { fetchDoubaoLimits, readDoubaoLimitsFallback } = require("./doubao-limits");
 const { fetchArkCodingPlanLimits } = require("./ark-coding-plan-limits");
 const { fetchArkAgentPlanLimits } = require("./ark-agent-plan-limits");
 const { fetchWorkbuddyLimits, fetchWorkbuddyAiLimits } = require("./workbuddy-limits");
@@ -4482,7 +4482,13 @@ async function fetchUsageLimitsUncached({
       fetchDoubaoLimits({ home, env, platform, fetchImpl: providerFetch, securityRunner, nowMs }),
       "Doubao",
       providerTimeoutMs,
-    ).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
+    ).catch(async (reason) => {
+      // The timeout race discards fetchDoubaoLimits' own cache fallback, so
+      // re-serve it here (readDoubaoLimitsFallback binds it to the active
+      // session); otherwise the error result keeps the section actionable.
+      const cached = await readDoubaoLimitsFallback({ home, env, platform, securityRunner, nowMs });
+      return cached || { configured: true, error: reason?.message || "Unknown error" };
+    }),
     // Public status-page probe (fail-soft, own 5-min cache in provider-status.js).
     // Only probed for configured accounts — without a token the Claude section
     // never renders, so the reading would have nowhere to go.
