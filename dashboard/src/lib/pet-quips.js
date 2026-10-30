@@ -324,6 +324,7 @@ const PET_LIMIT_PROVIDER_COPY_NAME_KEYS = {
   devin: "limits.provider.devin",
   workbuddy: "limits.provider.workbuddy",
   workbuddyAi: "limits.provider.workbuddy_ai",
+  doubao: "limits.provider.doubao",
 };
 
 // Unix timestamps are normally seconds; values above this order of magnitude
@@ -472,6 +473,11 @@ function collectPetLimitRows(limits) {
   addGeneric("workbuddyAi", limits.workbuddyAi, [
     [copy("limits.label.workbuddy_plan"), limits.workbuddyAi?.primary_window],
     [copy("limits.label.workbuddy_addon"), limits.workbuddyAi?.secondary_window],
+  ]);
+  addGeneric("doubao", limits.doubao, [
+    [copy("limits.label.doubao_5h"), limits.doubao?.primary_window],
+    [copy("limits.label.doubao_7d"), limits.doubao?.secondary_window],
+    [copy("limits.label.doubao_monthly"), limits.doubao?.tertiary_window],
   ]);
 
   rows.sort((a, b) => {
