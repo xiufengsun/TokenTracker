@@ -18,6 +18,7 @@ const {
   normalizeDoubaoLimits,
   postDoubaoEndpoint,
   readDoubaoLimitsCache,
+  readDoubaoLimitsFallback,
   writeDoubaoLimitsCache,
   fetchDoubaoLimits,
 } = require("../src/lib/doubao-limits");
@@ -300,17 +301,32 @@ test("fetchDoubaoLimits falls back to the disk cache when the API fails", async 
   const home = makeDoubaoHome();
   const nowMs = Date.parse("2030-07-29T00:00:00.000Z");
   try {
-    writeDoubaoLimitsCache(
-      {
-        configured: true,
-        error: null,
-        plan_label: "个人订阅",
-        primary_window: { used_percent: 30, reset_at: "2030-07-29T05:00:00.000Z", used_credits: 30, limit_credits: 100 },
-        secondary_window: null,
-        tertiary_window: null,
-      },
-      { home, nowMs },
-    );
+    const summaryFetch = async (url) => {
+      if (url === DOUBAO_QUOTA_SUMMARY_URL) {
+        return jsonResponse({ code: 0, data: { current_subscription: { display: { product_name: "个人订阅" } }, window_limit_section: [] } });
+      }
+      return jsonResponse({
+        code: 0,
+        data: {
+          total_used_percent: 30,
+          window_limit_groups: [
+            { window_type: "5h", used_quota: 30, total_quota: 100, reset_time: Date.parse("2030-07-29T05:00:00.000Z") },
+          ],
+        },
+      });
+    };
+    // A successful refresh writes the cache under the active session before
+    // the failing call gets to use it as its fallback.
+    const first = await fetchDoubaoLimits({
+      home,
+      env: {},
+      platform: "darwin",
+      fetchImpl: summaryFetch,
+      sqliteReader: sessionSqliteReader(),
+      keychainReader: async () => KW_SECRET,
+      nowMs,
+    });
+    assert.equal(first.error, null);
     const result = await fetchDoubaoLimits({
       home,
       env: {},
@@ -322,6 +338,147 @@ test("fetchDoubaoLimits falls back to the disk cache when the API fails", async 
     });
     assert.equal(result.stale, true);
     assert.equal(result.primary_window.used_percent, 30);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("fetchDoubaoLimits binds the disk cache to the active account", async () => {
+  const home = makeDoubaoHome();
+  const nowMs = Date.parse("2030-07-29T00:00:00.000Z");
+  try {
+    const summaryFetch = async (url) => {
+      if (url === DOUBAO_QUOTA_SUMMARY_URL) {
+        return jsonResponse({ code: 0, data: { current_subscription: { display: { product_name: "个人订阅" } }, window_limit_section: [] } });
+      }
+      return jsonResponse({
+        code: 0,
+        data: {
+          total_used_percent: 30,
+          window_limit_groups: [
+            { window_type: "5h", used_quota: 30, total_quota: 100, reset_time: Date.parse("2030-07-29T05:00:00.000Z") },
+          ],
+        },
+      });
+    };
+    await fetchDoubaoLimits({
+      home,
+      env: {},
+      platform: "darwin",
+      fetchImpl: summaryFetch,
+      sqliteReader: sessionSqliteReader(),
+      keychainReader: async () => KW_SECRET,
+      nowMs,
+    });
+    const rawCache = JSON.parse(fs.readFileSync(path.join(home, ".tokentracker", "tracker", DOUBAO_LIMITS_CACHE_FILE), "utf8")).doubao;
+    assert.match(rawCache.cookie_fingerprint, /^[0-9a-f]{16}$/);
+    // The stored fingerprint is not the credential itself.
+    assert.ok(!JSON.stringify(rawCache).includes("session-value"));
+
+    // A different account's session must never see the previous windows.
+    const other = await fetchDoubaoLimits({
+      home,
+      env: { DOUBAO_COOKIE: "sessionid=other-account" },
+      platform: "darwin",
+      fetchImpl: async () => jsonResponse({ code: 0, data: {} }, 500),
+      nowMs,
+    });
+    assert.equal(other.stale, undefined);
+    assert.equal(other.primary_window, undefined);
+    assert.match(other.error, /quota fetch failed|HTTP 500/);
+
+    // The same account still gets its fallback, and an unbound read (legacy
+    // shape) keeps working for callers without a session.
+    const same = await fetchDoubaoLimits({
+      home,
+      env: { DOUBAO_COOKIE: "sessionid=other-account" },
+      platform: "darwin",
+      fetchImpl: summaryFetch,
+      nowMs,
+    });
+    assert.equal(same.error, null);
+    const legacyRead = readDoubaoLimitsCache({ home, nowMs });
+    assert.equal(legacyRead.source, "disk-cache");
+    const wrongFingerprint = readDoubaoLimitsCache({ home, nowMs, fingerprint: "0".repeat(16) });
+    assert.equal(wrongFingerprint, null);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("fetchDoubaoLimits honors DOUBAO_COOKIE without any local Doubao data directory", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-doubao-cookie-only-"));
+  const nowMs = Date.parse("2030-07-29T00:00:00.000Z");
+  try {
+    let sawCookie = null;
+    const result = await fetchDoubaoLimits({
+      home,
+      env: { DOUBAO_COOKIE: "sessionid=manual-cookieless" },
+      platform: "darwin",
+      fetchImpl: async (url, options) => {
+        sawCookie = options.headers.Cookie;
+        if (url === DOUBAO_QUOTA_SUMMARY_URL) {
+          return jsonResponse({ code: 0, data: { current_subscription: { display: { product_name: "个人订阅" } }, window_limit_section: [] } });
+        }
+        return jsonResponse({
+          code: 0,
+          data: {
+            total_used_percent: 40,
+            window_limit_groups: [
+              { window_type: "5h", used_quota: 40, total_quota: 100, reset_time: Date.parse("2030-07-29T05:00:00.000Z") },
+            ],
+          },
+        });
+      },
+      sqliteReader: { readJsonRowsAsync: async () => { throw new Error("cookie store must not be read when DOUBAO_COOKIE is set"); } },
+      keychainReader: async () => { throw new Error("keychain must not be read when DOUBAO_COOKIE is set"); },
+      nowMs,
+    });
+    assert.equal(sawCookie, "sessionid=manual-cookieless");
+    assert.equal(result.configured, true);
+    assert.equal(result.error, null);
+    assert.equal(result.cookie_source, "DOUBAO_COOKIE");
+    assert.equal(result.primary_window.used_percent, 40);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("readDoubaoLimitsFallback serves only the active session's cache", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-doubao-fallback-"));
+  const nowMs = Date.parse("2030-07-29T00:00:00.000Z");
+  try {
+    const manualFetch = (percent) => async (url) => {
+      if (url === DOUBAO_QUOTA_SUMMARY_URL) {
+        return jsonResponse({ code: 0, data: { current_subscription: { display: { product_name: "个人订阅" } }, window_limit_section: [] } });
+      }
+      return jsonResponse({
+        code: 0,
+        data: {
+          total_used_percent: percent,
+          window_limit_groups: [
+            { window_type: "5h", used_quota: percent, total_quota: 100, reset_time: Date.parse("2030-07-29T05:00:00.000Z") },
+          ],
+        },
+      });
+    };
+    await fetchDoubaoLimits({
+      home,
+      env: { DOUBAO_COOKIE: "sessionid=fallback-a" },
+      platform: "darwin",
+      fetchImpl: manualFetch(50),
+      nowMs,
+    });
+
+    // Timeout-race callers re-derive the session; a matching one gets the
+    // still-valid windows, another account gets nothing.
+    const matched = await readDoubaoLimitsFallback({ home, env: { DOUBAO_COOKIE: "sessionid=fallback-a" }, platform: "darwin", nowMs });
+    assert.equal(matched.stale, true);
+    assert.equal(matched.primary_window.used_percent, 50);
+    const other = await readDoubaoLimitsFallback({ home, env: { DOUBAO_COOKIE: "sessionid=fallback-b" }, platform: "darwin", nowMs });
+    assert.equal(other, null);
+    const cookieless = await readDoubaoLimitsFallback({ home, env: {}, platform: "darwin", nowMs });
+    assert.equal(cookieless, null);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

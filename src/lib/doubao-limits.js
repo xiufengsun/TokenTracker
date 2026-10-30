@@ -20,6 +20,7 @@
 // recon only), so parsing is deliberately lenient: unrecognized shapes
 // degrade to null windows instead of invented percentages.
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -239,6 +240,18 @@ function doubaoLimitsCachePath({ home = os.homedir() } = {}) {
   return path.join(home, ".tokentracker", "tracker", DOUBAO_LIMITS_CACHE_FILE);
 }
 
+// The disk cache outlives API calls, so it must never serve one account's
+// windows to another. A truncated SHA-256 of the active cookie header travels
+// with every write and gates every read — the cookie itself never touches the
+// disk, and the hash of a high-entropy session id is not reversible.
+function doubaoCookieFingerprint(cookieHeader) {
+  return crypto
+    .createHash("sha256")
+    .update(`doubao-limits-cache:v1:${cookieHeader}`)
+    .digest("hex")
+    .slice(0, 16);
+}
+
 function doubaoCachedWindow(window, { cachedAtMs, nowMs } = {}) {
   if (!window || typeof window !== "object") return null;
   const resetAtMs = Date.parse(window.reset_at || "");
@@ -246,11 +259,14 @@ function doubaoCachedWindow(window, { cachedAtMs, nowMs } = {}) {
   return nowMs - cachedAtMs <= DOUBAO_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS ? window : null;
 }
 
-function readDoubaoLimitsCache({ home = os.homedir(), nowMs = Date.now() } = {}) {
+function readDoubaoLimitsCache({ home = os.homedir(), nowMs = Date.now(), fingerprint = null } = {}) {
   try {
     const raw = JSON.parse(fs.readFileSync(doubaoLimitsCachePath({ home }), "utf8"))?.doubao;
     const cachedAtMs = Date.parse(raw?.cached_at || "");
     if (!Number.isFinite(cachedAtMs) || cachedAtMs > nowMs + 60_000) return null;
+    // Callers that know the active session bind the fallback to it: entries
+    // written for another account (or predating the fingerprint) never serve.
+    if (fingerprint && raw?.cookie_fingerprint !== fingerprint) return null;
     const primaryWindow = doubaoCachedWindow(raw.primary_window, { cachedAtMs, nowMs });
     const secondaryWindow = doubaoCachedWindow(raw.secondary_window, { cachedAtMs, nowMs });
     const tertiaryWindow = doubaoCachedWindow(raw.tertiary_window, { cachedAtMs, nowMs });
@@ -280,7 +296,7 @@ function readDoubaoLimitsCache({ home = os.homedir(), nowMs = Date.now() } = {})
 // Only successful reads with at least one observable window are cached —
 // cookie values never touch the disk, and a free account's empty windows must
 // not be resurrected as data.
-function writeDoubaoLimitsCache(limits, { home = os.homedir(), nowMs = Date.now() } = {}) {
+function writeDoubaoLimitsCache(limits, { home = os.homedir(), nowMs = Date.now(), fingerprint = null } = {}) {
   if (!limits?.configured || limits.error || (!limits.primary_window && !limits.secondary_window && !limits.tertiary_window)) return;
   const cachePath = doubaoLimitsCachePath({ home });
   const payload = {
@@ -289,6 +305,7 @@ function writeDoubaoLimitsCache(limits, { home = os.homedir(), nowMs = Date.now(
       primary_window: limits.primary_window || null,
       secondary_window: limits.secondary_window || null,
       ...(limits.tertiary_window ? { tertiary_window: limits.tertiary_window } : {}),
+      ...(fingerprint ? { cookie_fingerprint: fingerprint } : {}),
       cached_at: new Date(nowMs).toISOString(),
     },
   };
@@ -312,8 +329,10 @@ async function fetchDoubaoLimits({
 } = {}) {
   // Gate on Doubao's data directory before anything else (and before any
   // keychain prompt): without it Doubao has never run on this machine and the
-  // panel section must stay hidden.
-  if (!fs.existsSync(resolveDoubaoDataDir({ home, env, platform }))) {
+  // panel section must stay hidden. A manual DOUBAO_COOKIE skips the gate —
+  // it works without any local Doubao installation (see docs/doubao-limits.md).
+  const hasManualCookie = typeof env?.DOUBAO_COOKIE === "string" && env.DOUBAO_COOKIE.trim() !== "";
+  if (!hasManualCookie && !fs.existsSync(resolveDoubaoDataDir({ home, env, platform }))) {
     return { configured: false };
   }
 
@@ -335,6 +354,7 @@ async function fetchDoubaoLimits({
     };
   }
 
+  const fingerprint = doubaoCookieFingerprint(session.cookieHeader);
   try {
     const summaryData = await postDoubaoEndpoint(DOUBAO_QUOTA_SUMMARY_URL, session.cookieHeader, fetchImpl);
     const usageData = await postDoubaoEndpoint(DOUBAO_USAGE_DETAIL_URL, session.cookieHeader, fetchImpl);
@@ -345,15 +365,37 @@ async function fetchDoubaoLimits({
       source: "provider-api",
       cookie_source: session.source,
     };
-    writeDoubaoLimitsCache(result, { home, nowMs });
+    writeDoubaoLimitsCache(result, { home, nowMs, fingerprint });
     return result;
   } catch (error) {
     if (error?.code === "AUTH_EXPIRED") {
       return { configured: true, error: error.message, auth_action_required: "reauth" };
     }
-    const cached = readDoubaoLimitsCache({ home, nowMs });
+    const cached = readDoubaoLimitsCache({ home, nowMs, fingerprint });
     if (cached) return cached;
     return { configured: true, error: error?.message || "Doubao quota fetch failed." };
+  }
+}
+
+// Cache fallback for callers that lost the aggregate provider timeout race:
+// the still-running fetchDoubaoLimits can no longer hand over its own cache
+// fallback, so re-derive the session here and only serve the cache it belongs
+// to. Null when anything along the way fails — the caller keeps its error.
+async function readDoubaoLimitsFallback({
+  home = os.homedir(),
+  env = process.env,
+  platform = process.platform,
+  securityRunner,
+  sqliteReader,
+  keychainReader,
+  nowMs = Date.now(),
+} = {}) {
+  try {
+    const session = await readDoubaoCookieSession({ home, env, platform, securityRunner, sqliteReader, keychainReader });
+    if (!session.ok) return null;
+    return readDoubaoLimitsCache({ home, nowMs, fingerprint: doubaoCookieFingerprint(session.cookieHeader) });
+  } catch (_error) {
+    return null;
   }
 }
 
@@ -370,6 +412,7 @@ module.exports = {
   normalizeDoubaoWindowGroups,
   postDoubaoEndpoint,
   readDoubaoLimitsCache,
+  readDoubaoLimitsFallback,
   writeDoubaoLimitsCache,
   fetchDoubaoLimits,
 };
