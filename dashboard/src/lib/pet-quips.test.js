@@ -140,6 +140,31 @@ describe("desktop pet limit dialogue", () => {
     }
   });
 
+  it("surfaces Doubao credit windows with localized labels", () => {
+    const prevLocale = getCopyLocale();
+    try {
+      setCopyLocale(ZH_CN_LOCALE);
+      const limits = {
+        doubao: {
+          configured: true,
+          error: null,
+          primary_window: { used_percent: 70, reset_at: "2099-01-01T00:00:00Z" },
+          secondary_window: { used_percent: 20, reset_at: "2099-01-02T00:00:00Z" },
+          tertiary_window: { used_percent: 5, reset_at: "2099-02-01T00:00:00Z" },
+        },
+      };
+
+      const readings = buildPetLimitSummaries(limits);
+      expect(readings.map(({ provider, window }) => `${provider} ${window}`)).toEqual([
+        "Doubao 5h",
+        "Doubao 7d",
+        "Doubao 每月",
+      ]);
+    } finally {
+      setCopyLocale(prevLocale);
+    }
+  });
+
   it("adds the limit line to the tap conversation without replacing token quips", () => {
     const pool = buildQuipPool("en", {
       tokens: 1200,
