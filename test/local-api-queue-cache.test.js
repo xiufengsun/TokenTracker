@@ -243,3 +243,43 @@ test("a pricing refresh during cooperative aggregation cannot publish mixed revi
   await refresh;
   assert.equal(Number(result.totals.total_cost_usd), 4_000);
 });
+
+test("incremental queue reader retains incomplete trailing bytes and parses once complete", async () => {
+  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tt-queue-split-"));
+  try {
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const firstLine = JSON.stringify(queueRow(100)) + "\n";
+    await fs.promises.writeFile(queuePath, firstLine);
+    const handler = createLocalApiHandler({ queuePath });
+
+    const initial = await callEndpoint(
+      handler,
+      "/functions/tokentracker-usage-summary?from=2026-07-17&to=2026-07-17&tz=UTC"
+    );
+    assert.equal(initial.totals.total_tokens, 100);
+
+    // Append incomplete JSONL fragment (no trailing newline)
+    const secondRow = queueRow(300, { model: "gpt-5.5-split" });
+    const fullSecondLine = JSON.stringify(secondRow) + "\n";
+    const part1 = fullSecondLine.slice(0, 25);
+    const part2 = fullSecondLine.slice(25);
+
+    await fs.promises.appendFile(queuePath, part1);
+    const mid = await callEndpoint(
+      handler,
+      "/functions/tokentracker-usage-summary?from=2026-07-17&to=2026-07-17&tz=UTC"
+    );
+    // Incomplete fragment not parsed yet as committed row
+    assert.equal(mid.totals.total_tokens, 100);
+
+    // Complete the line
+    await fs.promises.appendFile(queuePath, part2);
+    const completed = await callEndpoint(
+      handler,
+      "/functions/tokentracker-usage-summary?from=2026-07-17&to=2026-07-17&tz=UTC"
+    );
+    assert.equal(completed.totals.total_tokens, 400);
+  } finally {
+    await fs.promises.rm(tmp, { recursive: true, force: true });
+  }
+});

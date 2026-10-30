@@ -14,10 +14,8 @@ struct ServerLaunchConfig {
         guard let existing = existing?.trimmingCharacters(in: .whitespaces), !existing.isEmpty else {
             return extraNodeOption
         }
-        let parts = existing.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-        if parts.contains(where: { $0.hasPrefix("--max-old-space-size=") }) {
-            // Already has max-old-space-size, replace or keep
-            return parts.map { $0.hasPrefix("--max-old-space-size=") ? extraNodeOption : $0 }.joined(separator: " ")
+        if existing.contains("--max-old-space-size=") {
+            return existing
         }
         return "\(existing) \(extraNodeOption)"
     }

@@ -167,6 +167,16 @@ test("isSqliteExperimentalWarning is narrow: matches only SQLite ExperimentalWar
 });
 
 test("getDatabaseSync warning suppression is non-destructive and idempotent", (t, done) => {
+  let hasNodeSqlite = false;
+  try {
+    hasNodeSqlite = typeof require("node:sqlite")?.DatabaseSync === "function";
+  } catch {}
+  if (!hasNodeSqlite) {
+    t.skip("node:sqlite unavailable");
+    done();
+    return;
+  }
+
   const origEmitWarning = process.emitWarning;
 
   // Verify setup idempotency
