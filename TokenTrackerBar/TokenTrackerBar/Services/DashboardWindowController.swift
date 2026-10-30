@@ -508,7 +508,6 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         loadFailureOverlay = nil
         loadFailureHostingController = nil
         pendingDashboardURL = nil
-        self.qaDataStore = nil
         self.webView = nil
         self.window = nil
     }

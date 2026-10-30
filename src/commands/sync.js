@@ -3950,7 +3950,7 @@ function recordCodexColdScanAudit(
 }
 
 function compactQueueFile(filePath, isProjectQueue = false, queueStatePath = null) {
-  if (!filePath || !fssync.existsSync(filePath)) return false;
+  if (!filePath) return false;
   let raw;
   try {
     raw = fssync.readFileSync(filePath, "utf8");
@@ -3958,6 +3958,21 @@ function compactQueueFile(filePath, isProjectQueue = false, queueStatePath = nul
     return false;
   }
   if (!raw || !raw.trim()) return false;
+
+  const originalSize = Buffer.byteLength(raw, "utf8");
+  let state = null;
+  if (queueStatePath) {
+    try {
+      const parsed = JSON.parse(fssync.readFileSync(queueStatePath, "utf8"));
+      if (!parsed || typeof parsed !== "object") return false;
+      state = parsed;
+    } catch (err) {
+      if (!err || err.code !== "ENOENT") return false;
+    }
+    if (state && Number.isFinite(state.offset) && state.offset > 0 && state.offset < originalSize) {
+      return false;
+    }
+  }
 
   const lines = raw.split("\n");
   let lineCount = 0;
@@ -3974,7 +3989,15 @@ function compactQueueFile(filePath, isProjectQueue = false, queueStatePath = nul
       if (isProjectQueue) {
         key = `${row.project_key || ""}|${row.source || ""}|${row.hour_start || ""}`;
       } else if (row.kind === "account_session_state") {
-        key = `account_session_state|${row.source || ""}|${row.session_id || ""}`;
+        const ssSource = typeof row.source === "string" ? row.source.trim().toLowerCase() : "";
+        const ssId = typeof row.session_id === "string" ? row.session_id.trim() : "";
+        key = `account_session_state|${ssSource}|${ssId}`;
+        const verifiedMs = sessionSnapshotMs(row);
+        const prior = latestByKey.get(key);
+        if (!prior || (verifiedMs !== null && (prior.verifiedMs === null || verifiedMs > prior.verifiedMs))) {
+          latestByKey.set(key, { line: trimmed, order: i, verifiedMs });
+        }
+        continue;
       } else if (row.kind === "account_sync_watermark") {
         key = `account_sync_watermark|${row.source || ""}`;
       } else {
@@ -3987,7 +4010,9 @@ function compactQueueFile(filePath, isProjectQueue = false, queueStatePath = nul
   }
 
   const uniqueCount = latestByKey.size;
-  const shouldCompact = lineCount > 5000 || (lineCount > 100 && lineCount > 2 * uniqueCount);
+  const shouldCompact =
+    lineCount > uniqueCount &&
+    (lineCount > 5000 || (lineCount > 100 && lineCount > 2 * uniqueCount));
   if (!shouldCompact) return false;
 
   const compacted = Array.from(latestByKey.values())
@@ -4000,24 +4025,19 @@ function compactQueueFile(filePath, isProjectQueue = false, queueStatePath = nul
     fssync.writeFileSync(tmpPath, compacted, "utf8");
     fssync.renameSync(tmpPath, filePath);
 
-    if (queueStatePath && fssync.existsSync(queueStatePath)) {
+    if (queueStatePath && state && Number.isFinite(state.offset) && state.offset >= originalSize) {
       try {
-        const state = JSON.parse(fssync.readFileSync(queueStatePath, "utf8"));
-        if (state && typeof state === "object") {
-          const originalSize = Buffer.byteLength(raw, "utf8");
-          const newSize = Buffer.byteLength(compacted, "utf8");
-          if (state.offset >= originalSize) {
-            state.offset = newSize;
-            state.updatedAt = new Date().toISOString();
-            fssync.writeFileSync(queueStatePath, JSON.stringify(state, null, 2) + "\n", "utf8");
-          }
-        }
+        state.offset = Buffer.byteLength(compacted, "utf8");
+        state.updatedAt = new Date().toISOString();
+        const stateTmpPath = `${queueStatePath}.tmp.${process.pid}`;
+        fssync.writeFileSync(stateTmpPath, JSON.stringify(state, null, 2) + "\n", "utf8");
+        fssync.renameSync(stateTmpPath, queueStatePath);
       } catch (_e) {}
     }
     return true;
   } catch (_err) {
     try {
-      if (fssync.existsSync(tmpPath)) fssync.unlinkSync(tmpPath);
+      fssync.unlinkSync(tmpPath);
     } catch {}
     return false;
   }

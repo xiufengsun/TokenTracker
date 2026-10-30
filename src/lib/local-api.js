@@ -153,9 +153,9 @@ function createIncrementalQueueReader({ parseRow, label }) {
 
   return async function readQueue(filePath) {
     if (!filePath || typeof filePath !== "string") return [];
-    let stat;
+    let fd = null;
     try {
-      stat = fs.statSync(filePath);
+      fd = fs.openSync(filePath, "r");
     } catch (err) {
       if (err.code === "ENOENT") {
         cache.delete(filePath);
@@ -164,82 +164,106 @@ function createIncrementalQueueReader({ parseRow, label }) {
       throw err;
     }
 
-    const mtimeMs = stat.mtimeMs;
-    const size = stat.size;
-    const inode = `${stat.dev}:${stat.ino}`;
+    try {
+      const stat = fs.fstatSync(fd);
+      const mtimeMs = stat.mtimeMs;
+      const size = stat.size;
+      const inode = `${stat.dev}:${stat.ino}`;
 
-    const cached = cache.get(filePath);
+      const cached = cache.get(filePath);
 
-    if (cached && cached.inode === inode && cached.size === size && cached.mtimeMs === mtimeMs) {
-      return cached.cachedRows;
-    }
+      if (cached && cached.inode === inode && cached.size === size && cached.mtimeMs === mtimeMs) {
+        return cached.cachedRows;
+      }
 
-    if (cached && cached.inode === inode && size > cached.size) {
-      let fd = null;
-      try {
-        const appendedBytes = size - cached.size;
-        const buffer = Buffer.allocUnsafe(appendedBytes);
-        fd = fs.openSync(filePath, "r");
-        let bytesRead = 0;
-        while (bytesRead < appendedBytes) {
-          const n = fs.readSync(fd, buffer, bytesRead, appendedBytes - bytesRead, cached.size + bytesRead);
-          if (n === 0) break;
-          bytesRead += n;
-        }
-
-        const lines = buffer.subarray(0, bytesRead).toString("utf8").split("\n");
-        const bucketMap = cached.bucketMap;
-        for (let i = 0; i < lines.length; i++) {
-          const trimmed = lines[i].trim();
-          if (!trimmed) continue;
-          try {
-            const entry = parseRow(JSON.parse(trimmed));
-            if (entry && entry.key) {
-              bucketMap.set(entry.key, entry.row);
-            }
-          } catch {
-            // skip malformed lines
+      if (cached && cached.inode === inode && size > cached.size) {
+        try {
+          const appendedBytes = size - cached.size;
+          const buffer = Buffer.allocUnsafe(appendedBytes);
+          let bytesRead = 0;
+          while (bytesRead < appendedBytes) {
+            const n = fs.readSync(fd, buffer, bytesRead, appendedBytes - bytesRead, cached.size + bytesRead);
+            if (n === 0) break;
+            bytesRead += n;
           }
-        }
 
-        const cachedRows = Array.from(bucketMap.values());
-        cached.mtimeMs = mtimeMs;
-        cached.size = size;
-        cached.cachedRows = cachedRows;
-        return cachedRows;
-      } catch (_err) {
-        // Fallback to full reload on error
-      } finally {
-        if (fd !== null) {
-          try { fs.closeSync(fd); } catch {}
+          const chunkStr = buffer.subarray(0, bytesRead).toString("utf8");
+          const combined = (cached.trailingRemainder || "") + chunkStr;
+          const lastNewline = combined.lastIndexOf("\n");
+          let complete = "";
+          if (lastNewline !== -1) {
+            complete = combined.slice(0, lastNewline);
+            cached.trailingRemainder = combined.slice(lastNewline + 1);
+          } else {
+            cached.trailingRemainder = combined;
+          }
+
+          if (complete) {
+            const lines = complete.split("\n");
+            const bucketMap = cached.bucketMap;
+            for (let i = 0; i < lines.length; i++) {
+              const trimmed = lines[i].trim();
+              if (!trimmed) continue;
+              try {
+                const entry = parseRow(JSON.parse(trimmed));
+                if (entry && entry.key) {
+                  bucketMap.set(entry.key, entry.row);
+                }
+              } catch {
+                // skip malformed lines
+              }
+            }
+          }
+
+          const cachedRows = Array.from(cached.bucketMap.values());
+          cached.mtimeMs = mtimeMs;
+          cached.size = size;
+          cached.cachedRows = cachedRows;
+          return cachedRows;
+        } catch (_err) {
+          // Fallback to full reload on error
         }
       }
-    }
 
-    // Full reload: truncated, compacted, replaced, or first read
-    const bucketMap = new Map();
-    let fd = null;
-    try {
+      // Full reload: truncated, compacted, replaced, or first read
+      const bucketMap = new Map();
+      let trailingRemainder = "";
       if (size > 0) {
         const buffer = Buffer.allocUnsafe(size);
-        fd = fs.openSync(filePath, "r");
         let bytesRead = 0;
         while (bytesRead < size) {
           const n = fs.readSync(fd, buffer, bytesRead, size - bytesRead, bytesRead);
           if (n === 0) break;
           bytesRead += n;
         }
-        const lines = buffer.subarray(0, bytesRead).toString("utf8").split("\n");
-        for (let i = 0; i < lines.length; i++) {
-          const trimmed = lines[i].trim();
-          if (!trimmed) continue;
+        const combined = buffer.subarray(0, bytesRead).toString("utf8");
+        const lastNewline = combined.lastIndexOf("\n");
+        let complete = "";
+        if (lastNewline !== -1) {
+          complete = combined.slice(0, lastNewline);
+          trailingRemainder = combined.slice(lastNewline + 1);
+        } else {
+          trailingRemainder = combined;
           try {
-            const entry = parseRow(JSON.parse(trimmed));
+            const entry = parseRow(JSON.parse(combined.trim()));
             if (entry && entry.key) {
               bucketMap.set(entry.key, entry.row);
             }
-          } catch {
-            // skip malformed lines
+          } catch {}
+        }
+        if (complete) {
+          const lines = complete.split("\n");
+          for (let i = 0; i < lines.length; i++) {
+            const trimmed = lines[i].trim();
+            if (!trimmed) continue;
+            try {
+              const entry = parseRow(JSON.parse(trimmed));
+              if (entry && entry.key) {
+                bucketMap.set(entry.key, entry.row);
+              }
+            } catch {
+              // skip malformed lines
+            }
           }
         }
       }
@@ -250,14 +274,9 @@ function createIncrementalQueueReader({ parseRow, label }) {
         inode,
         bucketMap,
         cachedRows,
+        trailingRemainder,
       });
       return cachedRows;
-    } catch (err) {
-      if (err.code === "ENOENT") {
-        cache.delete(filePath);
-        return [];
-      }
-      throw err;
     } finally {
       if (fd !== null) {
         try { fs.closeSync(fd); } catch {}
@@ -864,15 +883,24 @@ function runSyncCommand(extraEnv = {}, opts = {}) {
     if (opts.drain === true) args.push("--drain");
     if (opts.waitForLock === true) args.push("--wait-for-lock");
     if (opts.signal?.aborted) { reject(Object.assign(new Error("Account session changed"), { code: "auth_session_changed", status: 409 })); return; }
+    const syncEnv = {
+      ...process.env, ...extraEnv,
+      ...(extraEnv.TOKENTRACKER_DEVICE_TOKEN ? {
+        TOKENTRACKER_INSFORGE_BASE_URL: extraEnv.TOKENTRACKER_INSFORGE_BASE_URL,
+        TOKENTRACKER_INSFORGE_ANON_KEY: extraEnv.TOKENTRACKER_INSFORGE_ANON_KEY || "",
+      } : {}),
+      TOKENTRACKER_LOCAL_SYNC_DEVICE_TOKEN: extraEnv.TOKENTRACKER_DEVICE_TOKEN || "",
+    };
+    if (typeof syncEnv.NODE_OPTIONS === "string") {
+      const stripped = syncEnv.NODE_OPTIONS.replace(/--max-old-space-size=\d+\s*/g, "").trim();
+      if (stripped) {
+        syncEnv.NODE_OPTIONS = stripped;
+      } else {
+        delete syncEnv.NODE_OPTIONS;
+      }
+    }
     const child = spawn(process.execPath, args, {
-      env: {
-        ...process.env, ...extraEnv,
-        ...(extraEnv.TOKENTRACKER_DEVICE_TOKEN ? {
-          TOKENTRACKER_INSFORGE_BASE_URL: extraEnv.TOKENTRACKER_INSFORGE_BASE_URL,
-          TOKENTRACKER_INSFORGE_ANON_KEY: extraEnv.TOKENTRACKER_INSFORGE_ANON_KEY || "",
-        } : {}),
-        TOKENTRACKER_LOCAL_SYNC_DEVICE_TOKEN: extraEnv.TOKENTRACKER_DEVICE_TOKEN || "",
-      },
+      env: syncEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
     const cancel = () => child.kill("SIGTERM");

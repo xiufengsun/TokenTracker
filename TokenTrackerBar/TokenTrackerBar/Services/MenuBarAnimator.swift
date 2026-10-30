@@ -138,6 +138,22 @@ final class MenuBarAnimator {
 
         guard !isScreenAsleep else { return }
 
+        let now = Date()
+        if now < sprintUntil {
+            if sprintTimer == nil {
+                let remaining = sprintUntil.timeIntervalSince(now)
+                sprintTimer = Timer.scheduledTimer(
+                    withTimeInterval: max(0.01, remaining + 0.1),
+                    repeats: false
+                ) { [weak self] _ in
+                    Task { @MainActor in self?.applyCurrentState() }
+                }
+            }
+        } else {
+            sprintTimer?.invalidate()
+            sprintTimer = nil
+        }
+
         switch iconStyle {
         case .static:
             setButtonImage(fallbackIcon)
@@ -353,7 +369,7 @@ final class MenuBarAnimator {
             }
             sleepObservers.append(observer)
         }
-        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+        for name in [NSWorkspace.screensDidWakeNotification] {
             let observer = notificationCenter.addObserver(
                 forName: name,
                 object: nil,

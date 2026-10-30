@@ -27,8 +27,8 @@ final class ServerLaunchConfigTests: XCTestCase {
         XCTAssertEqual(merged, "--trace-warnings --max-old-space-size=48")
     }
 
-    func testMergeNodeOptionsReplacesExistingOldSpaceSize() {
+    func testMergeNodeOptionsPreservesUserOldSpaceSize() {
         let merged = ServerLaunchConfig.mergeNodeOptions(existing: "--max-old-space-size=128 --trace-warnings")
-        XCTAssertEqual(merged, "--max-old-space-size=48 --trace-warnings")
+        XCTAssertEqual(merged, "--max-old-space-size=128 --trace-warnings")
     }
 }

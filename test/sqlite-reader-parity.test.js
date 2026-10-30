@@ -1,11 +1,24 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const cp = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { test, describe, before, after } = require("node:test");
-const { DatabaseSync } = require("node:sqlite");
+
+let DatabaseSync;
+try {
+  DatabaseSync = require("node:sqlite").DatabaseSync;
+} catch {}
+
+let sqliteCliAvailable = false;
+try {
+  cp.execFileSync("sqlite3", ["-version"], { stdio: "ignore" });
+  sqliteCliAvailable = true;
+} catch {}
+
+const canRunParityTests = Boolean(DatabaseSync && sqliteCliAvailable);
 
 const {
   readSqliteJsonRows,
@@ -13,7 +26,7 @@ const {
   readSqliteFirstValue,
 } = require("../src/lib/sqlite-reader");
 
-describe("SQLite Reader Parity Diff Suite (node:sqlite vs sqlite3 CLI)", () => {
+describe("SQLite Reader Parity Diff Suite (node:sqlite vs sqlite3 CLI)", { skip: !canRunParityTests }, () => {
   let tmpDir;
   let cursorDbPath;
   let workspaceDbPath;
@@ -21,6 +34,7 @@ describe("SQLite Reader Parity Diff Suite (node:sqlite vs sqlite3 CLI)", () => {
   let mixedDbPath;
 
   before(() => {
+    if (!canRunParityTests) return;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-sqlite-parity-"));
 
     // 1. Cursor state.vscdb fixture
@@ -103,7 +117,7 @@ describe("SQLite Reader Parity Diff Suite (node:sqlite vs sqlite3 CLI)", () => {
       );
       INSERT INTO mixed VALUES (1, 42, 3.14159, 'hello "quotes"', NULL, X'616263');
       INSERT INTO mixed VALUES (2, -100, 0.0, '', NULL, NULL);
-      INSERT INTO mixed VALUES (3, 0, -99.99, 'line1\\nline2\\ttab', 'non-null', X'FF00FE');
+      INSERT INTO mixed VALUES (3, 0, -99.99, '你好世界 🚀 non-ascii line1\\nline2\\ttab', 'non-null', X'646566');
     `);
     mixedDb.close();
   });
@@ -126,13 +140,20 @@ describe("SQLite Reader Parity Diff Suite (node:sqlite vs sqlite3 CLI)", () => {
     });
 
     // Run via sqlite3 CLI (TOKENTRACKER_USE_NODE_SQLITE=0)
+    // Pass requireFn that throws to guarantee fallback to node:sqlite cannot occur
     const cliSyncRows = readSqliteJsonRows(dbPath, sql, {
       label,
       env: { TOKENTRACKER_USE_NODE_SQLITE: "0" },
+      requireFn() {
+        throw new Error("node:sqlite must not be called when CLI is requested");
+      },
     });
     const cliAsyncRows = await readSqliteJsonRowsAsync(dbPath, sql, {
       label,
       env: { TOKENTRACKER_USE_NODE_SQLITE: "0" },
+      requireFn() {
+        throw new Error("node:sqlite must not be called when CLI is requested");
+      },
     });
 
     // 1. node:sqlite sync vs sqlite3 CLI sync
@@ -185,7 +206,12 @@ describe("SQLite Reader Parity Diff Suite (node:sqlite vs sqlite3 CLI)", () => {
       cursorDbPath,
       "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken';",
       "value",
-      { env: { TOKENTRACKER_USE_NODE_SQLITE: "0" } }
+      {
+        env: { TOKENTRACKER_USE_NODE_SQLITE: "0" },
+        requireFn() {
+          throw new Error("node:sqlite must not be called when CLI is requested");
+        },
+      }
     );
     assert.equal(nodeVal, cliVal);
     assert.equal(nodeVal, "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.synthetic");

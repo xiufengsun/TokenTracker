@@ -106,6 +106,9 @@ function runBenchmark() {
     const q = queries[i % queries.length];
     readSqliteJsonRows(dbPath, q, {
       env: { TOKENTRACKER_USE_NODE_SQLITE: "0" },
+      requireFn() {
+        throw new Error("node:sqlite must not be called on CLI benchmark path");
+      },
     });
   }
 

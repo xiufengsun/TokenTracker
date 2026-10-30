@@ -80,7 +80,7 @@ function normalizeRow(row) {
   const plain = {};
   for (const [key, value] of Object.entries(row)) {
     if (value instanceof Uint8Array) {
-      plain[key] = Buffer.from(value).toString("latin1");
+      plain[key] = Buffer.from(value).toString("utf8");
     } else if (typeof value === "bigint") {
       plain[key] = Number(value);
     } else {
