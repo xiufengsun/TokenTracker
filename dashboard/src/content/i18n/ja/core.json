@@ -317,7 +317,7 @@
   "settings.labs.island.hint": "MacBook のノッチをダイナミックアイランドに：本日のトークンと支出を常時表示し、ホバーで支出と上限の詳細を確認できます。",
   "settings.labs.island.aria": "ダイナミックアイランドの切り替え",
   "settings.labs.island_hide_menubar.label": "メニューバーアイコンを隠す",
-  "settings.labs.island_hide_menubar.hint": "メニューバーのアイコンを非表示にし、ダイナミックアイランドのみを使用します。",
+  "settings.labs.island_hide_menubar.hint": "有効にするとメニューバーのアイコンを隠し、アイランド／エッジのみを使います。",
   "settings.labs.island_hide_menubar.aria": "メニューバーアイコン非表示の切り替え",
   "dashboard.island.title": "ダイナミックアイランド登場",
   "dashboard.island.hint": "MacBook のノッチをリアルタイムのトークンメーターに：本日のトークンと支出を常時表示し、ホバーで詳細を確認できます。",
@@ -635,5 +635,9 @@
   "settings.local_data.error.too_many_devices": "インポート上限です。不要な端末を先に除外してください。",
   "settings.local_data.error.unknown_device": "このインポート元は存在しません。",
   "settings.local_data.error.transfer_failed": "転送に失敗しました。ファイルとローカルアプリを確認してください。",
-  "settings.local_data.local_history_only": "オフラインスナップショットにセッション記録は含まれません。コンテキスト内訳はこの端末を選択してください。プロジェクト、セッション、成果の分析は常にこの端末の記録のみを使用します。"
+  "settings.local_data.local_history_only": "オフラインスナップショットにセッション記録は含まれません。コンテキスト内訳はこの端末を選択してください。プロジェクト、セッション、成果の分析は常にこの端末の記録のみを使用します。",
+  "settings.labs.island_placement.label": "表示位置",
+  "settings.labs.island_placement.hint": "ダイナミックアイランド（ノッチ）か、右端の固定ピルを選べます。エッジの折りたたみ状態では可変長のトークン／支出テキストは出しません。",
+  "settings.labs.island_placement.island": "ダイナミックアイランド",
+  "settings.labs.island_placement.edge": "エッジ"
 }

@@ -317,7 +317,7 @@
   "settings.labs.island.hint": "MacBook 노치를 다이나믹 아일랜드로: 오늘의 토큰과 지출을 한눈에 보고, 마우스를 올리면 지출과 한도 상세를 확인할 수 있습니다.",
   "settings.labs.island.aria": "다이나믹 아일랜드 전환",
   "settings.labs.island_hide_menubar.label": "메뉴바 아이콘 숨기기",
-  "settings.labs.island_hide_menubar.hint": "상단 메뉴바 아이콘을 숨기고 다이나믹 아일랜드만 사용합니다.",
+  "settings.labs.island_hide_menubar.hint": "켜면 상단 메뉴바 아이콘을 숨기고 아일랜드/가장자리만 사용합니다.",
   "settings.labs.island_hide_menubar.aria": "메뉴바 아이콘 숨김 전환",
   "dashboard.island.title": "다이나믹 아일랜드를 만나보세요",
   "dashboard.island.hint": "MacBook 노치를 실시간 토큰 계기로: 오늘의 토큰과 지출을 한눈에 보고, 마우스를 올리면 상세 정보를 확인할 수 있습니다.",
@@ -635,5 +635,9 @@
   "settings.local_data.error.too_many_devices": "가져오기 한도에 도달했습니다. 사용하지 않는 기기를 먼저 제거하세요.",
   "settings.local_data.error.unknown_device": "가져온 원본 기기가 더 이상 없습니다.",
   "settings.local_data.error.transfer_failed": "전송에 실패했습니다. 파일과 로컬 앱을 확인하고 다시 시도하세요.",
-  "settings.local_data.local_history_only": "오프라인 스냅샷에는 세션 기록이 없습니다. 컨텍스트 분석은 이 기기를 선택하세요. 프로젝트, 세션 및 성과 분석은 항상 이 기기의 기록만 사용합니다."
+  "settings.local_data.local_history_only": "오프라인 스냅샷에는 세션 기록이 없습니다. 컨텍스트 분석은 이 기기를 선택하세요. 프로젝트, 세션 및 성과 분석은 항상 이 기기의 기록만 사용합니다.",
+  "settings.labs.island_placement.label": "외형 위치",
+  "settings.labs.island_placement.hint": "다이나믹 아일랜드(노치) 또는 오른쪽 가장자리 고정 필을 선택합니다. 가장자리 축소 상태에서는 가변 길이 토큰/비용 텍스트를 표시하지 않습니다.",
+  "settings.labs.island_placement.island": "다이나믹 아일랜드",
+  "settings.labs.island_placement.edge": "가장자리"
 }

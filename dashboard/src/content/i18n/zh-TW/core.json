@@ -318,7 +318,7 @@
   "settings.labs.island.hint": "將 MacBook 瀏海變成靈動島：收起時展示今日 Token 與花費，懸停查看花費與額度詳情。",
   "settings.labs.island.aria": "切換靈動島",
   "settings.labs.island_hide_menubar.label": "隱藏選單列圖示",
-  "settings.labs.island_hide_menubar.hint": "啟用靈動島後隱藏頂部選單列圖示，僅使用靈動島。",
+  "settings.labs.island_hide_menubar.hint": "啟用後隱藏頂部選單列圖示，僅使用靈動島或貼邊。",
   "settings.labs.island_hide_menubar.aria": "切換隱藏選單列圖示",
   "dashboard.island.title": "認識一下靈動島",
   "dashboard.island.hint": "把 MacBook 瀏海變成即時 Token 儀表：今日 Token 與花費一目了然，懸停查看花費與額度詳情。",
@@ -832,5 +832,9 @@
   "settings.local_data.error.too_many_devices": "已達匯入資料上限，請先移除不再需要的來源。",
   "settings.local_data.error.unknown_device": "此匯入來源已不存在。",
   "settings.local_data.error.transfer_failed": "操作失敗，請檢查檔案與本機應用程式後重試。",
-  "settings.local_data.local_history_only": "離線快照不含工作階段記錄。內容分解需選擇「本機」查看；專案、工作階段和成效分析始終只包含本機記錄。"
+  "settings.local_data.local_history_only": "離線快照不含工作階段記錄。內容分解需選擇「本機」查看；專案、工作階段和成效分析始終只包含本機記錄。",
+  "settings.labs.island_placement.label": "外觀位置",
+  "settings.labs.island_placement.hint": "選擇靈動島（瀏海）或右側貼邊膠囊。貼邊收起態不顯示可變長度的 Token/花費文字。",
+  "settings.labs.island_placement.island": "靈動島",
+  "settings.labs.island_placement.edge": "貼邊"
 }

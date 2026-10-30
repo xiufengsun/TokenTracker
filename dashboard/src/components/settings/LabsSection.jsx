@@ -1,6 +1,6 @@
 import React from "react";
 import { copy } from "../../lib/copy";
-import { SectionCard, SettingsRow, ToggleSwitch } from "./Controls.jsx";
+import { SectionCard, SettingsRow, ToggleSwitch, SegmentedControl } from "./Controls.jsx";
 import { useQualityPerDollarPref } from "../../hooks/use-quality-per-dollar-pref.js";
 import { useSessionEfficiencyPref } from "../../hooks/use-session-efficiency-pref.js";
 import { useNativeSettings } from "../../hooks/use-native-settings.js";
@@ -29,6 +29,7 @@ export function LabsSection() {
   const { available: nativeAvailable, settings: nativeSettings, setSetting } = useNativeSettings();
   const islandSupported = nativeAvailable && Boolean(nativeSettings?.dynamicIslandSupported);
   const islandEnabled = Boolean(nativeSettings?.dynamicIslandEnabled);
+  const placement = nativeSettings?.dynamicIslandPlacement === "edge" ? "edge" : "island";
 
   return (
     <SectionCard title={copy("settings.section.labs")}>
@@ -46,17 +47,39 @@ export function LabsSection() {
             }
           />
           {islandEnabled && (
-            <SettingsRow
-              label={copy("settings.labs.island_hide_menubar.label")}
-              hint={copy("settings.labs.island_hide_menubar.hint")}
-              control={
-                <ToggleSwitch
-                  checked={Boolean(nativeSettings?.hideMenuBarIcon)}
-                  onChange={() => setSetting("hideMenuBarIcon", !nativeSettings?.hideMenuBarIcon)}
-                  ariaLabel={copy("settings.labs.island_hide_menubar.aria")}
-                />
-              }
-            />
+            <>
+              <SettingsRow
+                label={copy("settings.labs.island_placement.label")}
+                hint={copy("settings.labs.island_placement.hint")}
+                control={
+                  <SegmentedControl
+                    options={[
+                      {
+                        value: "island",
+                        label: copy("settings.labs.island_placement.island"),
+                      },
+                      {
+                        value: "edge",
+                        label: copy("settings.labs.island_placement.edge"),
+                      },
+                    ]}
+                    value={placement}
+                    onChange={(next) => setSetting("dynamicIslandPlacement", next)}
+                  />
+                }
+              />
+              <SettingsRow
+                label={copy("settings.labs.island_hide_menubar.label")}
+                hint={copy("settings.labs.island_hide_menubar.hint")}
+                control={
+                  <ToggleSwitch
+                    checked={Boolean(nativeSettings?.hideMenuBarIcon)}
+                    onChange={() => setSetting("hideMenuBarIcon", !nativeSettings?.hideMenuBarIcon)}
+                    ariaLabel={copy("settings.labs.island_hide_menubar.aria")}
+                  />
+                }
+              />
+            </>
           )}
         </>
       )}

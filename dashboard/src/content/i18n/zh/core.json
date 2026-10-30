@@ -401,7 +401,7 @@
   "settings.labs.island.hint": "将 MacBook 刘海变成灵动岛：收起时展示今日 Token 与花费，悬停查看花费与额度详情。",
   "settings.labs.island.aria": "切换灵动岛",
   "settings.labs.island_hide_menubar.label": "隐藏菜单栏图标",
-  "settings.labs.island_hide_menubar.hint": "启用灵动岛后隐藏顶部菜单栏图标，仅使用灵动岛。",
+  "settings.labs.island_hide_menubar.hint": "启用后隐藏顶部菜单栏图标，仅使用灵动岛或贴边。",
   "settings.labs.island_hide_menubar.aria": "切换隐藏菜单栏图标",
   "dashboard.island.title": "认识一下灵动岛",
   "dashboard.island.hint": "把 MacBook 刘海变成实时 Token 仪表：今日 Token 与花费一目了然，悬停查看花费与额度详情。",
@@ -891,5 +891,9 @@
   "settings.local_data.error.too_many_devices": "已达到导入数据上限，请先移除不再需要的来源。",
   "settings.local_data.error.unknown_device": "这个导入来源已不存在。",
   "settings.local_data.error.transfer_failed": "操作失败，请检查文件和本地应用后重试。",
-  "settings.local_data.local_history_only": "离线快照不含会话记录。上下文分解需选择“本机”查看；项目、会话和效果分析始终只包含本机记录。"
+  "settings.local_data.local_history_only": "离线快照不含会话记录。上下文分解需选择“本机”查看；项目、会话和效果分析始终只包含本机记录。",
+  "settings.labs.island_placement.label": "外观位置",
+  "settings.labs.island_placement.hint": "选择灵动岛（刘海）或右侧贴边胶囊。贴边收起态不显示可变长度的 Token/花费文字。",
+  "settings.labs.island_placement.island": "灵动岛",
+  "settings.labs.island_placement.edge": "贴边"
 }

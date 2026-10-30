@@ -110,6 +110,12 @@ final class DynamicIslandState: ObservableObject {
     /// Bumped on `.nativeSettingsChanged` so currency/locale changes re-render
     /// the cost strings without waiting for the next data refresh.
     @Published var settingsTick = 0
+    /// Island (top-center / notch) vs edge (right-edge pill). Drives layout in
+    /// both the controller and the SwiftUI view.
+    @Published var placement: DynamicIslandPlacement = .island
+    /// Edge only: brief pre-expand "wake" (deeper pill + brighter dots) before
+    /// the full unfold. Island mode never sets this.
+    @Published var isEdgeWaking = false
 }
 
 /// Notch-hugging "Dynamic Island" (boring.notch-style): a transparent,
@@ -124,6 +130,12 @@ final class DynamicIslandController: NSObject {
     /// Delay before collapsing after the pointer leaves, so grazing the island
     /// edge doesn't flap it shut.
     private static let collapseDelay: TimeInterval = 0.25
+    /// Edge only: brief deepen/brighten beat before full unfold.
+    private static let edgeWakeDelay: TimeInterval = 0.12
+    /// Hold before an edge press becomes a vertical reposition drag.
+    private static let edgeLongPressDuration: TimeInterval = 0.35
+    /// Minimum pointer travel (pt) before a long-press counts as a drag.
+    private static let edgeDragSlop: CGFloat = 2
 
     private let viewModel: DashboardViewModel
     private let state = DynamicIslandState()
@@ -133,6 +145,20 @@ final class DynamicIslandController: NSObject {
     /// hit-test wrapper).
     private var hostingController: NSHostingController<DynamicIslandView>?
     private var collapseWorkItem: DispatchWorkItem?
+    /// Schedules edge expand after the wake beat; cancelled on hover-out.
+    private var wakeWorkItem: DispatchWorkItem?
+    /// Edge long-press → drag: armed on mouse-down, fires after the hold.
+    private var edgeLongPressWorkItem: DispatchWorkItem?
+    private var edgeDragDownMonitor: Any?
+    private var edgeDragDragMonitor: Any?
+    private var edgeDragUpMonitor: Any?
+    /// True while the user is mid long-press or actively dragging the edge pill.
+    private var edgePressActive = false
+    private var isEdgeDragging = false
+    /// Mouse Y + offset captured when long-press becomes a drag.
+    private var edgeDragAnchor: (mouseY: CGFloat, offset: CGFloat)?
+    /// Persisted mid-edge vertical offset (AppKit points, + = up).
+    private var edgeVerticalOffset: CGFloat = 0
     private var visibilityWorkItem: DispatchWorkItem?
     private var visibilityTransitions = DynamicIslandVisibilityTransitionTracker()
     /// Keeps the transparent panel click-through during transitions.
@@ -162,6 +188,8 @@ final class DynamicIslandController: NSObject {
     init(viewModel: DashboardViewModel) {
         self.viewModel = viewModel
         super.init()
+        state.placement = DynamicIslandPlacementPolicy.placement()
+        edgeVerticalOffset = DynamicIslandPlacementPolicy.edgeVerticalOffset()
 
         observers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -188,7 +216,7 @@ final class DynamicIslandController: NSObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.state.settingsTick += 1 }
+            Task { @MainActor [weak self] in self?.handleSettingsChanged() }
         })
         let workspace = NSWorkspace.shared.notificationCenter
         observers.append(workspace.addObserver(
@@ -216,6 +244,10 @@ final class DynamicIslandController: NSObject {
     deinit {
         visibilityWorkItem?.cancel()
         fullscreenSettleWorkItem?.cancel()
+        edgeLongPressWorkItem?.cancel()
+        if let edgeDragDownMonitor { NSEvent.removeMonitor(edgeDragDownMonitor) }
+        if let edgeDragDragMonitor { NSEvent.removeMonitor(edgeDragDragMonitor) }
+        if let edgeDragUpMonitor { NSEvent.removeMonitor(edgeDragUpMonitor) }
         presentationObservation?.invalidate()
         for observer in observers {
             NotificationCenter.default.removeObserver(observer)
@@ -243,10 +275,50 @@ final class DynamicIslandController: NSObject {
 
     /// Re-show the island on launch if it was enabled when the app last quit.
     func restoreIfNeeded() {
+        state.placement = DynamicIslandPlacementPolicy.placement()
+        edgeVerticalOffset = DynamicIslandPlacementPolicy.edgeVerticalOffset()
         fullscreenActive = readFullscreenActive()
         applyPresence()
         if fullscreenActive {
             armFullscreenSettleRetries()
+        }
+    }
+
+    /// Re-read placement after Labs / menu changes and re-pin the panel.
+    func reloadPlacement() {
+        let next = DynamicIslandPlacementPolicy.placement()
+        let changed = state.placement != next
+        state.placement = next
+        edgeVerticalOffset = DynamicIslandPlacementPolicy.edgeVerticalOffset()
+        if changed, state.isExpanded {
+            collapseWorkItem?.cancel()
+            state.isExpanded = false
+        }
+        if changed {
+            cancelEdgeWake()
+        }
+        // Placement can change which screen we care about (notched vs main),
+        // so refresh fullscreen presence before / while re-pinning — otherwise
+        // a stale fullscreenActive from the previous screen keeps the new
+        // surface hidden until some unrelated environment notification.
+        cancelFullscreenSettleRetries()
+        fullscreenActive = readFullscreenActive()
+        applyPresence()
+        if shouldShowPanel {
+            repositionPanel()
+            panel?.updateHitRegion()
+        } else if fullscreenActive {
+            armFullscreenSettleRetries()
+        }
+        state.settingsTick += 1
+    }
+
+    private func handleSettingsChanged() {
+        let next = DynamicIslandPlacementPolicy.placement()
+        if state.placement != next {
+            reloadPlacement()
+        } else {
+            state.settingsTick += 1
         }
     }
 
@@ -259,6 +331,7 @@ final class DynamicIslandController: NSObject {
 
         // Always reveal from the compact, non-interactive state.
         state.isVisibilityDismissing = false
+        cancelEdgeWake()
         state.isExpanded = false
         state.isPanelVisible = true
         acceptsIslandInteraction = false
@@ -270,6 +343,11 @@ final class DynamicIslandController: NSObject {
             panel.orderFrontRegardless()
             acceptsIslandInteraction = true
             panel.updateHitRegion()
+            // Same QA expand hook as the animated path (do not skip on Reduce Motion).
+            if UserDefaults.standard.bool(forKey: "DynamicIslandDebugForceExpanded"),
+               state.placement == .edge {
+                expand()
+            }
             return
         }
 
@@ -297,6 +375,11 @@ final class DynamicIslandController: NSObject {
                 guard controller.shouldShowPanel else { return }
                 controller.acceptsIslandInteraction = true
                 controller.panel?.updateHitRegion()
+                // QA / screenshot aid: expand without requiring Accessibility hover.
+                if UserDefaults.standard.bool(forKey: "DynamicIslandDebugForceExpanded"),
+                   controller.state.placement == .edge {
+                    controller.expand()
+                }
             }
         }
     }
@@ -304,6 +387,7 @@ final class DynamicIslandController: NSObject {
     func hide() {
         collapseWorkItem?.cancel()
         collapseWorkItem = nil
+        cancelEdgeWake()
         let transition = beginVisibilityTransition()
         acceptsIslandInteraction = false
         panel?.updateHitRegion()
@@ -370,18 +454,86 @@ final class DynamicIslandController: NSObject {
                 hovering: true,
                 pointerInsideInteractiveRegion: isPointerOverIsland()
             ) else { return }
+            // Long-press / drag owns the pointer — do not wake or expand under it.
+            guard !(edgePressActive || isEdgeDragging) else { return }
             collapseWorkItem?.cancel()
             collapseWorkItem = nil
-            expand()
+            if state.placement == .edge {
+                beginEdgeWakeThenExpand()
+            } else {
+                cancelEdgeWake()
+                expand()
+            }
         } else {
             collapseWorkItem?.cancel()
             collapseWorkItem = nil
+            cancelEdgeWake()
             // A menu is tracking — keep the island open; endMenuHold decides.
             guard menuHoldCount == 0 else { return }
+            // QA force-expanded screenshots must not auto-collapse on mouse exit.
+            if UserDefaults.standard.bool(forKey: "DynamicIslandDebugForceExpanded"),
+               state.placement == .edge {
+                return
+            }
             let item = DispatchWorkItem { [weak self] in self?.collapse() }
             collapseWorkItem = item
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.collapseDelay, execute: item)
         }
+    }
+
+    /// Edge resting → short wake (deeper pill + brighter dots) → unfold.
+    /// Island mode never enters this path.
+    private func beginEdgeWakeThenExpand() {
+        guard state.placement == .edge else {
+            expand()
+            return
+        }
+        guard !(edgePressActive || isEdgeDragging) else { return }
+        guard !state.isExpanded else { return }
+        if state.isEdgeWaking, wakeWorkItem != nil { return }
+        wakeWorkItem?.cancel()
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if reduce {
+            state.isEdgeWaking = false
+            expand()
+            return
+        }
+        withAnimation(EdgeNotchMotion.wake) {
+            state.isEdgeWaking = true
+        }
+        panel?.updateHitRegion()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.wakeWorkItem = nil
+            // Drop stale wake if the panel hid or the pointer left during the beat.
+            guard self.shouldShowPanel,
+                  self.state.isPanelVisible,
+                  self.state.placement == .edge,
+                  !self.state.isExpanded,
+                  self.isPointerOverIsland()
+            else {
+                self.cancelEdgeWake()
+                return
+            }
+            self.expand()
+        }
+        wakeWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.edgeWakeDelay, execute: item)
+    }
+
+    private func cancelEdgeWake() {
+        wakeWorkItem?.cancel()
+        wakeWorkItem = nil
+        guard state.isEdgeWaking else { return }
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if reduce {
+            state.isEdgeWaking = false
+        } else {
+            withAnimation(EdgeNotchMotion.wake) {
+                state.isEdgeWaking = false
+            }
+        }
+        panel?.updateHitRegion()
     }
 
     /// Menu tracking started from the island (gear button / right-click).
@@ -421,10 +573,21 @@ final class DynamicIslandController: NSObject {
 
     private func expand() {
         guard !state.isExpanded else { return }
-        // Panel frame stays put — only the black shape springs open from the
-        // top. Resizing the window mid-animation was what opened the seam.
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        // Wake chrome yields to the unfolded panel.
+        wakeWorkItem?.cancel()
+        wakeWorkItem = nil
+        state.isEdgeWaking = false
+        // Panel frame stays put — only the black shape springs open.
+        // Resizing the window mid-animation was what opened the seam.
+        // Edge uses CodeNotch-like liquid unfold (0.62/0.72); island keeps
+        // the snappier existing spring so notch wings do not feel sluggish.
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if reduce {
             state.isExpanded = true
+        } else if state.placement == .edge {
+            withAnimation(EdgeNotchMotion.unfold) {
+                state.isExpanded = true
+            }
         } else {
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                 state.isExpanded = true
@@ -435,8 +598,14 @@ final class DynamicIslandController: NSObject {
 
     private func collapse() {
         guard state.isExpanded else { return }
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        cancelEdgeWake()
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if reduce {
             state.isExpanded = false
+        } else if state.placement == .edge {
+            withAnimation(EdgeNotchMotion.unfold) {
+                state.isExpanded = false
+            }
         } else {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
                 state.isExpanded = false
@@ -446,9 +615,10 @@ final class DynamicIslandController: NSObject {
         // continue its spring animation visually, but its transparent former
         // bounds must become click-through and hover-inert at once.
         panel?.updateHitRegion()
-        // Re-assert after the spring settles in case measured geometry changed
-        // during the transition.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+        // Edge unfold settles slower (~0.6s) than the island spring; wait
+        // longer before re-asserting the collapsed hit region.
+        let settle: TimeInterval = state.placement == .edge ? 0.7 : 0.4
+        DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
             guard let self, !self.state.isExpanded else { return }
             self.panel?.updateHitRegion()
         }
@@ -456,15 +626,30 @@ final class DynamicIslandController: NSObject {
 
     // MARK: - Screen + geometry
 
-    /// Prefer a screen with a hardware notch; otherwise fall back to the main
-    /// screen with a simulated island.
+    /// Island mode prefers a hardware-notched screen; edge mode prefers the
+    /// main display (no notch required).
     private func targetScreen() -> NSScreen? {
-        NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 })
-            ?? NSScreen.main
-            ?? NSScreen.screens.first
+        if DynamicIslandPlacementPolicy.prefersNotchedScreen(for: state.placement) {
+            return NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 })
+                ?? NSScreen.main
+                ?? NSScreen.screens.first
+        }
+        return NSScreen.main ?? NSScreen.screens.first
     }
 
     private func geometry(for screen: NSScreen) -> DynamicIslandGeometry {
+        if state.placement == .edge {
+            let size = DynamicIslandPlacementPolicy.edgeCollapsedSize()
+            // Encode the fixed pill as a center-only strip (no text wings):
+            // collapsedWidth == centerGapWidth when wingWidth is 0.
+            return DynamicIslandGeometry(
+                centerGapWidth: size.width,
+                collapsedHeight: size.height,
+                wingWidth: 0,
+                hasNotch: false,
+                islandCenterX: screen.frame.maxX - size.width / 2
+            )
+        }
         // Carry the current content-measured wing width across screen changes;
         // the view re-measures and corrects it if the labels differ.
         let wingWidth = max(DynamicIslandGeometry.minWingWidth, state.geometry.wingWidth)
@@ -498,6 +683,7 @@ final class DynamicIslandController: NSObject {
     /// The view measured its wing labels; adopt the tight width so the
     /// collapsed hit-test pill stays snug around the text.
     private func applyWingWidth(_ width: CGFloat) {
+        guard DynamicIslandPlacementPolicy.appliesWingMetrics(for: state.placement) else { return }
         let clamped = max(DynamicIslandGeometry.minWingWidth, width)
         guard abs(clamped - state.geometry.wingWidth) > 0.5 else { return }
         state.geometry.wingWidth = clamped
@@ -523,6 +709,14 @@ final class DynamicIslandController: NSObject {
     private func panelFrame(on screen: NSScreen) -> NSRect {
         let bleed = DynamicIslandGeometry.shadowBleed
         let panelW = max(DynamicIslandGeometry.expandedWidth, state.geometry.collapsedWidth) + bleed * 2
+        if state.placement == .edge {
+            return DynamicIslandPlacementPolicy.edgePanelFrame(
+                screenFrame: screen.frame,
+                visibleBottom: screen.visibleFrame.minY,
+                panelWidth: panelW,
+                verticalOffset: edgeVerticalOffset
+            )
+        }
         let panelH = DynamicIslandLayoutPolicy.panelHeight(
             screenTop: screen.frame.maxY,
             visibleBottom: screen.visibleFrame.minY
@@ -543,6 +737,15 @@ final class DynamicIslandController: NSObject {
         let geo = state.geometry
         let panelW = panel.frame.width
         let panelH = panel.frame.height
+        if state.placement == .edge {
+            return DynamicIslandPlacementPolicy.edgeHitRect(
+                panelSize: CGSize(width: panelW, height: panelH),
+                isExpanded: state.isExpanded,
+                collapsedSize: CGSize(width: geo.collapsedWidth, height: geo.collapsedHeight),
+                expandedWidth: max(DynamicIslandGeometry.expandedWidth, geo.collapsedWidth),
+                expandedHeight: min(max(state.expandedHeight, geo.collapsedHeight), panelH)
+            )
+        }
         let width = state.isExpanded
             ? max(DynamicIslandGeometry.expandedWidth, geo.collapsedWidth)
             : geo.collapsedWidth
@@ -668,9 +871,20 @@ final class DynamicIslandController: NSObject {
         "Control Center", "Notification Centre", "Notification Center",
     ]
 
+    /// Screen used for fullscreen coverage checks. Prefer the panel's current
+    /// screen so a focus-driven `NSScreen.main` change cannot suppress an
+    /// already-visible surface on another display; fall back to the placement
+    /// target when the panel is not up yet.
+    private func presenceScreen() -> NSScreen? {
+        if let panel, panel.isVisible, let screen = panel.screen {
+            return screen
+        }
+        return targetScreen()
+    }
+
     /// `nil` when the window list is unavailable so the caller can fall back.
     private func islandScreenHasFullscreenWindow() -> Bool? {
-        guard let screen = targetScreen(),
+        guard let screen = presenceScreen(),
               let primary = NSScreen.screens.first
         else { return false }
         let cgOptions = CGWindowListOption(arrayLiteral: .optionOnScreenOnly, .excludeDesktopElements)
@@ -806,7 +1020,113 @@ final class DynamicIslandController: NSObject {
         panel.isReleasedWhenClosed = false
         panel.acceptsMouseMovedEvents = true
         panel.isMovableByWindowBackground = false
+        installEdgeDragMonitors(for: panel)
         return panel
+    }
+
+    // MARK: - Edge long-press vertical drag
+
+    /// Local monitors (not view mouseDown) so SwiftUI hosting cannot swallow
+    /// the press the way `isMovableByWindowBackground` fails for DesktopPet.
+    private func installEdgeDragMonitors(for panel: IslandPanel) {
+        if edgeDragDownMonitor != nil { return }
+        edgeDragDownMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self, weak panel] event in
+            guard let self, let panel, event.window === panel else { return event }
+            Task { @MainActor [weak self] in
+                self?.handleEdgeMouseDown()
+            }
+            return event
+        }
+        edgeDragDragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self, weak panel] event in
+            guard let self, let panel, event.window === panel else { return event }
+            let mouseY = NSEvent.mouseLocation.y
+            Task { @MainActor [weak self] in
+                self?.handleEdgeMouseDragged(mouseY: mouseY)
+            }
+            return event
+        }
+        edgeDragUpMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp]) { [weak self, weak panel] event in
+            guard let self, let panel, event.window === panel else { return event }
+            Task { @MainActor [weak self] in
+                self?.handleEdgeMouseUp()
+            }
+            return event
+        }
+    }
+
+    private func handleEdgeMouseDown() {
+        guard state.placement == .edge, acceptsIslandInteraction else { return }
+        guard isPointerOverIsland() else { return }
+        edgePressActive = true
+        isEdgeDragging = false
+        edgeDragAnchor = nil
+        // Holding to drag must not race the hover wake → expand path.
+        cancelEdgeWake()
+        collapseWorkItem?.cancel()
+        collapseWorkItem = nil
+        edgeLongPressWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.edgeLongPressWorkItem = nil
+            guard self.edgePressActive, self.state.placement == .edge else { return }
+            self.beginEdgeDrag()
+        }
+        edgeLongPressWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.edgeLongPressDuration, execute: item)
+    }
+
+    private func beginEdgeDrag() {
+        isEdgeDragging = true
+        edgeDragAnchor = (mouseY: NSEvent.mouseLocation.y, offset: edgeVerticalOffset)
+        NSCursor.closedHand.set()
+        // Keep whatever expanded/collapsed state we are in; only the panel Y moves.
+        collapseWorkItem?.cancel()
+        collapseWorkItem = nil
+        cancelEdgeWake()
+    }
+
+    private func handleEdgeMouseDragged(mouseY: CGFloat) {
+        // Long-press must have armed the drag first — pre-threshold jitter is ignored.
+        guard state.placement == .edge, isEdgeDragging, let anchor = edgeDragAnchor else { return }
+        let delta = mouseY - anchor.mouseY
+        guard abs(delta) >= Self.edgeDragSlop else { return }
+        guard let screen = panel?.screen ?? targetScreen() else { return }
+        let bleed = DynamicIslandGeometry.shadowBleed
+        let panelW = max(DynamicIslandGeometry.expandedWidth, state.geometry.collapsedWidth) + bleed * 2
+        let restHeight = DynamicIslandPlacementPolicy.edgePanelFrame(
+            screenFrame: screen.frame,
+            visibleBottom: screen.visibleFrame.minY,
+            panelWidth: panelW,
+            verticalOffset: 0
+        ).height
+        let next = DynamicIslandPlacementPolicy.clampEdgeVerticalOffset(
+            anchor.offset + delta,
+            screenFrame: screen.frame,
+            visibleBottom: screen.visibleFrame.minY,
+            panelHeight: restHeight
+        )
+        guard abs(next - edgeVerticalOffset) > 0.5 else { return }
+        edgeVerticalOffset = next
+        repositionPanel()
+        NSCursor.closedHand.set()
+    }
+
+    private func handleEdgeMouseUp() {
+        let wasDragging = isEdgeDragging
+        edgeLongPressWorkItem?.cancel()
+        edgeLongPressWorkItem = nil
+        edgePressActive = false
+        isEdgeDragging = false
+        edgeDragAnchor = nil
+        if wasDragging {
+            DynamicIslandPlacementPolicy.writeEdgeVerticalOffset(edgeVerticalOffset)
+            NSCursor.arrow.set()
+            PointerCursorCoordinator.shared.apply()
+        }
+        // Resume hover expand if the pointer is still over the chrome.
+        if state.placement == .edge, isPointerOverIsland() {
+            handleHover(true)
+        }
     }
 }
 

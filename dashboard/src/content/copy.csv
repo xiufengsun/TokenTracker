@@ -483,6 +483,10 @@ settings.labs.island.aria,ui,SettingsPage,LabsSection,island_aria,"Toggle Dynami
 settings.labs.island_hide_menubar.label,ui,SettingsPage,LabsSection,island_hide_menubar_label,"Hide Menu Bar Item",,active
 settings.labs.island_hide_menubar.hint,ui,SettingsPage,LabsSection,island_hide_menubar_hint,"Hide top menu bar icon and use Dynamic Island exclusively.",,active
 settings.labs.island_hide_menubar.aria,ui,SettingsPage,LabsSection,island_hide_menubar_aria,"Toggle hide menu bar item",,active
+settings.labs.island_placement.label,ui,SettingsPage,LabsSection,island_placement_label,"Appearance Placement",,active
+settings.labs.island_placement.hint,ui,SettingsPage,LabsSection,island_placement_hint,"Choose Dynamic Island (notch) or a fixed right-edge pill. Collapsed edge mode never shows long token/spend text.",,active
+settings.labs.island_placement.island,ui,SettingsPage,LabsSection,island_placement_island,"Dynamic Island",,active
+settings.labs.island_placement.edge,ui,SettingsPage,LabsSection,island_placement_edge,"Edge",,active
 dashboard.island.title,ui,DashboardPage,IslandOnboardingCard,island_title,"Meet the Dynamic Island",,active
 dashboard.island.hint,ui,DashboardPage,IslandOnboardingCard,island_hint,"Turn the MacBook notch into a live token meter — today's tokens and spend at a glance, hover for spend and limit details.",,active
 dashboard.island.enable,ui,DashboardPage,IslandOnboardingCard,island_enable,"Turn it on",,active

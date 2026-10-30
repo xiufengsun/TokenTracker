@@ -1157,6 +1157,23 @@ final class StatusBarController: NSObject {
         islandItem.state = islandEnabled ? .on : .off
         menu.addItem(islandItem)
 
+        if islandEnabled {
+            let placement = DynamicIslandPlacementPolicy.placement()
+            let placementItem = NSMenuItem(title: Strings.menuIslandPlacement, action: nil, keyEquivalent: "")
+            let placementMenu = NSMenu()
+            placementMenu.autoenablesItems = false
+            for option in DynamicIslandPlacement.allCases {
+                let title = option == .island ? Strings.menuPlacementIsland : Strings.menuPlacementEdge
+                let item = NSMenuItem(title: title, action: #selector(selectIslandPlacement(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = option.rawValue
+                item.state = option == placement ? .on : .off
+                placementMenu.addItem(item)
+            }
+            placementItem.submenu = placementMenu
+            menu.addItem(placementItem)
+        }
+
         // Menu Bar Icon
         let menuBarIconItem = NSMenuItem(title: Strings.menuMenuBarIcon, action: #selector(toggleMenuBarIcon), keyEquivalent: "")
         menuBarIconItem.target = self
@@ -1194,7 +1211,9 @@ final class StatusBarController: NSObject {
         let compactItem = NSMenuItem(title: Strings.menuDynamicIslandCompactMode, action: #selector(toggleDynamicIslandCompact), keyEquivalent: "")
         compactItem.target = self
         compactItem.state = DynamicIslandCompactPolicy.isEnabled() ? .on : .off
+        // Compact ring mode only applies to island wings, not the edge pill.
         compactItem.isEnabled = islandEnabled
+            && DynamicIslandPlacementPolicy.compactModeApplies(for: DynamicIslandPlacementPolicy.placement())
         displayMenu.addItem(compactItem)
 
         let remainingItem = NSMenuItem(title: Strings.menuRingShowsRemaining, action: #selector(selectRingDisplayMode(_:)), keyEquivalent: "")
@@ -1296,6 +1315,15 @@ final class StatusBarController: NSObject {
     }
 
     // MARK: - Surface Toggles (Dynamic Island & Menu Bar Icon)
+
+    @objc private func selectIslandPlacement(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String else { return }
+        let placement = DynamicIslandPlacement.fromBridge(raw)
+        DynamicIslandPlacementPolicy.write(placement)
+        dynamicIslandController.reloadPlacement()
+        NotificationCenter.default.post(name: .nativeSettingsChanged, object: nil)
+        NativeBridge.shared.pushSettings()
+    }
 
     @objc private func toggleDynamicIsland() {
         let current = UserDefaults.standard.bool(forKey: DynamicIslandController.enabledDefaultsKey)

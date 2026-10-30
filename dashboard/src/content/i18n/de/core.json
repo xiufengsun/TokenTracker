@@ -477,7 +477,7 @@
   "settings.labs.island.hint": "Verwandelt die MacBook-Notch in eine Dynamic Island: heutige Tokens und Ausgaben auf einen Blick, Details zu Ausgaben und Limits beim Hover.",
   "settings.labs.island.aria": "Dynamic Island umschalten",
   "settings.labs.island_hide_menubar.label": "Menüleisten-Symbol ausblenden",
-  "settings.labs.island_hide_menubar.hint": "Blendet das Symbol in der Menüleiste aus und nutzt ausschließlich die Dynamic Island.",
+  "settings.labs.island_hide_menubar.hint": "Blendet das Symbol in der Menüleiste aus und nutzt ausschließlich Island/Edge.",
   "settings.labs.island_hide_menubar.aria": "Menüleisten-Symbol ausblenden umschalten",
   "dashboard.island.title": "Entdecke die Dynamic Island",
   "dashboard.island.hint": "Verwandelt die MacBook-Notch in einen Live-Token-Zähler: heutige Tokens und Ausgaben auf einen Blick, Details beim Hover.",
@@ -632,5 +632,9 @@
   "settings.local_data.error.too_many_devices": "Importgrenze erreicht. Zuerst eine ungenutzte Quelle entfernen.",
   "settings.local_data.error.unknown_device": "Diese importierte Quelle ist nicht mehr vorhanden.",
   "settings.local_data.error.transfer_failed": "Übertragung fehlgeschlagen. Datei und lokale App prüfen und erneut versuchen.",
-  "settings.local_data.local_history_only": "Offline-Snapshots enthalten keine Sitzungen. Für die Kontextanalyse dieses Gerät auswählen. Projekt-, Sitzungs- und Ergebnisanalysen verwenden immer nur Aufzeichnungen dieses Geräts."
+  "settings.local_data.local_history_only": "Offline-Snapshots enthalten keine Sitzungen. Für die Kontextanalyse dieses Gerät auswählen. Projekt-, Sitzungs- und Ergebnisanalysen verwenden immer nur Aufzeichnungen dieses Geräts.",
+  "settings.labs.island_placement.label": "Platzierung",
+  "settings.labs.island_placement.hint": "Wähle Dynamic Island (Notch) oder eine feste Pill am rechten Rand. Im Edge-Zustand erscheinen keine langen Token-/Ausgaben-Texte.",
+  "settings.labs.island_placement.island": "Dynamic Island",
+  "settings.labs.island_placement.edge": "Rand"
 }

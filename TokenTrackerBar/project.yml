@@ -170,6 +170,7 @@ targets:
       - path: TokenTrackerBar/Models/MenuBarDisplayPreferences.swift
       - path: TokenTrackerBar/Models/DynamicIslandLayoutPolicy.swift
       - path: TokenTrackerBar/Models/DynamicIslandCompactPolicy.swift
+      - path: TokenTrackerBar/Models/DynamicIslandPlacementPolicy.swift
       - path: TokenTrackerBar/Models/PopoverPlacementPolicy.swift
       - path: TokenTrackerBar/Models/MenuBarIconStyle.swift
       - path: TokenTrackerBar/Models/UsageLimits.swift
