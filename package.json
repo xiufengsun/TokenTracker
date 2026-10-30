@@ -60,8 +60,8 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
-    "@sourcegraph/scip-typescript": "^0.4.0",
-    "@waffo/pancake-ts": "0.25.0",
+    "@sourcegraph/scip-typescript": "^0.5.2",
+    "@waffo/pancake-ts": "0.26.0",
     "alipay-sdk": "4.14.0",
     "esbuild": "0.28.2",
     "pngjs": "^7.0.0",
