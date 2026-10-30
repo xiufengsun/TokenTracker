@@ -419,9 +419,28 @@ function parseServeScriptPath(command) {
   const value = String(command || "").replaceAll("\0", " ").trim();
   if (!value) return null;
 
-  const executable = /^\S+(?=\s)/.exec(value);
-  if (!executable || !NODE_EXECUTABLE_RE.test(executable[0])) return null;
-  const rest = value.slice(executable[0].length);
+  const firstToken = /^\S+(?=\s)/.exec(value)?.[0];
+  let executable = null;
+  // ps also removes quoting from the executable itself (TokenTracker Dev.app).
+  // Prefer the longest existing Node-file prefix: splitting at the first space
+  // loses the real executable, while blindly consuming through a later "node"
+  // argument could misidentify a non-Node process. Directories do not qualify.
+  const boundaries = [...value.matchAll(/\s+/g)];
+  for (let i = boundaries.length - 1; i >= 0; i--) {
+    const prefix = value.slice(0, boundaries[i].index);
+    const candidate = prefix.replace(/^(["'])(.*)\1$/, "$2");
+    if (!NODE_EXECUTABLE_RE.test(candidate)) continue;
+    try {
+      if (!fssync.statSync(candidate).isFile()) continue;
+      executable = prefix;
+      break;
+    } catch (_e) { /* Unreadable/missing prefixes are not an identity proof. */ }
+  }
+  // Retain bare `node` and the existing no-space command forms. Spaced paths
+  // have no such fallback: without a real file they remain unverified.
+  if (!executable && firstToken && NODE_EXECUTABLE_RE.test(firstToken)) executable = firstToken;
+  if (!executable) return null;
+  const rest = value.slice(executable.length);
 
   SERVE_BOUNDARY_RE.lastIndex = 0;
   for (let match = SERVE_BOUNDARY_RE.exec(rest); match; match = SERVE_BOUNDARY_RE.exec(rest)) {

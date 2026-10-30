@@ -15,14 +15,17 @@ internal static class Program
         var deepLink = NativeReturnUri.FindArgument(args);
         var launchedAtStartup = args.Any(a =>
             string.Equals(a, LaunchAtStartup.StartupArgument, StringComparison.OrdinalIgnoreCase));
-        Diag.Log("program", $"Main argc={args.Length} deepLinkPresent={deepLink is not null} deepLinkLen={deepLink?.Length ?? 0} startup={launchedAtStartup}");
+        // Silent Start (persisted toggle) OR the --startup tag: launches stay in the tray.
+        var silentEffective = SilentStart.Enabled || launchedAtStartup;
+        Diag.Log("program", $"Main argc={args.Length} deepLinkPresent={deepLink is not null} deepLinkLen={deepLink?.Length ?? 0} startup={launchedAtStartup} silent={silentEffective}");
 
         using var mutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isNew);
         Diag.Log("program", $"mutex isNew={isNew}");
         if (!isNew)
         {
             // Forward deep links or an explicit manual launch to the live instance.
-            // A redundant Windows startup launch must stay quiet.
+            // A redundant Windows startup launch (or a duplicate login item) must
+            // stay quiet.
             if (deepLink is not null)
             {
                 var ok = SingleInstance.TryForwardToPrimary(deepLink);
@@ -87,17 +90,20 @@ internal static class Program
             listenerCts.Token);
 
         // Show the desktop pet on a normal launch (manual run or post-install), but stay
-        // quietly in the tray when Windows auto-starts us at login or when we were only
-        // spun up to relay an OAuth deep link (the pet then restores only if it was open
-        // last exit). Dashboard activation below is independent of the pet preference.
+        // quietly in the tray when Windows auto-starts us at login, when we were only
+        // spun up to relay an OAuth deep link, or when Silent Start is enabled (no pet,
+        // no dashboard — regardless of the pet's stored visibility). With Silent Start
+        // on, a later manual (second) launch still surfaces the dashboard via the
+        // ActivateMessage forward above.
         var showPetOnLaunch = deepLink is null && !launchedAtStartup;
-        var ctx = new TrayApplicationContext(showPetOnLaunch);
+        var ctx = new TrayApplicationContext(showPetOnLaunch, silentEffective);
         trayContext = ctx;
 
-        // Manual launches always show the dashboard; startup and deep links keep
-        // their own behavior. Defer activation until the message pump is running.
+        // Manual launches show the dashboard unless Silent Start keeps the launch
+        // quiet; startup and deep links keep their own behavior. Defer activation
+        // until the message pump is running.
         if (deepLink is not null) ctx.HandleDeepLink(deepLink);
-        else if (!launchedAtStartup)
+        else if (!launchedAtStartup && !silentEffective)
             wpfApp.Dispatcher.BeginInvoke(new Action(ctx.ActivateDashboard));
 
         Application.Run(ctx);

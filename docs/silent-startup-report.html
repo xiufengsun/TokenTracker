@@ -1,0 +1,1013 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>静默启动 · 调研报告 — TokenTracker</title>
+<script>
+/* 早于样式执行：读取主题偏好，避免深色用户看到白屏闪烁 */
+(function(){try{var q=new URLSearchParams(location.search).get('theme');
+var t=q||localStorage.getItem('tt-theme');
+if(!t)t=window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';
+document.documentElement.dataset.theme=t;}catch(e){}})();
+</script>
+<style>
+  :root{
+    --paper:#f7f4ed;
+    --paper-deep:#efeae0;
+    --card:#fffdf8;
+    --ink:#1d1b16;
+    --ink-soft:#4c463b;
+    --ink-faint:#8a8271;
+    --line:#d8d1c0;
+    --accent:#0e7466;          /* 主色:终端绿 */
+    --accent-soft:#e0efeb;
+    --amber:#b4690e;
+    --amber-soft:#f7ecd9;
+    --red:#b03a2e;
+    --red-soft:#f6e3e0;
+    --mac:#3d5a80;             /* macOS 蓝灰 */
+    --mac-soft:#e2e9f2;
+    --win:#0067b8;             /* Windows 蓝 */
+    --win-soft:#dfeefb;
+    --linux:#c05f10;           /* Tauri 橙 */
+    --linux-soft:#f8e9d8;
+    --code-bg:#211f1a;
+    --code-ink:#e8e2d2;
+    --mac-solid:#3d5a80;      /* 品牌实心块（不随主题变） */
+    --win-solid:#0067b8;
+    --linux-solid:#c05f10;
+    --accent-solid:#0e7466;
+    --accent-border:#bcd9d1;
+    --amber-border:#e7d2ac;
+    --red-border:#e5beb7;
+    --hl:#f3ddab;             /* 荧光笔标记 */
+    --serif:"Songti SC","Noto Serif SC","STSong","SimSun",serif;
+    --sans:"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+    --mono:"SF Mono","JetBrains Mono",Menlo,Consolas,"Courier New",monospace;
+    color-scheme:light;
+  }
+  /* ---------- 深色主题 ---------- */
+  html[data-theme="dark"]{
+    --paper:#16130e;
+    --paper-deep:#211d16;
+    --card:#262219;
+    --ink:#ece6d8;
+    --ink-soft:#b8af9a;
+    --ink-faint:#867e69;
+    --line:#3b3528;
+    --accent:#5cc9b0;
+    --accent-soft:#1c352f;
+    --accent-border:#31594e;
+    --amber:#e5a44f;
+    --amber-soft:#3b2d12;
+    --amber-border:#5f4820;
+    --red:#e68a80;
+    --red-soft:#3f211b;
+    --red-border:#6b3a30;
+    --mac:#93b3de;
+    --mac-soft:#1d2c40;
+    --win:#6cb4f0;
+    --win-soft:#142b43;
+    --linux:#f2a35c;
+    --linux-soft:#3a2810;
+    --hl:#4d3f1e;
+    color-scheme:dark;
+  }
+  /* 主题切换过渡（仅点击切换时短暂启用） */
+  .theming,.theming *,.theming *::before,.theming *::after{
+    transition:background-color .3s ease,color .3s ease,border-color .3s ease,
+               fill .3s ease,stroke .3s ease,box-shadow .3s ease !important;
+  }
+  /* ---------- 主题切换按钮 ---------- */
+  #theme-toggle{
+    position:fixed;top:14px;right:16px;z-index:98;
+    width:40px;height:40px;border-radius:50%;
+    border:1px solid var(--line);background:var(--card);color:var(--ink);
+    cursor:pointer;display:flex;align-items:center;justify-content:center;
+    box-shadow:0 2px 12px rgba(0,0,0,.22);
+    transition:transform .15s ease,background-color .2s,border-color .2s;
+  }
+  #theme-toggle:hover{transform:scale(1.1) rotate(14deg)}
+  #theme-toggle svg{width:19px;height:19px}
+  html[data-theme="dark"] #theme-toggle .icon-moon{display:none}
+  html:not([data-theme="dark"]) #theme-toggle .icon-sun{display:none}
+
+  /* ---------- SVG 图示主题化（通过 class 取 CSS 变量） ---------- */
+  figure.diagram .f-dark{fill:#262218;stroke:var(--line);stroke-width:1}
+  figure.diagram .f-card{fill:var(--card);stroke:var(--ink-soft);stroke-width:1.5}
+  figure.diagram .f-mac{fill:var(--mac-soft);stroke:var(--mac);stroke-width:1.6}
+  figure.diagram .f-win{fill:var(--win-soft);stroke:var(--win);stroke-width:1.5}
+  figure.diagram .f-linux{fill:var(--linux-soft);stroke:var(--linux);stroke-width:1.6}
+  figure.diagram .f-amber{fill:var(--amber-soft);stroke:var(--amber);stroke-width:1.6}
+  figure.diagram .f-red{fill:var(--red-soft);stroke:var(--red);stroke-width:1.8}
+  figure.diagram .f-solid-mac{fill:var(--mac-solid)}
+  figure.diagram .f-solid-accent{fill:var(--accent-solid)}
+  figure.diagram .ln{stroke:var(--ink-soft);stroke-width:1.6}
+  figure.diagram .ln-red{stroke:var(--red);stroke-width:1.6}
+  figure.diagram .s-accent{stroke:var(--accent)}
+  figure.diagram .t-mac{fill:var(--mac)}
+  figure.diagram .t-win{fill:var(--win)}
+  figure.diagram .t-linux{fill:var(--linux)}
+  figure.diagram .t-amber{fill:var(--amber)}
+  figure.diagram .t-red{fill:var(--red)}
+  figure.diagram .t-accent{fill:var(--accent)}
+  figure.diagram .t-soft{fill:var(--ink-soft)}
+  figure.diagram .t-faint{fill:var(--ink-faint)}
+  figure.diagram .t-paper{fill:#f7f4ed}   /* 深色块上的浅字，恒定 */
+  figure.diagram .t-white{fill:#ffffff}   /* 品牌实心块上的白字，恒定 */
+  figure.diagram .t-dim{fill:#a8a191}     /* 深色块上的暗字，恒定 */
+  figure.diagram .t-teal{fill:#7fc8ba}    /* 恒定点缀 */
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:var(--sans);
+    font-size:16px;
+    line-height:1.85;
+    -webkit-font-smoothing:antialiased;
+  }
+  ::selection{background:var(--accent);color:#fff}
+
+  /* ---------- 顶部进度条 ---------- */
+  #progress{position:fixed;top:0;left:0;height:3px;width:0;background:var(--accent);z-index:99;transition:width .1s linear}
+
+  /* ---------- 报头 ---------- */
+  header.hero{
+    background:linear-gradient(160deg,#181611 0%,#221f17 55%,#1b2420 100%);
+    color:#f7f4ed; /* 英雄区恒为深色，文字取值不随主题变 */
+    padding:72px 24px 64px;
+    position:relative;
+    overflow:hidden;
+  }
+  header.hero::before{ /* 细点阵纹理 */
+    content:"";position:absolute;inset:0;
+    background-image:radial-gradient(rgba(247,244,237,.07) 1px,transparent 1px);
+    background-size:22px 22px;
+  }
+  .hero-inner{max-width:1080px;margin:0 auto;position:relative}
+  .kicker{
+    font-family:var(--mono);font-size:12px;letter-spacing:.28em;
+    color:#7fc8ba;text-transform:uppercase;margin-bottom:18px;
+  }
+  h1.title{
+    font-family:var(--serif);font-weight:900;
+    font-size:clamp(38px,6vw,62px);line-height:1.18;letter-spacing:.02em;
+    margin-bottom:14px;
+  }
+  h1 .quiet{color:#8fb8ae}
+  .subtitle{font-size:17px;color:#c9c3b4;max-width:640px;margin-bottom:30px}
+  .meta-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-family:var(--mono);font-size:12.5px;color:#a8a191}
+  .meta-row .chip{
+    border:1px solid rgba(247,244,237,.25);border-radius:999px;
+    padding:4px 14px;display:inline-flex;align-items:center;gap:7px;
+  }
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .dot.mac{background:#9db8dc}.dot.win{background:#6cb2ee}.dot.linux{background:#eda44f}
+
+  /* 英雄插图 */
+  .hero-art{margin-top:44px}
+  .hero-art svg{width:100%;height:auto;display:block}
+
+  /* ---------- 主体布局 ---------- */
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  .layout{display:grid;grid-template-columns:1fr;gap:0}
+  @media(min-width:1180px){
+    .layout{grid-template-columns:200px 1fr;gap:44px}
+    nav.toc{position:sticky;top:28px;align-self:start;max-height:calc(100vh - 56px);overflow:auto;padding:34px 0 20px}
+  }
+  nav.toc{display:none;font-family:var(--mono);font-size:12px;line-height:1.5}
+  @media(min-width:1180px){nav.toc{display:block}}
+  nav.toc a{
+    display:block;color:var(--ink-faint);text-decoration:none;
+    padding:6px 10px;border-left:2px solid var(--line);
+  }
+  nav.toc a:hover{color:var(--ink);border-left-color:var(--accent)}
+  nav.toc a.active{color:var(--accent);border-left-color:var(--accent);background:var(--accent-soft)}
+  nav.toc .toc-head{color:var(--ink-faint);letter-spacing:.2em;margin:0 0 10px 12px;font-size:10.5px}
+
+  main{padding:26px 0 40px;min-width:0}
+
+  /* ---------- 章节 ---------- */
+  section{margin:74px 0}
+  .sec-head{display:flex;align-items:baseline;gap:16px;margin-bottom:8px}
+  .sec-no{
+    font-family:var(--serif);font-weight:900;font-size:56px;line-height:1;
+    color:transparent;-webkit-text-stroke:1.6px var(--accent);flex-shrink:0;
+  }
+  h2{font-family:var(--serif);font-weight:900;font-size:30px;letter-spacing:.02em;line-height:1.3}
+  .sec-lead{color:var(--ink-soft);max-width:720px;margin:6px 0 26px;font-size:15.5px}
+  h3{font-family:var(--serif);font-weight:700;font-size:20.5px;margin:34px 0 12px;display:flex;align-items:center;gap:10px}
+  h3::before{content:"";width:10px;height:10px;background:var(--accent);flex-shrink:0;border-radius:2px}
+  p{margin-bottom:14px;max-width:760px}
+  strong{font-weight:650}
+  em.hl{font-style:normal;background:linear-gradient(transparent 62%,var(--hl) 62%);padding:0 2px}
+  code.inline{
+    font-family:var(--mono);font-size:.86em;background:var(--paper-deep);
+    border:1px solid var(--line);border-radius:5px;padding:1px 6px;white-space:nowrap;
+  }
+  a{color:var(--accent);text-decoration-thickness:1px;text-underline-offset:3px}
+
+  /* ---------- 卡片与格子 ---------- */
+  .grid{display:grid;gap:18px;margin:22px 0}
+  .g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+  .g3{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:22px 22px 18px;position:relative;overflow:hidden;
+    box-shadow:0 1px 0 rgba(29,27,22,.04);
+  }
+  .card .tag{
+    font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--ink-faint);margin-bottom:8px;display:block;
+  }
+  .card h4{font-family:var(--serif);font-size:18px;font-weight:700;margin-bottom:8px}
+  .card p{font-size:14.5px;color:var(--ink-soft);margin-bottom:8px;max-width:none}
+  .card p:last-child{margin-bottom:0}
+
+  /* 平台卡 */
+  .plat{border-top:5px solid var(--line)}
+  .plat.mac{border-top-color:var(--mac)}.plat.mac .tag{color:var(--mac)}
+  .plat.win{border-top-color:var(--win)}.plat.win .tag{color:var(--win)}
+  .plat.linux{border-top-color:var(--linux)}.plat.linux .tag{color:var(--linux)}
+  .status-line{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .pill{
+    font-size:12px;font-family:var(--sans);font-weight:600;
+    border-radius:999px;padding:3px 11px;white-space:nowrap;
+  }
+  .pill.ok{background:var(--accent-soft);color:var(--accent)}
+  .pill.warn{background:var(--amber-soft);color:var(--amber)}
+  .pill.no{background:var(--red-soft);color:var(--red)}
+
+  /* 提示框 */
+  .callout{
+    border-radius:12px;padding:16px 20px;margin:20px 0;max-width:780px;
+    border:1px solid var(--line);background:var(--card);
+    display:flex;gap:14px;align-items:flex-start;
+  }
+  .callout .ico{
+    font-family:var(--serif);font-weight:900;font-size:15px;flex-shrink:0;
+    width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+    margin-top:3px;
+  }
+  .callout p{margin:0;font-size:14.5px;max-width:none}
+  .callout .t{font-weight:700;display:block;margin-bottom:2px;font-size:14px}
+  .callout.beginner{background:var(--accent-soft);border-color:var(--accent-border)}
+  .callout.beginner .ico{background:var(--accent);color:#fff}
+  .callout.beginner .t{color:var(--accent)}
+  .callout.key{background:var(--amber-soft);border-color:var(--amber-border)}
+  .callout.key .ico{background:var(--amber);color:#fff}
+  .callout.key .t{color:var(--amber)}
+  .callout.pit{background:var(--red-soft);border-color:var(--red-border)}
+  .callout.pit .ico{background:var(--red);color:#fff}
+  .callout.pit .t{color:var(--red)}
+
+  /* ---------- 表格 ---------- */
+  .tbl-wrap{overflow-x:auto;margin:20px 0;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+  table{border-collapse:collapse;width:100%;font-size:14px;min-width:640px}
+  th{
+    font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--ink-faint);text-align:left;padding:12px 16px;border-bottom:2px solid var(--ink);
+    background:var(--paper-deep);
+  }
+  td{padding:11px 16px;border-bottom:1px solid var(--line);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td .yes{color:var(--accent);font-weight:700}
+  td .warn{color:var(--amber);font-weight:700}
+  td .no{color:var(--red);font-weight:700}
+
+  /* ---------- 代码块 ---------- */
+  figure.code{
+    background:var(--code-bg);border:1px solid var(--line);border-radius:14px;margin:20px 0;overflow:hidden;
+    box-shadow:0 10px 26px -14px rgba(29,27,22,.5);
+  }
+  figure.code figcaption{
+    display:flex;justify-content:space-between;align-items:center;
+    padding:10px 18px;background:#181611;color:#8f8875;
+    font-family:var(--mono);font-size:12px;border-bottom:1px solid #343026;
+  }
+  figure.code figcaption .lang{color:#7fc8ba;letter-spacing:.14em;text-transform:uppercase;font-size:10.5px}
+  figure.code pre{
+    padding:18px 20px;overflow-x:auto;
+    font-family:var(--mono);font-size:13px;line-height:1.75;color:var(--code-ink);
+  }
+  .cm{color:#8d9b7e}      /* 注释 */
+  .kw{color:#c99ce8}      /* 关键字 */
+  .st{color:#e6c088}      /* 字符串 */
+  .fn{color:#8ec6e6}      /* 函数 */
+  .num{color:#e8a0a0}     /* 数字/常量 */
+  .newc{color:#7fc8ba;font-weight:700} /* 新增行高亮 */
+
+  /* ---------- 图示 ---------- */
+  figure.diagram{margin:24px 0;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px}
+  figure.diagram svg{width:100%;height:auto;display:block}
+  figure.diagram figcaption{
+    text-align:center;font-size:13px;color:var(--ink-faint);margin-top:12px;
+    font-family:var(--sans);
+  }
+  .legend{display:flex;flex-wrap:wrap;gap:16px;justify-content:center;margin-top:10px;font-size:12.5px;color:var(--ink-soft)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .lg{width:14px;height:14px;border-radius:4px;display:inline-block;border:1.5px solid var(--ink-soft)}
+
+  /* ---------- 术语表 ---------- */
+  .gloss{columns:2;column-gap:22px;margin:20px 0}
+  @media(max-width:700px){.gloss{columns:1}}
+  .gloss dl{
+    break-inside:avoid;background:var(--card);border:1px solid var(--line);
+    border-radius:10px;padding:14px 18px;margin-bottom:14px;
+  }
+  .gloss dt{font-weight:700;font-size:15px;font-family:var(--serif)}
+  .gloss dt code{font-family:var(--mono);font-size:.85em;color:var(--accent)}
+  .gloss dd{font-size:13.5px;color:var(--ink-soft);margin-top:5px}
+
+  /* ---------- 问题卡 ---------- */
+  .q-card{
+    background:var(--card);border:1px solid var(--line);border-left:5px solid var(--amber);
+    border-radius:12px;padding:18px 22px;margin-bottom:14px;max-width:780px;
+  }
+  .q-card .q-no{font-family:var(--mono);font-size:11px;color:var(--amber);letter-spacing:.2em}
+  .q-card h4{font-family:var(--serif);font-size:17.5px;margin:4px 0 6px}
+  .q-card p{font-size:14px;color:var(--ink-soft);margin:0;max-width:none}
+
+  /* ---------- 参考文献 ---------- */
+  details.refs{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:4px 22px;max-width:780px}
+  details.refs summary{cursor:pointer;font-weight:700;font-family:var(--serif);padding:14px 0}
+  details.refs ol{margin:0 0 18px 20px;font-size:13px;color:var(--ink-soft)}
+  details.refs li{margin-bottom:7px}
+  details.refs code{font-family:var(--mono);font-size:.88em}
+
+  footer{
+    border-top:1px solid var(--line);margin-top:80px;padding:36px 24px 60px;
+    text-align:center;color:var(--ink-faint);font-size:13px;
+  }
+  footer .fin{font-family:var(--serif);font-size:20px;color:var(--ink);margin-bottom:8px}
+
+  @media print{
+    #progress,#theme-toggle,nav.toc{display:none}
+    header.hero{background:var(--ink);-webkit-print-color-adjust:exact}
+    body{background:#fff}
+    /* 打印一律用浅色取值，覆盖深色主题变量 */
+    html[data-theme="dark"]{
+      --paper:#fff;--paper-deep:#f2f0ea;--card:#fff;--ink:#1d1b16;--ink-soft:#4c463b;
+      --ink-faint:#8a8271;--line:#d8d1c0;--accent:#0e7466;--accent-soft:#e0efeb;
+      --accent-border:#bcd9d1;--amber:#b4690e;--amber-soft:#f7ecd9;--amber-border:#e7d2ac;
+      --red:#b03a2e;--red-soft:#f6e3e0;--red-border:#e5beb7;--mac:#3d5a80;--mac-soft:#e2e9f2;
+      --win:#0067b8;--win-soft:#dfeefb;--linux:#c05f10;--linux-soft:#f8e9d8;--hl:#f3ddab;
+    }
+    .card,.callout,figure.diagram,figure.code,.tbl-wrap{break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div id="progress"></div>
+
+<button id="theme-toggle" type="button" aria-label="切换深色 / 浅色模式" title="切换深色 / 浅色模式">
+  <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+  <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+</button>
+
+<!-- ================= 报头 ================= -->
+<header class="hero">
+  <div class="hero-inner">
+    <div class="kicker">TokenTracker · Technical Research · 2026-09-04</div>
+    <h1 class="title">静默启动<span class="quiet">：让应用</span>悄悄上线</h1>
+    <p class="subtitle">目标：应用启动后只在菜单栏 / 系统托盘里待命，<strong>不弹出任何主面板</strong>。本文是覆盖 macOS、Windows、Linux 三个桌面端的完整调研，写给第一次接触这三个平台的你。</p>
+    <div class="meta-row">
+      <span class="chip"><span class="dot mac"></span>macOS · 菜单栏应用</span>
+      <span class="chip"><span class="dot win"></span>Windows · 托盘应用</span>
+      <span class="chip"><span class="dot linux"></span>Linux · Tauri 应用</span>
+      <span class="chip">阅读 ≈ 15 分钟</span>
+    </div>
+
+    <!-- 英雄插图：三个平台的“角落图标” -->
+    <div class="hero-art" aria-hidden="true">
+      <svg viewBox="0 0 1000 150" role="img" aria-label="三个平台的角落图标示意图">
+        <!-- macOS 菜单栏 -->
+        <g>
+          <rect x="0" y="18" width="320" height="34" rx="9" fill="#f7f4ed" opacity=".92"/>
+          <text x="16" y="40" font-family="monospace" font-size="13" fill="#3d5a80" font-weight="bold"> Finder</text>
+          <circle cx="270" cy="35" r="8" fill="#3d5a80"/>
+          <rect x="283" y="28" width="16" height="14" rx="3" fill="#3d5a80" opacity=".85"/>
+          <path d="M292 52 l-8 14 h16 z" fill="#f7f4ed" opacity=".92"/>
+          <rect x="252" y="60" width="70" height="26" rx="7" fill="#e2e9f2"/>
+          <text x="262" y="77" font-family="sans-serif" font-size="11" fill="#3d5a80">已就绪 ✓</text>
+        </g>
+        <!-- Windows 任务栏 -->
+        <g>
+          <rect x="360" y="18" width="280" height="34" rx="9" fill="#f7f4ed" opacity=".92"/>
+          <text x="376" y="40" font-family="monospace" font-size="13" fill="#555" font-weight="bold">⊞ Win</text>
+          <rect x="540" y="27" width="18" height="16" rx="3" fill="#0067b8" opacity=".45"/>
+          <rect x="566" y="27" width="18" height="16" rx="3" fill="#0067b8"/>
+          <rect x="592" y="27" width="18" height="16" rx="3" fill="#0067b8" opacity=".45"/>
+        </g>
+        <!-- Linux 顶栏 -->
+        <g>
+          <rect x="680" y="18" width="320" height="34" rx="9" fill="#f7f4ed" opacity=".92"/>
+          <text x="696" y="40" font-family="monospace" font-size="13" fill="#c05f10" font-weight="bold">Activities</text>
+          <path d="M920 27 a9 9 0 0 1 0 16 z" fill="#c05f10"/>
+          <circle cx="915" cy="35" r="8.5" fill="none" stroke="#c05f10" stroke-width="2.5"/>
+          <rect x="946" y="30" width="34" height="11" rx="5.5" fill="#c05f10"/>
+        </g>
+        <text x="0" y="116" font-family="sans-serif" font-size="12.5" fill="#8a8271">启动后只出现在角落 —— 用户不点，就不打扰。</text>
+        <text x="0" y="138" font-family="monospace" font-size="11.5" fill="#7fc8ba">$ tokentracker serve &nbsp;→&nbsp; 后台照常统计、同步、刷新 ✓</text>
+      </svg>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+<div class="layout">
+
+<!-- ================= 目录 ================= -->
+<nav class="toc" id="toc">
+  <div class="toc-head">目录 CONTENTS</div>
+  <a href="#s1">1 · 这个功能要做什么</a>
+  <a href="#s2">2 · 三个端现状体检</a>
+  <a href="#s3">3 · macOS 深潜</a>
+  <a href="#s4">4 · Windows 深潜</a>
+  <a href="#s5">5 · Linux 深潜</a>
+  <a href="#s6">6 · 四个关键发现</a>
+  <a href="#s7">7 · 推荐方案</a>
+  <a href="#s8">8 · 待拍板的问题</a>
+  <a href="#s9">9 · 新手术语表</a>
+  <a href="#s10">10 · 参考文献</a>
+</nav>
+
+<main>
+
+<!-- ================= 1 ================= -->
+<section id="s1">
+  <div class="sec-head"><span class="sec-no">01</span><h2>这个功能到底要做什么？</h2></div>
+  <p class="sec-lead">先用一个你每天都见的例子讲清楚需求，再给出三个端的"体检结论"。</p>
+
+  <div class="callout beginner">
+    <span class="ico">科</span>
+    <div><span class="t">新手科普：什么是"静默启动"？</span>
+    想想微信开机的样子：电脑开机后微信<strong>自动运行</strong>了，但你桌面上<strong>没有弹出聊天窗口</strong>——它只是安静地待在屏幕角落（任务栏托盘）里。等你有空点它，界面才弹出来。这种"启动后只留一个角落图标、不弹窗"的行为，就叫静默启动（silent start / 启动到托盘）。</div>
+  </div>
+
+  <p>对 TokenTracker 来说，需求就是一条用户故事：</p>
+
+  <div class="card" style="max-width:780px">
+    <span class="tag">User Story</span>
+    <h4>“我开机登录后，TokenTracker 自己就上线了，但别抢我的屏幕。”</h4>
+    <p>后台照常做三件事：① 本地服务器继续运行（<code class="inline">:7680</code>），② 继续解析 AI 日志、统计 token，③ 菜单栏/托盘图标待命。只有当我<strong>主动点击</strong>图标、或点了 <code class="inline">tokentracker://</code> 链接时，主面板才出现。</p>
+  </div>
+
+  <h3>三个端，三种"角落"</h3>
+  <p>TokenTracker 有三个桌面客户端，"角落图标"在每家系统上的名字和机制都不一样——这是本调研所有复杂度的根源：</p>
+
+  <div class="grid g3">
+    <div class="card plat mac">
+      <span class="tag">macOS · TokenTrackerBar</span>
+      <h4>菜单栏 Menu Bar</h4>
+      <p>屏幕右上角那排小图标。TokenTracker 是"菜单栏应用"（苹果叫 <strong>agent 应用</strong>：没有 Dock 图标、不抢焦点），点击图标弹出一个popover 小面板，另有完整仪表盘窗口。</p>
+      <p>技术：Swift + AppKit，面板是 <code class="inline">NSWindow</code> 里嵌 <code class="inline">WKWebView</code>。</p>
+    </div>
+    <div class="card plat win">
+      <span class="tag">Windows · TokenTrackerWin</span>
+      <h4>系统托盘 System Tray</h4>
+      <p>任务栏右下角时钟旁边。TokenTracker 常驻一个 <code class="inline">NotifyIcon</code> 托盘图标，左键点击弹出仪表盘窗口（<code class="inline">WebView2</code> 渲染网页），还养了一只桌面宠物。</p>
+      <p>技术：.NET 8 WinForms + WPF + WebView2。</p>
+    </div>
+    <div class="card plat linux">
+      <span class="tag">Linux · TokenTrackerLinux</span>
+      <h4>托盘托盘 Tray</h4>
+      <p>取决于桌面环境（GNOME/KDE…），通常在顶栏。TokenTracker 用 <strong>Tauri v2</strong>（Rust 框架）构建，托盘只有右键菜单："Open Dashboard" 和 "Quit"。</p>
+      <p>技术：Tauri v2 + Rust + 内嵌 Node 服务器。</p>
+    </div>
+  </div>
+
+  <div class="callout beginner">
+    <span class="ico">科</span>
+    <div><span class="t">新手科普：为什么面板里都是"网页"？</span>
+    三个端的面板都是"原生窗口里嵌一个浏览器内核"：macOS 用 <strong>WKWebView</strong>，Windows 用 <strong>WebView2</strong>（微软 Edge 的内嵌版），Linux 的 Tauri 用 <strong>WebKitGTK</strong>。它们加载的都是同一套 React 仪表盘页面。所以"静默启动"还要回答一个问题：<strong>藏在后台时，这些网页容器会不会出幺蛾子？</strong>（剧透：不会，第 6 节有实验依据。）</div>
+  </div>
+</section>
+
+<!-- ================= 2 ================= -->
+<section id="s2">
+  <div class="sec-head"><span class="sec-no">02</span><h2>三个端现状体检</h2></div>
+  <p class="sec-lead">最大的一份意外收获：<strong>三个端都已经有一部分静默启动的地基了</strong>，这个功能比想象中小。下表是逐项体检结果（✓ 已具备 · ⚠ 有缺口 · ✗ 没有）。</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr><th style="width:170px">能力</th><th>macOS</th><th>Windows</th><th>Linux</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>常驻图标</strong></td>
+          <td><span class="yes">✓</span> 菜单栏 agent</td>
+          <td><span class="yes">✓</span> NotifyIcon 托盘</td>
+          <td><span class="yes">✓</span> 托盘 + 菜单</td>
+        </tr>
+        <tr>
+          <td><strong>登录自启</strong></td>
+          <td><span class="yes">✓</span> SMAppService</td>
+          <td><span class="yes">✓</span> 注册表 Run 键 + <code class="inline">--startup</code> 参数</td>
+          <td><span class="no">✗</span> 无（需新增 autostart 插件）</td>
+        </tr>
+        <tr>
+          <td><strong>自启时不弹主面板</strong></td>
+          <td><span class="yes">✓</span> 已实现（写死，无开关）</td>
+          <td><span class="yes">✓</span> 主面板本来就不自动弹</td>
+          <td><span class="no">✗</span> 主面板 100% 弹出</td>
+        </tr>
+        <tr>
+          <td><strong>自启时彻底安静</strong></td>
+          <td><span class="warn">⚠</span> 宠物/灵动岛面板照常恢复</td>
+          <td><span class="warn">⚠</span> <strong>桌面宠物会覆盖静默</strong>（见 §4）</td>
+          <td><span class="no">✗</span> —</td>
+        </tr>
+        <tr>
+          <td><strong>用户开关</strong></td>
+          <td><span class="no">✗</span> 行为写死在代码里</td>
+          <td><span class="no">✗</span> 只有"启动时运行"开关</td>
+          <td><span class="no">✗</span> —</td>
+        </tr>
+        <tr>
+          <td><strong>关窗收进托盘</strong></td>
+          <td><span class="yes">✓</span> Cmd+Q 降级为关面板</td>
+          <td><span class="yes">✓</span> 关闭 = 隐藏</td>
+          <td><span class="yes">✓</span> 关闭 = 隐藏</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout key">
+    <span class="ico">重点</span>
+    <div><span class="t">一句话总结体检结果</span>
+    macOS 缺一个"用户开关"；Windows 只差"宠物让路"这一件事；Linux 两样都没有（自启 + 静默），但改动成本最低——因为它的窗口本来就是代码创建的，加一个参数就行。</div>
+  </div>
+</section>
+
+<!-- ================= 3 ================= -->
+<section id="s3">
+  <div class="sec-head"><span class="sec-no">03</span><h2>macOS 深潜：已经静默了，但用户不知道</h2></div>
+  <p class="sec-lead">TokenTrackerBar 的启动流程里已经埋好了一条"判断是否被系统拉起"的通道，只是没有暴露成设置。</p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 860 240" role="img" aria-label="macOS 启动决策流程图">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" style="fill:var(--ink-soft)"/>
+        </marker>
+        <marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" style="fill:var(--mac)"/>
+        </marker>
+      </defs>
+      <!-- 起点 -->
+      <rect class="f-dark" x="20" y="95" width="120" height="50" rx="12"/>
+      <text class="t-paper" x="80" y="116" text-anchor="middle" font-size="13.5" font-family="sans-serif" font-weight="bold">应用启动</text>
+      <text class="t-dim" x="80" y="133" text-anchor="middle" font-size="10.5" font-family="monospace">didFinishLaunching</text>
+      <!-- 判断 -->
+      <path class="f-mac" d="M230 120 L290 120 L320 90 L350 120 L320 150 L290 120"/>
+      <text class="t-mac" x="320" y="115" text-anchor="middle" font-size="12" font-weight="bold" font-family="sans-serif">登录自启？</text>
+      <text class="t-mac" x="320" y="130" text-anchor="middle" font-size="9.5" font-family="monospace">'lgit Apple事件</text>
+      <line class="ln" x1="140" y1="120" x2="286" y2="120" marker-end="url(#arr)"/>
+      <!-- 是 -->
+      <line x1="320" y1="88" x2="320" y2="52" style="stroke:var(--mac)" stroke-width="1.6" marker-end="url(#arrA)"/>
+      <text class="t-mac" x="330" y="72" font-size="11" font-family="sans-serif">是</text>
+      <rect class="f-solid-mac" x="250" y="10" width="140" height="42" rx="10"/>
+      <text class="t-white" x="320" y="36" text-anchor="middle" font-size="13" font-family="sans-serif" font-weight="bold">保持安静 ✓（现状）</text>
+      <!-- 否 -->
+      <line class="ln" x1="352" y1="120" x2="420" y2="120" marker-end="url(#arr)"/>
+      <text class="t-soft" x="382" y="110" font-size="11" font-family="sans-serif">否（手动启动）</text>
+      <rect class="f-amber" x="422" y="95" width="150" height="50" rx="12"/>
+      <text class="t-amber" x="497" y="116" text-anchor="middle" font-size="13" font-weight="bold" font-family="sans-serif">自动打开面板</text>
+      <text class="t-amber" x="497" y="133" text-anchor="middle" font-size="10" font-family="monospace">showDashboard()</text>
+      <!-- 新增虚线：用户开关 -->
+      <rect class="s-accent" x="620" y="80" width="220" height="84" rx="12" fill="none" stroke-width="2" stroke-dasharray="6 5"/>
+      <text class="t-accent" x="730" y="106" text-anchor="middle" font-size="13" font-weight="bold" font-family="sans-serif">要新增的：用户开关</text>
+      <text class="t-accent" x="730" y="126" text-anchor="middle" font-size="11" font-family="monospace">UserDefaults: LaunchSilently</text>
+      <text class="t-soft" x="730" y="146" text-anchor="middle" font-size="10.5" font-family="sans-serif">设置页 + 菜单栏菜单 + 桥接同步</text>
+      <line class="s-accent" x1="572" y1="120" x2="618" y2="120" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arr)"/>
+      <!-- 底注 -->
+      <text class="t-faint" x="20" y="215" font-size="11.5" font-family="sans-serif">无论哪条路：本地服务器、日志同步、托盘刷新、桌面小组件全部照常运行 —— "静默"只影响"弹不弹面板"。</text>
+    </svg>
+    <figcaption>图 3-1 · macOS 启动决策流程（虚线框 = 本次要补的部分）</figcaption>
+  </figure>
+
+  <h3>关键代码：静默判断就藏在启动回调里</h3>
+  <figure class="code">
+    <figcaption><span>TokenTrackerBar/TokenTrackerBarApp.swift : 149–154</span><span class="lang">Swift</span></figcaption>
+    <pre><span class="cm">// 正常的双击/Finder 启动要"像打开一个应用"；</span>
+<span class="cm">// 而 SMAppService 登录自启应当安静地挂进菜单栏。</span>
+<span class="kw">if</span> <span class="fn">NSAppleEventManager.shared().currentAppleEvent?</span>
+       .<span class="fn">attributeDescriptor</span>(forKeyword: <span class="num">keyAELaunchedAsLogInItem</span>) == <span class="kw">nil</span> {
+    <span class="fn">DashboardPresentationCoordinator.shared.showDashboard</span>()  <span class="cm">// ← 弹面板</span>
+}
+<span class="cm">// ↑ 意思是：只有当系统"没有"塞小纸条时，才弹面板。</span>
+<span class="cm">//   现状：这条逻辑写死了 —— 想要开关，就在这里扩展条件。</span></pre>
+  </figure>
+
+  <div class="callout beginner">
+    <span class="ico">科</span>
+    <div><span class="t">新手科普：什么是 "'lgit 小纸条"？</span>
+    当应用是通过"登录项"（开机自启）被 macOS 拉起来的，系统会随启动事件附赠一个名为 <code class="inline">'lgit</code>（<em>l</em>aunched as log<em>in</em> <em>it</em>em）的标记。应用读一下这个标记，就知道"我是被系统拉起来的，不是用户点的"。这是 Apple 官方文档里的机制（<code class="inline">AERegistry.h</code> 头文件原文："application was launched as a login item and probably shouldn't open up untitled documents"——连苹果都说：这种情况就别乱弹窗了）。</div>
+  </div>
+
+  <h3>一个绕不开的平台限制</h3>
+  <p>调查了一个"想当然"的方案：能不能在注册登录自启时顺手塞一个 <code class="inline">--silent</code> 命令行参数，像 Windows 那样？<strong>答案是不行。</strong>macOS 现代的登录项接口 <code class="inline">SMAppService.mainApp.register()</code> <em>不接受任何自定义参数</em>，官方文档和社区维护者的回复都确认了这一点。所以 macOS 上想控制静默，只能把偏好<strong>存盘</strong>（UserDefaults），启动时读出来——幸运的是现有的 <code class="inline">native:settings</code> 桥接机制（网页设置页 ↔ 原生应用双向同步）已经万事俱备，加一个键就能用。</p>
+
+  <div class="callout pit">
+    <span class="ico">坑</span>
+    <div><span class="t">已发现的隐患：自家检测写法与"社区验证版"不一致</span>
+    我们用 <code class="inline">attributeDescriptor(forKey: 'lgit)</code> 直接读事件属性；而被广泛验证的开源库 LaunchAtLogin-Modern 用的是 <code class="inline">paramDescriptor(forKey: keyAEPropData).enumCodeValue == 'lgit</code>。两者目标相同，但解析路径不同。若未来某个 macOS 版本上静默失效，<strong>第一件事就是对齐这个写法</strong>。另外这个小纸条只在 <code class="inline">applicationDidFinishLaunching</code> 里读得到，过后就没了——现有代码的位置刚好正确，重构时别挪。</div>
+  </div>
+</section>
+
+<!-- ================= 4 ================= -->
+<section id="s4">
+  <div class="sec-head"><span class="sec-no">04</span><h2>Windows 深潜：万事俱备，只欠"宠物让路"</h2></div>
+  <p class="sec-lead">Windows 端的静默启动框架已经完整落地——注册表自启带参数、单实例互斥、关窗收托盘都有了。唯一的漏洞出在桌面宠物身上。</p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 860 260" role="img" aria-label="Windows 启动流程图，宠物覆盖静默">
+      <defs>
+        <marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" style="fill:var(--accent)"/>
+        </marker>
+      </defs>
+      <!-- 起点 -->
+      <rect class="f-dark" x="20" y="100" width="110" height="50" rx="12"/>
+      <text class="t-paper" x="75" y="130" text-anchor="middle" font-size="13.5" font-family="sans-serif" font-weight="bold">Main(args)</text>
+      <!-- 三条支路 -->
+      <line class="ln" x1="130" y1="112" x2="200" y2="54" marker-end="url(#arr)"/>
+      <line class="ln" x1="130" y1="125" x2="200" y2="125" marker-end="url(#arr)"/>
+      <line class="ln" x1="130" y1="138" x2="200" y2="196" marker-end="url(#arr)"/>
+      <rect class="f-win" x="205" y="30" width="130" height="44" rx="10"/>
+      <text class="t-win" x="270" y="49" text-anchor="middle" font-size="12" font-weight="bold" font-family="monospace">tokentracker://</text>
+      <text class="t-win" x="270" y="65" text-anchor="middle" font-size="10.5" font-family="sans-serif">深链（OAuth 回调等）</text>
+      <rect class="f-win" x="205" y="103" width="130" height="44" rx="10"/>
+      <text class="t-win" x="270" y="122" text-anchor="middle" font-size="12" font-weight="bold" font-family="monospace">--startup</text>
+      <text class="t-win" x="270" y="138" text-anchor="middle" font-size="10.5" font-family="sans-serif">登录自启（Run 键带参）</text>
+      <rect class="f-card" x="205" y="176" width="130" height="44" rx="10"/>
+      <text class="t-soft" x="270" y="195" text-anchor="middle" font-size="12" font-weight="bold" font-family="sans-serif">普通手动启动</text>
+      <text class="t-soft" x="270" y="211" text-anchor="middle" font-size="10.5" font-family="sans-serif">安装后首次运行等</text>
+      <!-- 汇合到宠物决策（放大菱形，容纳文字） -->
+      <line class="ln" x1="335" y1="52" x2="386" y2="97" marker-end="url(#arr)"/>
+      <line class="ln" x1="335" y1="125" x2="344" y2="125" marker-end="url(#arr)"/>
+      <line class="ln" x1="335" y1="198" x2="386" y2="153" marker-end="url(#arr)"/>
+      <path class="f-amber" d="M350 125 L445 80 L540 125 L445 170 Z"/>
+      <text class="t-amber" x="445" y="121" text-anchor="middle" font-size="12.5" font-weight="bold" font-family="monospace">showPetOnLaunch?</text>
+      <text class="t-amber" x="445" y="140" text-anchor="middle" font-size="10" font-family="sans-serif">深链✗ · 自启✗ · 手动✓</text>
+      <!-- 宠物最终决策 -->
+      <line class="ln-red" x1="540" y1="125" x2="580" y2="125" marker-end="url(#arr)"/>
+      <rect class="f-red" x="585" y="88" width="205" height="74" rx="12"/>
+      <text class="t-red" x="687" y="112" text-anchor="middle" font-size="13" font-weight="bold" font-family="sans-serif">⚠ 但宠物偏好会覆盖！</text>
+      <text class="t-red" x="687" y="131" text-anchor="middle" font-size="11" font-family="monospace">PetVisible=true → 照弹</text>
+      <text class="t-faint" x="687" y="149" text-anchor="middle" font-size="10" font-family="sans-serif">StoredVisible ?? showPetOnLaunch</text>
+      <!-- 修复 -->
+      <line class="s-accent" x1="687" y1="162" x2="687" y2="178" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrG)"/>
+      <rect class="s-accent" x="585" y="182" width="205" height="48" rx="10" fill="none" stroke-width="2" stroke-dasharray="6 5"/>
+      <text class="t-accent" x="687" y="202" text-anchor="middle" font-size="12" font-weight="bold" font-family="sans-serif">修复：--startup 优先于宠物偏好</text>
+      <text class="t-accent" x="687" y="220" text-anchor="middle" font-size="10" font-family="monospace">StoredVisible 让位</text>
+      <!-- 底注 -->
+      <text class="t-faint" x="20" y="250" font-size="11.5" font-family="sans-serif">好消息：仪表盘窗口从来不自动弹 —— 静默启动在 Windows 上 = 让宠物也闭嘴。</text>
+    </svg>
+    <figcaption>图 4-1 · Windows 启动流程 —— 红框是唯一的静默漏洞，绿虚线是修复思路</figcaption>
+  </figure>
+
+  <h3>自启是怎么"带暗号"的</h3>
+  <p>Windows 的登录自启走的是注册表 <code class="inline">HKCU\...\CurrentVersion\Run</code> 键——微软官方文档明确说这个键的值就是一条命令行，所以<strong>带参数是被官方认可的做法</strong>。我们的代码早就用上了：</p>
+
+  <figure class="code">
+    <figcaption><span>TokenTrackerWin/LaunchAtStartup.cs : 59–65</span><span class="lang">C#</span></figcaption>
+    <pre><span class="cm">// 开启"登录时启动"：往注册表写一条带暗号的命令行</span>
+key?.<span class="fn">SetValue</span>(Constants.StartupRegistryValueName,
+    <span class="st">$"\"{ExecutablePath}\" {StartupArgument}"</span>);
+<span class="cm">// 写进去的内容形如：</span>
+<span class="cm">//   "C:\...\TokenTracker.exe" --startup</span>
+<span class="cm">//                                        ↑ 程序启动时读这个暗号，就知道"是系统拉我起来的"</span></pre>
+  </figure>
+
+  <figure class="code">
+    <figcaption><span>TokenTrackerWin/Program.cs : 73–78</span><span class="lang">C#</span></figcaption>
+    <pre><span class="cm">// 正常启动（手动运行/安装后）显示桌面宠物；</span>
+<span class="cm">// 登录自启（--startup）或深链拉起时，安静待在托盘。</span>
+<span class="kw">var</span> showPetOnLaunch = deepLink <span class="kw">is</span> <span class="kw">null</span> &amp;&amp; !launchedAtStartup;
+
+<span class="cm">// ⚠ 但下一行（TrayApplicationContext.cs:242）出了岔子：</span>
+<span class="kw">if</span> (PetWindow.StoredVisible ?? showPetOnLaunch)   <span class="cm">// ← 问题在这</span>
+<span class="cm">//  StoredVisible 是"上次退出时宠物开没开"的存档。</span>
+<span class="cm">//  只要它 = true，--startup 的安静指令就被无视了！</span></pre>
+  </figure>
+
+  <div class="callout beginner">
+    <span class="ico">科</span>
+    <div><span class="t">新手科普：<code>??</code> 是什么意思？</span>
+    <code class="inline">a ?? b</code> 读作"a 如果不是空就用 a，否则用 b"。这行的意思是"优先用存档的宠物偏好；没存过才看启动类型"。逻辑本身没错，错在<strong>优先级</strong>：静默启动这种"系统级指令"应该压过界面偏好，而不是反过来。</div>
+  </div>
+
+  <div class="callout key">
+    <span class="ico">重点</span>
+    <div><span class="t">WebView2 在后台会不会罢工？（做了专项调研）</span>
+    不会，但有三个细节值得知道：① <strong>初始化</strong>绑定在窗口的 <code class="inline">Loaded</code> 事件上——窗口不显示就不初始化，静默启动反而省了内存，首次打开才加载（代价可接受）；② <strong>一旦显示过后再藏起来</strong>，页面 JS 照常跑（项目已加 <code class="inline">--disable-background-timer-throttling</code> 等参数对抗节流）；③ 隐藏时网页<strong>不渲染</strong>、定时器会被 Chromium 降速（100ms → 1s），这是微软文档明说的行为，不是 bug。微软官方甚至"鼓励"把隐藏窗口的 WebView 关掉渲染省资源。</div>
+  </div>
+</section>
+
+<!-- ================= 5 ================= -->
+<section id="s5">
+  <div class="sec-head"><span class="sec-no">05</span><h2>Linux 深潜：一张白纸，但底子最好</h2></div>
+  <p class="sec-lead">Linux 端（Tauri v2 + Rust）目前完全没有静默启动：窗口 100% 弹出，也没有登录自启功能。但它的架构让改造变得非常便宜。</p>
+
+  <div class="callout beginner">
+    <span class="ico">科</span>
+    <div><span class="t">新手科普：Tauri 和那几个新名词</span>
+    <strong>Tauri</strong> 是一个用 Rust 写桌面应用的框架（对标 Electron，更省内存）。窗口由 Rust 代码创建。<strong>autostart 插件</strong>是官方维护的"登录自启"组件：开启后，Linux 上它会往 <code class="inline">~/.config/autostart/</code> 写一个 <strong>.desktop 文件</strong>——你可以把它理解成"Linux 桌面的开机自启名单"，名单里 <code class="inline">Exec=</code> 那一行写什么命令，登录后就执行什么命令。<strong>参数可以随便带</strong>，这正是我们需要的通道。</div>
+  </div>
+
+  <h3>现状：窗口创建时没有"隐藏"选项</h3>
+  <figure class="code">
+    <figcaption><span>TokenTrackerLinux/src-tauri/src/main.rs : 274–283</span><span class="lang">Rust</span></figcaption>
+    <pre><span class="cm">// 窗口必须在启动时创建好：托盘菜单的 "Open Dashboard"</span>
+<span class="cm">// 需要一个叫 "main" 的窗口可以拉起；服务器还在启动时，</span>
+<span class="cm">// 窗口先显示 index.html 当加载页。</span>
+<span class="kw">let</span> window = <span class="fn">WebviewWindowBuilder::new</span>(
+    app, <span class="st">"main"</span>, WebviewUrl::<span class="fn">App</span>(<span class="st">"index.html"</span>.into())
+)
+.<span class="fn">title</span>(<span class="st">"TokenTracker"</span>)
+.<span class="fn">inner_size</span>(<span class="num">1180.0</span>, <span class="num">820.0</span>)
+.<span class="fn">min_inner_size</span>(<span class="num">960.0</span>, <span class="num">640.0</span>)
+<span class="newc">//  .visible(false)   ← 要加的就是这一行（仅当检测到 --hidden 时）</span>
+.<span class="fn">build</span>()?;</pre>
+  </figure>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 860 235" role="img" aria-label="Linux 目标架构流程">
+      <rect class="f-dark" x="20" y="40" width="120" height="46" rx="10"/>
+      <text class="t-paper" x="80" y="60" text-anchor="middle" font-size="13" font-family="sans-serif" font-weight="bold">登录自启</text>
+      <text class="t-dim" x="80" y="77" text-anchor="middle" font-size="9.5" font-family="monospace">.desktop: --hidden</text>
+      <rect class="f-card" x="20" y="130" width="120" height="46" rx="10"/>
+      <text class="t-soft" x="80" y="150" text-anchor="middle" font-size="13" font-weight="bold" font-family="sans-serif">手动启动</text>
+      <text class="t-soft" x="80" y="167" text-anchor="middle" font-size="9.5" font-family="monospace">无参数</text>
+      <line x1="140" y1="63" x2="205" y2="63" style="stroke:var(--linux)" stroke-width="1.6" marker-end="url(#arr)"/>
+      <line class="ln" x1="140" y1="153" x2="205" y2="153" marker-end="url(#arr)"/>
+      <rect class="f-linux" x="210" y="40" width="170" height="46" rx="10"/>
+      <text class="t-linux" x="295" y="60" text-anchor="middle" font-size="12.5" font-weight="bold" font-family="monospace">.visible(false)</text>
+      <text class="t-linux" x="295" y="77" text-anchor="middle" font-size="10.5" font-family="sans-serif">窗口造好但先不显示</text>
+      <rect class="f-card" x="210" y="130" width="170" height="46" rx="10"/>
+      <text class="t-soft" x="295" y="150" text-anchor="middle" font-size="12.5" font-weight="bold" font-family="monospace">默认显示（现状）</text>
+      <text class="t-soft" x="295" y="167" text-anchor="middle" font-size="10.5" font-family="sans-serif">直接弹加载页 → 面板</text>
+      <line class="ln" x1="380" y1="63" x2="445" y2="63" marker-end="url(#arr)"/>
+      <line class="ln" x1="380" y1="153" x2="445" y2="153" marker-end="url(#arr)"/>
+      <rect class="f-dark" x="450" y="88" width="180" height="60" rx="10"/>
+      <text class="t-teal" x="540" y="112" text-anchor="middle" font-size="12.5" font-weight="bold" font-family="monospace">Node 服务器后台启动</text>
+      <text class="t-dim" x="540" y="130" text-anchor="middle" font-size="10.5" font-family="monospace">与窗口可见与否无关 ✓</text>
+      <line class="ln" x1="630" y1="118" x2="695" y2="118" marker-end="url(#arr)"/>
+      <rect class="f-solid-accent" x="700" y="88" width="140" height="60" rx="10"/>
+      <text class="t-white" x="770" y="112" text-anchor="middle" font-size="12.5" font-weight="bold" font-family="sans-serif">托盘菜单</text>
+      <text x="770" y="130" text-anchor="middle" font-size="10.5" fill="#d6ede7" font-family="sans-serif">Open Dashboard → show()</text>
+      <text class="t-faint" x="20" y="215" font-size="11.5" font-family="sans-serif">注：Linux 托盘不支持"左键点图标弹窗"事件，TokenTracker 已正确采用"菜单优先"设计，点击图标弹出的是菜单本身。</text>
+    </svg>
+    <figcaption>图 5-1 · Linux 目标架构：同一个窗口，只差"显不显示"这个开关</figcaption>
+  </figure>
+
+  <h3>autostart 插件在各平台到底写了什么（读了源码验证）</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>平台</th><th>写入位置</th><th>能带 --hidden 参数吗</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Linux</strong></td><td><code class="inline">~/.config/autostart/xxx.desktop</code>，参数原样进 <code class="inline">Exec=</code> 行</td><td><span class="yes">✓ 可以</span>（AppImage 也能自定位路径）</td></tr>
+        <tr><td><strong>Windows</strong></td><td><code class="inline">HKCU\...\Run</code> 注册表 + 一个"已启用"标记</td><td><span class="yes">✓ 可以</span></td></tr>
+        <tr><td><strong>macOS</strong></td><td><code class="inline">~/Library/LaunchAgents/xxx.plist</code></td><td><span class="yes">✓ 可以</span>，但 <span class="warn">我们不用它</span>——已有更正宗的 SMAppService</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout pit">
+    <span class="ico">坑</span>
+    <div><span class="t">Linux 特有的三个坑，实现时必须盯住</span>
+    ① <strong>GNOME 默认不显示托盘图标</strong>——用户得装 <code class="inline">gnome-shell-extension-appindicator</code> 扩展，否则图标干脆不出现（不报错，纯隐形）；② <strong>Wayland 下 hide→show 往返</strong>有已知 bug（tao#1299）：窗口标题栏按钮可能失灵，需要真机手测；③ <strong>AppImage 更新后路径会变</strong>——.desktop 里写的是绝对路径，应用更新后要重新 enable 一次自启。</div>
+  </div>
+</section>
+
+<!-- ================= 6 ================= -->
+<section id="s6">
+  <div class="sec-head"><span class="sec-no">06</span><h2>四个关键发现</h2></div>
+  <p class="sec-lead">如果只带走四条结论，是这四条。每条都查证过官方文档或源码，附录有出处。</p>
+
+  <div class="grid g2">
+    <div class="card">
+      <span class="tag">发现 1 · macOS</span>
+      <h4>SMAppService 传不了参数，静默只能靠"存档"</h4>
+      <p>macOS 登录项 API 不接受自定义命令行参数（官方文档 + 库作者双重确认）。但系统会塞 <code class="inline">'lgit</code> 小纸条，且我们的代码已经在正确位置读取它。结论：<strong>偏好存 UserDefaults，启动时读</strong>，桥接设施现成。</p>
+    </div>
+    <div class="card">
+      <span class="tag">发现 2 · Windows</span>
+      <h4>带参数自启是微软认可的正路</h4>
+      <p>微软文档明说 Run 键的值"就是一条命令行"，且系统会刻意<strong>延迟</strong>自启程序执行、避免干扰前台——"自启就该安分"是平台共识。我们的 <code class="inline">--startup</code> 暗号已经就位，唯一的坑是宠物偏好优先级。</p>
+    </div>
+    <div class="card">
+      <span class="tag">发现 3 · 全平台</span>
+      <h4>网页面板藏后台都不出事</h4>
+      <p>macOS 的 WKWebView 本来就是显示时才创建（静默 = 零开销）；Windows 的 WebView2 不显示就不初始化，显示过后隐藏也能跑 JS；Linux 的 wry 引擎在窗口隐藏时照样加载 URL——首次打开就是热的。三家的官方文档都支持"隐藏运行"这种用法。</p>
+    </div>
+    <div class="card">
+      <span class="tag">发现 4 · 架构</span>
+      <h4>"静默"只是 UI 表层，后端完全无感</h4>
+      <p>三个端的服务器生命周期都与窗口可见性解耦：macOS 的 ServerManager、Windows 的后台同步、Linux 的健康监控线程，全部照常工作。所以静默启动<strong>不需要动任何数据链路代码</strong>，只动"启动时显示什么"这一层。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 7 ================= -->
+<section id="s7">
+  <div class="sec-head"><span class="sec-no">07</span><h2>推荐方案</h2></div>
+  <p class="sec-lead">一份三个端统一遵守的"行为契约"，加上每端一小节改动清单。实现前请先拍板第 8 节的四个问题。</p>
+
+  <h3>行为契约（三端统一）</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>场景</th><th>主面板 / 宠物</th><th>理由</th></tr></thead>
+      <tbody>
+        <tr><td><strong>登录自启</strong>（登录项 / Run 键 / .desktop）</td><td><span class="yes">✓ 全部安静</span>，只有角落图标</td><td>平台共识：系统拉起的程序不该打扰用户</td></tr>
+        <tr><td><strong>手动启动</strong>（双击图标）</td><td>维持各端现状（macOS 弹面板；Windows 按宠物偏好；Linux 弹窗口）</td><td>用户主动动作，给反馈是应该的</td></tr>
+        <tr><td><strong>用户点击图标</strong></td><td>弹出面板（永远有效）</td><td>这是面板出现的主通道</td></tr>
+        <tr><td><strong>深链 / OAuth 回调</strong></td><td>弹出面板（永远有效）</td><td>登录流程需要界面配合，不能吞</td></tr>
+        <tr><td><strong>偏好开关</strong>"启动时打开面板"</td><td>默认关；打开后自启也弹面板</td><td>给想要"开机即见"的用户留出口</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>每端改动清单</h3>
+  <div class="grid g3">
+    <div class="card plat mac">
+      <span class="tag">macOS · 预计 1 个 PR</span>
+      <h4>加开关，别动判断位置</h4>
+      <p>① 新增 UserDefaults 键（如 <code class="inline">LaunchSilently</code>），扩展现有 if 条件（<code class="inline">TokenTrackerBarApp.swift:149</code>）；② 三处 UI 同步：菜单栏菜单项、<code class="inline">NativeBridge.pushSettings</code> 载荷 + <code class="inline">applySetting</code> 分支、网页设置页 <code class="inline">MenuBarSection.jsx</code>——全部照抄 <code class="inline">launchAtLogin</code> 的现成模式。</p>
+    </div>
+    <div class="card plat win">
+      <span class="tag">Windows · 最小改动</span>
+      <h4>一行优先级 + 一个托盘勾选</h4>
+      <p>① 让 <code class="inline">--startup</code>（或新增 <code class="inline">StartSilently</code> 存档）压过 <code class="inline">PetWindow.StoredVisible</code>（<code class="inline">TrayApplicationContext.cs:242</code>）；② 托盘菜单在"Launch at Login"旁边加一个"Start silently"勾选项，存进 <code class="inline">native-settings.json</code>（写法照抄 <code class="inline">PetWindow.WriteSettings</code>）。仪表盘不用动。</p>
+    </div>
+    <div class="card plat linux">
+      <span class="tag">Linux · 新增两件套</span>
+      <h4>--hidden 参数 + autostart 插件</h4>
+      <p>① <code class="inline">main.rs</code> 解析 <code class="inline">--hidden</code>（与 Windows 的 <code class="inline">--startup</code> 命名统一），有则给窗口构建器加 <code class="inline">.visible(false)</code>；② 引入 <code class="inline">tauri-plugin-autostart</code>，注册时传 <code class="inline">["--hidden"]</code>，托盘菜单加"Launch at Login"；③ 单实例回调：第二次启动若无 <code class="inline">--hidden</code> 就 show 窗口（现状已是如此，补个判断即可）。</p>
+    </div>
+  </div>
+
+  <div class="callout key">
+    <span class="ico">重点</span>
+    <div><span class="t">工作量评估</span>
+    三端合计是"小到中型"改动：macOS 和 Windows 各自一天内可完成（模式全部现成），Linux 稍多（新增插件 + 测试），因为要覆盖 AppImage / deb / rpm 三种包形态的验证。真正的成本在<strong>跨三个桌面环境的手工测试</strong>（尤其 Wayland）。</div>
+  </div>
+</section>
+
+<!-- ================= 8 ================= -->
+<section id="s8">
+  <div class="sec-head"><span class="sec-no">08</span><h2>实现前需要拍板的 4 个问题</h2></div>
+  <p class="sec-lead">这些是产品决策，不是技术问题——技术方案已经齐备，拍板后即可动工。</p>
+
+  <div class="q-card">
+    <span class="q-no">Q1</span>
+    <h4>手动启动也要静默吗？</h4>
+    <p>现状：macOS 手动双击会弹面板（代码注释里写明是有意设计）。建议：保持"手动 = 显示"，只让自启静默。想要全静默的用户可以用偏好开关自己关。</p>
+  </div>
+  <div class="q-card">
+    <span class="q-no">Q2</span>
+    <h4>Windows 的桌面宠物算不算"打扰"？</h4>
+    <p>宠物是氛围挂件，不是信息面板——有观点认为它可以在自启时照常出现。建议：<code class="inline">--startup</code> 压制一切（含宠物），"静默 = 什么都不弹"心智最简单。</p>
+  </div>
+  <div class="q-card">
+    <span class="q-no">Q3</span>
+    <h4>"登录自启"是否默认隐含"静默"？</h4>
+    <p>建议：是。自启默认安静；偏好开关的存在意义是允许用户"退出静默"（即"自启时也打开面板"），而不是默认打扰、让用户去关。这符合两家平台的官方倾向。</p>
+  </div>
+  <div class="q-card">
+    <span class="q-no">Q4</span>
+    <h4>Linux 是静默 + 自启一起上，还是分步？</h4>
+    <p>静默参数本身几乎零成本，但"登录自启"对 Linux 端是全新能力（新插件 + 三种包形态验证 + AppImage 路径过期问题）。可以一起发，也可以先发静默参数、自启下一版跟上。</p>
+  </div>
+</section>
+
+<!-- ================= 9 ================= -->
+<section id="s9">
+  <div class="sec-head"><span class="sec-no">09</span><h2>新手术语表</h2></div>
+  <p class="sec-lead">按出场顺序整理，看报告时随查随用。</p>
+  <div class="gloss">
+    <dl><dt>菜单栏应用 <code>Menu Bar App</code></dt><dd>macOS 上的应用类型（官方叫 agent app）：没有 Dock 图标，只在屏幕右上角菜单栏挂一个小图标。由 Info.plist 里的 <code>LSUIElement=YES</code> 声明。TokenTrackerBar 就是这种。</dd></dl>
+    <dl><dt>系统托盘 <code>System Tray</code></dt><dd>Windows 任务栏右下角、Linux 顶栏角落的小图标区。常驻后台应用的"灯牌"。</dd></dl>
+    <dl><dt>登录项 / 自启 <code>Login Item / Autostart</code></dt><dd>用户登录系统后自动运行某程序的机制。三平台各有一套：macOS 用 SMAppService，Windows 用注册表 Run 键，Linux 用 autostart 目录下的 .desktop 文件。</dd></dl>
+    <dl><dt><code>SMAppService</code></dt><dd>Apple 官方的登录项管理接口（macOS 13+）。一行 <code>register()</code> 完成登记，但<strong>不能附带自定义启动参数</strong>——本调研的关键约束之一。</dd></dl>
+    <dl><dt><code>'lgit</code> 标记</dt><dd>macOS 塞给登录自启应用的"小纸条"（Apple 事件属性），告诉它"你是系统拉起来的"。代码里用 <code>keyAELaunchedAsLogInItem</code> 常量读取。只在启动回调里能读到。</dd></dl>
+    <dl><dt><code>NSPopover / NSWindow</code></dt><dd>AppKit 的界面元素：popover 是贴着锚点的小浮层（菜单栏点击弹出的小面板），window 是完整窗口（TokenTracker 的仪表盘）。NSPanel 是特殊窗口（桌面宠物、灵动岛用的）。</dd></dl>
+    <dl><dt><code>WKWebView / WebView2 / WebKitGTK</code></dt><dd>三家平台的"内嵌浏览器"：macOS、Windows、Linux 各自的原生网页容器，TokenTracker 的仪表盘网页就跑在里面。</dd></dl>
+    <dl><dt><code>ApplicationContext</code></dt><dd>WinForms 的"无主窗口"程序骨架：程序不必依赖一个窗体存活，适合托盘常驻应用。TokenTrackerWin 的架构核心。</dd></dl>
+    <dl><dt><code>NotifyIcon</code></dt><dd>WinForms 的托盘图标组件，支持左键点击、右键菜单（打开面板/退出等）。</dd></dl>
+    <dl><dt>注册表 Run 键</dt><dd>Windows 登录自启名单：<code>HKCU\Software\Microsoft\Windows\CurrentVersion\Run</code>。键值就是一条完整命令行，<strong>天然支持带参数</strong>。</dd></dl>
+    <dl><dt><code>Message-基于单实例</code></dt><dd>"同一程序只允许跑一份"的机制。TokenTracker 用系统级互斥锁（mutex）实现；第二次启动会把消息转发给第一个实例然后自己退出。</dd></dl>
+    <dl><dt>深链 <code>tokentracker://</code></dt><dd>类似网页链接的自定义协议。点它（比如 OAuth 登录回调）会唤起已安装的应用——静默启动时必须保证深链仍能弹出面板。</dd></dl>
+    <dl><dt>Tauri</dt><dd>Rust 写的跨平台桌面框架，窗口由 Rust 创建、页面用系统浏览器内核渲染。TokenTrackerLinux 用它打包出 AppImage / .deb / .rpm。</dd></dl>
+    <dl><dt><code>.desktop</code> 文件</dt><dd>Linux 桌面的"程序名片"：名字、图标、启动命令（Exec）都写在里面。放进 <code>~/.config/autostart/</code> 就成为登录自启条目。</dd></dl>
+    <dl><dt><code>Wayland / X11</code></dt><dd>Linux 的两代窗口显示协议。Wayland 下有一些历史遗留的窗口管理怪癖（如 hide→show 后标题栏按钮失灵），实现时需手测。</dd></dl>
+    <dl><dt>AppImage / .deb / .rpm</dt><dd>Linux 三种主流分发格式：单文件绿色版 / Debian 系安装包 / RedHat 系安装包。TokenTracker 三种都发。</dd></dl>
+  </div>
+</section>
+
+<!-- ================= 10 ================= -->
+<section id="s10">
+  <div class="sec-head"><span class="sec-no">10</span><h2>参考文献</h2></div>
+  <p class="sec-lead">所有结论的原始出处。完整带注释版本见仓库文档 <code class="inline">docs/silent-startup.md</code>。</p>
+  <details class="refs" open>
+    <summary>官方文档（Apple / Microsoft / Tauri）</summary>
+    <ol>
+      <li>Apple · <code>NSApplicationDelegate.applicationDidFinishLaunching(_:)</code> — 启动回调语义：<br>developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationdidfinishlaunching(_:)</li>
+      <li>Apple · <code>LSUIElement</code>（agent 应用声明）：developer.apple.com/documentation/bundleresources/information-property-list/lsuielement</li>
+      <li>Apple · <code>SMAppService</code>（登录项，macOS 13+）：developer.apple.com/documentation/servicemanagement/smappservice</li>
+      <li>Apple · <code>'lgit</code>（keyAELaunchedAsLogInItem）定义 — AE.framework/Headers/AERegistry.h</li>
+      <li>Apple · Archived Window Programming Guide — <code>NSPanel.hidesOnDeactivate</code> 默认行为</li>
+      <li>Microsoft · Run and RunOnce Registry Keys — 值即命令行、系统延迟执行：learn.microsoft.com/windows/win32/setupapi/run-and-runonce-registry-keys</li>
+      <li>Microsoft · <code>ICoreWebView2Controller.IsVisible</code> — 隐藏即不渲染 + 节流说明：learn.microsoft.com/microsoft-edge/webview2/reference/win32/icorewebview2controller</li>
+      <li>Microsoft · <code>Form.SetVisibleCore</code> / <code>NotifyIcon</code> 官方模式：learn.microsoft.com/dotnet/api/system.windows.forms.form.setvisiblecore</li>
+      <li>Tauri v2 · Config Reference（<code>app.windows[].visible</code>）：v2.tauri.app/reference/config/</li>
+      <li>Tauri v2 · System Tray 指南（TrayIconEvent "Linux: Unsupported"）：v2.tauri.app/learn/system-tray/</li>
+      <li>tauri-plugin-autostart 源码 + auto-launch crate 源码（三平台写入行为逐一验证）：github.com/tauri-apps/plugins-workspace/tree/v2/plugins/autostart</li>
+      <li>wry WebKitGTK 后端源码 — 隐藏窗口照样加载 URL：github.com/tauri-apps/wry（src/webkitgtk/mod.rs）</li>
+    </ol>
+  </details>
+  <details class="refs">
+    <summary>开源参考实现与已知问题</summary>
+    <ol>
+      <li>LaunchAtLogin-Modern — <code>wasLaunchedAtLogin</code> 标准写法：github.com/sindresorhus/LaunchAtLogin-Modern</li>
+      <li>LaunchAtLogin-Legacy #33 — "SMAppService 无法区分登录启动/手动启动"（维护者确认）：github.com/sindresorhus/LaunchAtLogin-Legacy/issues/33</li>
+      <li>同类静默菜单栏应用参考：Rectangle / Stats / Maccy / MonitorControl（均为 LSUIElement + 启动不弹窗）</li>
+      <li>WebView2Feedback #3070（隐藏定时器节流）、#2681（visibilitychange 不触发）、#4763（裸 Win32 隐藏创建空白）、#5167（隐藏宿主抑制弹窗）：github.com/MicrosoftEdge/WebView2Feedback</li>
+      <li>tao #1299 — Wayland hide→show 后 CSD 按钮失灵：github.com/tauri-apps/tao/issues/1299</li>
+      <li>tauri #15936 — 隐藏启动渲染空白与 DMABUF 环境变量：github.com/tauri-apps/tauri/issues/15936</li>
+      <li>freedesktop · Autostart 规范：specifications.freedesktop.org/autostart/latest/</li>
+      <li>Arch Wiki · GNOME — AppIndicator 托盘扩展要求：wiki.archlinux.org/title/GNOME</li>
+    </ol>
+  </details>
+  <details class="refs">
+    <summary>本仓库代码位置速查</summary>
+    <ol>
+      <li>macOS 启动静默判断：TokenTrackerBar/TokenTrackerBarApp.swift:149–154 · 登录项管理：Services/LaunchAtLoginManager.swift · 桥接：Services/NativeBridge.swift:239–324</li>
+      <li>Windows 自启带参：TokenTrackerWin/LaunchAtStartup.cs:59–65 · 启动分流：Program.cs:15–18, 73–78 · 宠物覆盖点：TrayApplicationContext.cs:242</li>
+      <li>Linux 窗口创建：TokenTrackerLinux/src-tauri/src/main.rs:274–283 · 托盘：src/tray.rs · 关窗收托盘：main.rs:290–295 · 单实例：main.rs:251–258</li>
+    </ol>
+  </details>
+</section>
+
+</main>
+</div>
+</div>
+
+<footer>
+  <div class="fin">— 调研到此为止，动手之前先拍板 —</div>
+  <div>TokenTracker · 静默启动调研报告 · 2026-09-04 · 配套技术细节见 <code>docs/silent-startup.md</code></div>
+</footer>
+
+<script>
+  // 深浅色主题
+  const rootEl = document.documentElement;
+  const themeBtn = document.getElementById('theme-toggle');
+  function setTheme(t, animate){
+    if (animate){
+      document.body.classList.add('theming');
+      setTimeout(() => document.body.classList.remove('theming'), 400);
+    }
+    rootEl.dataset.theme = t;
+    try { localStorage.setItem('tt-theme', t); } catch(e){}
+  }
+  themeBtn.addEventListener('click', () => {
+    setTheme(rootEl.dataset.theme === 'dark' ? 'light' : 'dark', true);
+  });
+  // 跟随系统（仅在用户未手动选择过时）
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+    let stored = null; try { stored = localStorage.getItem('tt-theme'); } catch(err){}
+    if (!stored) setTheme(e.matches ? 'dark' : 'light', true);
+  });
+  // 打印一律回到浅色，打完恢复原主题
+  let themeBeforePrint = null;
+  addEventListener('beforeprint', () => {
+    themeBeforePrint = rootEl.dataset.theme;
+    setTheme('light', false);
+  });
+  addEventListener('afterprint', () => {
+    if (themeBeforePrint) setTheme(themeBeforePrint, false);
+  });
+
+  // 顶部阅读进度条
+  const bar = document.getElementById('progress');
+  addEventListener('scroll', () => {
+    const h = document.documentElement;
+    bar.style.width = (h.scrollTop / (h.scrollHeight - h.clientHeight) * 100) + '%';
+  }, {passive:true});
+  // 目录高亮
+  const links = [...document.querySelectorAll('nav.toc a')];
+  const secs = links.map(a => document.querySelector(a.getAttribute('href')));
+  addEventListener('scroll', () => {
+    let i = secs.findIndex(s => s && s.getBoundingClientRect().top > 120);
+    if (i === -1) i = secs.length - 1; else if (i > 0) i--;
+    links.forEach((a, j) => a.classList.toggle('active', j === i));
+  }, {passive:true});
+</script>
+</body>
+</html>

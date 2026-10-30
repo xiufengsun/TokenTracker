@@ -368,6 +368,8 @@
   "settings.menubar.appearanceLink": "열기",
   "settings.menubar.launchAtLogin": "로그인 시 실행",
   "settings.menubar.launchAtLoginHint": "macOS에 로그인할 때 TokenTrackerBar를 자동으로 시작합니다.",
+  "settings.menubar.silentStart": "조용히 시작",
+  "settings.menubar.silentStartHint": "다음 실행 시 메뉴 막대(트레이)에만 머물고 대시보드나 데스크톱 펫을 열지 않습니다.",
   "settings.menubar.syncNow": "지금 동기화",
   "settings.menubar.syncNowHint": "로컬 AI 도구 로그를 즉시 파싱하고 업로드합니다.",
   "settings.menubar.syncing": "동기화 중…",

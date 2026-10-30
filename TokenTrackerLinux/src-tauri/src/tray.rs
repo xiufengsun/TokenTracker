@@ -7,6 +7,7 @@ use tauri::{App, AppHandle, Manager, Runtime};
 
 const OPEN_ID: &str = "open-dashboard";
 const PET_ID: &str = "show-pet";
+const SILENT_ID: &str = "silent-start";
 const QUIT_ID: &str = "quit";
 const TRAY_ID: &str = "tokentracker-tray";
 
@@ -38,11 +39,23 @@ fn build_menu<R: Runtime, M: Manager<R>>(manager: &M) -> tauri::Result<Menu<R>> 
         .try_state::<crate::pet::PetState>()
         .is_some_and(|state| state.get().visible);
     let pet = CheckMenuItem::with_id(manager, PET_ID, "Show Pet", true, pet_visible, None::<&str>)?;
+    let silent_start = CheckMenuItem::with_id(
+        manager,
+        SILENT_ID,
+        "Silent Start",
+        true,
+        crate::settings::silent_start(),
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(manager, QUIT_ID, "Quit", true, None::<&str>)?;
-    Menu::with_items(manager, &[&open, &pet, &quit])
+    Menu::with_items(manager, &[&open, &pet, &silent_start, &quit])
 }
 
-/// Reflect the pet's visibility in the tray's "Show Pet" check after it changes.
+/// Rebuild and republish the tray menu from persisted state.
+///
+/// Every rebuild derives the pet visibility and the Silent Start check from
+/// their sources of truth, never from an item's own checked state, so a
+/// republish can't desync from what the user actually toggled.
 ///
 /// Publishes a freshly built menu rather than flipping the existing item, for
 /// the same reason as `republish_menu`: GNOME's AppIndicator extension handles
@@ -53,9 +66,13 @@ pub fn refresh_menu<R: Runtime>(app: &AppHandle<R>) {
     };
     match build_menu(app) {
         Ok(menu) => {
-            let _ = tray.set_menu(Some(menu));
+            if let Err(error) = tray.set_menu(Some(menu)) {
+                eprintln!("[TokenTracker] failed to republish the tray menu: {error}");
+            }
         }
-        Err(error) => eprintln!("[TokenTracker] failed to rebuild the tray menu: {error}"),
+        Err(error) => {
+            eprintln!("[TokenTracker] failed to rebuild the tray menu: {error}");
+        }
     }
 }
 
@@ -76,21 +93,7 @@ fn republish_menu(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(MENU_REPUBLISH_DELAY);
-        let _ = app.clone().run_on_main_thread(move || {
-            let Some(tray) = app.tray_by_id(TRAY_ID) else {
-                return;
-            };
-            match build_menu(&app) {
-                Ok(menu) => {
-                    if let Err(error) = tray.set_menu(Some(menu)) {
-                        eprintln!("[TokenTracker] failed to republish the tray menu: {error}");
-                    }
-                }
-                Err(error) => {
-                    eprintln!("[TokenTracker] failed to rebuild the tray menu: {error}");
-                }
-            }
-        });
+        let _ = app.clone().run_on_main_thread(move || refresh_menu(&app));
     });
 }
 
@@ -111,6 +114,16 @@ pub fn install(app: &App) -> tauri::Result<()> {
             PET_ID => {
                 let visible = app.state::<crate::pet::PetState>().get().visible;
                 crate::pet::set_visible(app, !visible);
+            }
+            SILENT_ID => {
+                // Derive the new value from the persisted state (never from the
+                // item's checked state) so AppIndicator's auto-toggle timing
+                // can't desync us. Republish instead of `set_checked` on a
+                // captured handle: the startup republish swaps in new items,
+                // so an old handle would update an orphaned item.
+                let value = !crate::settings::silent_start();
+                crate::settings::set_silent_start(value);
+                refresh_menu(app);
             }
             QUIT_ID => app.exit(0),
             _ => {}

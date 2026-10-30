@@ -619,6 +619,8 @@ settings.menubar.appearanceHint,ui,SettingsPage,MenuBarSection,mb_appearance_hin
 settings.menubar.appearanceLink,ui,SettingsPage,MenuBarSection,mb_appearance_link,"Open",,active
 settings.menubar.launchAtLogin,ui,SettingsPage,SettingsPage,mb_login,"Launch at login",,active
 settings.menubar.launchAtLoginHint,ui,SettingsPage,SettingsPage,mb_login_hint,"Start TokenTrackerBar automatically when you sign in to macOS.",,active
+settings.menubar.silentStart,ui,SettingsPage,SettingsPage,mb_silent_start,"Silent Start",,active
+settings.menubar.silentStartHint,ui,SettingsPage,SettingsPage,mb_silent_start_hint,"Stay in the menu bar/tray on next launch — no dashboard or pet.",,active
 settings.menubar.syncNow,ui,SettingsPage,SettingsPage,mb_sync_now,"Sync now",,active
 settings.menubar.syncNowHint,ui,SettingsPage,SettingsPage,mb_sync_now_hint,"Trigger an immediate parse and upload of local AI tool logs.",,active
 settings.menubar.syncing,ui,SettingsPage,SettingsPage,mb_syncing,"Syncing…",,active

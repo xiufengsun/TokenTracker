@@ -269,6 +269,35 @@ test("port cleanup only targets a real TokenTracker package", (t) => {
   assert.equal(isTokenTrackerServeCommand("node /srv/other/tracker.js serve"), false);
 });
 
+test("serve-command parsing recognizes spaced Node executable paths without accepting non-Node commands", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tt-spaced-node-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = path.join(root, "TokenTracker Dev.app", "Contents", "Resources", "EmbeddedServer", process.platform === "win32" ? "node.exe" : "node");
+  const entry = path.join(path.dirname(executable), "tokentracker", "bin", "tracker.js");
+  fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.writeFileSync(executable, "fixture");
+  fs.writeFileSync(entry, "");
+  fs.writeFileSync(path.join(path.dirname(path.dirname(entry)), "package.json"), JSON.stringify({ name: NPM_PACKAGE_NAME }));
+
+  const shadowNode = path.join(root, process.platform === "win32" ? "node.exe" : "node");
+  const nestedExecutable = path.join(shadowNode + " tools", path.basename(executable));
+  fs.writeFileSync(shadowNode, "fixture");
+  fs.mkdirSync(path.dirname(nestedExecutable));
+  fs.writeFileSync(nestedExecutable, "fixture");
+
+  for (const quoted of [executable, `"${executable}"`, nestedExecutable]) {
+    const command = `${quoted} ${entry} serve --port 7681`;
+    assert.equal(parseServeScriptPath(command), entry);
+    assert.equal(isTokenTrackerServeCommand(command), true);
+  }
+  assert.equal(parseServeScriptPath(`/usr/bin/python ${executable} ${entry} serve`), null);
+  assert.equal(isTokenTrackerServeCommand(`${executable} ${entry} sync`), false);
+  assert.equal(isTokenTrackerServeCommand(`${executable} /unrelated/bin/tracker.js serve`), false);
+  fs.unlinkSync(executable);
+  assert.equal(isTokenTrackerServeCommand(`${executable} ${entry} serve`), false,
+    "a missing spaced executable cannot establish process identity");
+});
+
 test("port scan is limited to listeners, not everything touching the port", () => {
   // `lsof -i tcp:<port>` matches a socket whose LOCAL *or REMOTE* port matches,
   // so without -sTCP:LISTEN a browser connected to the dashboard is reported

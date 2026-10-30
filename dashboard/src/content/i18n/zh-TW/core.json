@@ -411,6 +411,8 @@
   "settings.menubar.appearanceLink": "前往",
   "settings.menubar.launchAtLogin": "登入時啟動",
   "settings.menubar.launchAtLoginHint": "登入 macOS 時自動啟動 TokenTrackerBar。",
+  "settings.menubar.silentStart": "靜默啟動",
+  "settings.menubar.silentStartHint": "下次啟動時僅駐留選單欄（系統匣），不自動開啟儀表盤或寵物。",
   "settings.menubar.syncNow": "立即同步",
   "settings.menubar.syncNowHint": "觸發本地AI工具日誌立即解析並上傳。",
   "settings.menubar.syncing": "正在同步...",

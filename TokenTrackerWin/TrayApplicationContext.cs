@@ -43,6 +43,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _petCharacterEmber;
     private readonly ToolStripMenuItem _petCharacterBot;
     private readonly ToolStripMenuItem _startupItem;
+    private readonly ToolStripMenuItem _silentItem;
+    private readonly bool _silentEffective;
     private readonly ToolStripMenuItem _checkUpdatesItem;
 
     // Right-click-the-pet context menu (separate ToolStrip items — an item can't
@@ -96,8 +98,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private (string Symbol, decimal Rate) _summaryCurrency = Currency.ReadPersisted() ?? ("$", 1m);
     private int _currencyReadRevision;
 
-    public TrayApplicationContext(bool showPetOnLaunch = false)
+    public TrayApplicationContext(bool showPetOnLaunch = false, bool silentEffective = false)
     {
+        _silentEffective = silentEffective;
         _poller = new UsagePoller(() => _server.BaseUrl);
         SystemEvents.UserPreferenceChanged += OnSystemUserPreferenceChanged;
         _menuRenderer = new TrayMenuRenderer(_menuPalette);
@@ -171,6 +174,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _startupItem = CreateMenuItem("", OnToggleStartup);
         _startupItem.Checked = LaunchAtStartup.IsEnabled;
         _startupItem.CheckOnClick = false;
+        _silentItem = CreateMenuItem("", OnToggleSilentStart);
+        _silentItem.Checked = SilentStart.Enabled;
+        _silentItem.CheckOnClick = false;
         _checkUpdatesItem = CreateMenuItem("", (_, _) => OnCheckUpdatesClicked());
         _starItem = CreateMenuItem("", (_, _) => OpenInBrowser(Constants.GitHubUrl));
         _quitItem = CreateMenuItem("", (_, _) => Quit());
@@ -196,6 +202,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _menu.Items.Add(_petCharacterItem);
         _menu.Items.Add(CreateSeparator());
         _menu.Items.Add(_startupItem);
+        _menu.Items.Add(_silentItem);
         _menu.Items.Add(_checkUpdatesItem);
         _menu.Items.Add(_starItem);
         _menu.Items.Add(CreateSeparator());
@@ -268,7 +275,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         if (_quotaWindow.Enabled)
             _uiDispatcher.BeginInvoke(new Action(() => { _quotaWindow.SetEnabled(true); UpdateLimitsPolling(); _poller.RefreshNow(); }));
 
-        if (PetWindow.StoredVisible ?? showPetOnLaunch)
+        if (!_silentEffective && (PetWindow.StoredVisible ?? showPetOnLaunch))
         {
             _uiDispatcher.BeginInvoke(new Action(() =>
             {
@@ -387,6 +394,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         UpdatePetSizeChecks();
         UpdatePetCharacterChecks();
         _startupItem.Text = _strings.LaunchAtLogin;
+        _silentItem.Text = _strings.SilentStart;
         _starItem.Text = _strings.StarOnGitHub;
         _quitItem.Text = _strings.Quit;
         RefreshUpdateMenuItem();
@@ -463,11 +471,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     public void ActivateDashboard() => PostToUi(OpenDashboard);
 
-    private void OpenDashboard()
+    internal void OpenDashboard() => PostToUi(() =>
     {
         EnsureDashboard();
         _dashboard!.ShowDashboard();
-    }
+    });
 
     private void ToggleDashboard()
     {
@@ -768,6 +776,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
             // Startup can still be toggled from the tray menu; keep the
             // macOS-specific settings row out of the Windows page.
             launchAtLoginSupported = false,
+            // Unlike startup, Silent Start is offered in the panel as well as
+            // the tray menu.
+            launchSilently = SilentStart.Enabled,
+            launchSilentlySupported = true,
             updateStatus,
             updateBusy = _updateChecker.State is UpdateChecker.UpdateState.Checking
                 or UpdateChecker.UpdateState.Downloading
@@ -791,6 +803,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
             case "launchAtLogin" when value is bool launch:
                 if (launch) LaunchAtStartup.Enable();
                 else LaunchAtStartup.Disable();
+                break;
+            case "launchSilently" when value is bool silent:
+                // The tray menu is a persistent WinForms object (unlike the macOS
+                // rebuild-per-open menu): keep its check in step with
+                // dashboard-driven changes so the next click toggles, not reverts —
+                // but only reflect state that actually persisted to disk.
+                if (SilentStart.Set(silent))
+                    _silentItem.Checked = silent;
                 break;
             case TokenUnits.SettingKey when value is string unitSystem:
                 // Display-only preference: persist it, then re-render the tray summary
@@ -859,6 +879,18 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         LaunchAtStartup.Toggle();
         _startupItem.Checked = LaunchAtStartup.IsEnabled;
+    }
+
+    private void OnToggleSilentStart(object? sender, EventArgs e)
+    {
+        var value = !_silentItem.Checked;
+        // Only reflect the new state when the write landed; the echo below still
+        // carries the stored value so an open dashboard converges on truth.
+        if (SilentStart.Set(value))
+            _silentItem.Checked = value;
+        // Echo to an open dashboard so the panel toggle stays in step
+        // (no-op when the dashboard is closed).
+        PushDashboardNativeSettings();
     }
 
     /// <summary>

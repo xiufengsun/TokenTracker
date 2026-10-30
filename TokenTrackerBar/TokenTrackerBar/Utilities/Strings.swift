@@ -309,6 +309,7 @@ enum Strings {
     static var menuAbout: String { t("About TokenTracker", "关于 TokenTracker", "關於 TokenTracker", "TokenTracker について", "TokenTracker 정보") }
 
     static var menuHelp: String { t("TokenTracker Help", "TokenTracker 帮助", "TokenTracker 說明", "TokenTracker ヘルプ", "TokenTracker 도움말") }
+    static var menuSilentStart: String { t("Silent Start", "静默启动", "Silent Start", "Silent Start", "Silent Start") }
     static var menuLaunchAtLogin: String { t("Launch at Login", "登录时启动", "登入時啟動", "ログイン時に起動", "로그인 시 실행") }
     static var menuStarOnGitHub: String { t("★ Star on GitHub", "★ 在 GitHub 上标星", "★ 在 GitHub 上標星", "★ GitHub でスターを付ける", "★ GitHub에서 스타하기") }
     static var menuShowStats: String { t("Show Numeric Values", "显示数值", "顯示數值", "数値の表示", "수치 표시") }

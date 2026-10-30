@@ -172,10 +172,17 @@ final class StatusBarController: NSObject {
     }
 
     static let hideMenuBarIconKey = "HideMenuBarIcon"
+    static let launchSilentlyKey = "LaunchSilently"
     private static let hideIconPromptShownKey = "HideMenuBarIconPromptShown"
 
     static func setMenuBarIconHidden(_ hidden: Bool) {
         instance?.updateMenuBarIconVisibility(userRequestedHide: hidden)
+    }
+
+    /// Single write path for the Silent Start preference, shared by the
+    /// status-bar menu toggle and the dashboard panel bridge (spec §5.3).
+    static func setSilentStart(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: launchSilentlyKey)
     }
 
     /// One-time native prompt after the island is enabled: offer to hide the
@@ -1254,6 +1261,11 @@ final class StatusBarController: NSObject {
         loginItem.state = launchAtLoginManager.isEnabled ? .on : .off
         menu.addItem(loginItem)
 
+        let silentItem = NSMenuItem(title: Strings.menuSilentStart, action: #selector(toggleSilentStart), keyEquivalent: "")
+        silentItem.target = self
+        silentItem.state = UserDefaults.standard.bool(forKey: Self.launchSilentlyKey) ? .on : .off
+        menu.addItem(silentItem)
+
         let toastItem = NSMenuItem(title: Strings.toastOnResetLabel, action: #selector(toggleResetToast), keyEquivalent: "")
         toastItem.target = self
         toastItem.state = WeeklyLimitResetDetector.toastEnabled() ? .on : .off
@@ -1267,12 +1279,17 @@ final class StatusBarController: NSObject {
         menu.addItem(.separator())
 
         // ── Group 4: System & App Info ──
+        // "Check for Updates" is unavailable in Debug (Dev variant) builds — it
+        // would install the official app over the dev one. The tag-keyed update
+        // observer below self-guards when the item is absent.
+        #if !DEBUG
         let updateTitle = UpdateChecker.shared.statusText ?? Strings.menuCheckForUpdates
         let updateItem = NSMenuItem(title: updateTitle, action: #selector(checkForUpdates), keyEquivalent: "u")
         updateItem.tag = Self.updateMenuItemTag
         updateItem.target = self
         updateItem.isEnabled = !UpdateChecker.shared.isBusy
         menu.addItem(updateItem)
+        #endif
 
         let version = UpdateChecker.shared.currentVersion()
         let aboutItem = NSMenuItem(title: "TokenTracker v\(version)", action: #selector(openAbout), keyEquivalent: "")
@@ -1358,9 +1375,14 @@ final class StatusBarController: NSObject {
         DashboardWindowController.shared.showSettings()
     }
 
+    // Debug builds hard-off: the selector is only referenced by the guarded
+    // menu item, but keeping it out of the Debug binary closes the last
+    // programmatic path to the updater (dev spec §4-6).
+    #if !DEBUG
     @objc private func checkForUpdates() {
         UpdateChecker.shared.check(silent: false)
     }
+    #endif
 
     @objc private func openGitHub() {
         if let url = URL(string: "https://github.com/xiufengsun/TokenTracker") {
@@ -1441,6 +1463,15 @@ final class StatusBarController: NSObject {
 
     @objc private func toggleLaunchAtLogin() {
         launchAtLoginManager.toggle()
+    }
+
+    @objc private func toggleSilentStart() {
+        // The menu is rebuilt from scratch on every open (buildMenu), so the
+        // checkmark reflects this on next open; no in-place refresh (spec §6.1).
+        // pushSettings() echoes the new value to an open dashboard panel, which
+        // renders the same toggle (spec §5.3); it no-ops with no webview alive.
+        Self.setSilentStart(!UserDefaults.standard.bool(forKey: Self.launchSilentlyKey))
+        NativeBridge.shared.pushSettings()
     }
 
     @objc private func toggleDesktopPet() {

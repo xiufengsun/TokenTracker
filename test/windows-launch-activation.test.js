@@ -16,9 +16,14 @@ test("Windows entrypoint opens the dashboard on a manual cold start", () => {
   const launch = source.slice(listener, messagePump);
 
   assert.match(
+    source,
+    /var silentEffective = SilentStart\.Enabled \|\| launchedAtStartup;/,
+    "the persisted Silent Start preference (or the --startup tag) must gate launch-time activation",
+  );
+  assert.match(
     launch,
-    /if\s*\(deepLink is not null\)\s*ctx\.HandleDeepLink\(deepLink\);\s*else if\s*\(!launchedAtStartup\)\s*wpfApp\.Dispatcher\.BeginInvoke\(new Action\(ctx\.ActivateDashboard\)\);/,
-    "manual cold starts must schedule dashboard activation before the message pump, independently of the pet preference",
+    /if\s*\(deepLink is not null\)\s*ctx\.HandleDeepLink\(deepLink\);\s*else if\s*\(!launchedAtStartup && !silentEffective\)\s*wpfApp\.Dispatcher\.BeginInvoke\(new Action\(ctx\.ActivateDashboard\)\);/,
+    "manual cold starts must schedule dashboard activation before the message pump, independently of the pet preference — unless Silent Start keeps the launch quiet",
   );
 });
 
