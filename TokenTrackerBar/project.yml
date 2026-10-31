@@ -184,6 +184,9 @@ targets:
       - path: TokenTrackerBar/Models/UsagePublicationPolicy.swift
       - path: TokenTrackerBar/Models/DashboardPresentationPolicy.swift
       - path: TokenTrackerBar/Services/ResumableDownloader.swift
+      # UpdateReleaseClient (issue #945) resolves releases without UI; its
+      # localized FetchError messages pull in Strings, which is listed below.
+      - path: TokenTrackerBar/Services/UpdateReleaseClient.swift
       - path: TokenTrackerBar/Services/LocalAPIConfiguration.swift
       - path: TokenTrackerBar/Services/QueueActivityMonitor.swift
       - path: TokenTrackerBar/Models/CompanionAnimationPolicy.swift

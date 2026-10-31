@@ -93,6 +93,8 @@ const {
 // date-filtered session views and cached sidecars keep the 6x premium.
 // v27 adds oh-my-pi (omp) sessions from ~/.omp/agent/sessions/**/*.jsonl.
 const SIDECAR_VERSION = 27;
+// Invalidate only Codex token summaries; other sources keep their cached rows.
+const CODEX_USAGE_VERSION = 1;
 const EDIT_TOOLS = new Set([
   "apply_patch",
   "edit",
@@ -803,6 +805,7 @@ async function scanCodexSession(filePath) {
     seenTokenEvents: new Set(),
     collectBreakdowns: false,
     collectModelUsage: true,
+    ledgerUsage: true,
     onObject(obj, model) {
       signalCollector.consume(obj, model);
       performanceCollector.consume(obj, model);
@@ -2273,7 +2276,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       previousMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
       const checkedAt = Date.parse(previousMeta.checked_at || previousMeta.generated_at || "");
       if (
-        !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta.version === SIDECAR_VERSION &&
+        !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION &&
         Number.isFinite(checkedAt) &&
         Date.now() - checkedAt < Math.max(0, Number(cacheTtlMs) || 0)
       ) {
@@ -2314,7 +2317,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     // db + its WAL sidecars: the trio is one logical file for change detection.
     ...[...(discovered.zcode || []), ...(discovered.opencode || [])].flatMap((dbPath) => [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]),
   ]);
-  if (!force && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.signature === signature) {
+  if (!force && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.signature === signature) {
     await writeAtomic(metaPath, `${JSON.stringify({ ...previousMeta, checked_at: new Date().toISOString() })}\n`);
     return readSidecar(sidecarPath);
   }
@@ -2344,6 +2347,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   // vanished mid-scan). Swallowing these silently made sessions disappear with
   // no signal at all; count them so the API can say so.
   let skippedFiles = 0;
+  let incompleteCodexUsage = false;
   let incompleteZcodeScan = false;
   let incompleteOpencodeScan = false;
   let incompleteKimiScan = false;
@@ -2354,6 +2358,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     const statKey = analyticsEntryStatKey(entry.source, entry.filePath);
     if (!statKey) {
       skippedFiles += 1;
+      if (entry.source === "codex") incompleteCodexUsage = true;
       if (entry.source === "zcode") incompleteZcodeScan = true;
       if (entry.source === "opencode") incompleteOpencodeScan = true;
       if (entry.source === "kimi") incompleteKimiScan = true;
@@ -2362,7 +2367,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       continue;
     }
     let rows = null;
-    if (!force && !(entry.source === "zcode" && retryZcodeScan) && !(entry.source === "opencode" && retryOpencodeScan) && !(entry.source === "kimi" && retryKimiScan) && !(entry.source === "omp" && retryOmpScan) && !(entry.source === "dsh" && retryDshScan) && previousFiles[cacheKey]?.stat_key === statKey) {
+    if (!force && !(entry.source === "codex" && previousMeta?.codex_usage_version !== CODEX_USAGE_VERSION) && !(entry.source === "zcode" && retryZcodeScan) && !(entry.source === "opencode" && retryOpencodeScan) && !(entry.source === "kimi" && retryKimiScan) && !(entry.source === "omp" && retryOmpScan) && !(entry.source === "dsh" && retryDshScan) && previousFiles[cacheKey]?.stat_key === statKey) {
       if (entry.source === "zcode" || entry.source === "opencode" || entry.source === "kimi" || entry.source === "omp" || entry.source === "dsh") {
         // One db scans to many cached rows; recover them all from the previous
         // pass. An empty recovery means the sidecar lost its rows — rescan.
@@ -2392,6 +2397,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
         // One active/partial session must not poison the sidecar, but do not
         // pretend it never existed either.
         skippedFiles += 1;
+        if (entry.source === "codex") incompleteCodexUsage = true;
         if (entry.source === "zcode") incompleteZcodeScan = true;
         if (entry.source === "opencode") incompleteOpencodeScan = true;
         if (entry.source === "kimi") incompleteKimiScan = true;
@@ -2455,6 +2461,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     const generatedAt = new Date().toISOString();
     await writeAtomic(metaPath, `${JSON.stringify({
       version: SIDECAR_VERSION,
+      codex_usage_version: incompleteCodexUsage ? 0 : CODEX_USAGE_VERSION,
       signature,
       generated_at: generatedAt,
       checked_at: generatedAt,

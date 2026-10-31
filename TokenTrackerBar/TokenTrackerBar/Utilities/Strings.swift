@@ -465,6 +465,18 @@ enum Strings {
     static var fileDownloadFailed: String { t("File download failed. This may be a network issue.", "文件下载失败，可能是网络问题。", "檔案下載失敗，可能是網路問題。", "ファイルのダウンロードに失敗しました。ネットワークの問題の可能性があります。", "파일 다운로드에 실패했습니다. 네트워크 문제일 수 있습니다.") }
     static func installFailed(_ reason: String) -> String { t("Installation failed: \(reason)", "安装失败：\(reason)", "安裝失敗：\(reason)", "インストールに失敗しました：\(reason)", "설치에 실패했습니다: \(reason)") }
     static var noReleaseAvailable: String { t("No release available.", "暂无可用发布版本。", "暫無可用釋出版本。", "利用可能なリリースがありません。", "사용 가능한 릴리스가 없습니다.") }
+    static var updateRateLimitedStatus: String {
+        t("GitHub API rate limited. Try again later.", "GitHub API 已限流，请稍后重试。", "GitHub API 已限流，請稍後重試。", "GitHub API がレート制限中のため、しばらくしてから再試行してください。", "GitHub API 사용량이 제한되었습니다. 잠시 후 다시 시도하세요.")
+    }
+    static func updateRateLimitedRetryAt(_ time: String) -> String {
+        t("GitHub API can be retried after: \(time)", "GitHub 接口可重试时间：\(time)", "GitHub 介面可重試時間：\(time)", "GitHub API の再試行可能日時：\(time)", "GitHub API 재시도 가능 시간: \(time)")
+    }
+    static var updateUnexpectedRedirect: String {
+        t("The update server returned an unexpected redirect.", "更新服务器返回了意外的跳转。", "更新伺服器回傳了意外的跳轉。", "アップデートサーバーが予期しないリダイレクトを返しました。", "업데이트 서버가 예상치 못한 리디렉션을 반환했습니다.")
+    }
+    static var updateAssetSizeUnavailable: String {
+        t("The update file size is unavailable.", "无法获取更新文件大小。", "無法取得更新檔案大小。", "更新ファイルのサイズを取得できません。", "업데이트 파일 크기를 가져올 수 없습니다.")
+    }
 
     static func minutesAgo(_ n: Int) -> String { t("\(n)m ago", "\(n) 分钟前", "\(n) 分鐘前", "\(n)分前", "\(n)분 전") }
     static func hoursAgo(_ n: Int) -> String { t("\(n)h ago", "\(n) 小时前", "\(n) 小時前", "\(n)時間前", "\(n)시간 전") }
