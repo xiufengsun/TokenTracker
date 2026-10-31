@@ -170,6 +170,31 @@ export function isDevinProviderSelected() {
   return readVisibility().devin === true;
 }
 
+/**
+ * Ordered ids the user currently keeps visible — the display-layer fact the
+ * usage-limits request forwards so hidden providers are not fetched at all
+ * (issue 956). Hidden rows backed by a hand-entered subscription still render and
+ * must be re-added by the caller before gating the fetch (see LimitsPage).
+ */
+export function visibleProviderIds() {
+  const snapshot = readLocalSnapshot();
+  return snapshot.providerOrder.filter((id) => snapshot.providerVisibility[id] !== false);
+}
+
+/**
+ * Inverse of {@link visibleProviderIds}: ids to gate out of the next
+ * usage-limits fetch. Devin is NOT included — its opt-in flag
+ * ({@link isDevinProviderSelected}) remains the single fact gating it, per
+ * the OPT_IN_PROVIDERS precedent, so a default profile sends no hidden list
+ * at all and keeps the legacy no-auth-header request shape.
+ */
+export function hiddenProviderIds() {
+  const snapshot = readLocalSnapshot();
+  return snapshot.providerOrder.filter(
+    (id) => id !== "devin" && snapshot.providerVisibility[id] === false,
+  );
+}
+
 function readDisplayMode() {
   if (typeof window === "undefined") return LIMIT_DISPLAY_MODES.USED;
   try {

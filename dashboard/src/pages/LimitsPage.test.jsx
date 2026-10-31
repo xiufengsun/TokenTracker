@@ -111,6 +111,7 @@ describe("LimitsPage", () => {
         source: "dashboard-existing",
       }),
       publishToPreloadCache: true,
+      getHiddenProviders: expect.any(Function),
     });
     expect(screen.queryByTestId("limits-skeleton")).not.toBeInTheDocument();
     expect(screen.getByTestId("limits-panel")).toHaveTextContent("Codex connected");
@@ -126,6 +127,7 @@ describe("LimitsPage", () => {
     expect(useUsageLimitsMock).toHaveBeenCalledWith({
       initialRefresh: true,
       publishToPreloadCache: true,
+      getHiddenProviders: expect.any(Function),
     });
   });
 

@@ -7,6 +7,8 @@ export declare const LIMIT_PROVIDER_ICON_KEYS: readonly string[];
 
 export declare function isLimitsPrefsStorageKey(key: string | null): boolean;
 export declare function isDevinProviderSelected(): boolean;
+export declare function visibleProviderIds(): string[];
+export declare function hiddenProviderIds(): string[];
 export declare function limitProviderIconKey(id: string): string | null;
 export declare function limitProviderName(id: string): string;
 

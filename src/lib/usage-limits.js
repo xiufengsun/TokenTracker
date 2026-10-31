@@ -50,21 +50,54 @@ const execFileAsync = promisify(cp.execFile);
 // 2-minute in-memory cache. It also expires early at the earliest upcoming window
 // reset in the cached data (see cacheExpiresAtMs), floored so a provider reporting
 // a reset "right now" can't turn every poll into a full upstream round.
-// Partitioned by the Devin opt-in selection AND the Antigravity quota opt-out, so
-// a request made while Devin is off is never served (or joined onto) a response
-// fetched while it was on, and an aggregate fetched while Antigravity was enabled
-// is never served after the opt-out is set. Key = `${devin}-${antigravity}`.
-const USAGE_LIMITS_SELECTION_KEYS = ["off-on", "off-off", "on-on", "on-off"];
+// Partitioned by the Devin opt-in selection AND the Antigravity quota opt-out AND
+// the per-request hidden-provider set (#956), so a request made while Devin is off
+// is never served (or joined onto) a response fetched while it was on, an aggregate
+// fetched while Antigravity was enabled is never served after the opt-out is set,
+// and a response fetched for a visibility selection is never served to one made
+// under a different one. Key = `${devin}-${antigravity}[-<hidden ids>]`.
+const USAGE_LIMITS_BASE_SELECTION_KEYS = ["off-on", "off-off", "on-on", "on-off"];
 const cacheBySelection = {};
-for (const key of USAGE_LIMITS_SELECTION_KEYS) cacheBySelection[key] = { data: null, expiresAtMs: 0 };
+for (const key of USAGE_LIMITS_BASE_SELECTION_KEYS) cacheBySelection[key] = { data: null, expiresAtMs: 0 };
 // Credential replacements (provider-key save) bump this generation so a fetch
 // that started under the old credential cannot repopulate the memory or disk
 // caches after invalidation.
 let usageLimitsCacheGeneration = 0;
+// Provider row keys of the usage-limits aggregate — the id space `hidden`
+// parameter values are validated against (dashboard rows, menu-bar
+// LimitsSettingsStore.allProviders, and this payload all share it).
+const USAGE_LIMITS_PROVIDER_IDS = Object.freeze([
+  "claude", "codex", "cursor", "gemini", "kimi", "kiro", "grok",
+  "copilot", "antigravity", "zcode", "opencodeGo", "commandCode",
+  "qoder", "qoderCn", "codingPlan", "agentPlan", "devin",
+  "workbuddy", "workbuddyAi",
+]);
+
+// Normalize a caller-supplied hidden-provider list (array, Set, or
+// comma-separated query value) into a sorted, de-duplicated id array, or null
+// when nothing is hidden. Unknown ids are dropped: the parameter only ever
+// narrows the fetch, so a silently ignored typo must not widen the cache-key
+// space (and leniency matches the devin query param, which accepts any value
+// that is not "1"/"true" as off).
+function normalizeHiddenProviders(input) {
+  const raw = input instanceof Set
+    ? [...input]
+    : Array.isArray(input)
+      ? input
+      : typeof input === "string" && input.trim().length > 0
+        ? input.split(",")
+        : [];
+  const ids = [...new Set(
+    raw.map((id) => String(id).trim()).filter((id) => USAGE_LIMITS_PROVIDER_IDS.includes(id)),
+  )].sort();
+  return ids.length > 0 ? ids : null;
+}
+
 function usageLimitsSelectionKey(options) {
   const devin = options?.devinEnabled === true ? "on" : "off";
   const antigravity = isAntigravityQuotaDisabled() ? "off" : "on";
-  return `${devin}-${antigravity}`;
+  const hidden = normalizeHiddenProviders(options?.hiddenProviders);
+  return `${devin}-${antigravity}${hidden ? `-${hidden.join("+")}` : ""}`;
 }
 const CACHE_TTL_MS = 2 * 60 * 1000;
 // Must stay below the macOS app's post-reset re-fetch grace (10s in
@@ -3996,7 +4029,6 @@ function withPlanLabel(obj, raw, brand) {
 // local-api.js): a refresh arriving while a fetch is already running reuses that
 // in-flight fetch and returns its result.
 const inFlightBySelection = {};
-for (const key of USAGE_LIMITS_SELECTION_KEYS) inFlightBySelection[key] = null;
 
 // Codex stamps reset_at as unix seconds; every other provider (and Claude's
 // resets_at) uses ISO strings. Numbers that look like epoch milliseconds are
@@ -4038,7 +4070,9 @@ async function getUsageLimits(options = {}) {
   const selection = usageLimitsSelectionKey(options);
   const cache = cacheBySelection[selection];
   const nowMs = Date.now();
-  if (cache.data && nowMs < cache.expiresAtMs) {
+  // Unseen selections (a hidden set never requested before this process's
+  // lifetime) simply miss — partitions are created lazily on first fetch.
+  if (cache?.data && nowMs < cache.expiresAtMs) {
     return cache.data;
   }
   if (inFlightBySelection[selection]) {
@@ -4074,6 +4108,11 @@ async function fetchUsageLimitsUncached({
   providerTimeoutMs = DEFAULT_PROVIDER_TIMEOUT_MS,
   forceRefresh = false,
   devinEnabled = false,
+  // Provider visibility gate (#956): ids to skip entirely — no upstream call,
+  // no credential read, no subprocess, no cache read/write. Null/empty means
+  // "fetch every configured provider" (the legacy behavior clients that don't
+  // send the parameter keep getting).
+  hiddenProviders = null,
   // Generation captured by getUsageLimits before the fetch began. A provider
   // key save bumps it, and this fetch must then stop at returning its own
   // result: publishing it would restore pre-save data for every later caller.
@@ -4090,11 +4129,22 @@ async function fetchUsageLimitsUncached({
 } = {}) {
   const injectedNowMs = Number.isFinite(nowMs) ? nowMs : undefined;
   nowMs = injectedNowMs ?? Date.now();
+  const hiddenSet = new Set(normalizeHiddenProviders(hiddenProviders) || []);
 
+  // A hidden provider must not have its local credentials read at all (#956):
+  // these upfront token/subscription probes are the first file and keychain
+  // touches of the Claude/Codex chains, so they are gated here and every
+  // downstream step keys off the resulting null token.
   const [claudeOauth, claudeSubscription, codexAuth] = await Promise.all([
-    Promise.resolve().then(() => readClaudeCodeOauthToken({ platform, securityRunner, home, nowMs })),
-    Promise.resolve().then(() => detectClaudeCodeSubscriptionDetails({ platform, securityRunner, home })),
-    readCodexAuthBundle({ home, env }),
+    hiddenSet.has("claude")
+      ? Promise.resolve(null)
+      : Promise.resolve().then(() => readClaudeCodeOauthToken({ platform, securityRunner, home, nowMs })),
+    hiddenSet.has("claude")
+      ? Promise.resolve(null)
+      : Promise.resolve().then(() => detectClaudeCodeSubscriptionDetails({ platform, securityRunner, home })),
+    hiddenSet.has("codex")
+      ? Promise.resolve(null)
+      : readCodexAuthBundle({ home, env }),
   ]);
   const claudeToken = claudeOauth?.accessToken || null;
   const claudeTokenExpiresAtMs = claudeOauth?.expiresAtMs ?? null;
@@ -4150,6 +4200,15 @@ async function fetchUsageLimitsUncached({
     : null;
 
   const providerFetch = withFetchTimeout(fetchImpl, providerTimeoutMs);
+  // What a hidden provider's Promise.all slot resolves to. Both shapes flow
+  // through the same assembly branches as a genuinely unconfigured provider —
+  // the CommandCode/Devin fulfilled branches keep the value verbatim, the
+  // OpenCode Go branch passes `configured === false` through, Claude/Codex
+  // naturally produce `{ configured: false }` from their gated null tokens —
+  // so no hidden error, cache read, or credential touch can reach the payload
+  // (#956).
+  const hiddenSentinel = Promise.resolve({ configured: false });
+  const hiddenSettled = Promise.resolve({ status: "fulfilled", value: { configured: false } });
   const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, devinRaw, workbuddy, workbuddyAi, claudeServiceStatus] = await Promise.all([
     claudeToken && !freshClaudeCache && !claudeRetryAtMs
       ? withProviderTimeout(fetchClaudeUsageLimits(claudeToken, { fetchImpl: providerFetch, maxAttempts: 1 }), "Claude", providerTimeoutMs).then(
@@ -4167,17 +4226,17 @@ async function fetchUsageLimitsUncached({
           (reason) => ({ status: "rejected", reason }),
         )
       : Promise.resolve(null),
-    withProviderTimeout(fetchCursorLimits({ home, fetchImpl: providerFetch }), "Cursor", providerTimeoutMs)
+    hiddenSet.has("cursor") ? hiddenSentinel : withProviderTimeout(fetchCursorLimits({ home, fetchImpl: providerFetch }), "Cursor", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
-    withProviderTimeout(fetchKimiLimits({ home, env, fetchImpl: providerFetch }), "Kimi", providerTimeoutMs)
+    hiddenSet.has("kimi") ? hiddenSentinel : withProviderTimeout(fetchKimiLimits({ home, env, fetchImpl: providerFetch }), "Kimi", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
-    withProviderTimeout(fetchGeminiLimits({ home, env, fetchImpl: providerFetch, commandRunner }), "Gemini", providerTimeoutMs)
+    hiddenSet.has("gemini") ? hiddenSentinel : withProviderTimeout(fetchGeminiLimits({ home, env, fetchImpl: providerFetch, commandRunner }), "Gemini", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
-    fetchKiroLimits({ commandRunner, now, platform, home }),
+    hiddenSet.has("kiro") ? hiddenSentinel : fetchKiroLimits({ commandRunner, now, platform, home }),
     // Antigravity's own budget keeps the serial chain inside providerTimeoutMs; this
     // outer race is the enforcing backstop every other provider already has, and the
     // signal makes a fired race actually kill the spawned scans and open sockets.
-    withAbortableProviderTimeout(
+    hiddenSet.has("antigravity") ? hiddenSentinel : withAbortableProviderTimeout(
       (signal) => fetchAntigravityLimits({
         home,
         commandRunner,
@@ -4193,18 +4252,18 @@ async function fetchUsageLimitsUncached({
       "Antigravity",
       providerTimeoutMs,
     ).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
-    withProviderTimeout(fetchCopilotLimits({ home, env, fetchImpl: providerFetch, platform, securityRunner }), "GitHub Copilot", providerTimeoutMs)
+    hiddenSet.has("copilot") ? hiddenSentinel : withProviderTimeout(fetchCopilotLimits({ home, env, fetchImpl: providerFetch, platform, securityRunner }), "GitHub Copilot", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
-    withProviderTimeout(fetchGrokLimits({ home, env, fetchImpl: providerFetch, timeoutMs: providerTimeoutMs }), "Grok Build", providerTimeoutMs)
+    hiddenSet.has("grok") ? hiddenSentinel : withProviderTimeout(fetchGrokLimits({ home, env, fetchImpl: providerFetch, timeoutMs: providerTimeoutMs }), "Grok Build", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
-    withProviderTimeout(fetchZcodeLimits({ home, env, fetchImpl: providerFetch, providerTimeoutMs }), "ZCode", providerTimeoutMs)
+    hiddenSet.has("zcode") ? hiddenSentinel : withProviderTimeout(fetchZcodeLimits({ home, env, fetchImpl: providerFetch, providerTimeoutMs }), "ZCode", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
     // OpenCode Go: authoritative subscription windows come from the dashboard
     // scrape; local opencode.db cost is available only as an explicit estimate.
     // See src/lib/opencode-go-limits.js.
-    withProviderTimeout(fetchOpencodeGoLimits({ home, trackerDir, env, fetchImpl: providerFetch }), "OpenCode Go", providerTimeoutMs)
+    hiddenSet.has("opencodeGo") ? hiddenSentinel : withProviderTimeout(fetchOpencodeGoLimits({ home, trackerDir, env, fetchImpl: providerFetch }), "OpenCode Go", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
-    withProviderTimeout(
+    hiddenSet.has("qoder") ? hiddenSentinel : withProviderTimeout(
       fetchQoderLimits({
         home,
         env,
@@ -4214,7 +4273,7 @@ async function fetchUsageLimitsUncached({
       "Qoder",
       providerTimeoutMs,
     ).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
-    withProviderTimeout(
+    hiddenSet.has("qoderCn") ? hiddenSentinel : withProviderTimeout(
       fetchQoderCnLimits({
         home,
         env,
@@ -4228,7 +4287,7 @@ async function fetchUsageLimitsUncached({
     // products sharing the same arkcli binary. No token-consumption source —
     // consumption for the compatible CLIs is already counted from their
     // local files; these only surface the 5h/week/month quota percentages.
-    withAbortableProviderTimeout(
+    hiddenSet.has("codingPlan") ? hiddenSentinel : withAbortableProviderTimeout(
       (signal) => fetchArkCodingPlanLimits({
         commandRunner,
         home,
@@ -4240,7 +4299,7 @@ async function fetchUsageLimitsUncached({
       "Ark Coding Plan",
       providerTimeoutMs,
     ).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
-    withAbortableProviderTimeout(
+    hiddenSet.has("agentPlan") ? hiddenSentinel : withAbortableProviderTimeout(
       (signal) => fetchArkAgentPlanLimits({
         commandRunner,
         home,
@@ -4260,7 +4319,7 @@ async function fetchUsageLimitsUncached({
     // outer race bounds the whole slot: without it three sequential per-request
     // timeouts (whoami, then credits+subscriptions) could hold the aggregate
     // ~2x longer than any sibling provider.
-    withProviderTimeout(fetchCommandcodeLimits({ home, trackerDir, env, fetchImpl: providerFetch }), "CommandCode", providerTimeoutMs)
+    hiddenSet.has("commandCode") ? hiddenSettled : withProviderTimeout(fetchCommandcodeLimits({ home, trackerDir, env, fetchImpl: providerFetch }), "CommandCode", providerTimeoutMs)
       .then(
         (value) => ({ status: "fulfilled", value }),
         (reason) => ({ status: "rejected", reason }),
@@ -4270,7 +4329,7 @@ async function fetchUsageLimitsUncached({
     // ~/.local/share/devin/credentials.toml. No local fallback — window state
     // lives server-side. fetchDevinLimits throws on auth expiry so the
     // assemble step below can flag auth_action_required.
-    withProviderTimeout(fetchDevinLimits({ home, env, enabled: devinEnabled === true, fetchImpl: providerFetch }), "Devin", providerTimeoutMs)
+    hiddenSet.has("devin") ? hiddenSettled : withProviderTimeout(fetchDevinLimits({ home, env, enabled: devinEnabled === true, fetchImpl: providerFetch }), "Devin", providerTimeoutMs)
       .then(
         (value) => ({ status: "fulfilled", value }),
         (reason) => ({ status: "rejected", reason }),
@@ -4280,9 +4339,9 @@ async function fetchUsageLimitsUncached({
     // when the provider budget expires; the post-abort grace lets the edition's
     // disk-cache fallback land instead of the bare timeout. Reward credits are
     // not a plan window.
-    withWorkbuddyProviderTimeout((signal) => fetchWorkbuddyLimits({ home, env, fetchImpl: providerFetch, signal, nowMs: injectedNowMs }), "WorkBuddy", providerTimeoutMs)
+    hiddenSet.has("workbuddy") ? hiddenSentinel : withWorkbuddyProviderTimeout((signal) => fetchWorkbuddyLimits({ home, env, fetchImpl: providerFetch, signal, nowMs: injectedNowMs }), "WorkBuddy", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
-    withWorkbuddyProviderTimeout((signal) => fetchWorkbuddyAiLimits({ home, env, fetchImpl: providerFetch, signal, nowMs: injectedNowMs }), "WorkBuddy AI", providerTimeoutMs)
+    hiddenSet.has("workbuddyAi") ? hiddenSentinel : withWorkbuddyProviderTimeout((signal) => fetchWorkbuddyAiLimits({ home, env, fetchImpl: providerFetch, signal, nowMs: injectedNowMs }), "WorkBuddy AI", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
     // Public status-page probe (fail-soft, own 5-min cache in provider-status.js).
     // Only probed for configured accounts — without a token the Claude section
@@ -4300,8 +4359,10 @@ async function fetchUsageLimitsUncached({
     // that still exists means the latter — reporting `configured: false` there hides the
     // whole Claude section while the usage bars (parsed from local logs, no auth needed)
     // keep updating, which reads as "TokenTracker doesn't support my plan" rather than
-    // "your CLI login expired". Existence-only probe: no secret is read here.
-    const credentialsPresent = detectClaudeCodeCredentialsPresence({ platform, securityRunner, home });
+    // "your CLI login expired". Existence-only probe: no secret is read here — and a
+    // hidden Claude skips even that (#956): its row is the plain sentinel either way.
+    const credentialsPresent = !hiddenSet.has("claude")
+      && detectClaudeCodeCredentialsPresence({ platform, securityRunner, home });
     claude = credentialsPresent
       ? { configured: true, error: CLAUDE_AUTH_EXPIRED_MESSAGE, auth_action_required: "reauth" }
       : { configured: false };
@@ -4559,6 +4620,10 @@ async function fetchUsageLimitsUncached({
 
   for (const [providerName, provider] of Object.entries(data)) {
     if (providerName === "fetched_at" || !provider || typeof provider !== "object") continue;
+    // An exact not-configured sentinel (hidden provider #956, or an opted-out
+    // Devin) is metadata-free by contract — it was never fetched, so it must
+    // not be aged into a "disk-cache"/stale provenance.
+    if (provider.configured === false && Object.keys(provider).length === 1) continue;
     const capturedAt = provider.cached_at || data.fetched_at;
     const ageMs = Math.max(0, nowMs - Date.parse(capturedAt || ""));
     const stale = provider.stale === true || (Number.isFinite(ageMs) && ageMs > 10 * 60 * 1000);
@@ -4579,7 +4644,8 @@ async function fetchUsageLimitsUncached({
   }
 
   if (cacheGeneration === usageLimitsCacheGeneration) {
-    cacheBySelection[selectionKey || usageLimitsSelectionKey({ devinEnabled })] = {
+    pruneSelectionPartitions(nowMs);
+    cacheBySelection[selectionKey || usageLimitsSelectionKey({ devinEnabled, hiddenProviders })] = {
       data,
       expiresAtMs: cacheExpiresAtMs(data, nowMs),
     };
@@ -4587,20 +4653,44 @@ async function fetchUsageLimitsUncached({
   return data;
 }
 
+// Hidden-set keys make the partition space user-shaped and unbounded in
+// principle, while realistic sessions only ever hold a handful of selections.
+// Keep it bounded: once past the soft cap, drop expired partitions first and
+// then the oldest still-unexpired ones — they are simply refetched on demand.
+const SELECTION_PARTITION_CAP = 48;
+function pruneSelectionPartitions(nowMs) {
+  const keys = Object.keys(cacheBySelection);
+  if (keys.length <= SELECTION_PARTITION_CAP) return;
+  const expired = [];
+  const live = [];
+  for (const key of keys) {
+    (cacheBySelection[key].expiresAtMs <= nowMs ? expired : live).push(key);
+  }
+  const dropCount = keys.length - SELECTION_PARTITION_CAP;
+  const drop = expired.length >= dropCount
+    ? expired.slice(0, dropCount)
+    : [...expired, ...live.slice(0, dropCount - expired.length)];
+  for (const key of drop) delete cacheBySelection[key];
+}
+
 function resetUsageLimitsCache({ invalidateInFlight = false } = {}) {
   if (invalidateInFlight) usageLimitsCacheGeneration += 1;
-  for (const key of USAGE_LIMITS_SELECTION_KEYS) {
+  // Selection partitions are created lazily (hidden sets extend the key
+  // space), so reset whatever exists instead of a fixed key list.
+  for (const key of Object.keys(cacheBySelection)) {
     cacheBySelection[key] = { data: null, expiresAtMs: 0 };
     // Ordinary resets still let a running fetch serve refresh=1 callers; a
     // credential replacement must not, so drop the old-key promises too.
-    if (invalidateInFlight) inFlightBySelection[key] = null;
+    if (invalidateInFlight) delete inFlightBySelection[key];
   }
 }
 
 module.exports = {
   getUsageLimits,
   normalizePlanLabel,
+  normalizeHiddenProviders,
   resetUsageLimitsCache,
+  USAGE_LIMITS_PROVIDER_IDS,
   OPENCODE_GO_LIMITS_CACHE_FILE,
   resolveOpencodeGoLimitsCachePath,
   cacheExpiresAtMs,
