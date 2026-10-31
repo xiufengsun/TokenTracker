@@ -407,7 +407,7 @@ describe("LimitsPage", () => {
   });
 });
 
-describe("LimitsPage fetch gate (#956)", () => {
+describe("LimitsPage fetch gate (issue 956)", () => {
   beforeEach(() => {
     resetDashboardPreload();
     useUsageLimitsMock.mockReset();
