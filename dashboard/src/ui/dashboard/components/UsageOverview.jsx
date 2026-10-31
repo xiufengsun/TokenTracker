@@ -127,7 +127,7 @@ function formatProviderPercent(provider) {
 }
 
 // A request-only provider (issue 948) has conversation activity but no token
-// totals: the card shows "0 tokens / N requests" instead of a 0.00% share.
+// totals: it stays out of the card grid and surfaces in the notice row below.
 function isRequestOnlyProvider(provider) {
   const requests = Number(provider?.requests) || 0;
   return requests > 0 && !(Number(provider?.usage) > 0);
@@ -348,8 +348,14 @@ export function UsageOverview({
     summaryValue
   );
 
-  // FleetData is already grouped by provider.
-  const providers = fleetData.filter((f) => f.models?.length > 0);
+  // FleetData is already grouped by provider. Request-only providers
+  // (issue 948: zero tokens, activity as conversation_count) stay out of the
+  // card grid — the grid's visual language is token share — and surface in a
+  // slim notice row below it instead.
+  const providers = fleetData.filter((f) => f.models?.length > 0 && !isRequestOnlyProvider(f));
+  const requestOnlyProviders = fleetData.filter(
+    (f) => f.models?.length > 0 && isRequestOnlyProvider(f),
+  );
   // Devin contributes real token counts but its models (swe-2, swe-2-high,
   // compactor) ship without pricing data, so the dollar figure silently
   // under-reports whenever Devin is in view — surface the notice on both the
@@ -369,10 +375,6 @@ export function UsageOverview({
     (provider) =>
       String(provider?.source || provider?.label || "").trim().toLowerCase() === "trae",
   );
-  // Zero-token providers add nothing to a share bar and sort after every
-  // token-backed provider, so this filter is a prefix of `providers` and the
-  // index-based colors of bar and cards stay aligned (issue 948).
-  const shareBarProviders = providers.filter((provider) => getProviderPercentValue(provider) > 0);
   const allModels = useMemo(() => buildAllModels(fleetData), [fleetData]);
   const allUsage = allModels.reduce((sum, model) => sum + (Number(model.usage) || 0), 0);
   const allCost = providers.reduce((sum, provider) => sum + (Number(provider.usd) || 0), 0);
@@ -557,7 +559,7 @@ export function UsageOverview({
             <div
               role="img"
               aria-label={copy("usage.overview.distribution_aria", {
-                items: shareBarProviders
+                items: providers
                   .map((provider) =>
                     copy("usage.overview.distribution_item", {
                       label: formatProviderDisplayName(provider.label),
@@ -568,7 +570,7 @@ export function UsageOverview({
               })}
               className="h-1.5 w-full bg-oai-gray-100 dark:bg-oai-gray-800 rounded-full overflow-hidden flex"
             >
-              {shareBarProviders.map((provider, idx) => {
+              {providers.map((provider, idx) => {
                 const color = getProviderColor(provider.label, idx);
                 const displayLabel = formatProviderDisplayName(provider.label);
                 const percentLabel = formatProviderPercent(provider);
@@ -627,7 +629,6 @@ export function UsageOverview({
                 const isExpanded = activeProvider === provider.label;
                 const displayLabel = formatProviderDisplayName(provider.label);
                 const percentLabel = formatProviderPercent(provider);
-                const requestOnly = isRequestOnlyProvider(provider);
 
                 return (
                   <button
@@ -653,12 +654,10 @@ export function UsageOverview({
                       <span className="text-sm font-medium text-oai-black dark:text-oai-white truncate" title={displayLabel}>{displayLabel}</span>
                     </div>
                     <div className="text-lg font-semibold text-oai-black dark:text-oai-white tabular-nums">
-                      {requestOnly ? copy("usage.overview.zero_tokens") : `${percentLabel}%`}
+                      {percentLabel}%
                     </div>
                     <div className="mt-0.5 text-[11px] text-oai-gray-400 dark:text-oai-gray-400 tabular-nums">
-                      {requestOnly
-                        ? copy("usage.overview.request_count", { count: Math.max(0, Number(provider.requests) || 0) })
-                        : copy("usage.overview.model_count", { count: provider.models.length })}
+                      {copy("usage.overview.model_count", { count: provider.models.length })}
                     </div>
                   </button>
                 );
@@ -719,6 +718,9 @@ export function UsageOverview({
             )}
 
           </div>
+        )}
+        {requestOnlyProviders.length > 0 && (
+          <RequestOnlyNotice providers={requestOnlyProviders} />
         )}
       </div>
       </Card>
@@ -911,6 +913,26 @@ function KiroEstimateNotice() {
         {copy("usage.overview.kiro_notice_title")}.
       </span>{" "}
       {copy("usage.overview.kiro_notice_body")}
+    </p>
+  );
+}
+
+// Request-only providers (issue 948: Qoder-style credit-billed transcripts
+// with zero tokens) render as one slim notice under the card grid — the grid
+// itself stays a pure token-share visualization. Per-model detail lives in
+// the All-models list, which already carries their request counts.
+function RequestOnlyNotice({ providers }) {
+  const items = providers
+    .map((provider) =>
+      copy("usage.overview.request_only_item", {
+        label: formatProviderDisplayName(provider.label),
+        count: Math.max(0, Number(provider.requests) || 0),
+      }),
+    )
+    .join("，");
+  return (
+    <p className="mb-3 text-[10px] leading-snug text-oai-gray-400 dark:text-oai-gray-500">
+      {copy("usage.overview.request_only_note", { items })}
     </p>
   );
 }

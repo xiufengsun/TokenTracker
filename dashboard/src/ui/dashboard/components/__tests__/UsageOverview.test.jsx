@@ -675,7 +675,7 @@ describe("UsageOverview", () => {
     expect(screen.queryByText(copy("usage.overview.trae_notice_body"))).toBeNull();
   });
 
-  it("renders request-only providers as 0 tokens / N requests cards", () => {
+  it("keeps request-only providers out of the card grid and shows one notice row", () => {
     render(
       <UsageOverview
         period="day"
@@ -684,6 +684,15 @@ describe("UsageOverview", () => {
         summaryValue="0"
         hasSummary
         fleetData={[{
+          source: "codex",
+          label: "CODEX",
+          totalPercent: "100.00",
+          totalPercentValue: 100,
+          usage: 100,
+          requests: 0,
+          usd: 0,
+          models: [{ id: "gpt-5", name: "gpt-5", share: 100, usage: 100, requests: 0, cost: 0 }],
+        }, {
           source: "qoder",
           label: "QODER",
           totalPercent: "0.00",
@@ -698,8 +707,9 @@ describe("UsageOverview", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: /QODER/ })).toBeTruthy();
-    expect(screen.getByText(copy("usage.overview.zero_tokens"))).toBeVisible();
-    expect(screen.getByText(copy("usage.overview.request_count", { count: 19 }))).toBeVisible();
+    expect(screen.queryByRole("button", { name: /QODER/ })).toBeNull();
+    const notice = screen.getByText(/Active without token data:/);
+    expect(notice).toBeVisible();
+    expect(notice.textContent).toContain("19 requests");
   });
 });
