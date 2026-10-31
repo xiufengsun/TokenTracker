@@ -134,11 +134,17 @@ function isRequestOnlyProvider(provider) {
 }
 
 // Zero-token (request-only) model rows show their request count where a
-// token total would sit; rows with neither keep the legacy empty cell.
+// token total would sit; rows with neither keep the legacy empty cell. A
+// merged row can carry BOTH (issue 948: token usage from one tool,
+// request-only activity from another) — show both instead of hiding the
+// requests behind the token total.
 function modelTokensCellLabel(model, formatTokens) {
   const positive = formatPositiveTokens(formatTokens, model?.usage);
-  if (positive) return positive;
   const requests = Math.max(0, Number(model?.requests) || 0);
+  if (positive && requests > 0) {
+    return `${positive} · ${copy("usage.overview.request_count", { count: requests })}`;
+  }
+  if (positive) return positive;
   return requests > 0 ? copy("usage.overview.request_count", { count: requests }) : null;
 }
 
