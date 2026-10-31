@@ -84,6 +84,8 @@
   "usage.overview.expand": "펼치기",
   "usage.overview.collapse": "접기",
   "usage.overview.model_count": "모델 {{count}}개",
+  "usage.overview.request_count": "요청 {{count}}건",
+  "usage.overview.zero_tokens": "토큰 0",
   "usage.overview.model_details_aria": "{{provider}} 모델 세부 정보",
   "widgets.page.title": "메뉴 막대 & 위젯",
   "widgets.cta.open_gallery": "위젯 갤러리 열기",

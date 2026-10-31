@@ -126,6 +126,22 @@ function formatProviderPercent(provider) {
   return value.toFixed(2);
 }
 
+// A request-only provider (issue 948) has conversation activity but no token
+// totals: the card shows "0 tokens / N requests" instead of a 0.00% share.
+function isRequestOnlyProvider(provider) {
+  const requests = Number(provider?.requests) || 0;
+  return requests > 0 && !(Number(provider?.usage) > 0);
+}
+
+// Zero-token (request-only) model rows show their request count where a
+// token total would sit; rows with neither keep the legacy empty cell.
+function modelTokensCellLabel(model, formatTokens) {
+  const positive = formatPositiveTokens(formatTokens, model?.usage);
+  if (positive) return positive;
+  const requests = Math.max(0, Number(model?.requests) || 0);
+  return requests > 0 ? copy("usage.overview.request_count", { count: requests }) : null;
+}
+
 const PERIOD_COPY_KEYS = {
   day: "usage.period.day",
   week: "usage.period.week",
@@ -353,6 +369,10 @@ export function UsageOverview({
     (provider) =>
       String(provider?.source || provider?.label || "").trim().toLowerCase() === "trae",
   );
+  // Zero-token providers add nothing to a share bar and sort after every
+  // token-backed provider, so this filter is a prefix of `providers` and the
+  // index-based colors of bar and cards stay aligned (issue 948).
+  const shareBarProviders = providers.filter((provider) => getProviderPercentValue(provider) > 0);
   const allModels = useMemo(() => buildAllModels(fleetData), [fleetData]);
   const allUsage = allModels.reduce((sum, model) => sum + (Number(model.usage) || 0), 0);
   const allCost = providers.reduce((sum, provider) => sum + (Number(provider.usd) || 0), 0);
@@ -537,7 +557,7 @@ export function UsageOverview({
             <div
               role="img"
               aria-label={copy("usage.overview.distribution_aria", {
-                items: providers
+                items: shareBarProviders
                   .map((provider) =>
                     copy("usage.overview.distribution_item", {
                       label: formatProviderDisplayName(provider.label),
@@ -548,7 +568,7 @@ export function UsageOverview({
               })}
               className="h-1.5 w-full bg-oai-gray-100 dark:bg-oai-gray-800 rounded-full overflow-hidden flex"
             >
-              {providers.map((provider, idx) => {
+              {shareBarProviders.map((provider, idx) => {
                 const color = getProviderColor(provider.label, idx);
                 const displayLabel = formatProviderDisplayName(provider.label);
                 const percentLabel = formatProviderPercent(provider);
@@ -607,6 +627,7 @@ export function UsageOverview({
                 const isExpanded = activeProvider === provider.label;
                 const displayLabel = formatProviderDisplayName(provider.label);
                 const percentLabel = formatProviderPercent(provider);
+                const requestOnly = isRequestOnlyProvider(provider);
 
                 return (
                   <button
@@ -632,10 +653,12 @@ export function UsageOverview({
                       <span className="text-sm font-medium text-oai-black dark:text-oai-white truncate" title={displayLabel}>{displayLabel}</span>
                     </div>
                     <div className="text-lg font-semibold text-oai-black dark:text-oai-white tabular-nums">
-                      {percentLabel}%
+                      {requestOnly ? copy("usage.overview.zero_tokens") : `${percentLabel}%`}
                     </div>
                     <div className="mt-0.5 text-[11px] text-oai-gray-400 dark:text-oai-gray-400 tabular-nums">
-                      {copy("usage.overview.model_count", { count: provider.models.length })}
+                      {requestOnly
+                        ? copy("usage.overview.request_count", { count: Math.max(0, Number(provider.requests) || 0) })
+                        : copy("usage.overview.model_count", { count: provider.models.length })}
                     </div>
                   </button>
                 );
@@ -801,7 +824,7 @@ function ModelUsageRows({ models, color }) {
   return (
     <div className="space-y-3">
       {models.map((model) => {
-        const tokensLabel = formatPositiveTokens(formatTokens, model.usage);
+        const tokensLabel = modelTokensCellLabel(model, formatTokens);
         const costLabel = formatCost(model.cost, currency, rate);
         const clampedShare = Math.max(0, Math.min(100, Number(model.share) || 0));
         const rowKey = model.id || model.name;

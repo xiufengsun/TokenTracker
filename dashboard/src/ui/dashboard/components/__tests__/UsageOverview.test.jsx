@@ -674,4 +674,32 @@ describe("UsageOverview", () => {
     showSource("codex");
     expect(screen.queryByText(copy("usage.overview.trae_notice_body"))).toBeNull();
   });
+
+  it("renders request-only providers as 0 tokens / N requests cards", () => {
+    render(
+      <UsageOverview
+        period="day"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="0"
+        hasSummary
+        fleetData={[{
+          source: "qoder",
+          label: "QODER",
+          totalPercent: "0.00",
+          totalPercentValue: 0,
+          usage: 0,
+          requests: 19,
+          usd: 0,
+          models: [{ id: "qfmodel", name: "qfmodel", share: 0, usage: 0, requests: 19, cost: null }],
+        }]}
+        from="2026-11-01"
+        to="2026-11-01"
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /QODER/ })).toBeTruthy();
+    expect(screen.getByText(copy("usage.overview.zero_tokens"))).toBeVisible();
+    expect(screen.getByText(copy("usage.overview.request_count", { count: 19 }))).toBeVisible();
+  });
 });

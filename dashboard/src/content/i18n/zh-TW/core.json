@@ -95,6 +95,8 @@
   "usage.overview.expand": "展開",
   "usage.overview.collapse": "收起",
   "usage.overview.model_count": "{{count}} 個模型",
+  "usage.overview.request_count": "{{count}} 個請求",
+  "usage.overview.zero_tokens": "0 Token",
   "usage.overview.model_details_aria": "{{provider}} 模型詳情",
   "widgets.page.title": "選單欄與小元件",
   "widgets.cta.open_gallery": "開啟小元件庫",

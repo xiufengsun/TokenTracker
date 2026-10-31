@@ -66,6 +66,8 @@
   "usage.overview.expand": "Ausklappen",
   "usage.overview.collapse": "Einklappen",
   "usage.overview.model_count": "{{count}} Modelle",
+  "usage.overview.request_count": "{{count}} Anfragen",
+  "usage.overview.zero_tokens": "0 Token",
   "usage.overview.model_details_aria": "Modelldetails für {{provider}}",
   "widgets.page.title": "Menüleiste & Widgets",
   "widgets.cta.open_gallery": "Widget-Galerie öffnen",
