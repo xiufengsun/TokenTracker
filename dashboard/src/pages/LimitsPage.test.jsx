@@ -73,6 +73,7 @@ describe("LimitsPage", () => {
       order: ["kimi"],
       visibility: { kimi: true },
       displayMode: "used",
+      showSubscriptions: true,
     }));
     hiddenProviderIdsMock.mockReset();
     hiddenProviderIdsMock.mockReturnValue([]);
@@ -422,6 +423,7 @@ describe("LimitsPage fetch gate (issue 956)", () => {
       order: ["kimi"],
       visibility: { kimi: true },
       displayMode: "used",
+      showSubscriptions: true,
     }));
     hiddenProviderIdsMock.mockReset();
     hiddenProviderIdsMock.mockReturnValue([]);
@@ -470,3 +472,29 @@ describe("LimitsPage fetch gate (issue 956)", () => {
     expect(refreshLimitsMock).not.toHaveBeenCalled();
   });
 });
+
+  it("keeps subscription-backed providers gated while subscription display is off", async () => {
+    // With showSubscriptions off the panel omits subscription-backed hidden
+    // rows entirely, so their providers must stay in the fetch gate — the
+    // first subscription load must not shrink it, and no re-read is owed.
+    useLimitsDisplayPrefsMock.mockImplementation(() => ({
+      order: ["kimi"],
+      visibility: { kimi: true },
+      displayMode: "used",
+      showSubscriptions: false,
+    }));
+    hiddenProviderIdsMock.mockReturnValue(["claude"]);
+    listSubscriptionsMock.mockResolvedValue([
+      { provider: "claude", service: "Claude Pro", nextBillingAt: "2026-12-01T00:00:00.000Z" },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <LimitsPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(listSubscriptionsMock).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });
+    expect(refreshLimitsMock).not.toHaveBeenCalled();
+  });
