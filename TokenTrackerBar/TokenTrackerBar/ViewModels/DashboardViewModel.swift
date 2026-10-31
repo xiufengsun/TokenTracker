@@ -105,11 +105,16 @@ class DashboardViewModel: ObservableObject {
     /// only to Devin transitions even though `.nativeSettingsChanged` fires for
     /// every preference change.
     private var lastDevinSelection: Bool
+    /// Last seen visibility-gate key (#956) — the sorted ids the fetch gate is
+    /// currently scoped to, so the observer also reacts to any visibility
+    /// toggle that changes which providers the server may fetch.
+    private var lastHiddenProvidersKey: String
 
     init() {
         guard !NativeQAProfile.isQABuild else { fatalError("Native QA cannot construct the personal-data model") }
         let selected = LimitsSettingsStore.shared.isVisible("devin")
         lastDevinSelection = selected
+        lastHiddenProvidersKey = Self.fetchGateKey()
         // A cache written while Devin was enabled must not reappear once the
         // user switched it off — strip retained rows before first publish.
         usageLimits = UsageLimitsCache.load()?.applyingDevinSelection(selected)
@@ -934,14 +939,29 @@ class DashboardViewModel: ObservableObject {
     /// has stamped the new window by the time we ask.
     private static let resetBoundaryGrace: TimeInterval = 10
 
-    /// React to the Devin provider switch (same switch the dashboard toggles,
-    /// mirrored through `limitsPreferences`). Turning it off must immediately
-    /// remove retained rows from the published record and the on-disk cache;
-    /// either direction re-reads the server under the new selection.
+    /// The ids the fetch gate (#956) is scoped to: every provider hidden in
+    /// Settings, minus Devin (which stays keyed off its own opt-in flag, as
+    /// on the dashboard). Sorted so the key is stable across recomputes.
+    private static func fetchGateHiddenProviders() -> [String] {
+        LimitsSettingsStore.allProviders
+            .filter { $0 != "devin" && !LimitsSettingsStore.shared.isVisible($0) }
+    }
+
+    private static func fetchGateKey() -> String {
+        fetchGateHiddenProviders().joined(separator: ",")
+    }
+
+    /// React to a provider-visibility change (same switches the dashboard
+    /// toggles, mirrored through `limitsPreferences`). Turning Devin off must
+    /// immediately remove retained rows from the published record and the
+    /// on-disk cache; any visibility change that alters the fetch gate
+    /// (#956) re-reads the server under the new selection.
     private func handleDevinSelectionChanged() {
         let selected = LimitsSettingsStore.shared.isVisible("devin")
-        guard selected != lastDevinSelection else { return }
+        let hiddenKey = Self.fetchGateKey()
+        guard selected != lastDevinSelection || hiddenKey != lastHiddenProvidersKey else { return }
         lastDevinSelection = selected
+        lastHiddenProvidersKey = hiddenKey
         limitsPublicationAuthority.invalidateForSelectionChange()
         if let current = usageLimits {
             let adjusted = current.applyingDevinSelection(selected)
@@ -964,7 +984,12 @@ class DashboardViewModel: ObservableObject {
         let issued = limitsPublicationAuthority.beginRequest()
         do {
             let selected = LimitsSettingsStore.shared.isVisible("devin")
-            let fetched = try await APIClient.shared.fetchUsageLimits(devinEnabled: selected)
+            // Visibility gate (#956): hidden providers are not fetched at all
+            // — the server skips their upstream calls and credential reads.
+            let fetched = try await APIClient.shared.fetchUsageLimits(
+                devinEnabled: selected,
+                hiddenProviders: Self.fetchGateHiddenProviders()
+            )
             // Only the newest request may publish. A response fetched under a
             // superseded Devin selection is dropped here — before it can reach
             // the display record, the disk cache or reset detection — and its
