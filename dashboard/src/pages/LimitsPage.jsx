@@ -173,14 +173,17 @@ export function LimitsPage() {
       setSubscriptions(rows);
       setSubscriptionsError(false);
       // Track which providers a subscription keeps on screen (the fetch-gate
-      // exception set above). When the set changes after the initial load —
-      // a subscription added or removed in the popover — re-read limits so a
-      // newly backed hidden row gets data instead of "not connected".
+      // exception set above). When the set changes the effective gate —
+      // including on the first load, where the mount fetch ran without
+      // subscription knowledge — re-read limits so a newly backed hidden row
+      // gets data instead of "not connected".
       const providerIds = new Set(rows.map((row) => row?.provider).filter(Boolean));
       const previous = subscriptionProviderIdsRef.current;
-      const changed = previous !== null
-        && (previous.size !== providerIds.size
-          || [...providerIds].some((id) => !previous.has(id)));
+      const prefsHidden = hiddenProviderIds();
+      const changed = previous === null
+        ? [...providerIds].some((id) => prefsHidden.includes(id))
+        : previous.size !== providerIds.size
+          || [...providerIds].some((id) => !previous.has(id));
       subscriptionProviderIdsRef.current = providerIds;
       if (changed) void refresh();
     } catch (_e) {
