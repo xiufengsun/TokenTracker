@@ -3629,6 +3629,36 @@ describe("normalizeAntigravityResponse", () => {
     assert.equal(result.account_plan, null);
     assert.equal(result.primary_window.used_percent, 50);
     assert.equal(result.primary_window.reset_at, "2024-04-05T10:00:00.000Z");
+    assert.equal(result.primary_window.limit_window_seconds, undefined);
+    assert.equal(result.tertiary_window, null);
+    assert.equal(result.quaternary_window, null);
+  });
+
+  it("preserves GPT-OSS quota in primary_window when Gemini models are present without Claude", () => {
+    const result = normalizeAntigravityResponse({
+      code: "ok",
+      clientModelConfigs: [
+        {
+          label: "GPT-OSS 120B",
+          modelOrAlias: { model: "gpt-oss-120b" },
+          quotaInfo: {
+            remainingFraction: 0.75,
+            resetTime: "1712311200",
+          },
+        },
+        {
+          label: "Gemini 2.5 Pro",
+          modelOrAlias: { model: "gemini-2.5-pro" },
+          quotaInfo: {
+            remainingFraction: 0.4,
+            resetTime: "1712311200",
+          },
+        },
+      ],
+    }, { fallbackToConfigs: true });
+
+    assert.equal(result.primary_window.used_percent, 25);
+    assert.equal(result.tertiary_window.used_percent, 60);
   });
 });
 
@@ -3636,9 +3666,13 @@ describe("normalizeAntigravityQuotaSummary", () => {
   it("accepts the Cloud Code HTTP payload with top-level groups", () => {
     const result = normalizeAntigravityQuotaSummary(antigravityQuotaSummaryPayload());
     assert.equal(result.primary_window.used_percent, 42);
+    assert.equal(result.primary_window.limit_window_seconds, 604800);
     assert.equal(result.secondary_window.used_percent, 18);
+    assert.equal(result.secondary_window.limit_window_seconds, 18000);
     assert.equal(result.tertiary_window.used_percent, 60);
+    assert.equal(result.tertiary_window.limit_window_seconds, 604800);
     assert.equal(result.quaternary_window.used_percent, 10);
+    assert.equal(result.quaternary_window.limit_window_seconds, 18000);
     assert.equal(result.primary_window.reset_at, "2026-09-07T00:00:00.000Z");
   });
 

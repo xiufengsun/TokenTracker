@@ -288,6 +288,7 @@ enum WidgetSnapshotWriter {
     // optional windows each. We flatten them into a uniform list so the
     // widget can render generically.
 
+    /// Flattens per-provider rate-limit structures into a uniform list of `LimitProvider` items for the widget.
     private static func limitProviders(from limits: UsageLimitsResponse?) -> [LimitProvider] {
         guard let limits else { return [] }
         // Honor the user's Limits Display visibility preferences — the
@@ -414,8 +415,23 @@ enum WidgetSnapshotWriter {
 
         // Antigravity
         if limits.antigravity.configured {
-            if let w = limits.antigravity.primaryWindow {
-                out.append(LimitProvider(source: "antigravity", label: "Antigravity",
+            if let w = limits.antigravity.quaternaryWindow {
+                out.append(LimitProvider(source: "antigravity", label: "Gm · 5h",
+                                         fraction: w.usedPercent / 100.0,
+                                         resetsAt: parseISO(w.resetAt)))
+            }
+            if let w = limits.antigravity.tertiaryWindow {
+                out.append(LimitProvider(source: "antigravity", label: "Gm · weekly",
+                                         fraction: w.usedPercent / 100.0,
+                                         resetsAt: parseISO(w.resetAt)))
+            }
+            if limits.antigravity.quaternaryWindow == nil, let w = limits.antigravity.secondaryWindow {
+                out.append(LimitProvider(source: "antigravity", label: "Cl · 5h",
+                                         fraction: w.usedPercent / 100.0,
+                                         resetsAt: parseISO(w.resetAt)))
+            }
+            if limits.antigravity.tertiaryWindow == nil, let w = limits.antigravity.primaryWindow {
+                out.append(LimitProvider(source: "antigravity", label: "Cl · weekly",
                                          fraction: w.usedPercent / 100.0,
                                          resetsAt: parseISO(w.resetAt)))
             }

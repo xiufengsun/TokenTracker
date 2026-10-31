@@ -56,10 +56,13 @@ enum WidgetStrings {
         return (parts.last ?? label).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Formats the localized display label for a widget rate-limit bar.
     static func limitLabel(_ limit: LimitProvider) -> String {
         let label = limit.label
         let kind = limitKind(limit.label)
-        let source = limit.source.capitalized
+        let source = limit.source == "antigravity"
+            ? (label.components(separatedBy: "·").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? limit.source.capitalized)
+            : limit.source.capitalized
         switch loc {
         case NativeLocalization.chineseLocale:
             switch kind {

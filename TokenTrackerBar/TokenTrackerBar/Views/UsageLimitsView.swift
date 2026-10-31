@@ -666,12 +666,14 @@ struct UsageLimitsView: View {
         return s
     }
 
+    /// Quota rows for Antigravity, ordered Gm 5h → Gm 7d → Cl 5h → Cl 7d.
+    /// Uses server-supplied `limitWindowSeconds` so only confirmed quota buckets receive pace notches.
     private func antigravitySpecs(_ a: AntigravityLimits) -> [LimitWindowSpec] {
         var s: [LimitWindowSpec] = []
-        if let w = a.primaryWindow { s.append(makeSpec("Cl 7d", w.usedPercent, iso: w.resetAt)) }
-        if let w = a.secondaryWindow { s.append(makeSpec("Cl 5h", w.usedPercent, iso: w.resetAt)) }
-        if let w = a.tertiaryWindow { s.append(makeSpec("Gm 7d", w.usedPercent, iso: w.resetAt)) }
-        if let w = a.quaternaryWindow { s.append(makeSpec("Gm 5h", w.usedPercent, iso: w.resetAt)) }
+        if let w = a.quaternaryWindow { s.append(makeSpec("Gm 5h", w.usedPercent, windowSeconds: w.limitWindowSeconds, iso: w.resetAt)) }
+        if let w = a.tertiaryWindow { s.append(makeSpec("Gm 7d", w.usedPercent, windowSeconds: w.limitWindowSeconds, iso: w.resetAt)) }
+        if let w = a.secondaryWindow { s.append(makeSpec("Cl 5h", w.usedPercent, windowSeconds: w.limitWindowSeconds, iso: w.resetAt)) }
+        if let w = a.primaryWindow { s.append(makeSpec("Cl 7d", w.usedPercent, windowSeconds: w.limitWindowSeconds, iso: w.resetAt)) }
         return s
     }
 

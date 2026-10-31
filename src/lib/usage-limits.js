@@ -3054,9 +3054,12 @@ function parseAntigravityModelConfigs(configs) {
     .filter(Boolean);
 }
 
+/**
+ * Classifies an Antigravity model config into its quota family (`claude` for Claude/GPT-OSS third-party models, `gemini_pro`, `gemini_flash`, or `unknown`).
+ */
 function antigravityFamily(model) {
   const text = `${model?.label || ""} ${model?.model_id || ""}`.toLowerCase();
-  if (text.includes("claude")) return "claude";
+  if (text.includes("claude") || text.includes("gpt-oss")) return "claude";
   if (text.includes("gemini") && text.includes("pro")) return "gemini_pro";
   if (text.includes("gemini") && text.includes("flash")) return "gemini_flash";
   return "unknown";
@@ -3071,6 +3074,9 @@ function antigravityPriority(model) {
   return 0;
 }
 
+/**
+ * Normalizes an Antigravity `GetUserStatus` or `GetCommandModelConfigs` payload into rate-limit windows.
+ */
 function normalizeAntigravityResponse(body, { fallbackToConfigs = false } = {}) {
   if (!antigravityCodeIsOk(body?.code)) {
     throw new Error(`Antigravity API error: ${body?.code}`);
@@ -3124,13 +3130,16 @@ function normalizeAntigravityResponse(body, { fallbackToConfigs = false } = {}) 
       || userStatus?.planStatus?.planInfo?.planName
       || userStatus?.planStatus?.planInfo?.planShortName
       || null,
-    primary_window: makeWindow(claudeModels.length ? pickMin(claudeModels) : pickMin(models)),
+    primary_window: makeWindow(claudeModels.length ? pickMin(claudeModels) : (geminiModels.length ? null : pickMin(models))),
     secondary_window: makeWindow(claudeModels.length ? pickMax(claudeModels) : null),
-    tertiary_window: makeWindow(geminiModels.length ? pickMin(geminiModels) : pickMin(models)),
+    tertiary_window: makeWindow(geminiModels.length ? pickMin(geminiModels) : null),
     quaternary_window: makeWindow(geminiModels.length ? pickMax(geminiModels) : null),
   };
 }
 
+/**
+ * Normalizes an Antigravity quota-summary payload into rate-limit windows with confirmed bucket durations.
+ */
 function normalizeAntigravityQuotaSummary(body) {
   if (body?.code !== undefined && body?.code !== null && !antigravityCodeIsOk(body.code)) {
     throw new Error(`Antigravity API error: ${body?.code}`);
@@ -3148,11 +3157,12 @@ function normalizeAntigravityQuotaSummary(body) {
   }
 
   // Map bucketId → window, regardless of which group they live in
-  const makeWindow = (remainingFraction, resetTime) => {
+  const makeWindow = (remainingFraction, resetTime, windowSeconds) => {
     if (typeof remainingFraction !== "number") return null;
     return buildWindow({
       usedPercent: Math.round((1 - remainingFraction) * 100),
       resetAt: parseAntigravityDate(resetTime) || (typeof resetTime === "string" ? resetTime : null),
+      windowSeconds,
     });
   };
 
@@ -3166,10 +3176,10 @@ function normalizeAntigravityQuotaSummary(body) {
   }
 
   const windows = {
-    primary_window: makeWindow(buckets["3p-weekly"]?.remainingFraction, buckets["3p-weekly"]?.resetTime),
-    secondary_window: makeWindow(buckets["3p-5h"]?.remainingFraction, buckets["3p-5h"]?.resetTime),
-    tertiary_window: makeWindow(buckets["gemini-weekly"]?.remainingFraction, buckets["gemini-weekly"]?.resetTime),
-    quaternary_window: makeWindow(buckets["gemini-5h"]?.remainingFraction, buckets["gemini-5h"]?.resetTime),
+    primary_window: makeWindow(buckets["3p-weekly"]?.remainingFraction, buckets["3p-weekly"]?.resetTime, 7 * 86400),
+    secondary_window: makeWindow(buckets["3p-5h"]?.remainingFraction, buckets["3p-5h"]?.resetTime, 5 * 3600),
+    tertiary_window: makeWindow(buckets["gemini-weekly"]?.remainingFraction, buckets["gemini-weekly"]?.resetTime, 7 * 86400),
+    quaternary_window: makeWindow(buckets["gemini-5h"]?.remainingFraction, buckets["gemini-5h"]?.resetTime, 5 * 3600),
   };
 
   // If the groups parsed but none of the known bucketIds matched (upstream
