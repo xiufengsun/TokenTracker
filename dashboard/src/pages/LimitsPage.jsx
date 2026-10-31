@@ -44,11 +44,25 @@ function formatRefreshedAt(iso) {
  * every provider row is fresh and error-free, "partial" when any row still
  * reports an error, a stale cache, a disk-cache source, or a failed ZCode
  * extras endpoint (reset cards / Start Plan).
+ *
+ * When `visibleProviders` is provided, providers hidden by the user are excluded
+ * from the refresh outcome evaluation so that hidden/disabled provider failures
+ * do not falsely flag the refresh as partial or stale on rows the user cannot see.
  */
-function describeRefreshOutcome(data) {
+export function describeRefreshOutcome(data, visibleProviders) {
+  const visibleFilter = Array.isArray(visibleProviders)
+    ? new Set(visibleProviders)
+    : visibleProviders instanceof Set
+      ? visibleProviders
+      : null;
+
   const providers = Object.entries(data || {}).filter(
-    ([key, value]) => key !== "fetched_at" && value && typeof value === "object"
-      && value.configured !== false,
+    ([key, value]) =>
+      key !== "fetched_at" &&
+      value &&
+      typeof value === "object" &&
+      value.configured !== false &&
+      (!visibleFilter || visibleFilter.has(key)),
   );
   const errored = providers.filter(([, provider]) => Boolean(provider.error));
   // ZCode folds reset cards and Start Plan grants into its row from separate
@@ -66,9 +80,9 @@ function describeRefreshOutcome(data) {
     return { kind: "stale" };
   }
   if (errored.length || cached.length || extrasErrored) {
-    return { kind: "partial", at: data.fetched_at };
+    return { kind: "partial", at: data?.fetched_at };
   }
-  return { kind: "updated", at: data.fetched_at };
+  return { kind: "updated", at: data?.fetched_at };
 }
 
 /**
@@ -142,7 +156,11 @@ export function LimitsPage() {
       // resolves with the payload it applied (null when it could not refresh),
       // so the notice never fakes "up to date".
       const next = await refresh();
-      setRefreshNotice(next ? describeRefreshOutcome(next) : { kind: "failed" });
+      setRefreshNotice(
+        next
+          ? describeRefreshOutcome(next, prefs.visibleOrdered)
+          : { kind: "failed" },
+      );
     } finally {
       refreshInFlightRef.current = false;
       setIsRefreshing(false);
