@@ -940,7 +940,7 @@ function RequestOnlyNotice({ providers }) {
         count: Math.max(0, Number(provider.requests) || 0),
       }),
     )
-    .join("，");
+    .join(copy("usage.overview.request_only_separator"));
   return (
     <p className="mb-3 text-[10px] leading-snug text-oai-gray-400 dark:text-oai-gray-500">
       {copy("usage.overview.request_only_note", { items })}
