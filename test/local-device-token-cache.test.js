@@ -650,8 +650,14 @@ test("owner-proven trial recheck can replace a successful community deadline whi
   const manual=await x.post('/functions/tokentracker-local-sync',{cloudSessionId:binding.body.session_id,expectedOwnerId:owner,drain:true,recheckCloudAccess:true});
   assert.equal(manual.status,200);assert.equal(manual.body.uploaded,true);assert.equal(x.ingested.length,calls+1);
   const paidCadence=JSON.parse(await fs.readFile(throttlePath,'utf8'));
+  // Paid cadence is a short (~15m) window from the successful owner-proven
+  // recheck. Assert that relative to the community lastSuccess timestamp — not
+  // against community.serverNextAllowedAtMs (next UTC midnight). Near midnight
+  // that daily anchor can fall inside the paid window and flip the ordering
+  // even though the paid cadence correctly replaced the daily deadline (#949).
   assert.ok(paidCadence.serverNextAllowedAtMs-community.lastSuccessMs<16*60_000);
-  assert.ok(paidCadence.serverNextAllowedAtMs<community.serverNextAllowedAtMs);
+  assert.notEqual(paidCadence.serverNextAllowedAtMs, community.serverNextAllowedAtMs);
+  assert.ok(paidCadence.serverNextAllowedAtMs-community.lastSuccessMs>0);
   assert.equal((await pg.query('SELECT count(*)::int n FROM tokentracker_hourly WHERE user_id=$1',[owner])).rows[0].n,2);
   const other=randomUUID();await pg.query('INSERT INTO auth.users VALUES($1)',[other]);
   await x.post('/api/auth/sign-in',{owner:other});
