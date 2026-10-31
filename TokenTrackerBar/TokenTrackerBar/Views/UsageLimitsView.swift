@@ -1003,11 +1003,19 @@ struct UsageLimitsView: View {
         let title = planNames.isEmpty ? Strings.zcodeStartGrantsTitle : planNames.joined(separator: " · ")
         let specs = zcodeStartPlanSpecs(startPlan)
         VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(.caption2, design: .default))
-                .modifier(FontWeightModifier(weight: .medium))
-                .foregroundStyle(.tertiary)
-                .padding(.top, 2)
+            HStack(spacing: 4) {
+                // Decorative parity with the dashboard's lucide Gift on every
+                // start_plan section header (aria-hidden on the web side).
+                Image(systemName: "gift")
+                    .font(.system(.caption2, design: .default))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(.system(.caption2, design: .default))
+                    .modifier(FontWeightModifier(weight: .medium))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.top, 2)
             if let error = startPlan.error, !error.isEmpty {
                 Text(error)
                     .font(.system(.caption2, design: .default))
