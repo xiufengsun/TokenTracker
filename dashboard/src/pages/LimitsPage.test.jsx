@@ -471,7 +471,6 @@ describe("LimitsPage fetch gate (issue 956)", () => {
     await act(async () => { await Promise.resolve(); });
     expect(refreshLimitsMock).not.toHaveBeenCalled();
   });
-});
 
   it("keeps subscription-backed providers gated while subscription display is off", async () => {
     // With showSubscriptions off the panel omits subscription-backed hidden
@@ -498,3 +497,4 @@ describe("LimitsPage fetch gate (issue 956)", () => {
     await act(async () => { await Promise.resolve(); });
     expect(refreshLimitsMock).not.toHaveBeenCalled();
   });
+});
