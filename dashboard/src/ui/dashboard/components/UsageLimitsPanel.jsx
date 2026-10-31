@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AlertCircle, ChevronDown, Gift, Clock as ClockIcon, Infinity as InfinityIcon } from "lucide-react";
+import { AlertCircle, ChevronDown, Gift, Globe, Clock as ClockIcon, Infinity as InfinityIcon } from "lucide-react";
 import { FadeIn } from "../../foundation/FadeIn.jsx";
 import { copy, getCopyLocale } from "../../../lib/copy";
 import { LIMIT_DISPLAY_MODES } from "../../../hooks/use-limits-display-prefs.js";
@@ -905,6 +905,53 @@ function ZcodeStartPlanSection({ data, mode, now }) {
   );
 }
 
+// Snapshot of the user's other region (issue 938), read from ZCode's own
+// usage logs: ZCode queries both regions' balances while running, so the data
+// exists even when that region has no credentials on disk to re-fetch with.
+function ZcodeOtherRegionSection({ data, mode, now }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef(null);
+  const labelWidth = useWidestLabelWidth(containerRef);
+  const regionName = copy(data.region === "zai" ? "limits.zcode.region.zai" : "limits.zcode.region.bigmodel");
+  const planLabel = data.plan_label || copy("limits.zcode.start_grants");
+  const title = copy("limits.zcode.other_region.title", { region: regionName, plan: planLabel });
+  const rows = PROVIDER_LIMIT_SPECS.zcode.windows(data)
+    .filter((s) => s.window)
+    .map((s) => ({ spec: s, mode, pace: paceForSpec(s, mode, now) }));
+  const snapshotMs = Date.parse(data.log_timestamp);
+  return (
+    <div className="mt-2 border-t border-oai-gray-200/60 pt-2 dark:border-oai-gray-800">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={(event) => { event.stopPropagation(); setOpen((value) => !value); }}
+        onKeyDown={(event) => event.stopPropagation()}
+        className="flex w-full items-center gap-1.5 rounded text-xs text-oai-gray-500 transition-colors hover:text-oai-gray-800 dark:text-oai-gray-400 dark:hover:text-oai-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500"
+      >
+        <Globe size={13} aria-hidden />
+        <span className="min-w-0 truncate" title={title}>{title}</span>
+        <ChevronDown size={13} aria-hidden className={`ml-auto transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open ? (
+        <div
+          ref={containerRef}
+          data-limit-label-group=""
+          className="mt-2 flex flex-col gap-1.5"
+          style={labelWidth > 0 ? { "--tt-limits-label-w": `${labelWidth}px` } : undefined}
+        >
+          <LimitWindowSection rows={rows} mode={mode} />
+          <LimitDetail rows={rows} mode={mode} now={now} />
+          {Number.isFinite(snapshotMs) ? (
+            <StatusLine>
+              {copy("limits.zcode.other_region.snapshot", { time: formatExactReset(snapshotMs) })}
+            </StatusLine>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, badge = null, subscription = null, now = Date.now(), onKeySaved = null) {
   const spec = PROVIDER_LIMIT_SPECS[id];
   if (!spec) return null;
@@ -938,6 +985,9 @@ function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, bad
       ) : null}
       {id === "zcode" && data.start_plan?.configured ? (
         <ZcodeStartPlanSection data={data.start_plan} mode={mode} now={now} />
+      ) : null}
+      {id === "zcode" && data.other_region ? (
+        <ZcodeOtherRegionSection data={data.other_region} mode={mode} now={now} />
       ) : null}
     </ToolGroup>
   );

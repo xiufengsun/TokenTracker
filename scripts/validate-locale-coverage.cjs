@@ -30,6 +30,8 @@ const SOURCE_IDENTICAL_KEY_ALLOWLIST = [
   /^settings[.]menubar[.]iconStyle[.](?:clawd|bot)$/,
   /^settings[.]menubar[.]updates[.]footerCore$/,
   /^limits[.]provider[.]/,
+  /^limits[.]zcode[.]region[.](?:zai|bigmodel)$/, // Region brand names.
+  /^limits[.]zcode[.]other_region[.]title$/, // Formatting-only label.
   /^limits[.]apiKey[.]env_unset_command$/,
   /^limits[.]agentPlan[.]setupHint[.]snippet_install$/,
   /^limits[.]commandCode[.]setupHint[.]snippet_(?:login|login_windows|env_windows|read|export|setenv)$/,

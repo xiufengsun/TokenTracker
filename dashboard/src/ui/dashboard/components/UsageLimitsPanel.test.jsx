@@ -137,6 +137,52 @@ describe("UsageLimitsPanel", () => {
     expect(screen.getByText("98%")).toBeInTheDocument();
   });
 
+  it("renders the other region's log snapshot as an independently collapsible section", () => {
+    render(
+      <UsageLimitsPanel
+        order={["zcode"]}
+        displayMode="remaining"
+        zcode={{
+          configured: true, plan_label: "Pro", plan_kind: "coding-plan",
+          primary_window: { used_percent: 2 },
+          secondary_window: { used_percent: 30 },
+          other_region: {
+            source: "zcode-log", region: "zai", provider_key: "account:zai-start-plan",
+            plan_kind: "start-plan", plan_label: "Start",
+            log_timestamp: "2026-07-08T01:08:30.077Z",
+            buckets: [{
+              label: "GLM-5.3", plan_name: "ZCode Start Plan", period: "daily",
+              remaining_units: 2_400_000, total_units: 3_000_000,
+              window: { used_percent: 20, reset_at: "2030-10-07T16:00:00.000Z" },
+            }],
+            primary_window: { used_percent: 20, reset_at: "2030-10-07T16:00:00.000Z" },
+          },
+        }}
+      />,
+    );
+    const section = screen.getByRole("button", { name: "Z.ai · Start" });
+    expect(section).toHaveAttribute("aria-expanded", "false");
+    const snapshot = copy("limits.zcode.other_region.snapshot", { time: formatExpiry("2026-07-08T01:08:30.077Z") });
+    expect(screen.queryByText(snapshot)).not.toBeInTheDocument();
+    fireEvent.click(section);
+    expect(section).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(snapshot)).toBeInTheDocument();
+    expect(screen.getByText("80%")).toBeInTheDocument();
+  });
+
+  it("hides the other-region section when the payload has no snapshot", () => {
+    render(
+      <UsageLimitsPanel
+        order={["zcode"]}
+        zcode={{
+          configured: true, plan_label: "Pro", plan_kind: "coding-plan",
+          primary_window: { used_percent: 2 },
+        }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Z.ai · Start" })).not.toBeInTheDocument();
+  });
+
   it("shows separate usable 5h and weekly reset counts with their earliest expiries", () => {
     render(<UsageLimitsPanel order={["zcode"]} zcode={{
       configured: true, plan_label: "Pro", plan_kind: "coding-plan",

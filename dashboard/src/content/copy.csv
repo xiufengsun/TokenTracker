@@ -286,6 +286,10 @@ limits.zcode.reset_bank.title,dashboard,LimitsPage,UsageLimitsPanel,label,"Quota
 limits.zcode.reset_bank.count,dashboard,LimitsPage,UsageLimitsPanel,detail,"{{count}} available",,active
 limits.zcode.reset_bank.earliest,dashboard,LimitsPage,UsageLimitsPanel,detail,"Earliest expiry: {{time}}",,active
 limits.zcode.reset_bank.batch,dashboard,LimitsPage,UsageLimitsPanel,detail,"{{time}} ×{{count}}",,active
+limits.zcode.region.zai,dashboard,LimitsPage,UsageLimitsPanel,label,"Z.ai",,active
+limits.zcode.region.bigmodel,dashboard,LimitsPage,UsageLimitsPanel,label,"BigModel",,active
+limits.zcode.other_region.title,dashboard,LimitsPage,UsageLimitsPanel,label,"{{region}} · {{plan}}",,active
+limits.zcode.other_region.snapshot,dashboard,LimitsPage,UsageLimitsPanel,detail,"Snapshot from the ZCode log, {{time}}",,active
 leaderboard.range,dashboard,LeaderboardPage,LeaderboardPage,range,"UTC {{period}} · {{from}} – {{to}}",,active
 leaderboard.range_loading,dashboard,LeaderboardPage,LeaderboardPage,range_loading,"UTC {{period}} · …",,active
 leaderboard.range.total,dashboard,LeaderboardPage,LeaderboardPage,range_total,"All time",,active
