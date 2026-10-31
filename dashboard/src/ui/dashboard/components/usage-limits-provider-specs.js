@@ -197,30 +197,39 @@ export const PROVIDER_LIMIT_SPECS = {
       ];
     },
   },
+  // Every Qoder fetch path (desktop RPC, CN CLI OpenAPI, cookie API, log
+  // summary) already carries used/limit/remaining per window, so the inline
+  // detail mirrors WorkBuddy's card. creditPrecision must be explicit: the
+  // default rounds amounts ≥100 to integers, which would hide fractional
+  // add-on credits. The three buckets mirror Qoder's own Credits page.
   qoder: {
     windows(data) {
       return [
-        { key: "credits", labelKey: "limits.label.qoder_credits", window: dropEmptyQoderWindow(data.primary_window) },
-        { key: "addon", labelKey: "limits.label.qoder_addon_credits", window: dropEmptyQoderWindow(data.tertiary_window) },
+        { key: "credits", labelKey: "limits.label.qoder_credits", window: dropEmptyQoderWindow(data.primary_window), creditPrecision: 2, showCreditDetail: true },
+        { key: "addon", labelKey: "limits.label.qoder_addon_credits", window: dropEmptyQoderWindow(data.tertiary_window), creditPrecision: 2, showCreditDetail: true },
         {
           key: "ultimate",
           labelKey: "limits.label.qoder_ultimate",
           window: data.secondary_window,
           timeKind: "expiry",
+          showCreditDetail: true,
         },
       ];
     },
   },
+  // Same windows and detail as the international edition; only the labels
+  // differ between the two installs.
   qoderCn: {
     windows(data) {
       return [
-        { key: "credits", labelKey: "limits.label.qoder_cn_credits", window: dropEmptyQoderWindow(data.primary_window) },
-        { key: "addon", labelKey: "limits.label.qoder_cn_addon_credits", window: dropEmptyQoderWindow(data.tertiary_window) },
+        { key: "credits", labelKey: "limits.label.qoder_cn_credits", window: dropEmptyQoderWindow(data.primary_window), creditPrecision: 2, showCreditDetail: true },
+        { key: "addon", labelKey: "limits.label.qoder_cn_addon_credits", window: dropEmptyQoderWindow(data.tertiary_window), creditPrecision: 2, showCreditDetail: true },
         {
           key: "ultimate",
           labelKey: "limits.label.qoder_cn_ultimate",
           window: data.secondary_window,
           timeKind: "expiry",
+          showCreditDetail: true,
         },
       ];
     },

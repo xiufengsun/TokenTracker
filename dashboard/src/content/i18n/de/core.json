@@ -421,6 +421,7 @@
   "limits.label.qoder_ultimate": "Ultimate Gratisaufrufe",
   "limits.label.qoder_cn_credits": "Credits",
   "limits.label.qoder_cn_ultimate": "Ultimate Gratisaufrufe",
+  "limits.codex_credits.detail": "{{used}} / {{limit}} Credits genutzt · {{remaining}} übrig",
   "limits.qoder_calls.detail": "{{used}} / {{limit}} Aufrufe genutzt · {{remaining}} übrig",
   "limits.hover.expires_at": "Läuft {{time}} ab",
   "limits.label.opencode_go_weekly": "Wöchentlich",
