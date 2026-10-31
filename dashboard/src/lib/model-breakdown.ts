@@ -304,13 +304,16 @@ export function buildAllModels(fleetData: any) {
       // Request-only rows (issue 948) carry no usage but do carry a request count.
       const requests = Math.max(0, toFiniteNumber(model?.requests) ?? 0);
       if ((usage == null || usage <= 0) && requests <= 0) continue;
+      // usage stays null for request-only rows; normalize once so the
+      // aggregation loop below never sees a possibly-null number.
+      const usageValue = usage ?? 0;
       const name = typeof model?.name === "string" && model.name.trim()
         ? model.name.trim()
         : typeof model?.id === "string" && model.id.trim()
           ? model.id.trim()
           : null;
       if (!name) continue;
-      modelRows.push({ model, name, usage, requests });
+      modelRows.push({ model, name, usage: usageValue, requests });
     }
   }
 

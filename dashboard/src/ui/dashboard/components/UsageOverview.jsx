@@ -553,40 +553,45 @@ export function UsageOverview({
         <div className={showProviderSkeleton ? undefined : "hidden"}>
           <ProviderDistributionSkeleton />
         </div>
-        {providers.length > 0 && (
+        {/* The All card (and the All-models detail behind it) must stay reachable
+            even when no provider has tokens — a Qoder-only user would otherwise
+            lose the request-only model rows entirely (issue 948 review). */}
+        {(providers.length > 0 || requestOnlyProviders.length > 0) && (
           <div className="space-y-6">
             {/* Distribution Bar */}
-            <div
-              role="img"
-              aria-label={copy("usage.overview.distribution_aria", {
-                items: providers
-                  .map((provider) =>
-                    copy("usage.overview.distribution_item", {
-                      label: formatProviderDisplayName(provider.label),
-                      percent: formatProviderPercent(provider),
-                    }),
-                  )
-                  .join("，"),
-              })}
-              className="h-1.5 w-full bg-oai-gray-100 dark:bg-oai-gray-800 rounded-full overflow-hidden flex"
-            >
-              {providers.map((provider, idx) => {
-                const color = getProviderColor(provider.label, idx);
-                const displayLabel = formatProviderDisplayName(provider.label);
-                const percentLabel = formatProviderPercent(provider);
-                return (
-                  <motion.div
-                    key={provider.label}
-                    initial={{ width: 0 }}
-                    animate={{ width: `${getProviderPercentValue(provider)}%` }}
-                    transition={{ duration: 0.5, delay: 0.45 + idx * 0.04, ease: [0.16, 1, 0.3, 1] }}
-                    className="h-full"
-                    style={{ backgroundColor: color }}
-                    title={`${displayLabel}: ${percentLabel}%`}
-                  />
-                );
-              })}
-            </div>
+            {providers.length > 0 && (
+              <div
+                role="img"
+                aria-label={copy("usage.overview.distribution_aria", {
+                  items: providers
+                    .map((provider) =>
+                      copy("usage.overview.distribution_item", {
+                        label: formatProviderDisplayName(provider.label),
+                        percent: formatProviderPercent(provider),
+                      }),
+                    )
+                    .join("，"),
+                })}
+                className="h-1.5 w-full bg-oai-gray-100 dark:bg-oai-gray-800 rounded-full overflow-hidden flex"
+              >
+                {providers.map((provider, idx) => {
+                  const color = getProviderColor(provider.label, idx);
+                  const displayLabel = formatProviderDisplayName(provider.label);
+                  const percentLabel = formatProviderPercent(provider);
+                  return (
+                    <motion.div
+                      key={provider.label}
+                      initial={{ width: 0 }}
+                      animate={{ width: `${getProviderPercentValue(provider)}%` }}
+                      transition={{ duration: 0.5, delay: 0.45 + idx * 0.04, ease: [0.16, 1, 0.3, 1] }}
+                      className="h-full"
+                      style={{ backgroundColor: color }}
+                      title={`${displayLabel}: ${percentLabel}%`}
+                    />
+                  );
+                })}
+              </div>
+            )}
 
             {/* Provider Cards — responsive grid keeps cells equal-width so the
                 last row never stretches when the count doesn't divide evenly. */}
