@@ -4679,9 +4679,15 @@ function resetUsageLimitsCache({ invalidateInFlight = false } = {}) {
   // space), so reset whatever exists instead of a fixed key list.
   for (const key of Object.keys(cacheBySelection)) {
     cacheBySelection[key] = { data: null, expiresAtMs: 0 };
-    // Ordinary resets still let a running fetch serve refresh=1 callers; a
-    // credential replacement must not, so drop the old-key promises too.
-    if (invalidateInFlight) delete inFlightBySelection[key];
+  }
+  // Ordinary resets still let a running fetch serve refresh=1 callers; a
+  // credential replacement must not, so drop the old-key promises too. The
+  // in-flight map is walked on its own: a selection can hold a promise before
+  // its partition exists (stored only when the fetch completes).
+  if (invalidateInFlight) {
+    for (const key of Object.keys(inFlightBySelection)) {
+      delete inFlightBySelection[key];
+    }
   }
 }
 

@@ -12,6 +12,7 @@ const useLimitsDisplayPrefsMock = vi.hoisted(() => vi.fn());
 const listSubscriptionsMock = vi.hoisted(() => vi.fn());
 const createSubscriptionMock = vi.hoisted(() => vi.fn());
 const refreshLimitsMock = vi.hoisted(() => vi.fn());
+const hiddenProviderIdsMock = vi.hoisted(() => vi.fn(() => []));
 
 vi.mock("../hooks/use-usage-limits", () => ({
   useUsageLimits: useUsageLimitsMock,
@@ -19,6 +20,7 @@ vi.mock("../hooks/use-usage-limits", () => ({
 
 vi.mock("../hooks/use-limits-display-prefs.js", () => ({
   useLimitsDisplayPrefs: useLimitsDisplayPrefsMock,
+  hiddenProviderIds: hiddenProviderIdsMock,
 }));
 
 vi.mock("../lib/subscription-manager-api", () => ({
@@ -72,6 +74,8 @@ describe("LimitsPage", () => {
       visibility: { kimi: true },
       displayMode: "used",
     }));
+    hiddenProviderIdsMock.mockReset();
+    hiddenProviderIdsMock.mockReturnValue([]);
     listSubscriptionsMock.mockReset();
     listSubscriptionsMock.mockResolvedValue([]);
     createSubscriptionMock.mockReset();
@@ -400,5 +404,69 @@ describe("LimitsPage", () => {
     expect(refreshLimitsMock).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/Limits updated/)).toBeInTheDocument();
     expect(screen.queryByText("Refreshing limits…")).not.toBeInTheDocument();
+  });
+});
+
+describe("LimitsPage fetch gate (#956)", () => {
+  beforeEach(() => {
+    resetDashboardPreload();
+    useUsageLimitsMock.mockReset();
+    useUsageLimitsMock.mockImplementation(() => ({
+      data: apiLimits,
+      error: null,
+      isLoading: false,
+      refresh: refreshLimitsMock,
+    }));
+    useLimitsDisplayPrefsMock.mockReset();
+    useLimitsDisplayPrefsMock.mockImplementation(() => ({
+      order: ["kimi"],
+      visibility: { kimi: true },
+      displayMode: "used",
+    }));
+    hiddenProviderIdsMock.mockReset();
+    hiddenProviderIdsMock.mockReturnValue([]);
+    listSubscriptionsMock.mockReset();
+    listSubscriptionsMock.mockResolvedValue([]);
+    createSubscriptionMock.mockReset();
+    createSubscriptionMock.mockResolvedValue({ id: "sub-new" });
+    refreshLimitsMock.mockReset();
+    refreshLimitsMock.mockResolvedValue(null);
+  });
+
+  it("re-reads limits when the first subscription load backs a hidden provider", async () => {
+    // The mount fetch runs without subscription knowledge, gated by prefs
+    // alone; the first subscription load then reveals a hand-entered
+    // subscription on a hidden provider — its row must get data, so the
+    // component re-reads limits under the shrunken gate.
+    hiddenProviderIdsMock.mockReturnValue(["claude"]);
+    listSubscriptionsMock.mockResolvedValue([
+      { provider: "claude", service: "Claude Pro", nextBillingAt: "2026-12-01T00:00:00.000Z" },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <LimitsPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(refreshLimitsMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not re-read limits when the first subscription load backs nothing hidden", async () => {
+    hiddenProviderIdsMock.mockReturnValue(["claude"]);
+    listSubscriptionsMock.mockResolvedValue([
+      { provider: "kimi", service: "Kimi", nextBillingAt: "2026-12-01T00:00:00.000Z" },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <LimitsPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(listSubscriptionsMock).toHaveBeenCalled());
+    // Give the post-load effect a tick to (not) fire.
+    await act(async () => { await Promise.resolve(); });
+    expect(refreshLimitsMock).not.toHaveBeenCalled();
   });
 });
