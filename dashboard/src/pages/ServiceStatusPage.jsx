@@ -13,15 +13,15 @@ import { ProviderIcon } from "../ui/dashboard/components/ProviderIcon.jsx";
 //   google     — Google's incidents.json feed, filtered by service name
 //                (covers Gemini; Google products share one feed)
 //
-// DeepSeek has no public JSON API and no CORS, so the local app relays and
-// parses status.deepseek.com through /api/deepseek-status (see
-// src/lib/provider-status.js). On the hosted web build without a local backend
-// that probe renders Unreachable. Providers deliberately absent: Grok fronts
-// its status page with bot checks (browser fetch gets 403/HTML), OpenCode
-// publishes a status API (status.opencode.ai/api/status) without CORS headers,
-// and z.ai / Kiro / Qoder expose no usable public status API at all. Only
-// providers TokenTracker actually tracks belong here — this page explains
-// "why is MY provider's data red", it is not a general status aggregator.
+// Two providers are special: DeepSeek (no public JSON API) and OpenCode
+// (official status API without CORS headers) are relayed by the local app
+// through /api/deepseek-status and /api/opencode-status (see
+// src/lib/provider-status.js). On the hosted web build without a local
+// backend those probes render Unreachable. Grok + Kiro front their status
+// pages with bot checks (browser and server fetches get 403), and z.ai /
+// Qoder expose no public status page at all. Only providers TokenTracker
+// actually tracks belong here — this page explains "why is MY provider's
+// data red", it is not a general status aggregator.
 export const STATUS_PROVIDERS = [
   {
     id: "claude",
@@ -105,6 +105,15 @@ export const STATUS_PROVIDERS = [
     // No public JSON API / no CORS: the local app relays and parses the page.
     apiUrl: "/api/deepseek-status",
     pageUrl: "https://status.deepseek.com",
+  },
+  {
+    id: "opencode",
+    name: "OpenCode",
+    icon: "OPENCODE",
+    // Official status API (status.opencode.ai/api/status) ships no CORS
+    // headers; relayed by the local app like deepseek above.
+    apiUrl: "/api/opencode-status",
+    pageUrl: "https://status.opencode.ai",
   },
 ];
 

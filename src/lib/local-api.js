@@ -1676,34 +1676,38 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
     return hasAllowedLoopbackOrigin(req?.headers || {});
   }
 
-  return async function handleLocalApi(req, res, url) {
-    const p = url.pathname;
-    // status.deepseek.com has no public JSON API or CORS, so the dashboard
-    // cannot probe it like the other providers. Relay it through the local app:
-    // fetchProviderServiceStatus("deepseek") fetches + parses the server-rendered
-    // page (with a 5-minute cache and 6s timeout in provider-status.js) and we
-    // return a Statuspage.io-shaped payload the existing dashboard parser reads.
-    if (p === "/api/deepseek-status") {
-      const method = String(req.method || "GET").toUpperCase();
-      if (method !== "GET" && method !== "HEAD") {
-        json(res, { error: "Method Not Allowed" }, 405);
-        return true;
-      }
-      try {
-        const reading = await fetchProviderServiceStatus("deepseek");
-        if (!reading) {
-          json(res, { error: "DeepSeek status unavailable" }, 502);
-          return true;
-        }
-        json(res, {
-          page: { updated_at: reading.updated_at },
-          status: { indicator: reading.indicator, description: reading.description || "" },
-        });
-      } catch (error) {
-        json(res, { error: `DeepSeek status probe error: ${error?.message || error}` }, 502);
-      }
+  // status.deepseek.com (no public JSON API) and status.opencode.ai (official
+  // API but no CORS headers) are both unreadable from the browser, so the
+  // dashboard probes them through these same-origin relays instead. The
+  // server-side fetch/parse/cache logic lives in provider-status.js (6s
+  // timeout, 5-minute cache, last-good fallback); a failed probe surfaces as
+  // 502 and the card renders Unreachable.
+  const relayProviderStatus = (providerId, label) => async (req, res) => {
+    const method = String(req.method || "GET").toUpperCase();
+    if (method !== "GET" && method !== "HEAD") {
+      json(res, { error: "Method Not Allowed" }, 405);
       return true;
     }
+    try {
+      const reading = await fetchProviderServiceStatus(providerId);
+      if (!reading) {
+        json(res, { error: `${label} status unavailable` }, 502);
+        return true;
+      }
+      json(res, {
+        page: { updated_at: reading.updated_at },
+        status: { indicator: reading.indicator, description: reading.description || "" },
+      });
+    } catch (error) {
+      json(res, { error: `${label} status probe error: ${error?.message || error}` }, 502);
+    }
+    return true;
+  };
+
+  return async function handleLocalApi(req, res, url) {
+    const p = url.pathname;
+    if (p === "/api/deepseek-status") return relayProviderStatus("deepseek", "DeepSeek")(req, res);
+    if (p === "/api/opencode-status") return relayProviderStatus("opencode", "OpenCode")(req, res);
     if (p === "/api/local-usage") {
       if (!isAuthorizedLocalMutation(req)) { json(res, { code: "unauthorized" }, 401); return true; }
       try {
