@@ -67,6 +67,7 @@ tokentracker              # 대시보드 열기
 tokentracker sync         # 수동 동기화
 tokentracker status       # hook 상태 확인
 tokentracker doctor       # 헬스 체크
+tokentracker update       # CLI 업그레이드 (npm 전역 / Homebrew)
 ```
 
 ### 🍺 Homebrew (macOS)
@@ -81,7 +82,7 @@ brew install --cask xiufengsun/tokentracker/tokentracker
 brew install xiufengsun/tokentracker/tokentracker
 ```
 
-업그레이드는 `brew upgrade --cask xiufengsun/tokentracker/tokentracker`. tap은 새 릴리스마다 한 시간 이내에 자동 갱신됩니다.
+업그레이드는 앱은 `brew upgrade --cask xiufengsun/tokentracker/tokentracker`, CLI는 `brew upgrade xiufengsun/tokentracker/tokentracker` 또는 `tokentracker update`. tap은 새 릴리스마다 한 시간 이내에 자동 갱신됩니다.
 
 ---
 

@@ -67,6 +67,7 @@ tokentracker              # ダッシュボードを開く
 tokentracker sync         # 手動同期
 tokentracker status       # hook の状態を確認
 tokentracker doctor       # ヘルスチェック
+tokentracker update       # CLI をアップグレード（npm グローバル / Homebrew）
 ```
 
 ### 🍺 Homebrew (macOS)
@@ -81,7 +82,7 @@ brew install --cask xiufengsun/tokentracker/tokentracker
 brew install xiufengsun/tokentracker/tokentracker
 ```
 
-アップグレードは `brew upgrade --cask xiufengsun/tokentracker/tokentracker`。tap は新リリースから 1 時間以内に自動更新されます。
+アップグレードは、アプリが `brew upgrade --cask xiufengsun/tokentracker/tokentracker`、CLI が `brew upgrade xiufengsun/tokentracker/tokentracker` または `tokentracker update`。tap は新リリースから 1 時間以内に自動更新されます。
 
 ---
 

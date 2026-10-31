@@ -8,6 +8,7 @@ const { cmdServe } = require("./commands/serve");
 const { cmdDeviceLogin } = require("./commands/device-login");
 const { cmdWrapped } = require("./commands/wrapped");
 const { cmdSessions } = require("./commands/sessions");
+const { cmdUpdate } = require("./commands/update");
 
 async function run(argv) {
   // Best-effort Sentry init (no-op without DSN / when telemetry opted out).
@@ -70,20 +71,27 @@ async function run(argv) {
     case "sessions":
       await cmdSessions(rest);
       return;
+    case "update":
+      await cmdUpdate(rest);
+      return;
     default:
-      throw new Error(`Unknown command: ${command}`);
+      process.stderr.write(`Unknown command: ${command}\n\n`);
+      printHelp(process.stderr);
+      process.exitCode = 1;
+      return;
   }
 }
 
-function printHelp() {
+function printHelp(stream = process.stdout) {
   // Keep this short; npx users want quick guidance.
-  process.stdout.write(
+  stream.write(
     [
       "tokentracker",
       "",
       "Usage:",
       "  npx tokentracker                                         Open local dashboard",
       "  npx tokentracker -v, --version                           Show version info",
+      "  npx tokentracker-cli [--debug] update [--check] [--json]",
       "  npx tokentracker [--debug] serve [--port 7680] [--no-open] [--no-sync]",
       "  npx tokentracker [--debug] init [--yes] [--dry-run] [--no-open] [--link-code <code>]",
       "  npx tokentracker [--debug] sync [--auto] [--drain] [--from-openclaw]",
@@ -109,6 +117,8 @@ function printHelp() {
       "  - --debug shows original backend errors.",
       "  - device-login pairs a headless CLI / SSH session with a browser sign-in (15-min code).",
       "  - sessions exports metadata-only Claude/Codex/Grok/ZCode efficiency analytics; no prompt or response text is retained.",
+      "  - update upgrades an npm global install or a Homebrew install. An npx run prints the command for the next launch.",
+      "  - update --check only reports, and exits 1 when a newer release exists. --json prints one JSON object.",
       "",
     ].join("\n"),
   );

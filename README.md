@@ -108,6 +108,7 @@ tokentracker status       # Check hook status
 tokentracker status --json     # Machine-readable summary (pipe to jq, ingest from AI agents)
 tokentracker status --light    # Plain ASCII table (CI / SSH, no spinner)
 tokentracker doctor       # Health check
+tokentracker update       # Upgrade the CLI (npm global or Homebrew)
 ```
 
 ### 🍺 Homebrew (macOS)
@@ -122,7 +123,7 @@ brew install --cask xiufengsun/tokentracker/tokentracker
 brew install xiufengsun/tokentracker/tokentracker
 ```
 
-Upgrade with `brew upgrade --cask xiufengsun/tokentracker/tokentracker`. The tap auto-bumps within an hour of every new release.
+Upgrade the app with `brew upgrade --cask xiufengsun/tokentracker/tokentracker`, and the CLI with `brew upgrade xiufengsun/tokentracker/tokentracker` or `tokentracker update`. The tap auto-bumps within an hour of every new release.
 
 ### 🐧 Linux (AppImage, `.deb`, `.rpm`)
 
