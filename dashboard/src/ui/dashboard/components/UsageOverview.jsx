@@ -33,7 +33,15 @@ import { formatProviderDisplayName } from "../../../lib/provider-display";
 import { DateRangePopover, formatDateShort, getDateFnsLocale } from "./DateRangePopover.jsx";
 import { ProviderIcon } from "./ProviderIcon.jsx";
 import { formatUsdCurrency } from "../../../lib/format";
-import { buildAllModels, hasModelTokenSplits } from "../../../lib/model-breakdown";
+import {
+  buildAllModels,
+  hasModelTokenSplits,
+  hasModelSpeedTiers,
+  MODEL_SPEED_TIER_KEYS,
+  modelSpeedTierMultiplier,
+  modelSpeedTierStandard,
+  modelTokenSplitsTotal,
+} from "../../../lib/model-breakdown";
 import { ContextBreakdownPanel } from "./ContextBreakdownPanel.jsx";
 
 const ALL_PROVIDERS_KEY = "__all__";
@@ -781,6 +789,61 @@ function ModelTokenSplits({ tokens }) {
 }
 
 /**
+ * Speed-tier sub-rows (issue 886): under an expanded model row, one line per
+ * Codex speed tier — Standard (the residual), Fast and Ultrafast — with the
+ * tier's tokens and the backend-allocated cost. Rendered only when the backend
+ * reported tier subsets; the multiplier suffix comes from the model's pricing
+ * info so the label never hardcodes 2x/6x.
+ */
+function speedTierRowLabel(tier, model) {
+  const base = copy(
+    tier === "priority"
+      ? "usage.overview.tier_fast"
+      : tier === "ultrafast"
+        ? "usage.overview.tier_ultrafast"
+        : "usage.overview.tier_standard",
+  );
+  const multiplier = tier === "standard" ? 0 : modelSpeedTierMultiplier(model, tier);
+  if (!(multiplier > 1)) return base;
+  const rate = Number.isInteger(multiplier) ? String(multiplier) : String(Math.round(multiplier * 100) / 100);
+  return copy("usage.overview.tier_rate_label", { label: base, rate });
+}
+
+function ModelSpeedTierRows({ model }) {
+  const { currency, rate } = useCurrency();
+  const { formatTokens, formatTokensTooltip } = useTokenFormat();
+  if (!hasModelSpeedTiers(model)) return null;
+  const rows = [
+    { key: "standard", split: modelSpeedTierStandard(model) },
+    ...MODEL_SPEED_TIER_KEYS.map((tier) => ({ key: tier, split: model?.tiers?.[tier] || null })),
+  ].filter((row) => row.split && (modelTokenSplitsTotal(row.split.tokens) > 0 || row.split.cost > 0));
+  if (!rows.length) return null;
+  return (
+    <div className="mb-1.5 flex flex-col gap-y-1" data-model-speed-tiers>
+      {rows.map((row) => {
+        const tokensTotal = modelTokenSplitsTotal(row.split.tokens);
+        return (
+          <div key={row.key} className="flex flex-wrap items-baseline gap-x-3 text-[11px] tabular-nums">
+            <span className="min-w-[8rem] text-oai-gray-500 dark:text-oai-gray-400">
+              {speedTierRowLabel(row.key, model)}
+            </span>
+            <span
+              title={formatTokensTooltip(tokensTotal)}
+              className="text-oai-gray-600 dark:text-oai-gray-300"
+            >
+              {formatTokens(tokensTotal)}
+            </span>
+            <span className="text-oai-gray-600 dark:text-oai-gray-300">
+              {formatCost(row.split.cost, currency, rate)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * Grid cells of one model row: name, token total, cost and share. The share
  * cell carries a rotating chevron when the row has token splits.
  */
@@ -827,7 +890,8 @@ function ModelRowHeader({ model, tokensLabel, costLabel, expandable, isExpanded 
 /**
  * Renders the per-model usage rows for one provider (or the all-models list).
  * Rows whose backend entry carries token-type splits become expandable; the
- * expanded state shows the five split values under the row.
+ * expanded state shows the five split values under the row, plus the
+ * Standard/Fast/Ultrafast speed-tier lines when the backend reported them.
  */
 function ModelUsageRows({ models, color }) {
   const { currency, rate } = useCurrency();
@@ -865,7 +929,12 @@ function ModelUsageRows({ models, color }) {
                 <ModelRowHeader {...headerProps} />
               </div>
             )}
-            {isExpanded && <ModelTokenSplits tokens={model.tokens} />}
+            {isExpanded && (
+              <>
+                <ModelTokenSplits tokens={model.tokens} />
+                <ModelSpeedTierRows model={model} />
+              </>
+            )}
             <div
               className="h-[3px] bg-oai-gray-100 dark:bg-oai-gray-800 rounded-full overflow-hidden"
               role="progressbar"
