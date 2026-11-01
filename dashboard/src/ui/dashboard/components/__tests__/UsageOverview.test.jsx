@@ -283,6 +283,99 @@ describe("UsageOverview", () => {
     expect(screen.queryByText("Cached input")).toBeNull();
   });
 
+  it("labels token-backed unpriced rows in the cost column instead of a blank cell", async () => {
+    const user = userEvent.setup();
+    const fleetData = [
+      {
+        source: "codex",
+        label: "CODEX",
+        totalPercent: "100.00",
+        usage: 130,
+        usd: 0.2,
+        models: [
+          {
+            id: "gpt-6.1-terra",
+            name: "gpt-6.1-terra",
+            share: 60,
+            usage: 80,
+            cost: null,
+            pricing: { status: "unpriced" },
+            costSource: "curated",
+          },
+          {
+            id: "free-model",
+            name: "free-model",
+            share: 15,
+            usage: 20,
+            cost: 0,
+            pricing: { status: "free" },
+            costSource: "curated",
+          },
+          {
+            id: "legacy-model",
+            name: "legacy-model",
+            share: 10,
+            usage: 20,
+            cost: null,
+          },
+          {
+            id: "req-only-model",
+            name: "req-only-model",
+            share: 0,
+            usage: 0,
+            requests: 5,
+            cost: null,
+            pricing: { status: "unpriced" },
+            costSource: "curated",
+          },
+          {
+            id: "reported-model",
+            name: "reported-model",
+            share: 15,
+            usage: 10,
+            cost: 0.2,
+            pricing: { status: "unpriced" },
+            costSource: "provider_reported",
+          },
+        ],
+      },
+    ];
+    const { container } = render(
+      <UsageOverview
+        period="month"
+        periods={["month"]}
+        summaryLabel="Total"
+        summaryValue="130"
+        fleetData={fleetData}
+        from="2026-11-01"
+        to="2026-11-30"
+      />,
+    );
+
+    const unpricedLabel = copy("dashboard.cost_breakdown.unpriced_label");
+
+    // All-tools ranking: only the token-backed unpriced row is flagged —
+    // free rows, rows without pricing metadata, request-only rows, and
+    // provider-reported rows keep their cells as before.
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: /All tools:/i }));
+    });
+    expect(container.querySelectorAll("[data-model-rank-row]")).toHaveLength(5);
+    const badges = screen.getAllByText(unpricedLabel);
+    expect(badges).toHaveLength(1);
+    expect(badges[0]).toBeVisible();
+    expect(badges[0]).toHaveAttribute("title", copy("dashboard.cost_breakdown.unpriced"));
+    expect(badges[0].closest("[data-model-rank-row]")).toHaveTextContent("gpt-6.1-terra");
+
+    // Per-provider rows read pricing straight from the fleet entry.
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: /CODEX:/i }));
+    });
+    const providerBadges = screen.getAllByText(unpricedLabel);
+    expect(providerBadges).toHaveLength(1);
+    expect(providerBadges[0].closest("[data-model-rank-row]")).toHaveTextContent("gpt-6.1-terra");
+  });
+
   it("renders AnythingLLM with its official name, icon, and stable accent", () => {
     const { container } = render(
       <UsageOverview
