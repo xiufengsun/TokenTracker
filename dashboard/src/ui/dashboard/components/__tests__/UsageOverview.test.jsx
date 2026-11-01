@@ -674,4 +674,69 @@ describe("UsageOverview", () => {
     showSource("codex");
     expect(screen.queryByText(copy("usage.overview.trae_notice_body"))).toBeNull();
   });
+
+  it("keeps request-only providers out of the card grid and shows one notice row", () => {
+    render(
+      <UsageOverview
+        period="day"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="0"
+        hasSummary
+        fleetData={[{
+          source: "codex",
+          label: "CODEX",
+          totalPercent: "100.00",
+          totalPercentValue: 100,
+          usage: 100,
+          requests: 0,
+          usd: 0,
+          models: [{ id: "gpt-5", name: "gpt-5", share: 100, usage: 100, requests: 0, cost: 0 }],
+        }, {
+          source: "qoder",
+          label: "QODER",
+          totalPercent: "0.00",
+          totalPercentValue: 0,
+          usage: 0,
+          requests: 19,
+          usd: 0,
+          models: [{ id: "qfmodel", name: "qfmodel", share: 0, usage: 0, requests: 19, cost: null }],
+        }]}
+        from="2026-11-01"
+        to="2026-11-01"
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /QODER/ })).toBeNull();
+    const notice = screen.getByText(/Active without token data:/);
+    expect(notice).toBeVisible();
+    expect(notice.textContent).toContain("19 requests");
+  });
+
+  it("keeps the All card reachable when only request-only providers exist", () => {
+    render(
+      <UsageOverview
+        period="day"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="0"
+        hasSummary
+        fleetData={[{
+          source: "qoder",
+          label: "QODER",
+          totalPercent: "0.00",
+          totalPercentValue: 0,
+          usage: 0,
+          requests: 19,
+          usd: 0,
+          models: [{ id: "qfmodel", name: "qfmodel", share: 0, usage: 0, requests: 19, cost: null }],
+        }]}
+        from="2026-11-01"
+        to="2026-11-01"
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /All tools/ })).toBeTruthy();
+    expect(screen.getByText(/Active without token data:/)).toBeVisible();
+  });
 });

@@ -80,6 +80,9 @@ const TOKEN_TOTAL_KEYS = [
   "cached_input_tokens",
   "cache_creation_input_tokens",
   "reasoning_output_tokens",
+  // Not a token measure, but it rides the same totals plumbing so alias
+  // merging keeps request-only providers intact (issue 948).
+  "conversation_count",
 ];
 
 // Token-type split keys as carried on provider/all-model entries (`tokens`
@@ -127,6 +130,7 @@ function emptyTotals() {
     cached_input_tokens: 0,
     cache_creation_input_tokens: 0,
     reasoning_output_tokens: 0,
+    conversation_count: 0,
     total_cost_usd: "0",
   };
 }
@@ -177,9 +181,13 @@ export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) 
     .map((entry: any) => {
       const totalTokens = resolveDisplayTokens(entry?.totals);
       const totalCost = toFiniteNumber(entry?.totals?.total_cost_usd) ?? 0;
+      // Request-only providers (issue 948: credit-billed transcripts that
+      // report no tokens) carry their activity as conversation_count.
+      const totalRequests = Math.max(0, toFiniteNumber(entry?.totals?.conversation_count) ?? 0);
       return {
         source: entry?.source,
         totalTokens: Number.isFinite(totalTokens) ? totalTokens : 0,
+        totalRequests,
         totalCost: Number.isFinite(totalCost) ? totalCost : 0,
         inputTokens: Math.max(0, toFiniteNumber(entry?.totals?.input_tokens) ?? 0),
         cacheRead: Math.max(0, toFiniteNumber(entry?.totals?.cached_input_tokens) ?? 0),
@@ -187,7 +195,7 @@ export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) 
         models: Array.isArray(entry?.models) ? entry.models : [],
       };
     })
-    .filter((entry) => entry.totalTokens > 0);
+    .filter((entry) => entry.totalTokens > 0 || entry.totalRequests > 0);
 
   if (!normalizedSources.length) return [];
 
@@ -199,7 +207,9 @@ export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) 
 
   return normalizedSources
     .slice()
-    .sort((a: any, b: any) => b.totalTokens - a.totalTokens)
+    // Token-backed providers keep today's order; request-only providers sink
+    // to the bottom, ordered among themselves by request count (issue 948).
+    .sort((a: any, b: any) => (b.totalTokens - a.totalTokens) || (b.totalRequests - a.totalRequests))
     .map((entry: any) => {
       const label = entry.source
         ? String(entry.source).toUpperCase()
@@ -209,18 +219,24 @@ export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) 
       const models = entry.models
         .map((model: any) => {
           const modelTokens = resolveDisplayTokens(model?.totals);
-          if (!Number.isFinite(modelTokens) || modelTokens <= 0) return null;
+          const modelRequests = Math.max(0, toFiniteNumber(model?.totals?.conversation_count) ?? 0);
+          if ((!Number.isFinite(modelTokens) || modelTokens <= 0) && modelRequests <= 0) return null;
           const share =
             entry.totalTokens > 0 ? Math.round((modelTokens / entry.totalTokens) * 1000) / 10 : 0;
           const name = resolveModelName(model, safeCopy("shared.placeholder.short"));
           const id = resolveModelId(model);
           const explicitModelCost = toFiniteNumber(model?.totals?.total_cost_usd);
+          // Request-only models book no cost — the endpoint total is a literal
+          // 0 and there is no token base to prorate entry cost from, so keep
+          // null and let the UI show "—" instead of a fabricated "$0.00".
           const modelCost =
-            explicitModelCost != null
-              ? explicitModelCost
-              : entry.totalCost > 0 && entry.totalTokens > 0
-                ? (modelTokens / entry.totalTokens) * entry.totalCost
-                : null;
+            modelTokens <= 0
+              ? null
+              : explicitModelCost != null
+                ? explicitModelCost
+                : entry.totalCost > 0 && entry.totalTokens > 0
+                  ? (modelTokens / entry.totalTokens) * entry.totalCost
+                  : null;
           // Per-model token-type splits feed the expandable detail rows in
           // the All-models and per-provider model lists. The API already
           // returns them; previously they were dropped here.
@@ -230,6 +246,7 @@ export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) 
             name,
             share,
             usage: modelTokens,
+            requests: modelRequests,
             cost: modelCost,
             tokens: {
               input: Math.max(0, toFiniteNumber(rawTotals?.input_tokens) ?? 0),
@@ -261,6 +278,7 @@ export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) 
         totalPercentValue: totalPercentRaw,
         usd: entry.totalCost,
         usage: entry.totalTokens,
+        requests: entry.totalRequests,
         cacheHitRate,
         cacheReusedTokens: entry.cacheRead,
         cacheInputTokens,
@@ -283,14 +301,19 @@ export function buildAllModels(fleetData: any) {
     const models: any[] = Array.isArray(provider?.models) ? provider.models : [];
     for (const model of models) {
       const usage = toFiniteNumber(model?.usage);
-      if (usage == null || usage <= 0) continue;
+      // Request-only rows (issue 948) carry no usage but do carry a request count.
+      const requests = Math.max(0, toFiniteNumber(model?.requests) ?? 0);
+      if ((usage == null || usage <= 0) && requests <= 0) continue;
+      // usage stays null for request-only rows; normalize once so the
+      // aggregation loop below never sees a possibly-null number.
+      const usageValue = usage ?? 0;
       const name = typeof model?.name === "string" && model.name.trim()
         ? model.name.trim()
         : typeof model?.id === "string" && model.id.trim()
           ? model.id.trim()
           : null;
       if (!name) continue;
-      modelRows.push({ model, name, usage });
+      modelRows.push({ model, name, usage: usageValue, requests });
     }
   }
 
@@ -298,7 +321,7 @@ export function buildAllModels(fleetData: any) {
     modelRows.map((row) => ({ name: row.name, weight: row.usage })),
   );
 
-  for (const { model, name, usage } of modelRows) {
+  for (const { model, name, usage, requests } of modelRows) {
     const identity = resolveAggregateModelIdentity(name, bareNames);
     if (!identity) continue;
     const { key } = identity;
@@ -306,12 +329,14 @@ export function buildAllModels(fleetData: any) {
       id: key,
       name: identity.name,
       usage: 0,
+      requests: 0,
       cost: 0,
       hasCost: false,
       nameWeight: 0,
       tokens: { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 },
     };
     current.usage += usage;
+    current.requests += requests;
     // Combine token-type splits across tools alongside the usage total.
     const splits = model?.tokens || {};
     for (const splitKey of MODEL_TOKEN_SPLIT_KEYS) {
@@ -340,6 +365,7 @@ export function buildAllModels(fleetData: any) {
       id: model.id,
       name: model.name,
       usage: model.usage,
+      requests: model.requests,
       cost: model.hasCost ? model.cost : null,
       tokens: { ...model.tokens },
       share: totalUsage > 0
@@ -367,6 +393,8 @@ export function buildTopModels(modelBreakdown: any, { limit = 3, copyFn }: AnyRe
     const models: any[] = Array.isArray(source?.models) ? source.models : [];
     for (const model of models) {
       const tokens = resolveDisplayTokens(model?.totals);
+      // Request-only models (issue 948) stay out on purpose: this is a token
+      // ranking for the hero, and a zero-token model has no share to show.
       if (!Number.isFinite(tokens) || tokens <= 0) continue;
       totalTokensAll += tokens;
       const name = resolveModelName(model, safeCopy("shared.placeholder.short"));

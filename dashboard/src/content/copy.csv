@@ -725,6 +725,10 @@ usage.overview.percent_below_threshold,ui,DashboardPage,UsageOverview,percent_be
 usage.overview.expand,ui,DashboardPage,UsageOverview,expand,"expand",,active
 usage.overview.collapse,ui,DashboardPage,UsageOverview,collapse,"collapse",,active
 usage.overview.model_count,ui,DashboardPage,UsageOverview,model_count,"{{count}} models",,active
+usage.overview.request_count,ui,DashboardPage,UsageOverview,request_count,"{{count}} requests",,active
+usage.overview.request_only_item,ui,DashboardPage,UsageOverview,request_only_item,"{{label}} · {{count}} requests",,active
+usage.overview.request_only_note,ui,DashboardPage,UsageOverview,request_only_note,"Active without token data: {{items}}. Per-model detail in All models.",,active
+usage.overview.request_only_separator,ui,DashboardPage,UsageOverview,request_only_separator,", ",,active
 usage.overview.model_details_aria,ui,DashboardPage,UsageOverview,model_details_aria,"{{provider}} model details",,active
 usage.overview.all_tools,ui,DashboardPage,UsageOverview,all_tools,"All",,active
 usage.overview.all_models,ui,DashboardPage,UsageOverview,all_models,"All models",,active

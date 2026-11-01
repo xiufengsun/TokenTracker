@@ -126,6 +126,28 @@ function formatProviderPercent(provider) {
   return value.toFixed(2);
 }
 
+// A request-only provider (issue 948) has conversation activity but no token
+// totals: it stays out of the card grid and surfaces in the notice row below.
+function isRequestOnlyProvider(provider) {
+  const requests = Number(provider?.requests) || 0;
+  return requests > 0 && !(Number(provider?.usage) > 0);
+}
+
+// Zero-token (request-only) model rows show their request count where a
+// token total would sit; rows with neither keep the legacy empty cell. A
+// merged row can carry BOTH (issue 948: token usage from one tool,
+// request-only activity from another) — show both instead of hiding the
+// requests behind the token total.
+function modelTokensCellLabel(model, formatTokens) {
+  const positive = formatPositiveTokens(formatTokens, model?.usage);
+  const requests = Math.max(0, Number(model?.requests) || 0);
+  if (positive && requests > 0) {
+    return `${positive} · ${copy("usage.overview.request_count", { count: requests })}`;
+  }
+  if (positive) return positive;
+  return requests > 0 ? copy("usage.overview.request_count", { count: requests }) : null;
+}
+
 const PERIOD_COPY_KEYS = {
   day: "usage.period.day",
   week: "usage.period.week",
@@ -332,8 +354,14 @@ export function UsageOverview({
     summaryValue
   );
 
-  // FleetData is already grouped by provider.
-  const providers = fleetData.filter((f) => f.models?.length > 0);
+  // FleetData is already grouped by provider. Request-only providers
+  // (issue 948: zero tokens, activity as conversation_count) stay out of the
+  // card grid — the grid's visual language is token share — and surface in a
+  // slim notice row below it instead.
+  const providers = fleetData.filter((f) => f.models?.length > 0 && !isRequestOnlyProvider(f));
+  const requestOnlyProviders = fleetData.filter(
+    (f) => f.models?.length > 0 && isRequestOnlyProvider(f),
+  );
   // Devin contributes real token counts but its models (swe-2, swe-2-high,
   // compactor) ship without pricing data, so the dollar figure silently
   // under-reports whenever Devin is in view — surface the notice on both the
@@ -531,40 +559,45 @@ export function UsageOverview({
         <div className={showProviderSkeleton ? undefined : "hidden"}>
           <ProviderDistributionSkeleton />
         </div>
-        {providers.length > 0 && (
+        {/* The All card (and the All-models detail behind it) must stay reachable
+            even when no provider has tokens — a Qoder-only user would otherwise
+            lose the request-only model rows entirely (issue 948 review). */}
+        {(providers.length > 0 || requestOnlyProviders.length > 0) && (
           <div className="space-y-6">
             {/* Distribution Bar */}
-            <div
-              role="img"
-              aria-label={copy("usage.overview.distribution_aria", {
-                items: providers
-                  .map((provider) =>
-                    copy("usage.overview.distribution_item", {
-                      label: formatProviderDisplayName(provider.label),
-                      percent: formatProviderPercent(provider),
-                    }),
-                  )
-                  .join("，"),
-              })}
-              className="h-1.5 w-full bg-oai-gray-100 dark:bg-oai-gray-800 rounded-full overflow-hidden flex"
-            >
-              {providers.map((provider, idx) => {
-                const color = getProviderColor(provider.label, idx);
-                const displayLabel = formatProviderDisplayName(provider.label);
-                const percentLabel = formatProviderPercent(provider);
-                return (
-                  <motion.div
-                    key={provider.label}
-                    initial={{ width: 0 }}
-                    animate={{ width: `${getProviderPercentValue(provider)}%` }}
-                    transition={{ duration: 0.5, delay: 0.45 + idx * 0.04, ease: [0.16, 1, 0.3, 1] }}
-                    className="h-full"
-                    style={{ backgroundColor: color }}
-                    title={`${displayLabel}: ${percentLabel}%`}
-                  />
-                );
-              })}
-            </div>
+            {providers.length > 0 && (
+              <div
+                role="img"
+                aria-label={copy("usage.overview.distribution_aria", {
+                  items: providers
+                    .map((provider) =>
+                      copy("usage.overview.distribution_item", {
+                        label: formatProviderDisplayName(provider.label),
+                        percent: formatProviderPercent(provider),
+                      }),
+                    )
+                    .join("，"),
+                })}
+                className="h-1.5 w-full bg-oai-gray-100 dark:bg-oai-gray-800 rounded-full overflow-hidden flex"
+              >
+                {providers.map((provider, idx) => {
+                  const color = getProviderColor(provider.label, idx);
+                  const displayLabel = formatProviderDisplayName(provider.label);
+                  const percentLabel = formatProviderPercent(provider);
+                  return (
+                    <motion.div
+                      key={provider.label}
+                      initial={{ width: 0 }}
+                      animate={{ width: `${getProviderPercentValue(provider)}%` }}
+                      transition={{ duration: 0.5, delay: 0.45 + idx * 0.04, ease: [0.16, 1, 0.3, 1] }}
+                      className="h-full"
+                      style={{ backgroundColor: color }}
+                      title={`${displayLabel}: ${percentLabel}%`}
+                    />
+                  );
+                })}
+              </div>
+            )}
 
             {/* Provider Cards — responsive grid keeps cells equal-width so the
                 last row never stretches when the count doesn't divide evenly. */}
@@ -697,6 +730,9 @@ export function UsageOverview({
 
           </div>
         )}
+        {requestOnlyProviders.length > 0 && (
+          <RequestOnlyNotice providers={requestOnlyProviders} />
+        )}
       </div>
       </Card>
   );
@@ -801,7 +837,7 @@ function ModelUsageRows({ models, color }) {
   return (
     <div className="space-y-3">
       {models.map((model) => {
-        const tokensLabel = formatPositiveTokens(formatTokens, model.usage);
+        const tokensLabel = modelTokensCellLabel(model, formatTokens);
         const costLabel = formatCost(model.cost, currency, rate);
         const clampedShare = Math.max(0, Math.min(100, Number(model.share) || 0));
         const rowKey = model.id || model.name;
@@ -888,6 +924,26 @@ function KiroEstimateNotice() {
         {copy("usage.overview.kiro_notice_title")}.
       </span>{" "}
       {copy("usage.overview.kiro_notice_body")}
+    </p>
+  );
+}
+
+// Request-only providers (issue 948: Qoder-style credit-billed transcripts
+// with zero tokens) render as one slim notice under the card grid — the grid
+// itself stays a pure token-share visualization. Per-model detail lives in
+// the All-models list, which already carries their request counts.
+function RequestOnlyNotice({ providers }) {
+  const items = providers
+    .map((provider) =>
+      copy("usage.overview.request_only_item", {
+        label: formatProviderDisplayName(provider.label),
+        count: Math.max(0, Number(provider.requests) || 0),
+      }),
+    )
+    .join(copy("usage.overview.request_only_separator"));
+  return (
+    <p className="mb-3 text-[10px] leading-snug text-oai-gray-400 dark:text-oai-gray-500">
+      {copy("usage.overview.request_only_note", { items })}
     </p>
   );
 }
