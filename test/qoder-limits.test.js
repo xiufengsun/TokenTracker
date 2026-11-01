@@ -908,8 +908,9 @@ test("fetchQoderLimits persists a provider-level last-good cache for app restart
   assert.equal(cached.primary_window.remaining_credits, 75);
   assert.equal(cached.secondary_window.remaining_credits, 300);
   assert.equal(cached.cached, true);
-  assert.equal(cached.stale, true);
-  assert.equal(cached.source, "disk-cache");
+  // Still inside the fresh TTL: inherit the live write's source (#955).
+  assert.equal(cached.stale, false);
+  assert.match(cached.source, /local-ipc/);
 });
 
 test("fetchQoderLimits returns last-good before explicit provider fallback", async (t) => {
@@ -1173,6 +1174,8 @@ test("fetchQoderLimits picks the newest summary when mtime and line order disagr
 
   // The cache snapshot advanced past both files, so the next fetch reads it
   // — and it must hold the newest summary, not the first-eligible one.
+  // Within the fresh TTL the re-serve keeps the written local-log provenance
+  // (#955) instead of claiming a degraded disk-cache hit.
   const second = await fetchQoderLimits({
     home,
     platform: "darwin",
@@ -1182,8 +1185,64 @@ test("fetchQoderLimits picks the newest summary when mtime and line order disagr
       throw new Error("Qoder local service is not running.");
     },
   });
-  assert.equal(second.source, "disk-cache");
+  assert.equal(second.source, "local-log");
+  assert.equal(second.stale, false);
   assert.equal(second.tertiary_window.limit_credits, 1300);
+});
+
+test("fetchQoderLimits does not self-lock a fresh log write into permanent disk-cache stale (#955)", async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-qoder-955-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const nowMs = Date.parse("2030-07-29T12:00:00.000Z");
+  const file = writeQoderDesktopMainLog(home, "com.qoder.app.stable", "fresh-session", {
+    used: 10,
+    total: 100,
+    observedAt: new Date(nowMs - 30_000).toISOString(),
+    addOn: { total: 1400, used: 0, remaining: 1400 },
+  });
+  fs.utimesSync(file, new Date(nowMs - 10_000), new Date(nowMs - 10_000));
+
+  const first = await fetchQoderLimits({
+    home,
+    platform: "darwin",
+    env: {},
+    nowMs,
+    rpcRequest: async () => {
+      throw new Error("Qoder local service is not running.");
+    },
+  });
+  assert.equal(first.source, "local-log");
+  assert.equal(first.tertiary_window.limit_credits, 1400);
+
+  // Two minutes later the same log line loses to the cache floor — data is
+  // unchanged, so provenance must stay fresh rather than force partial UI.
+  const second = await fetchQoderLimits({
+    home,
+    platform: "darwin",
+    env: {},
+    nowMs: nowMs + 2 * 60_000,
+    rpcRequest: async () => {
+      throw new Error("Qoder local service is not running.");
+    },
+  });
+  assert.equal(second.source, "local-log");
+  assert.equal(second.stale, false);
+  assert.equal(second.cached, true);
+  assert.equal(second.tertiary_window.limit_credits, 1400);
+
+  // Past the fresh TTL the same payload is honest about age.
+  const aged = await fetchQoderLimits({
+    home,
+    platform: "darwin",
+    env: {},
+    nowMs: nowMs + 11 * 60_000,
+    rpcRequest: async () => {
+      throw new Error("Qoder local service is not running.");
+    },
+  });
+  assert.equal(aged.source, "disk-cache");
+  assert.equal(aged.stale, true);
+  assert.equal(aged.tertiary_window.limit_credits, 1400);
 });
 
 test("fetchQoderLimits prefers a configured manual cookie over a local summary when no cache exists", async (t) => {

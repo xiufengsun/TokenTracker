@@ -77,17 +77,11 @@ async function cmdServe(argv) {
     return;
   }
 
-  // 0. First-time setup: if tracker dir doesn't exist, run init first
+  // Resolve paths early so the HTTP listener can bind before first-run init.
+  // Native hosts (Windows especially) probe health with a hard deadline; if we
+  // block on init+first-sync before listen, that deadline kills the child and
+  // the setup never commits cursors.json (#961).
   const { trackerDir, binDir } = await resolveTrackerPaths();
-  if (!fssync.existsSync(path.join(trackerDir, "cursors.json"))) {
-    process.stdout.write("First time? Setting up Token Tracker...\n\n");
-    try {
-      const { cmdInit } = require("./init");
-      await cmdInit(["--yes"]);
-    } catch (e) {
-      process.stdout.write(`Init warning: ${e?.message || e}\n`);
-    }
-  }
 
   try {
     const { installLocalTrackerApp, repairRuntimeIntegrations } = require("./init");
@@ -102,8 +96,10 @@ async function cmdServe(argv) {
     process.stdout.write(`Runtime refresh warning: ${e?.message || e}\n`);
   }
 
-  // 1. Optional sync
-  if (opts.sync) {
+  // Optional sync for non-first-run launches. First-run init still owns its
+  // inline first sync below, after the listener is up.
+  const needsFirstRunSetup = !fssync.existsSync(path.join(trackerDir, "cursors.json"));
+  if (opts.sync && !needsFirstRunSetup) {
     process.stdout.write("Syncing local data...\n");
     try {
       const { cmdSync } = require("./sync");
@@ -114,7 +110,7 @@ async function cmdServe(argv) {
     }
   }
 
-  // 2. Resolve paths
+  // Resolve paths
   const queuePath = resolveQueuePath();
   const dashboardDir = resolveDashboardDir();
 
@@ -240,6 +236,19 @@ async function cmdServe(argv) {
 
     if (opts.open) {
       openInBrowser(url);
+    }
+  }
+
+  // First-time setup AFTER the listener is accepting health probes. Init still
+  // runs inline (including first sync) so the dashboard fills in, but native
+  // hosts can mark the server Running without racing that sync (#961).
+  if (needsFirstRunSetup) {
+    process.stdout.write("First time? Setting up Token Tracker...\n\n");
+    try {
+      const { cmdInit } = require("./init");
+      await cmdInit(["--yes"]);
+    } catch (e) {
+      process.stdout.write(`Init warning: ${e?.message || e}\n`);
     }
   }
 

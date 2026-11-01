@@ -40,6 +40,9 @@ const QODER_ACTIVITY_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const QODER_LIMITS_CACHE_FILE = "qoder-usage-limits-cache.json";
 const QODER_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const QODER_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS = 12 * 60 * 60 * 1000;
+// Align with usage-limits provenance aging (10 min): a cache hit fresher than
+// this inherits its written source and is not flagged stale (#955 self-lock).
+const QODER_LIMITS_CACHE_FRESH_TTL_MS = 10 * 60 * 1000;
 // Qoder Desktop 0.4+ writes its account usage summary to main.log, which can
 // accumulate a whole session before the quota is read. Scan a bounded window
 // backwards instead of assuming the summary is near EOF.
@@ -435,6 +438,15 @@ function readQoderLimitsCache({
     if (nowMs - cachedAtMs > QODER_LIMITS_CACHE_MAX_AGE_MS && !hasUnexpiredDatedWindow) {
       return null;
     }
+    // Provenance must describe the data's age, not the transport (#955): a
+    // successful refresh writes this cache and immediately floors later log
+    // scans, so the next refresh re-serves the same payload. Marking every
+    // hit stale/disk-cache made the Limits page permanently partial.
+    const ageMs = nowMs - cachedAtMs;
+    const fresh = ageMs <= QODER_LIMITS_CACHE_FRESH_TTL_MS;
+    const writtenSource = typeof raw.source === "string" && raw.source.trim()
+      ? raw.source.trim()
+      : null;
     return {
       configured: true,
       error: null,
@@ -444,9 +456,9 @@ function readQoderLimitsCache({
       secondary_window: secondaryWindow,
       ...(tertiaryWindow ? { tertiary_window: tertiaryWindow } : {}),
       cached: true,
-      stale: true,
+      stale: !fresh,
       cached_at: raw.cached_at,
-      source: "disk-cache",
+      source: fresh && writtenSource ? writtenSource : "disk-cache",
     };
   } catch (_error) {
     return null;
@@ -467,6 +479,9 @@ function writeQoderLimitsCache(limits, {
       primary_window: limits.primary_window || null,
       secondary_window: limits.secondary_window || null,
       ...(limits.tertiary_window ? { tertiary_window: limits.tertiary_window } : {}),
+      // Remember the winning source so a fresh re-serve keeps honest
+      // provenance instead of always claiming "disk-cache" (#955).
+      source: typeof limits.source === "string" ? limits.source : null,
       cached_at: new Date(nowMs).toISOString(),
     },
   };
