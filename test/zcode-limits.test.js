@@ -16,11 +16,13 @@ const {
   isZcodeInstalled,
   normalizeZcodeCodingPlanQuotaResponse,
   readZcodeLimitsCache,
+  readZcodeLogSnapshotCache,
   resolveZcodeAppVersion,
   resolveZcodeProviderBillingBaseUrl,
   resolveZcodeProviderQuotaUrl,
   loadZcodeSelectedPlanProviderKeys,
   writeZcodeLimitsCache,
+  writeZcodeLogSnapshotCache,
   zcodeCacheIdentity,
   scanZcodeBalanceLogs,
   zcodePlanKindFromProviderId,
@@ -2143,6 +2145,18 @@ describe("ZCode other-region log snapshot", () => {
     try {
       const v2 = writeZcodeCodingPlanConfig(tmp, "bigmodel");
       writeZcodeBalanceLog(v2, "2026-07-08 09:08:30.077", { providerId: "account:zai-start-plan" });
+      // Even a snapshot persisted by an earlier fetch stays silent: saved
+      // snapshots are log-derived data, so the kill switch covers them too.
+      const snapshotAtMs = new Date(2026, 6, 8, 9, 0, 0).getTime();
+      writeZcodeLogSnapshotCache(
+        new Map([["zai", {
+          body: balanceBody(),
+          providerKey: "account:zai-start-plan",
+          timestampMs: snapshotAtMs,
+          log_timestamp: new Date(snapshotAtMs).toISOString(),
+        }]]),
+        { home: tmp, nowMs: snapshotAtMs },
+      );
       const result = await fetchZcodeLimits({
         home: tmp,
         env: {
@@ -2786,6 +2800,206 @@ describe("ZCode limits disk cache", () => {
       assert.equal(result.source, "zcode-log");
       assert.equal(result.provider_key, "builtin:zai-start-plan");
       assert.equal(result.stale, true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  // Issue #959: ZCode only queries the balance of the region currently in use,
+  // so the other region's log rows age out of the 6h scan window and the
+  // other_region section vanished. Fetching now snapshots each region's
+  // freshest log record into the disk cache while it is inside the window.
+  it("persists each region's freshest log record as a snapshot partition on fetch", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tt-zcode-snapshot-write-"));
+    try {
+      const v2 = writeStartPlanConfig(tmp);
+      writeZcodeBalanceLog(v2, "2026-07-08 08:58:30.077", { providerId: "account:zai-start-plan" });
+      const result = await fetchZcodeLimits({ home: tmp, env: APP_ENV, nowMs: T0, fetchImpl: okResponse(futureBalanceBody()) });
+      assert.equal(result.error, null);
+      const parsed = JSON.parse(fs.readFileSync(cachePath(tmp), "utf8"));
+      const snapshot = parsed["log-snapshot:zai"];
+      assert.equal(snapshot.source, "zcode-log");
+      assert.equal(snapshot.region, "zai");
+      assert.equal(snapshot.provider_key, "account:zai-start-plan");
+      assert.equal(snapshot.plan_kind, "start-plan");
+      assert.equal(snapshot.plan_label, "Start");
+      assert.equal(snapshot.primary_window.used_percent, 20);
+      assert.equal(snapshot.log_timestamp, new Date(2026, 6, 8, 8, 58, 30, 77).toISOString());
+      assert.equal(snapshot.cached_at, T0_ISO);
+      // Log records carry no login id, so there is no identity to persist; and
+      // the red line holds structurally — no login-scoped extras.
+      assert.equal("identity" in snapshot, false);
+      assert.equal("reset_credits" in snapshot, false);
+      assert.equal("start_plan" in snapshot, false);
+      // Only regions actually seen in the logs get a partition; the live fetch
+      // is not a log record.
+      assert.equal("log-snapshot:bigmodel" in parsed, false);
+      assert.equal(typeof parsed["builtin:bigmodel-start-plan"].identity, "string");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("serves the persisted snapshot after the other region's log rows age out", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tt-zcode-snapshot-serve-"));
+    try {
+      const v2 = writeStartPlanConfig(tmp);
+      // Snapshot captured 26h ago, when the zai row was still inside the window.
+      const snapshotAtMs = T0 - 26 * 3_600_000;
+      writeZcodeLogSnapshotCache(
+        new Map([["zai", {
+          body: balanceBody(),
+          providerKey: "account:zai-start-plan",
+          timestampMs: snapshotAtMs,
+          log_timestamp: new Date(snapshotAtMs).toISOString(),
+        }]]),
+        { home: tmp, nowMs: snapshotAtMs },
+      );
+      // The zai log row itself has aged out of the 6h scan window.
+      writeZcodeBalanceLog(v2, "2026-07-08 02:00:00.077", { providerId: "account:zai-start-plan" });
+      const result = await fetchZcodeLimits({ home: tmp, env: APP_ENV, nowMs: T0, fetchImpl: okResponse(futureBalanceBody()) });
+      assert.equal(result.error, null);
+      assert.equal(result.region, "bigmodel");
+      assert.equal(result.other_region.region, "zai");
+      assert.equal(result.other_region.source, "zcode-log");
+      assert.equal(result.other_region.provider_key, "account:zai-start-plan");
+      assert.equal(result.other_region.primary_window.used_percent, 20);
+      assert.equal(result.other_region.log_timestamp, new Date(snapshotAtMs).toISOString());
+      assert.equal("reset_credits" in result.other_region, false);
+      assert.equal("start_plan" in result.other_region, false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers the fresh log record over the persisted snapshot and re-snapshots it", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tt-zcode-snapshot-fresh-"));
+    try {
+      const v2 = writeStartPlanConfig(tmp);
+      const staleAtMs = T0 - 26 * 3_600_000;
+      writeZcodeLogSnapshotCache(
+        new Map([["zai", {
+          body: balanceBody(),
+          providerKey: "account:zai-start-plan",
+          timestampMs: staleAtMs,
+          log_timestamp: new Date(staleAtMs).toISOString(),
+        }]]),
+        { home: tmp, nowMs: staleAtMs },
+      );
+      writeZcodeBalanceLog(v2, "2026-07-08 08:58:30.077", { providerId: "account:zai-start-plan" });
+      const result = await fetchZcodeLimits({ home: tmp, env: APP_ENV, nowMs: T0, fetchImpl: okResponse(futureBalanceBody()) });
+      assert.equal(result.error, null);
+      assert.equal(result.other_region.log_timestamp, new Date(2026, 6, 8, 8, 58, 30, 77).toISOString());
+      const parsed = JSON.parse(fs.readFileSync(cachePath(tmp), "utf8"));
+      assert.equal(parsed["log-snapshot:zai"].log_timestamp, new Date(2026, 6, 8, 8, 58, 30, 77).toISOString());
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("never adopts a snapshot partition as the primary card", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tt-zcode-snapshot-primary-"));
+    try {
+      writeStartPlanConfig(tmp);
+      // Only a snapshot partition exists — no provider partition, no log rows.
+      writeZcodeLogSnapshotCache(
+        new Map([["zai", {
+          body: balanceBody(),
+          providerKey: "account:zai-start-plan",
+          timestampMs: T0 - 26 * 3_600_000,
+          log_timestamp: new Date(T0 - 26 * 3_600_000).toISOString(),
+        }]]),
+        { home: tmp, nowMs: T0 - 26 * 3_600_000 },
+      );
+      const result = await fetchZcodeLimits({ home: tmp, env: APP_ENV, nowMs: T0, fetchImpl: statusResponse(500, { code: 500, msg: "boom" }) });
+      assert.match(result.error, /500/);
+      assert.equal(result.source, undefined);
+      assert.equal(result.stale, undefined);
+      assert.equal(result.other_region, undefined);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("pairs a cached primary card with the persisted other-region snapshot", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tt-zcode-snapshot-cached-"));
+    try {
+      writeStartPlanConfig(tmp);
+      writeZcodeLimitsCache(seededLimits(), { home: tmp, nowMs: T0 - 60_000, providerKey: "builtin:bigmodel-start-plan", identity: CACHE_IDENTITY });
+      writeZcodeLogSnapshotCache(
+        new Map([["zai", {
+          body: balanceBody(),
+          providerKey: "account:zai-start-plan",
+          timestampMs: T0 - 26 * 3_600_000,
+          log_timestamp: new Date(T0 - 26 * 3_600_000).toISOString(),
+        }]]),
+        { home: tmp, nowMs: T0 - 26 * 3_600_000 },
+      );
+      const result = await fetchZcodeLimits({ home: tmp, env: APP_ENV, nowMs: T0, fetchImpl: statusResponse(500, { code: 500, msg: "boom" }) });
+      assert.equal(result.source, "disk-cache");
+      assert.equal(result.stale, true);
+      assert.equal(result.provider_key, "builtin:bigmodel-start-plan");
+      assert.equal(result.other_region.region, "zai");
+      assert.equal(result.other_region.primary_window.used_percent, 20);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a snapshot partition whose cached_at sits in the future", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tt-zcode-snapshot-future-"));
+    try {
+      writeStartPlanConfig(tmp);
+      fs.mkdirSync(path.dirname(cachePath(tmp)), { recursive: true });
+      fs.writeFileSync(cachePath(tmp), JSON.stringify({
+        "log-snapshot:zai": {
+          source: "zcode-log",
+          region: "zai",
+          provider_key: "account:zai-start-plan",
+          log_timestamp: new Date(T0 - 3_600_000).toISOString(),
+          plan_kind: "start-plan",
+          plan_id: "zcode-v3-start-plan-0615",
+          plan_label: "Start",
+          buckets: [],
+          primary_window: { used_percent: 20, reset_at: null },
+          secondary_window: null,
+          tertiary_window: null,
+          cached_at: new Date(T0 + 10 * 60_000).toISOString(),
+        },
+      }), { encoding: "utf8", mode: 0o600 });
+      const result = await fetchZcodeLimits({ home: tmp, env: APP_ENV, nowMs: T0, fetchImpl: okResponse(futureBalanceBody()) });
+      assert.equal(result.error, null);
+      assert.equal(result.other_region, undefined);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a snapshot partition with unit-level guards", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tt-zcode-snapshot-read-"));
+    try {
+      const snapshotAtMs = T0 - 26 * 3_600_000;
+      writeZcodeLogSnapshotCache(
+        new Map([["zai", {
+          body: balanceBody(),
+          providerKey: "account:zai-start-plan",
+          timestampMs: snapshotAtMs,
+          log_timestamp: new Date(snapshotAtMs).toISOString(),
+        }]]),
+        { home: tmp, nowMs: snapshotAtMs },
+      );
+      const snapshot = readZcodeLogSnapshotCache("zai", { home: tmp, nowMs: T0 });
+      assert.equal(snapshot.region, "zai");
+      assert.equal(snapshot.source, "zcode-log");
+      assert.equal(snapshot.primary_window.used_percent, 20);
+      assert.equal("identity" in snapshot, false);
+      // Unknown regions and missing/corrupt partitions read as null; a cached_at
+      // that sits in the reader's future (beyond clock skew) is rejected too.
+      assert.equal(readZcodeLogSnapshotCache("eu", { home: tmp, nowMs: T0 }), null);
+      assert.equal(readZcodeLogSnapshotCache("bigmodel", { home: tmp, nowMs: T0 }), null);
+      assert.equal(readZcodeLogSnapshotCache("zai", { home: tmp, nowMs: T0 - 27 * 3_600_000 }), null);
+      fs.writeFileSync(cachePath(tmp), "not json", "utf8");
+      assert.equal(readZcodeLogSnapshotCache("zai", { home: tmp, nowMs: T0 }), null);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

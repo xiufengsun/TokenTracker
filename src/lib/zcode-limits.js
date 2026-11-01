@@ -1156,6 +1156,10 @@ function readZcodeLimitsCache({ home, nowMs = Date.now(), providerKeys = [], ide
       configured: true,
       error: null,
       provider_key: providerKey,
+      // Live results carry their provider's region for the other_region
+      // attach; the cached shape mirrors them so a cache-served card keeps
+      // that section too (issue #959).
+      region: zcodeRegionFromProviderId(providerKey),
       plan_kind: typeof raw.plan_kind === "string" ? raw.plan_kind : null,
       plan_id: typeof raw.plan_id === "string" ? raw.plan_id : null,
       plan_label: typeof raw.plan_label === "string" ? raw.plan_label : null,
@@ -1172,27 +1176,23 @@ function readZcodeLimitsCache({ home, nowMs = Date.now(), providerKeys = [], ide
   return null;
 }
 
-/** Merge one provider partition into the disk cache; best-effort, never throws. */
-function writeZcodeLimitsCache(limits, { home, nowMs = Date.now(), providerKey, identity } = {}) {
-  if (!providerKey || !identity || !limits?.configured || limits.error) return;
-  if (!limits.primary_window && !limits.secondary_window && !limits.tertiary_window) return;
+/**
+ * Merge partitions into the disk cache atomically; best-effort, never throws.
+ * Cross-process semantics are last-writer-wins on purpose, matching the house
+ * pattern (ark / qoder / codex caches): a concurrent writer can discard a
+ * partition added between its read and rename, which costs one refresh cycle
+ * — the next fetch rewrites it. Snapshots in particular keep getting
+ * re-persisted on every fetch while their region's rows are inside the scan
+ * window, so a lost write self-heals long before the window expires.
+ */
+function mergeZcodeLimitsCacheEntries(entries, { home } = {}) {
   const cachePath = zcodeLimitsCachePath({ home });
   let payload = {};
   try {
     const parsed = JSON.parse(fs.readFileSync(cachePath, "utf8"));
     if (parsed && typeof parsed === "object") payload = parsed;
   } catch (_error) {}
-  payload[providerKey] = {
-    identity,
-    plan_kind: typeof limits.plan_kind === "string" ? limits.plan_kind : null,
-    plan_id: typeof limits.plan_id === "string" ? limits.plan_id : null,
-    plan_label: typeof limits.plan_label === "string" ? limits.plan_label : null,
-    buckets: Array.isArray(limits.buckets) ? limits.buckets : [],
-    primary_window: limits.primary_window || null,
-    secondary_window: limits.secondary_window || null,
-    tertiary_window: limits.tertiary_window || null,
-    cached_at: new Date(nowMs).toISOString(),
-  };
+  Object.assign(payload, entries);
   try {
     fs.mkdirSync(path.dirname(cachePath), { recursive: true });
     const tmpPath = `${cachePath}.${process.pid}.tmp`;
@@ -1201,28 +1201,129 @@ function writeZcodeLimitsCache(limits, { home, nowMs = Date.now(), providerKey, 
   } catch (_error) {}
 }
 
+/** Merge one provider partition into the disk cache; best-effort, never throws. */
+function writeZcodeLimitsCache(limits, { home, nowMs = Date.now(), providerKey, identity } = {}) {
+  if (!providerKey || !identity || !limits?.configured || limits.error) return;
+  if (!limits.primary_window && !limits.secondary_window && !limits.tertiary_window) return;
+  mergeZcodeLimitsCacheEntries({
+    [providerKey]: {
+      identity,
+      plan_kind: typeof limits.plan_kind === "string" ? limits.plan_kind : null,
+      plan_id: typeof limits.plan_id === "string" ? limits.plan_id : null,
+      plan_label: typeof limits.plan_label === "string" ? limits.plan_label : null,
+      buckets: Array.isArray(limits.buckets) ? limits.buckets : [],
+      primary_window: limits.primary_window || null,
+      secondary_window: limits.secondary_window || null,
+      tertiary_window: limits.tertiary_window || null,
+      cached_at: new Date(nowMs).toISOString(),
+    },
+  }, { home });
+}
+
+// Issue #959: ZCode only queries the balance of the region currently in use,
+// so the other region's log rows stop appearing the moment it goes idle and
+// then age out of the 6h scan window — the other_region section would vanish.
+// While a region's rows are still fresh, snapshot its latest record into a
+// per-region cache partition; withZcodeOtherRegion falls back to it after the
+// window expires. The snapshot shape comes straight from
+// normalizeZcodeBalanceResponse, so the no-reset_credits / no-start_plan red
+// line holds structurally. Log records carry no login id, so unlike the
+// windows partitions there is no identity guard here: staleness is
+// self-attested by the snapshot's log_timestamp (rendered as the section's
+// time row), and the section stays collapsed and informational.
+function zcodeLogSnapshotCacheKey(region) {
+  return `log-snapshot:${region}`;
+}
+
+function writeZcodeLogSnapshotCache(byRegion, { home, nowMs = Date.now() } = {}) {
+  if (!(byRegion instanceof Map) || byRegion.size === 0) return;
+  const entries = {};
+  for (const [region, record] of byRegion) {
+    if (region !== "bigmodel" && region !== "zai") continue;
+    let normalized;
+    try {
+      normalized = normalizeZcodeBalanceResponse(record.body);
+    } catch (_error) {
+      continue;
+    }
+    entries[zcodeLogSnapshotCacheKey(region)] = {
+      source: "zcode-log",
+      region,
+      provider_key: record.providerKey,
+      log_timestamp: record.log_timestamp,
+      ...normalized,
+      cached_at: new Date(nowMs).toISOString(),
+    };
+  }
+  if (Object.keys(entries).length > 0) mergeZcodeLimitsCacheEntries(entries, { home });
+}
+
+/**
+ * Read one region's persisted log snapshot, shaped exactly like the fresh
+ * withZcodeOtherRegion attach (issue #938). Deliberately no per-window
+ * expiry: clipping aged windows would make the cached section render
+ * differently from the same record served fresh inside the scan window.
+ */
+function readZcodeLogSnapshotCache(region, { home, nowMs = Date.now() } = {}) {
+  if (region !== "bigmodel" && region !== "zai") return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(zcodeLimitsCachePath({ home }), "utf8"));
+  } catch (_error) {
+    return null;
+  }
+  const raw = parsed?.[zcodeLogSnapshotCacheKey(region)];
+  if (!raw || typeof raw !== "object" || raw.source !== "zcode-log" || raw.region !== region) return null;
+  if (!Number.isFinite(Date.parse(typeof raw.log_timestamp === "string" ? raw.log_timestamp : ""))) return null;
+  const cachedAtMs = Date.parse(typeof raw.cached_at === "string" ? raw.cached_at : "");
+  if (!Number.isFinite(cachedAtMs) || cachedAtMs > nowMs + 60_000) return null;
+  return {
+    source: "zcode-log",
+    region,
+    provider_key: typeof raw.provider_key === "string" ? raw.provider_key : null,
+    log_timestamp: raw.log_timestamp,
+    plan_kind: typeof raw.plan_kind === "string" ? raw.plan_kind : null,
+    plan_id: typeof raw.plan_id === "string" ? raw.plan_id : null,
+    plan_label: typeof raw.plan_label === "string" ? raw.plan_label : null,
+    buckets: Array.isArray(raw.buckets) ? raw.buckets : [],
+    primary_window: raw.primary_window || null,
+    secondary_window: raw.secondary_window || null,
+    tertiary_window: raw.tertiary_window || null,
+  };
+}
+
 /**
  * Attach the freshest logged balance snapshot from the user's other region
  * (issue #938): ZCode's own usage logs carry both regions' billing data even
- * when only the active region's credentials are on disk. The snapshot is
+ * when only the active region's credentials are on disk. Once those rows age
+ * out of the 6h scan window (ZCode only queries the active region's balance,
+ * issue #959), fall back to the snapshot persisted by
+ * writeZcodeLogSnapshotCache while they were fresh. Either way the section is
  * read-only and deliberately carries no reset_credits / start_plan extras —
  * those are login-scoped and must never ride along across regions.
  */
-function withZcodeOtherRegion(result, byRegion) {
+function withZcodeOtherRegion(result, byRegion, { home, env = process.env, nowMs = Date.now() } = {}) {
   if (!result || result.error || !result.region) return result;
   const otherRegion = result.region === "bigmodel" ? "zai" : "bigmodel";
   const record = byRegion instanceof Map ? byRegion.get(otherRegion) : null;
-  if (!record) return result;
-  return {
-    ...result,
-    other_region: {
-      source: "zcode-log",
-      region: otherRegion,
-      provider_key: record.providerKey,
-      log_timestamp: record.log_timestamp,
-      ...normalizeZcodeBalanceResponse(record.body),
-    },
-  };
+  if (record) {
+    return {
+      ...result,
+      other_region: {
+        source: "zcode-log",
+        region: otherRegion,
+        provider_key: record.providerKey,
+        log_timestamp: record.log_timestamp,
+        ...normalizeZcodeBalanceResponse(record.body),
+      },
+    };
+  }
+  // Saved snapshots are log-derived data, so the log-fallback kill switch
+  // silences them along with the scan that feeds them.
+  if (env?.TOKENTRACKER_ZCODE_DISABLE_LOG_FALLBACK === "1") return result;
+  const snapshot = readZcodeLogSnapshotCache(otherRegion, { home, nowMs });
+  if (!snapshot) return result;
+  return { ...result, other_region: snapshot };
 }
 
 /**
@@ -1264,8 +1365,9 @@ function loadZcodeLoginScopedTokens(family, auth, { home, env } = {}) {
  * logs, and finally the last-good disk cache. The result carries the winning
  * provider's `region` ("bigmodel" | "zai") and, when ZCode's own logs hold one,
  * an `other_region` snapshot of the second region's plan (issue #938) — read-only
- * log data, never extended with login-scoped extras. Credentials and internal
- * team routing identifiers are omitted from the result.
+ * log data, never extended with login-scoped extras, served from the logs while
+ * fresh and from the disk cache once the scan window expires (issue #959).
+ * Credentials and internal team routing identifiers are omitted from the result.
  */
 async function fetchZcodeLimits({ home, env, fetchImpl = fetch, nowMs = Date.now(), providerTimeoutMs } = {}) {
   const startedAt = Date.now();
@@ -1283,11 +1385,15 @@ async function fetchZcodeLimits({ home, env, fetchImpl = fetch, nowMs = Date.now
     providerKeys: authCandidates.map((auth) => auth.providerKey),
     nowMs,
   });
+  // Issue #959: capture each region's freshest log record while it is still
+  // inside the scan window, so the other_region section survives the window
+  // expiring (ZCode stops writing rows for a region the moment it goes idle).
+  writeZcodeLogSnapshotCache(logScan.byRegion, { home, nowMs });
   const requireProviderMatch = authCandidates.some((auth) => auth.planKind === "coding-plan");
   const selectLogFallback = (errors) => {
     const record = logScan.preferred
       || (requireProviderMatch && authCandidates.length > 0 ? null : logScan.fallback);
-    return withZcodeOtherRegion(zcodeLogFallbackResult(record, errors), logScan.byRegion);
+    return withZcodeOtherRegion(zcodeLogFallbackResult(record, errors), logScan.byRegion, { home, env, nowMs });
   };
   if (!authCandidates.length) {
     return selectLogFallback([]) || { configured: false };
@@ -1403,13 +1509,13 @@ async function fetchZcodeLimits({ home, env, fetchImpl = fetch, nowMs = Date.now
           }
         }
       }
-      return withZcodeOtherRegion(result, logScan.byRegion);
+      return withZcodeOtherRegion(result, logScan.byRegion, { home, env, nowMs });
     } catch (error) {
       errors.push(`${auth.providerKey}: ${error?.message || "Unknown error"}`);
       partitionFailures.push({ providerKey: auth.providerKey, authError: error?.authError === true });
     }
   }
-  if (emptySuccess) return withZcodeOtherRegion(emptySuccess, logScan.byRegion);
+  if (emptySuccess) return withZcodeOtherRegion(emptySuccess, logScan.byRegion, { home, env, nowMs });
   // Rank fallback partitions in live candidate priority order, and withhold
   // any partition whose attempts all ended in auth errors: re-login is
   // actionable, so neither a stale log record nor stale cache bars may mask
@@ -1428,7 +1534,7 @@ async function fetchZcodeLimits({ home, env, fetchImpl = fetch, nowMs = Date.now
   // A log record for a provider with no live candidate is untouched by this
   // gate: nothing was attempted for it, so no error is being masked.
   if (logRecord && !authErrorOnlyProviders.has(logRecord.providerKey)) {
-    return withZcodeOtherRegion(zcodeLogFallbackResult(logRecord, errors), logScan.byRegion);
+    return withZcodeOtherRegion(zcodeLogFallbackResult(logRecord, errors), logScan.byRegion, { home, env, nowMs });
   }
   // Last stop before the error result: serve the disk cache in live candidate
   // priority order, scoped to the login that produced the windows so an
@@ -1440,7 +1546,7 @@ async function fetchZcodeLimits({ home, env, fetchImpl = fetch, nowMs = Date.now
     identityByKey.get(auth.providerKey).add(zcodeCacheIdentity(loginIdFor(zcodeProviderFamily(auth.providerKey)), auth.teamContext));
   }
   const cached = readZcodeLimitsCache({ home, nowMs, providerKeys: cacheEligible, identityByKey });
-  if (cached) return withZcodeOtherRegion(cached, logScan.byRegion);
+  if (cached) return withZcodeOtherRegion(cached, logScan.byRegion, { home, env, nowMs });
   return {
     configured: true,
     error: errors[0] || "Unknown error",
@@ -1474,6 +1580,8 @@ module.exports = {
   fetchZcodeStartPlanGrants,
   readZcodeLimitsCache,
   writeZcodeLimitsCache,
+  writeZcodeLogSnapshotCache,
+  readZcodeLogSnapshotCache,
   zcodeCacheIdentity,
   fetchZcodeLimits,
 };

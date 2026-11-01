@@ -906,8 +906,10 @@ function ZcodeStartPlanSection({ data, mode, now }) {
 }
 
 // Snapshot of the user's other region (issue 938), read from ZCode's own
-// usage logs: ZCode queries both regions' balances while running, so the data
-// exists even when that region has no credentials on disk to re-fetch with.
+// usage logs. ZCode only queries the balance of the region currently in use
+// (issue 959), so while the other region's log rows are inside the scan
+// window TokenTracker also persists them to the disk cache and serves that
+// snapshot here once they age out; the row below shows the data's age.
 function ZcodeOtherRegionSection({ data, mode, now }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef(null);
