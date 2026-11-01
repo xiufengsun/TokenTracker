@@ -25,10 +25,10 @@ const { resolveWorkbuddyHome } = require("./rollout");
 const { UNAVAILABLE, readWorkbuddyIpcDiscovery, openWorkbuddyIpc } = require("./workbuddy-ipc");
 
 const WORKBUDDY_LIMITS_CACHE_FILE = "workbuddy-usage-limits-cache.json";
-// Windows without a usable reset_at — the pooled resource window by design,
-// plus a plan row whose cycle end never parsed — cannot be checked against a
-// quota rollover, so they are only served while the snapshot is young enough
-// to trust.
+// Windows without a usable reset_at — the pooled resource window unless it
+// carries a readable expiring_at, plus a plan row whose cycle end never
+// parsed — cannot be checked against a quota rollover, so they are only
+// served while the snapshot is young enough to trust.
 const WORKBUDDY_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS = 12 * 60 * 60 * 1000;
 
 const PLAN_PRIORITY = Object.freeze({
@@ -406,6 +406,52 @@ function resourceWindow(pool) {
   };
 }
 
+// Resource packages die individually: paid add-ons and reward grants each
+// carry their own cycle end, so the pooled window can advertise when its
+// credits start to lapse — "by <day>, <credits> expire" beats a bare date
+// because a date alone cannot say how much is at stake. Grants are bucketed
+// by local calendar day and only the earliest day that still holds credit is
+// reported; later days belong in a per-grant breakdown, not the pooled bar.
+// Rows that could be the subscription plan are not resource credit (the same
+// rule collectResourceGroups applies), and a grant with no remaining credit,
+// a past end, or an unreadable end has nothing to lose.
+function collectExpiringResourceCredits(rows, identity = {}, nowMs = Date.now()) {
+  const grants = new Map();
+  for (const row of rows) {
+    if (!row || isSelectablePlan(row, identity.code)) continue;
+    const remain = row.remain
+      ?? (row.total !== null && row.used !== null ? Math.max(0, row.total - row.used) : null);
+    if (remain === null || remain <= 0) continue;
+    const endMs = Date.parse(normalizeResetAt(row.cycleEnd) || "");
+    if (!Number.isFinite(endMs) || endMs <= nowMs) continue;
+    // The summary and the paid/free pages list the same grant; one code with
+    // one end time is one grant, and the later listing wins the way
+    // mergePackageRows merges.
+    grants.set(`${row.code}\u0000${endMs}`, { endMs, remain });
+  }
+  let earliest = null;
+  for (const grant of grants.values()) {
+    const day = localDayNumber(grant.endMs);
+    if (!earliest || day < earliest.day) {
+      earliest = { day, endMs: grant.endMs, credits: grant.remain };
+    } else if (day === earliest.day) {
+      // Grants lapsing the same day merge; the moment to advertise is the
+      // last one, when the day's final grant dies.
+      earliest.endMs = Math.max(earliest.endMs, grant.endMs);
+      earliest.credits += grant.remain;
+    }
+  }
+  if (!earliest) return null;
+  return { at: new Date(earliest.endMs).toISOString(), credits: earliest.credits };
+}
+
+// Year*10000 + month*100 + day, local time — an ordering key that survives
+// unpadded string comparison and matches how the end times parse.
+function localDayNumber(ms) {
+  const date = new Date(ms);
+  return date.getFullYear() * 10000 + (date.getMonth() + 1) * 100 + date.getDate();
+}
+
 function englishPlanLabel(row, identity, variantId) {
   // An actual English subscription/package name takes precedence over the
   // client's edition fallback. Unknown localized tiers stay unnamed.
@@ -521,12 +567,19 @@ function workbuddyLimitsCachePath({ home } = {}) {
 
 // A window whose reset_at has already passed is stale data, not a usable
 // fallback — the quota has rolled over, so drop it. Undated windows (the
-// resource pool, or a plan row without a readable cycle end) cannot be
-// checked against a reset and are bounded by the snapshot-age TTL instead.
+// resource pool without a readable expiring_at, or a plan row without a
+// readable cycle end) cannot be checked against a reset and are bounded by
+// the snapshot-age TTL instead.
 function workbuddyCachedWindow(window, { cachedAtMs, nowMs } = {}) {
   if (!window || typeof window !== "object") return null;
   const resetAtMs = Date.parse(window.reset_at || "");
   if (Number.isFinite(resetAtMs)) return resetAtMs > nowMs ? window : null;
+  // The resource pool has no reset but may carry the earliest grant expiry.
+  // Once that moment passes the pool's numbers no longer describe the
+  // account, so it is trusted exactly until then — the same discipline as a
+  // reset date, not the undated TTL.
+  const expiringAtMs = Date.parse(window.expiring_at || "");
+  if (Number.isFinite(expiringAtMs)) return expiringAtMs > nowMs ? window : null;
   return nowMs - cachedAtMs <= WORKBUDDY_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS ? window : null;
 }
 
@@ -656,7 +709,7 @@ async function postBilling(fetchImpl, url, token, body = {}, signal) {
   return response.json();
 }
 
-async function fetchPlanQuota(post, variantId) {
+async function fetchPlanQuota(post, variantId, nowMs) {
   const prefix = "/billing/meter/";
   const summary = await post(`${prefix}get-user-resource-summary`, {});
   if (!unwrapBillingBody(summary)) throw new Error("WorkBuddy quota request was rejected.");
@@ -681,11 +734,24 @@ async function fetchPlanQuota(post, variantId) {
   const quota = selectWorkbuddyPlanQuota([
     ...collectPackageRows(summary), ...packageRows.flat(),
   ], identity, variantId);
+  const secondary = resourceWindow(collectResourceGroups(summary));
+  if (secondary) {
+    // The pooled bar cannot say which credits lapse first; the package
+    // listings carry each grant's cycle end. A pool without a window is
+    // dropped wholesale, so expiry has nothing to attach to.
+    const expiring = collectExpiringResourceCredits(
+      [...collectPackageRows(summary), ...packageRows.flat()], identity, nowMs,
+    );
+    if (expiring) {
+      secondary.expiring_at = expiring.at;
+      secondary.expiring_credits = expiring.credits;
+    }
+  }
   return {
     configured: true, error: null,
     plan_label: quota?.plan_label || englishPlanLabel({ code: identity.code }, identity, variantId),
     primary_window: quota?.primary_window || null,
-    secondary_window: resourceWindow(collectResourceGroups(summary)),
+    secondary_window: secondary,
   };
 }
 
@@ -724,7 +790,8 @@ async function fetchVariantLive(variant, variantId, { env, workbuddyHome, instal
       discovery, signal: opts.signal, timeoutMs: opts.timeoutMs, connectImpl: opts.connectImpl,
     });
     try {
-      return { ...await fetchPlanQuota((apiPath, body) => client.postBilling(apiPath, body), variantId), source: "ipc" };
+      return { ...await fetchPlanQuota((apiPath, body) => client.postBilling(apiPath, body), variantId,
+        Number.isFinite(opts.nowMs) ? opts.nowMs : undefined), source: "ipc" };
     } finally {
       client.close();
     }
@@ -748,7 +815,8 @@ async function fetchVariantLive(variant, variantId, { env, workbuddyHome, instal
     throw error;
   }
   return { ...await fetchPlanQuota((apiPath, body) => postBilling(fetchImpl,
-    `${origin}${apiPath}`, session.token, body, opts.signal), variantId), source: "api" };
+    `${origin}${apiPath}`, session.token, body, opts.signal), variantId,
+  Number.isFinite(opts.nowMs) ? opts.nowMs : undefined), source: "api" };
 }
 
 async function fetchVariant(variantId, opts = {}) {
@@ -817,6 +885,7 @@ module.exports = {
   selectWorkbuddyLimits,
   collectPackageRows,
   collectResourceGroups,
+  collectExpiringResourceCredits,
   resourceWindow,
   readSubscriptionIdentity,
   originAllowed,

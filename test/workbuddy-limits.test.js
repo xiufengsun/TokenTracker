@@ -5,6 +5,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+  collectExpiringResourceCredits,
   collectPackageRows,
   collectResourceGroups,
   fetchWorkbuddyAiLimits,
@@ -283,6 +284,78 @@ test("an all-zero resource pool yields no window", () => {
   assert.equal(pool.total, 0);
   assert.equal(resourceWindow(pool), null);
   assert.equal(resourceWindow({ total: 0, used: 0, remain: 0, seen: true }), null);
+});
+
+test("expiring resource credits merge same-day grants and report the earliest day", () => {
+  const rows = [
+    { code: "addon-a", total: 100, remain: 40, used: 60, cycleEnd: "2026-07-10T02:30:00Z" },
+    { code: "addon-b", total: 50, remain: 50, used: 0, cycleEnd: "2026-07-10T07:45:00Z" },
+    { code: "addon-c", total: 80, remain: 20, used: 60, cycleEnd: "2026-07-12T03:00:00Z" },
+  ];
+  const expiring = collectExpiringResourceCredits(rows, { code: "" }, T0);
+  assert.deepEqual(expiring, {
+    at: new Date("2026-07-10T07:45:00Z").toISOString(),
+    credits: 90,
+  });
+});
+
+test("expiring resource credits drop plan rows, spent grants, and past ends", () => {
+  const rows = [
+    trialRow({ CycleEndTime: "2026-07-10T02:30:00Z" }),
+    { code: REWARD, total: 300, remain: 0, used: 300, cycleEnd: "2026-07-10T02:30:00Z" },
+    { code: "addon-x", total: 100, remain: 40, used: 60, cycleEnd: "2026-07-07T00:00:00Z" },
+    { code: "addon-y", total: 100, remain: 30, used: 70, cycleEnd: "garbage" },
+    { code: "addon-z", total: 90, used: 30, cycleEnd: "2026-07-11T03:00:00Z" },
+  ];
+  const expiring = collectExpiringResourceCredits(rows, { code: TRIAL }, T0);
+  assert.deepEqual(expiring, {
+    at: new Date("2026-07-11T03:00:00Z").toISOString(),
+    credits: 60,
+  });
+});
+
+test("a grant listed by both the summary and the pages is counted once", () => {
+  const grant = { code: REWARD, total: 100, remain: 40, used: 60, cycleEnd: "2026-07-10T02:30:00Z" };
+  const expiring = collectExpiringResourceCredits([grant, { ...grant }, grant], { code: "" }, T0);
+  assert.equal(expiring.credits, 40);
+});
+
+test("a live read advertises the pool's earliest expiring grants on the resource window", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wb-cache-"));
+  const authPath = path.join(home, "workbuddy-desktop.info");
+  fs.writeFileSync(authPath, authFileInfo({ token: "cn-token", uid: "uid-cn" }));
+  const live = await fetchWorkbuddyLimits({
+    home,
+    nowMs: T0,
+    env: { HOME: home },
+    authFiles: [authPath],
+    origin: "https://www.workbuddy.cn",
+    fetchImpl: summaryFetch({
+      code: 0,
+      data: {
+        SubscriptionPackageName: "体验版",
+        Packages: [trialRow({ CycleEndTime: "2026-07-10T07:45:00Z" }), {
+          PackageCode: REWARD,
+          PackageName: "官方活动发放",
+          CycleTotalCapacity: 300,
+          CycleRemainCapacity: 100,
+          CycleUsedCapacity: 200,
+          CycleEndTime: "2026-07-10T02:30:00Z",
+        }],
+        CreditGroups: [
+          { Kind: "plan_base", CycleTotalCapacity: "500", CycleRemainCapacity: "0", CycleUsedCapacity: "500" },
+          { Kind: "addon", Name: "购买积分", CycleTotalCapacity: "1000", CycleRemainCapacity: "400", CycleUsedCapacity: "600" },
+          { Kind: "benefit", Name: "平台奖励积分", CycleTotalCapacity: "300", CycleRemainCapacity: "100", CycleUsedCapacity: "200" },
+        ],
+      },
+    }),
+  });
+  assert.equal(live.error, null);
+  assert.equal(live.secondary_window.limit_credits, 1300);
+  // The plan tier's cycle end is a renewal point, not a lapse: only the
+  // reward grant is advertised, at the moment it dies.
+  assert.equal(live.secondary_window.expiring_at, new Date("2026-07-10T02:30:00Z").toISOString());
+  assert.equal(live.secondary_window.expiring_credits, 100);
 });
 
 test("groups that omit CycleRemainCapacity keep remaining_credits exact", () => {
@@ -819,6 +892,35 @@ test("cache windows expire by rollover and by the undated snapshot TTL", () => {
     primary: planWindowFixture(null),
     secondary: { used_percent: 10, reset_at: null, used_credits: 1, limit_credits: 10, remaining_credits: 9 },
   });
+  assert.ok(read(T0 + 11 * 60 * 60 * 1000));
+  assert.equal(read(T0 + 13 * 60 * 60 * 1000), null);
+});
+
+test("a resource pool with expiring_at is trusted until the expiry, not the undated TTL", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wb-cache-"));
+  const write = (secondary) => writeWorkbuddyLimitsCache(
+    {
+      configured: true, error: null, plan_label: "Free",
+      primary_window: null, secondary_window: secondary,
+    },
+    { home, nowMs: T0, variantId: "workbuddy", identity: "uid" },
+  );
+  const read = (nowMs = T0) => readWorkbuddyLimitsCache({ home, nowMs, variantId: "workbuddy", identity: "uid" });
+  const pool = {
+    used_percent: 10, reset_at: null, used_credits: 1, limit_credits: 10, remaining_credits: 9,
+    expiring_at: "2026-07-10T02:30:00Z", expiring_credits: 4,
+  };
+
+  // Past the undated TTL but before the grants lapse, the pool still describes
+  // the account.
+  write(pool);
+  assert.ok(read(T0 + 13 * 60 * 60 * 1000));
+  // Once the advertised grants have died the numbers lie, so the snapshot is
+  // dropped exactly then.
+  assert.equal(read(T0 + 3 * 24 * 60 * 60 * 1000), null);
+
+  // An unreadable expiring_at is no date at all: back to the snapshot TTL.
+  write({ ...pool, expiring_at: "not-a-date" });
   assert.ok(read(T0 + 11 * 60 * 60 * 1000));
   assert.equal(read(T0 + 13 * 60 * 60 * 1000), null);
 });

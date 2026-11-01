@@ -38,6 +38,18 @@ credentials and full API responses are never persisted or logged. Legacy
 plaintext sessions and manually configured `WORKBUDDY_ACCESS_TOKEN` /
 `WORKBUDDY_AI_ACCESS_TOKEN` remain available when no desktop proxy is discovered.
 
+Because each grant lapses on its own date, the resource window may also carry
+`expiring_at` and `expiring_credits`: the paid/free package listings each carry
+their own `CycleEndTime`, and the window advertises the earliest local calendar
+day that still holds credit — `expiring_at` is the moment that day's last grant
+dies and `expiring_credits` sums the credit expiring with it. A bare earliest
+date cannot say how much is at stake, and later days belong in a per-grant
+breakdown rather than the pooled bar, so only the earliest day is advertised.
+Grants that could be the subscription plan are excluded (their cycle end is a
+renewal point, not a lapse), as are spent grants and dates that have already
+passed. The disk cache trusts such a window until `expiring_at` — the same
+discipline as a reset date — instead of the undated 12-hour snapshot TTL.
+
 ## English plan names and provenance
 
 An English `SubscriptionPackageName` or `PackageName` returned by the API is
