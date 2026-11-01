@@ -54,8 +54,9 @@ without a cycle end — so every non-plan package the summary names is added to
 the requested codes. Grants that could be the subscription plan are excluded
 (their cycle end is a renewal point, not a lapse), as are spent grants and
 dates that have already passed. The disk cache trusts such a window until
-`expiring_at` — the same discipline as a reset date — instead of the undated
-12-hour snapshot TTL.
+`expiring_first_at` (falling back to `expiring_at` when it does not parse) —
+the same discipline as a reset date — instead of the undated 12-hour
+snapshot TTL.
 
 ## English plan names and provenance
 
