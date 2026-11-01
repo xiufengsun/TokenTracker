@@ -39,10 +39,13 @@ plaintext sessions and manually configured `WORKBUDDY_ACCESS_TOKEN` /
 `WORKBUDDY_AI_ACCESS_TOKEN` remain available when no desktop proxy is discovered.
 
 Because each grant lapses on its own date, the resource window may also carry
-`expiring_at` and `expiring_credits`: the paid/free package listings each carry
-their own `CycleEndTime`, and the window advertises the earliest local calendar
-day that still holds credit — `expiring_at` is the moment that day's last grant
-dies and `expiring_credits` sums the credit expiring with it. A bare earliest
+`expiring_at`, `expiring_first_at` and `expiring_credits`: the paid/free
+package listings each carry their own `CycleEndTime`, and the window
+advertises the earliest local calendar day that still holds credit —
+`expiring_credits` sums the credit expiring with that day, `expiring_at` is
+the moment the day's last grant dies (the display anchor) and
+`expiring_first_at` the moment its first grant does (when the pool's numbers
+start to drift, and the disk-cache validity anchor). A bare earliest
 date cannot say how much is at stake, and later days belong in a per-grant
 breakdown rather than the pooled bar, so only the earliest day is advertised.
 Grant rows are only returned when their package codes ride along in the

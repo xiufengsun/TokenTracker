@@ -437,16 +437,22 @@ function collectExpiringResourceCredits(rows, identity = {}, nowMs = Date.now())
   for (const grant of grants.values()) {
     const day = localDayNumber(grant.endMs);
     if (!earliest || day < earliest.day) {
-      earliest = { day, endMs: grant.endMs, credits: grant.remain };
+      earliest = { day, endMs: grant.endMs, firstMs: grant.endMs, credits: grant.remain };
     } else if (day === earliest.day) {
       // Grants lapsing the same day merge; the moment to advertise is the
-      // last one, when the day's final grant dies.
+      // last one, when the day's final grant dies, while the first one marks
+      // when the pool's numbers actually start to drift.
       earliest.endMs = Math.max(earliest.endMs, grant.endMs);
+      earliest.firstMs = Math.min(earliest.firstMs, grant.endMs);
       earliest.credits += grant.remain;
     }
   }
   if (!earliest) return null;
-  return { at: new Date(earliest.endMs).toISOString(), credits: earliest.credits };
+  return {
+    at: new Date(earliest.endMs).toISOString(),
+    firstAt: new Date(earliest.firstMs).toISOString(),
+    credits: earliest.credits,
+  };
 }
 
 // Year*10000 + month*100 + day, local time — an ordering key that survives
@@ -578,12 +584,15 @@ function workbuddyCachedWindow(window, { cachedAtMs, nowMs } = {}) {
   if (!window || typeof window !== "object") return null;
   const resetAtMs = Date.parse(window.reset_at || "");
   if (Number.isFinite(resetAtMs)) return resetAtMs > nowMs ? window : null;
-  // The resource pool has no reset but may carry the earliest grant expiry.
-  // Once that moment passes the pool's numbers no longer describe the
-  // account, so it is trusted exactly until then — the same discipline as a
-  // reset date, not the undated TTL.
-  const expiringAtMs = Date.parse(window.expiring_at || "");
-  if (Number.isFinite(expiringAtMs)) return expiringAtMs > nowMs ? window : null;
+  // The resource pool has no reset but may carry its earliest grant expiry.
+  // expiring_first_at is the first moment the advertised credits start to
+  // lapse — from then on the pool's numbers no longer describe the account,
+  // so the snapshot is trusted exactly until then; expiring_at (the day's
+  // end) is only the display anchor. The same discipline as a reset date,
+  // not the undated TTL.
+  const expiringAtMs = Date.parse(window.expiring_first_at || "");
+  const anchorMs = Number.isFinite(expiringAtMs) ? expiringAtMs : Date.parse(window.expiring_at || "");
+  if (Number.isFinite(anchorMs)) return anchorMs > nowMs ? window : null;
   return nowMs - cachedAtMs <= WORKBUDDY_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS ? window : null;
 }
 
@@ -757,6 +766,7 @@ async function fetchPlanQuota(post, variantId, nowMs) {
     );
     if (expiring) {
       secondary.expiring_at = expiring.at;
+      secondary.expiring_first_at = expiring.firstAt;
       secondary.expiring_credits = expiring.credits;
     }
   }

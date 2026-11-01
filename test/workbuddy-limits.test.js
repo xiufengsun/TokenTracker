@@ -287,14 +287,17 @@ test("an all-zero resource pool yields no window", () => {
 });
 
 test("expiring resource credits merge same-day grants and report the earliest day", () => {
+  // Zone-less local strings: the day buckets follow the machine's calendar,
+  // so both grants stay on one local day wherever the suite runs.
   const rows = [
-    { code: "addon-a", total: 100, remain: 40, used: 60, cycleEnd: "2026-07-10T02:30:00Z" },
-    { code: "addon-b", total: 50, remain: 50, used: 0, cycleEnd: "2026-07-10T07:45:00Z" },
-    { code: "addon-c", total: 80, remain: 20, used: 60, cycleEnd: "2026-07-12T03:00:00Z" },
+    { code: "addon-a", total: 100, remain: 40, used: 60, cycleEnd: "2026-07-10 07:49:53" },
+    { code: "addon-b", total: 50, remain: 50, used: 0, cycleEnd: "2026-07-10 23:18:27" },
+    { code: "addon-c", total: 80, remain: 20, used: 60, cycleEnd: "2026-07-12 03:00:00" },
   ];
   const expiring = collectExpiringResourceCredits(rows, { code: "" }, T0);
   assert.deepEqual(expiring, {
-    at: new Date("2026-07-10T07:45:00Z").toISOString(),
+    at: new Date("2026-07-10T23:18:27").toISOString(),
+    firstAt: new Date("2026-07-10T07:49:53").toISOString(),
     credits: 90,
   });
 });
@@ -311,6 +314,7 @@ test("expiring resource credits drop plan rows, spent grants, and past ends", ()
   const expiring = collectExpiringResourceCredits(rows, { code: TRIAL }, T0);
   assert.deepEqual(expiring, {
     at: new Date("2026-07-11T03:00:00Z").toISOString(),
+    firstAt: new Date("2026-07-11T03:00:00Z").toISOString(),
     credits: 60,
   });
 });
@@ -384,8 +388,10 @@ test("a live read advertises the pool's earliest expiring grants on the resource
   assert.ok(requestedCodes.every((codes) => codes.includes(REWARD)));
   assert.equal(live.secondary_window.limit_credits, 6238);
   // Same-day grants merge; the plan tier's cycle end is a renewal point, and
-  // the summary's aggregated pool row has no cycle end to double-count.
+  // the summary's aggregated pool row has no cycle end to double-count. The
+  // day's first lapse anchors the cache, its last one anchors the display.
   assert.equal(live.secondary_window.expiring_at, new Date("2026-07-10T23:18:27").toISOString());
+  assert.equal(live.secondary_window.expiring_first_at, new Date("2026-07-10T07:49:53").toISOString());
   assert.equal(live.secondary_window.expiring_credits, 139);
 });
 
@@ -939,19 +945,25 @@ test("a resource pool with expiring_at is trusted until the expiry, not the unda
   const read = (nowMs = T0) => readWorkbuddyLimitsCache({ home, nowMs, variantId: "workbuddy", identity: "uid" });
   const pool = {
     used_percent: 10, reset_at: null, used_credits: 1, limit_credits: 10, remaining_credits: 9,
-    expiring_at: "2026-07-10T02:30:00Z", expiring_credits: 4,
+    expiring_at: "2026-07-10T23:18:27Z", expiring_first_at: "2026-07-10T07:49:53Z", expiring_credits: 4,
   };
 
   // Past the undated TTL but before the grants lapse, the pool still describes
   // the account.
   write(pool);
   assert.ok(read(T0 + 13 * 60 * 60 * 1000));
-  // Once the advertised grants have died the numbers lie, so the snapshot is
-  // dropped exactly then.
-  assert.equal(read(T0 + 3 * 24 * 60 * 60 * 1000), null);
+  // The first lapse is when the numbers start to drift, so the snapshot is
+  // dropped there even though the advertised day-end is still ahead.
+  const firstLapse = Date.parse("2026-07-10T07:49:53Z");
+  assert.equal(read(firstLapse + 60_000), null);
+
+  // An unreadable first lapse falls back to the day-end anchor.
+  write({ ...pool, expiring_first_at: "not-a-date" });
+  assert.ok(read(Date.parse("2026-07-10T23:18:27Z") - 60_000));
+  assert.equal(read(Date.parse("2026-07-10T23:18:27Z") + 60_000), null);
 
   // An unreadable expiring_at is no date at all: back to the snapshot TTL.
-  write({ ...pool, expiring_at: "not-a-date" });
+  write({ ...pool, expiring_first_at: "not-a-date", expiring_at: "not-a-date" });
   assert.ok(read(T0 + 11 * 60 * 60 * 1000));
   assert.equal(read(T0 + 13 * 60 * 60 * 1000), null);
 });
