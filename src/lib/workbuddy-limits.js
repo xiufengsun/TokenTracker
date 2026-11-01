@@ -195,6 +195,9 @@ function normalizePackageRow(row) {
     used,
     cycleEnd: firstString(row, ["CycleEndTime", "cycleEnd", "cycle_end"])
       || firstString(row, ["DeductionEndTime", "expireAt"]),
+    // Set once a grant has terminated (spent or revoked); active grants
+    // carry an empty string.
+    terminatedAt: firstString(row, ["ExpiredTime", "expiredTime"]),
   };
 }
 
@@ -414,11 +417,12 @@ function resourceWindow(pool) {
 // reported; later days belong in a per-grant breakdown, not the pooled bar.
 // Rows that could be the subscription plan are not resource credit (the same
 // rule collectResourceGroups applies), and a grant with no remaining credit,
-// a past end, or an unreadable end has nothing to lose.
+// a past end, an unreadable end, or a termination stamp has nothing to lose.
 function collectExpiringResourceCredits(rows, identity = {}, nowMs = Date.now()) {
   const grants = new Map();
   for (const row of rows) {
     if (!row || isSelectablePlan(row, identity.code)) continue;
+    if (row.terminatedAt) continue;
     const remain = row.remain
       ?? (row.total !== null && row.used !== null ? Math.max(0, row.total - row.used) : null);
     if (remain === null || remain <= 0) continue;
@@ -714,13 +718,22 @@ async function fetchPlanQuota(post, variantId, nowMs) {
   const summary = await post(`${prefix}get-user-resource-summary`, {});
   if (!unwrapBillingBody(summary)) throw new Error("WorkBuddy quota request was rejected.");
   const identity = readSubscriptionIdentity(summary);
+  const summaryRows = collectPackageRows(summary);
   const planCodes = [...new Set([...Object.keys(PLAN_PRIORITY),
     ...(identity.code && !isRewardCode(identity.code) ? [identity.code] : [])])];
+  // Resource grants ride along in the same pages query. The summary carries
+  // their aggregated pool row without a cycle end, so the per-grant rows —
+  // where each grant's own CycleEndTime lives — only come back when their
+  // package codes are requested; a plan-code-only listing never sees them.
+  const resourceCodes = summaryRows
+    .filter((row) => !isSelectablePlan(row, identity.code))
+    .map((row) => row.code);
+  const packageCodes = [...new Set([...planCodes, ...resourceCodes])];
   const packageRows = await Promise.all(["paid", "free"].map(async (kind) => {
     const rows = [];
     for (let page = 1; page <= 10; page++) {
       const payload = await post(`${prefix}get-user-resource-${kind}-packages`, {
-        PageNumber: page, PageSize: 100, PackageCodes: planCodes,
+        PageNumber: page, PageSize: 100, PackageCodes: packageCodes,
         Status: [0, 3], ...(kind === "paid" ? { NeedRenewInfo: true } : {}),
       });
       const data = unwrapBillingBody(payload);
@@ -731,16 +744,16 @@ async function fetchPlanQuota(post, variantId, nowMs) {
     }
     throw new Error("WorkBuddy quota package list was incomplete.");
   }));
-  const quota = selectWorkbuddyPlanQuota([
-    ...collectPackageRows(summary), ...packageRows.flat(),
-  ], identity, variantId);
+  const quota = selectWorkbuddyPlanQuota([...summaryRows, ...packageRows.flat()], identity, variantId);
   const secondary = resourceWindow(collectResourceGroups(summary));
   if (secondary) {
-    // The pooled bar cannot say which credits lapse first; the package
-    // listings carry each grant's cycle end. A pool without a window is
-    // dropped wholesale, so expiry has nothing to attach to.
+    // The pooled bar cannot say which credits lapse first; the grant rows
+    // carry each grant's cycle end. The summary's own pool row has no cycle
+    // end and skips the expiry bucket, so grants are not double-counted. A
+    // pool without a window is dropped wholesale, so expiry has nothing to
+    // attach to.
     const expiring = collectExpiringResourceCredits(
-      [...collectPackageRows(summary), ...packageRows.flat()], identity, nowMs,
+      [...summaryRows, ...packageRows.flat()], identity, nowMs,
     );
     if (expiring) {
       secondary.expiring_at = expiring.at;

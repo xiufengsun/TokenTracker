@@ -45,10 +45,14 @@ day that still holds credit — `expiring_at` is the moment that day's last gran
 dies and `expiring_credits` sums the credit expiring with it. A bare earliest
 date cannot say how much is at stake, and later days belong in a per-grant
 breakdown rather than the pooled bar, so only the earliest day is advertised.
-Grants that could be the subscription plan are excluded (their cycle end is a
-renewal point, not a lapse), as are spent grants and dates that have already
-passed. The disk cache trusts such a window until `expiring_at` — the same
-discipline as a reset date — instead of the undated 12-hour snapshot TTL.
+Grant rows are only returned when their package codes ride along in the
+listings query beside the plan codes — the summary aggregates each pool
+without a cycle end — so every non-plan package the summary names is added to
+the requested codes. Grants that could be the subscription plan are excluded
+(their cycle end is a renewal point, not a lapse), as are spent grants and
+dates that have already passed. The disk cache trusts such a window until
+`expiring_at` — the same discipline as a reset date — instead of the undated
+12-hour snapshot TTL.
 
 ## English plan names and provenance
 

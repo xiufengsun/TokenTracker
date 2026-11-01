@@ -305,6 +305,7 @@ test("expiring resource credits drop plan rows, spent grants, and past ends", ()
     { code: REWARD, total: 300, remain: 0, used: 300, cycleEnd: "2026-07-10T02:30:00Z" },
     { code: "addon-x", total: 100, remain: 40, used: 60, cycleEnd: "2026-07-07T00:00:00Z" },
     { code: "addon-y", total: 100, remain: 30, used: 70, cycleEnd: "garbage" },
+    { code: "addon-t", total: 100, remain: 55, used: 45, cycleEnd: "2026-07-09T00:00:00Z", terminatedAt: "2026-07-01T00:00:00Z" },
     { code: "addon-z", total: 90, used: 30, cycleEnd: "2026-07-11T03:00:00Z" },
   ];
   const expiring = collectExpiringResourceCredits(rows, { code: TRIAL }, T0);
@@ -320,42 +321,72 @@ test("a grant listed by both the summary and the pages is counted once", () => {
   assert.equal(expiring.credits, 40);
 });
 
+// One resource grant as the free-packages listing returns it (2026-11-01
+// capture): capacities as numeric + Precise string pairs, the grant's own
+// cycle end, and a Status that is 0 while credit remains.
+function grantRow({ code = REWARD, size = 100, remain, end }) {
+  return {
+    PackageCode: code,
+    PackageName: "官方活动发放",
+    CycleCapacitySize: size,
+    CycleCapacityRemain: remain,
+    CycleCapacityUsed: size - remain,
+    CycleCapacitySizePrecise: String(size),
+    CycleCapacityRemainPrecise: String(remain),
+    CycleCapacityUsedPrecise: String(size - remain),
+    CycleEndTime: end,
+    Status: 0,
+  };
+}
+
 test("a live read advertises the pool's earliest expiring grants on the resource window", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "wb-cache-"));
   const authPath = path.join(home, "workbuddy-desktop.info");
   fs.writeFileSync(authPath, authFileInfo({ token: "cn-token", uid: "uid-cn" }));
+  // Real capture shape: the summary aggregates the benefit pool without a
+  // cycle end; per-grant CycleEndTime only comes back from the listings, and
+  // only when the grant's package code is requested alongside the plan codes.
+  const requestedCodes = [];
   const live = await fetchWorkbuddyLimits({
     home,
     nowMs: T0,
     env: { HOME: home },
     authFiles: [authPath],
     origin: "https://www.workbuddy.cn",
-    fetchImpl: summaryFetch({
-      code: 0,
-      data: {
-        SubscriptionPackageName: "体验版",
-        Packages: [trialRow({ CycleEndTime: "2026-07-10T07:45:00Z" }), {
-          PackageCode: REWARD,
-          PackageName: "官方活动发放",
-          CycleTotalCapacity: 300,
-          CycleRemainCapacity: 100,
-          CycleUsedCapacity: 200,
-          CycleEndTime: "2026-07-10T02:30:00Z",
-        }],
-        CreditGroups: [
-          { Kind: "plan_base", CycleTotalCapacity: "500", CycleRemainCapacity: "0", CycleUsedCapacity: "500" },
-          { Kind: "addon", Name: "购买积分", CycleTotalCapacity: "1000", CycleRemainCapacity: "400", CycleUsedCapacity: "600" },
-          { Kind: "benefit", Name: "平台奖励积分", CycleTotalCapacity: "300", CycleRemainCapacity: "100", CycleUsedCapacity: "200" },
-        ],
-      },
-    }),
+    fetchImpl: async (url, options) => {
+      if (url.endsWith("get-user-resource-summary")) {
+        return { ok: true, status: 200, json: async () => ({ code: 0, data: {
+          SubscriptionPackageName: "体验版",
+          Packages: [
+            { PackageCode: TRIAL, CycleTotalCapacity: "500", CycleRemainCapacity: "500", CycleUsedCapacity: "0" },
+            { PackageCode: REWARD, CycleTotalCapacity: "6238", CycleRemainCapacity: "4131.03000062", CycleUsedCapacity: "2106.96999938" },
+          ],
+          CreditGroups: [
+            { Kind: "plan_base", CycleTotalCapacity: "500", CycleRemainCapacity: "500", CycleUsedCapacity: "0" },
+            { Kind: "benefit", CycleTotalCapacity: "6238", CycleRemainCapacity: "4131.03000062", CycleUsedCapacity: "2106.96999938" },
+          ],
+        } }) };
+      }
+      if (url.endsWith("get-user-resource-free-packages")) {
+        requestedCodes.push(JSON.parse(options.body).PackageCodes);
+        return { ok: true, status: 200, json: async () => ({ code: 0, data: { Accounts: [
+          grantRow({ code: TRIAL, size: 500, remain: 500, end: "2026-07-31 23:59:59" }),
+          grantRow({ remain: 39, end: "2026-07-10 07:49:53" }),
+          grantRow({ remain: 100, end: "2026-07-10 23:18:27" }),
+          grantRow({ remain: 100, end: "2026-07-12 03:00:00" }),
+        ], TotalCount: 4 } }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ code: 0, data: { Accounts: [], TotalCount: 0 } }) };
+    },
   });
   assert.equal(live.error, null);
-  assert.equal(live.secondary_window.limit_credits, 1300);
-  // The plan tier's cycle end is a renewal point, not a lapse: only the
-  // reward grant is advertised, at the moment it dies.
-  assert.equal(live.secondary_window.expiring_at, new Date("2026-07-10T02:30:00Z").toISOString());
-  assert.equal(live.secondary_window.expiring_credits, 100);
+  assert.ok(requestedCodes.length > 0);
+  assert.ok(requestedCodes.every((codes) => codes.includes(REWARD)));
+  assert.equal(live.secondary_window.limit_credits, 6238);
+  // Same-day grants merge; the plan tier's cycle end is a renewal point, and
+  // the summary's aggregated pool row has no cycle end to double-count.
+  assert.equal(live.secondary_window.expiring_at, new Date("2026-07-10T23:18:27").toISOString());
+  assert.equal(live.secondary_window.expiring_credits, 139);
 });
 
 test("groups that omit CycleRemainCapacity keep remaining_credits exact", () => {
