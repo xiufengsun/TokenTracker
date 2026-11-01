@@ -357,8 +357,10 @@ export function buildAllModels(fleetData: any) {
       current.tokens[splitKey] += Math.max(0, Number(splits[splitKey]) || 0);
     }
     // OR-combined so a merged row keeps the flag when any contributing tool
-    // lacks a published rate for the model.
-    if (isUnpricedModel(model)) {
+    // lacks a published rate for the model. Request-only contributors never
+    // set it: they book no cost regardless of pricing, so their unpriced
+    // status says nothing about the merged row's cost.
+    if (usage > 0 && isUnpricedModel(model)) {
       current.unpriced = true;
     }
     const cost = toFiniteNumber(model?.cost);

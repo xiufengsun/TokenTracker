@@ -285,6 +285,42 @@ describe("buildAllModels", () => {
     ]);
   });
 
+  it("ignores request-only contributors when aggregating the unpriced flag", () => {
+    const models = buildAllModels([
+      {
+        label: "CODEX",
+        models: [
+          {
+            id: "shared",
+            name: "shared-model",
+            usage: 0,
+            requests: 5,
+            cost: null,
+            pricing: { status: "unpriced" },
+            costSource: "curated",
+          },
+        ],
+      },
+      {
+        label: "CURSOR",
+        models: [
+          {
+            id: "shared",
+            name: "shared-model",
+            usage: 50,
+            cost: null,
+            pricing: { status: "priced" },
+            costSource: "curated",
+          },
+        ],
+      },
+    ]);
+
+    // The token-backed contributor is priced and the request-only one books
+    // no cost either way, so the merged row must not be flagged.
+    expect(models).toMatchObject([{ id: "shared-model", usage: 50, unpriced: false }]);
+  });
+
   it("carries API token totals through buildFleetData provider models", () => {
     const fleet = buildFleetData({
       sources: [

@@ -376,6 +376,69 @@ describe("UsageOverview", () => {
     expect(providerBadges[0].closest("[data-model-rank-row]")).toHaveTextContent("gpt-6.1-terra");
   });
 
+  it("does not label a merged row whose only unpriced contributor is request-only", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <UsageOverview
+        period="month"
+        periods={["month"]}
+        summaryLabel="Total"
+        summaryValue="100"
+        fleetData={[
+          {
+            source: "codex",
+            label: "CODEX",
+            totalPercent: "50.00",
+            usage: 100,
+            usd: 0,
+            models: [
+              {
+                id: "shared-model",
+                name: "shared-model",
+                share: 100,
+                usage: 100,
+                cost: null,
+                pricing: { status: "priced" },
+                costSource: "curated",
+              },
+            ],
+          },
+          {
+            source: "qoder",
+            label: "QODER",
+            totalPercent: "0.00",
+            usage: 0,
+            usd: 0,
+            models: [
+              {
+                id: "shared-model",
+                name: "shared-model",
+                share: 0,
+                usage: 0,
+                requests: 5,
+                cost: null,
+                pricing: { status: "unpriced" },
+                costSource: "curated",
+              },
+            ],
+          },
+        ]}
+        from="2026-11-01"
+        to="2026-11-30"
+      />,
+    );
+
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: /All tools:/i }));
+    });
+
+    // The two contributors merge into one row: its tokens are priced and the
+    // request-only side books no cost either way — no unpriced label.
+    expect(container.querySelectorAll("[data-model-rank-row]")).toHaveLength(1);
+    expect(container.querySelector("[data-model-rank-row]")).toHaveTextContent("shared-model");
+    expect(screen.queryByText(copy("dashboard.cost_breakdown.unpriced_label"))).toBeNull();
+  });
+
   it("renders AnythingLLM with its official name, icon, and stable accent", () => {
     const { container } = render(
       <UsageOverview
