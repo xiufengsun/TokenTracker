@@ -1,6 +1,8 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const zlib = require("node:zlib");
+const { promisify } = require("node:util");
 const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const { setImmediate: yieldToRequests } = require("node:timers/promises");
@@ -19,6 +21,7 @@ const { functionUrlFor, fetchFunctionResponse } = require("./function-url");
 const { createCloudDeviceTokenStore } = require("./cloud-device-token");
 const { parseBearerToken } = require("./bearer-token");
 const { writeJsonAtomicSync } = require("./atomic-json");
+const { negotiateEncoding } = require("./accept-encoding");
 const { createLocalUsageTransfer, MAX_BYTES: LOCAL_USAGE_MAX_BYTES } = require("./local-usage-transfer");
 const { fetchProviderServiceStatus } = require("./provider-status");
 
@@ -53,6 +56,114 @@ const AVATAR_PROXY_TTL_MS = 60 * 60 * 1000; // 1h
 const AVATAR_PROXY_MAX_BYTES = 512 * 1024; // 512 KiB per image
 const AVATAR_PROXY_MAX_ENTRIES = 64;
 const avatarProxyCache = new Map();
+
+// The sessions endpoint serializes ~9MB of row data. Building it twice in a
+// row is pure duplicate work when the sidecar and pricing revision have not
+// changed; keep the exact JSON bytes keyed by both. A short TTL also covers
+// new source session files without requiring a sidecar rebuild; sync's
+// writeAtomic() replaces the sidecar and invalidates immediately. Force-refresh
+// requests bypass reads but still refresh the cache.
+const SESSIONS_RESPONSE_CACHE_MAX = 2;
+const SESSIONS_RESPONSE_CACHE_TTL_MS = 60 * 1000;
+const sessionsResponseCache = new Map();
+
+function sessionsResponseCacheKey({ sidecarPath, from, to, limit, timeZone, offsetMinutes }) {
+  try {
+    const stat = fs.statSync(sidecarPath);
+    return [
+      sidecarPath,
+      stat.dev,
+      stat.ino,
+      stat.size,
+      stat.mtimeMs,
+      stat.ctimeMs,
+      getPricingRevision(),
+      from,
+      to,
+      limit,
+      timeZone || "",
+      Number.isFinite(offsetMinutes) ? offsetMinutes : "",
+    ].join("\0");
+  } catch {
+    return null;
+  }
+}
+
+function rememberSessionsResponse(key, body) {
+  const entry = { raw: body, gzip: null, br: null, expiresAt: Date.now() + SESSIONS_RESPONSE_CACHE_TTL_MS };
+  if (!key) return entry;
+  sessionsResponseCache.set(key, entry);
+  while (sessionsResponseCache.size > SESSIONS_RESPONSE_CACHE_MAX) {
+    sessionsResponseCache.delete(sessionsResponseCache.keys().next().value);
+  }
+  return entry;
+}
+
+function getCachedSessionsResponse(key) {
+  const entry = sessionsResponseCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    sessionsResponseCache.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+const gzipAsync = promisify(zlib.gzip);
+const brotliCompressAsync = promisify(zlib.brotliCompress);
+
+async function sendSessionsResponse(req, res, entry) {
+  const { encoding: accepted, identityAllowed } = negotiateEncoding(req.headers["accept-encoding"]);
+  const notAcceptable = () => {
+    const message = "Not Acceptable";
+    res.writeHead(406, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Length": Buffer.byteLength(message),
+      "Cache-Control": "no-store",
+      "Vary": "Accept-Encoding",
+    });
+    res.end(message);
+  };
+  if (!accepted && !identityAllowed) {
+    notAcceptable();
+    return;
+  }
+  let body = entry.raw;
+  let encoding = null;
+  if (entry.raw.length > 32 * 1024 && accepted === "br") {
+    try {
+      entry.br ||= brotliCompressAsync(entry.raw, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } });
+      body = await entry.br;
+      encoding = "br";
+    } catch (error) {
+      entry.br = null;
+      console.warn("[local-api] sessions brotli failed, serving identity:", error?.message || error);
+    }
+  } else if (entry.raw.length > 32 * 1024 && accepted === "gzip") {
+    try {
+      entry.gzip ||= gzipAsync(entry.raw);
+      body = await entry.gzip;
+      encoding = "gzip";
+    } catch (error) {
+      entry.gzip = null;
+      console.warn("[local-api] sessions gzip failed, serving identity:", error?.message || error);
+    }
+  }
+  if (!encoding && !identityAllowed) {
+    notAcceptable();
+    return;
+  }
+  const headers = {
+    "Content-Type": "application/json",
+    "Content-Length": body.length,
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Vary": "Accept-Encoding",
+  };
+  if (encoding) headers["Content-Encoding"] = encoding;
+  res.writeHead(200, headers);
+  res.end(body);
+}
 
 // ---------------------------------------------------------------------------
 // Per-model pricing — delegated to src/lib/pricing/
@@ -2645,10 +2756,35 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("X-Content-Type-Options", "nosniff");
       try {
-        const { buildSessionAnalytics, listSessionsForBrowser } = require("./session-analytics");
+        const { buildSessionAnalytics, listSessionsForBrowser, resolveSessionSidecarPath } = require("./session-analytics");
+        const timeZoneContext = getTimeZoneContext(url);
+        const cacheParams = {
+          sidecarPath: resolveSessionSidecarPath(os.homedir()),
+          from,
+          to,
+          limit,
+          ...timeZoneContext,
+        };
+        const beforeCacheKey = sessionsResponseCacheKey(cacheParams);
+        const cacheKey = refresh ? null : beforeCacheKey;
+        const cached = cacheKey ? getCachedSessionsResponse(cacheKey) : null;
+        if (cached) {
+          await sendSessionsResponse(req, res, cached);
+          return true;
+        }
         const sessions = await buildSessionAnalytics({ force: refresh });
-        const result = listSessionsForBrowser(sessions, { from, to, limit, ...getTimeZoneContext(url) });
-        json(res, { from, to, ...result });
+        const result = listSessionsForBrowser(sessions, { from, to, limit, ...timeZoneContext });
+        const afterBuildCacheKey = sessionsResponseCacheKey(cacheParams);
+        const body = JSON.stringify({ from, to, ...result });
+        const afterSerializeCacheKey = sessionsResponseCacheKey(cacheParams);
+        const incomplete = Boolean(sessions.sidecarReadFailed) ||
+          (Array.isArray(sessions.incompleteDirs) && sessions.incompleteDirs.length > 0) ||
+          result.skipped_files !== 0;
+        const cacheable = Boolean(afterBuildCacheKey) &&
+          afterBuildCacheKey === afterSerializeCacheKey &&
+          !incomplete;
+        const entry = rememberSessionsResponse(cacheable ? afterBuildCacheKey : null, Buffer.from(body));
+        await sendSessionsResponse(req, res, entry);
       } catch (error) {
         // Node fs errors embed the absolute path ("EACCES ... open '/Users/…'").
         // Keep that out of the HTTP body and log it locally instead.

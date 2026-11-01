@@ -30,7 +30,7 @@ const path = require("node:path");
 const readline = require("node:readline");
 const { listClaudeProjectFiles, listRolloutFilesDeep, claudeMessageDedupKey, normalizeClaudeUsage, readZcodeDbMessages, coerceEpochMs, resolveZcodeInstallPaths, normalizeOpencodeModelFields, normalizeOpencodeTokens, deriveOpencodeMessageFingerprint, resolveDshHomes } = require("./rollout");
 const { parseCodexRolloutFile } = require("./codex-rollout-parser");
-const { computeRowCost, getModelPricingInfo } = require("./pricing");
+const { computeRowCost, getModelPricingInfo, getPricingRevision } = require("./pricing");
 const { normalizePerformance, mergePerformance, createClaudePerformanceCollector, createCodexPerformanceCollector, createZcodePerformanceCollector } = require("./session-performance");
 const { readSqliteJsonRows, readSqliteJsonRowsAsync } = require("./sqlite-reader");
 const { resolveZcodeNativeDbPath, resolveInstallPaths } = require("./install-resolver");
@@ -2238,13 +2238,49 @@ function analyticsEntryStatKey(source, filePath) {
   return sessionStat;
 }
 
+// The sidecar is a local, append-only JSONL snapshot that can be several MB.
+// Re-reading and reparsing it on every cache-hit request showed up as ~150ms on
+// a real 7.5MB sidecar. Cache the parsed+repriced rows by file identity and
+// pricing revision; writeAtomic() replaces the file (new mtime/ctime), so a
+// sync invalidates this naturally.
+const SIDECAR_READ_CACHE_MAX = 4;
+const sidecarReadCache = new Map();
+
 function readSidecar(sidecarPath) {
+  let fd;
   try {
-    return fs.readFileSync(sidecarPath, "utf8")
+    // Open once and use that descriptor for both stat and read, so a file
+    // replacement between the two operations cannot mix identities.
+    fd = fs.openSync(sidecarPath, "r");
+    const stat = fs.fstatSync(fd);
+    const cacheKey = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}:${getPricingRevision()}`;
+    const cached = sidecarReadCache.get(sidecarPath);
+    if (cached?.key === cacheKey) return cached.rows.map((row) => ({ ...row }));
+    const rows = fs.readFileSync(fd, "utf8")
       .split("\n")
       .filter(Boolean)
       .map((line) => repriceSessionRecord(JSON.parse(line)));
-  } catch { return []; }
+    sidecarReadCache.set(sidecarPath, { key: cacheKey, rows });
+    if (sidecarReadCache.size > SIDECAR_READ_CACHE_MAX) {
+      const oldest = sidecarReadCache.keys().next().value;
+      sidecarReadCache.delete(oldest);
+    }
+    return rows;
+  } catch {
+    const rows = [];
+    Object.defineProperty(rows, "sidecarReadFailed", { value: true, enumerable: false });
+    return rows;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+function readSidecarWithMeta(sidecarPath, meta) {
+  const rows = readSidecar(sidecarPath);
+  if (Number.isFinite(meta?.skipped_files)) {
+    Object.defineProperty(rows, "skippedFiles", { value: meta.skipped_files, enumerable: false });
+  }
+  return rows;
 }
 
 async function writeAtomic(filePath, content) {
@@ -2280,7 +2316,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
         Number.isFinite(checkedAt) &&
         Date.now() - checkedAt < Math.max(0, Number(cacheTtlMs) || 0)
       ) {
-        return readSidecar(sidecarPath);
+        return readSidecarWithMeta(sidecarPath, previousMeta);
       }
     } catch { /* first run */ }
   }
@@ -2293,7 +2329,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   if (incompleteDirs.length > 0) {
     warnIncompleteDiscovery(incompleteDirs);
     if (!force && previousMeta?.version === SIDECAR_VERSION) {
-      const cached = readSidecar(sidecarPath);
+      const cached = readSidecarWithMeta(sidecarPath, previousMeta);
       Object.defineProperty(cached, "incompleteDirs", { value: incompleteDirs, enumerable: false });
       return cached;
     }
@@ -2319,7 +2355,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   ]);
   if (!force && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.signature === signature) {
     await writeAtomic(metaPath, `${JSON.stringify({ ...previousMeta, checked_at: new Date().toISOString() })}\n`);
-    return readSidecar(sidecarPath);
+    return readSidecarWithMeta(sidecarPath, previousMeta);
   }
 
   const previousRows = !force && previousMeta?.version === SIDECAR_VERSION
@@ -2465,6 +2501,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       signature,
       generated_at: generatedAt,
       checked_at: generatedAt,
+      skipped_files: skippedFiles,
       files: nextFiles,
     })}\n`);
     await fsp.rm(incompleteZcodePath, { force: true });

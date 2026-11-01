@@ -175,12 +175,13 @@ async function cmdServe(argv) {
       }
 
       // Static files
-      const served = await serveStaticFile(dashboardDir, url.pathname, res, { localRuntimeConfig: true });
+      const acceptEncoding = req.headers["accept-encoding"] || "";
+      const served = await serveStaticFile(dashboardDir, url.pathname, res, { localRuntimeConfig: true, acceptEncoding });
       if (served) return;
 
       // SPA fallback
       if (shouldServeSpaFallback(req, url)) {
-        await serveStaticFile(dashboardDir, "/index.html", res, { localRuntimeConfig: true });
+        await serveStaticFile(dashboardDir, "/index.html", res, { localRuntimeConfig: true, acceptEncoding });
         return;
       }
 
