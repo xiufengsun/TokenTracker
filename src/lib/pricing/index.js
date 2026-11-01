@@ -424,7 +424,19 @@ const SPEED_TIERS = [
 // premium computeRowCost adds on top. Zero-cost (local inference, Pi
 // subscription) and authoritative-cost (Grok) rows have no tier allocation —
 // everything stays under standard there.
+const SPEED_TIER_COLUMN_SUFFIXES = [
+  "input_tokens",
+  "cached_input_tokens",
+  "cache_creation_input_tokens",
+  "output_tokens",
+  "reasoning_output_tokens",
+];
+
 function speedTierCost(row, prefix, multiplierKey) {
+  // Skip the pricing lookup entirely for rows without observed columns of
+  // this tier — the allocation below is 0 for them anyway, and the
+  // model-breakdown endpoint calls this for every row of every source.
+  if (!SPEED_TIER_COLUMN_SUFFIXES.some((suffix) => Number(row?.[`${prefix}${suffix}`]) > 0)) return 0;
   if (LOCAL_INFERENCE_SOURCES.has(String(row?.source || "").toLowerCase())) return 0;
   if (PI_SUBSCRIPTION_SOURCES.has(String(row?.source || "").toLowerCase())) return 0;
   const reportedCost = Number(row?.total_cost_usd);
