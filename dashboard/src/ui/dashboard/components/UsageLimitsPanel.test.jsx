@@ -595,7 +595,7 @@ describe("UsageLimitsPanel", () => {
     expect(screen.getByText("110.02")).toBeInTheDocument();
     expect(screen.getByText("15.5")).toBeInTheDocument();
     expect(screen.getByText("incl. grant 2")).toBeInTheDocument();
-    // A pay-as-you-go balance invents no window bar (#960): no progress bar
+    // A pay-as-you-go balance invents no window bar (issue 960): no progress bar
     // may appear inside the balance card.
     expect(document.querySelector("[data-deepseek-balance] .rounded-full")).toBeNull();
   });
@@ -622,7 +622,7 @@ describe("UsageLimitsPanel", () => {
 
     expect(screen.getByText("Not connected")).toBeInTheDocument();
     expect(screen.getByText("Connect DeepSeek")).toBeInTheDocument();
-    expect(screen.getByText("platform.deepseek.com")).toBeInTheDocument();
+    expect(screen.getByText("Open platform.deepseek.com")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Paste API key")).toBeInTheDocument();
   });
 
@@ -637,6 +637,29 @@ describe("UsageLimitsPanel", () => {
     expect(screen.getByText(/rejected \(401\)/)).toBeInTheDocument();
     expect(screen.getByText("Connect DeepSeek")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Paste API key")).toBeInTheDocument();
+  });
+
+  it("explains an environment-provided DeepSeek key on an error row so the saved key can take over", () => {
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" });
+    render(
+      <UsageLimitsPanel
+        deepseek={{
+          configured: true,
+          error: "DeepSeek API key was rejected (401). Check the key in the DeepSeek platform console.",
+          auth_error: true,
+          credential_source: "env",
+        }}
+        order={["deepseek"]}
+      />,
+    );
+
+    expect(screen.getByText(/rejected \(401\)/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Using DEEPSEEK_API_KEY from the environment\./),
+    ).toBeInTheDocument();
+    expect(screen.getByText("launchctl unsetenv DEEPSEEK_API_KEY")).toBeInTheDocument();
+    // One input from the setup hint, one from the env notice.
+    expect(screen.getAllByPlaceholderText("Paste API key")).toHaveLength(2);
   });
 
   it("explains an environment-provided OpenCode Go key and lets the user save one from the notice", async () => {

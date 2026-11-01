@@ -818,7 +818,7 @@ function ZcodeResetBankSection({ data }) {
 
 // DeepSeek has no quota windows: the official source is the prepaid balance,
 // so the row is a balance card — one line per currency, no bar and no reset
-// countdown (#960). Mapping a balance onto the used-percent window shape would
+// countdown (issue 960). Mapping a balance onto the used-percent window shape would
 // render a fake "used 0" bar (owner call: no invented window bars).
 function DeepseekBalanceSection({ data }) {
   const balances = Array.isArray(data?.balances) ? data.balances : [];
@@ -1112,6 +1112,7 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
           ? renderProviderExtra(PROVIDER_LIMIT_SPECS.kiro.extra, data)
           : null}
         {id === "deepseek" ? <SetupHint title={copy("limits.deepseek.setupHint.title")}><DeepseekSetupHint onSaved={onKeySaved} /></SetupHint> : null}
+        {id === "deepseek" ? <EnvCredentialNotice providerId={id} data={data} onSaved={onKeySaved} /> : null}
         {id === "opencodeGo" ? <SetupHint title={copy("limits.opencodeGo.setupHint.title")}><OpenCodeGoSetupHint onSaved={onKeySaved} /></SetupHint> : null}
         {id === "commandCode" ? <SetupHint title={copy("limits.commandCode.setupHint.title")}><CommandCodeSetupHint onSaved={onKeySaved} /></SetupHint> : null}
         {id === "codingPlan" ? <SetupHint title={copy("limits.codingPlan.setupHint.title")}><ArkCodingPlanSetupHint /></SetupHint> : null}
@@ -1431,7 +1432,7 @@ function CommandCodeSetupHint({ onSaved }) {
 
 // DeepSeek (platform.deepseek.com) is pay-as-you-go with no desktop app and
 // no usage API: the official balance endpoint keyed by a plain API key is the
-// only documented programmatic source (#960). The key is entered here and
+// only documented programmatic source (issue 960). The key is entered here and
 // stored by the backend in a 0600 file, same flow as OpenCode Go/CommandCode.
 function DeepseekSetupHint({ onSaved }) {
   return (
@@ -1449,7 +1450,7 @@ function DeepseekSetupHint({ onSaved }) {
             onClick={(e) => e.stopPropagation()}
             className="mt-1 inline-flex items-center gap-1 rounded-md bg-oai-brand/10 px-2 py-1 font-medium text-oai-brand hover:bg-oai-brand/15 transition-colors"
           >
-            platform.deepseek.com
+            {copy("limits.deepseek.setupHint.cta")}
             <ExternalArrow />
           </a>
         </HintStep>

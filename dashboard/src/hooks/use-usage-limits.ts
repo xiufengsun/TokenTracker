@@ -142,7 +142,7 @@ interface UsageLimitsData {
     stale?: boolean;
     cached_at?: string | null;
   };
-  // Pay-as-you-go balance card (#960): no quota windows, one row per currency.
+  // Pay-as-you-go balance card (issue 960): no quota windows, one row per currency.
   deepseek?: {
     configured: boolean;
     error?: string | null;

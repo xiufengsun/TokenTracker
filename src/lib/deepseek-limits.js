@@ -90,8 +90,26 @@ function normalizeDeepseekBalanceResponse(body) {
   return balances;
 }
 
+// The fingerprint labels a credential, so it must come from a memory-hard
+// KDF rather than a bare fast hash (CodeQL flags sha256 over key-store/env
+// credentials; the ark apiKey-prefix label hit the same alert before #950).
+// Memoized per key: scrypt is intentionally slow.
+const DEEPSEEK_FINGERPRINT_SALT = "tokentracker/deepseek-limits-cache/v1";
+let fingerprintMemo = null;
+
 function keyFingerprint(apiKey) {
-  return crypto.createHash("sha256").update(String(apiKey)).digest("hex").slice(0, 16);
+  const key = String(apiKey);
+  if (fingerprintMemo?.key === key) return fingerprintMemo.hex;
+  const hex = crypto
+    .scryptSync(key, DEEPSEEK_FINGERPRINT_SALT, 16, {
+      N: 2 ** 15,
+      r: 8,
+      p: 1,
+      maxmem: 128 * 2 ** 15 * 8 * 2,
+    })
+    .toString("hex");
+  fingerprintMemo = { key, hex };
+  return hex;
 }
 
 function resolveDeepseekLimitsCachePath({ trackerDir, home } = {}) {

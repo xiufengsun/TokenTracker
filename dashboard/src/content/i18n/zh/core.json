@@ -854,6 +854,7 @@
   "limits.deepseek.setupHint.title": "连接 DeepSeek",
   "limits.deepseek.setupHint.subtitle": "DeepSeek 为按量付费：TokenTracker 通过官方余额 API 展示预付余额，没有用量窗口。",
   "limits.deepseek.setupHint.step1": "在 DeepSeek 开放平台控制台创建 API Key。",
+  "limits.deepseek.setupHint.cta": "打开 platform.deepseek.com",
   "limits.deepseek.setupHint.step2": "粘贴 API Key（以 sk- 开头）。TokenTracker 仅将其用于余额查询。",
   "limits.label.devin_daily": "每日",
   "limits.label.devin_weekly": "每周",

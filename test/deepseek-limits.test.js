@@ -6,7 +6,6 @@ const path = require("node:path");
 
 const {
   DEEPSEEK_BALANCE_CACHE_TTL_MS,
-  DEEPSEEK_LIMITS_CACHE_FILE,
   balanceNumber,
   fetchDeepseekLimits,
   keyFingerprint,
@@ -153,7 +152,9 @@ describe("fetchDeepseekLimits", () => {
       await fetchDeepseekLimits({ home, env, fetchImpl: fetchResponding(200, BALANCE_BODY) });
       const cachePath = resolveDeepseekLimitsCachePath({ home });
       assert.ok(fs.existsSync(cachePath));
-      assert.equal(fs.statSync(cachePath).mode & 0o777, 0o600);
+      // POSIX mode bits don't exist on Windows; atomic-json.test.js has the
+      // same guard.
+      if (process.platform !== "win32") assert.equal(fs.statSync(cachePath).mode & 0o777, 0o600);
 
       const second = await fetchDeepseekLimits({ home, env, fetchImpl: fetchResponding(500, "boom") });
       assert.equal(second.configured, true);
@@ -250,8 +251,22 @@ describe("deepseek cache plumbing", () => {
   it("readDeepseekLimitsCache rejects a future cached_at and empty balances", async () => {
     const { tmp, home } = await makeEnv({});
     try {
-      const cachePath = path.join(home, DEEPSEEK_LIMITS_CACHE_FILE);
-      fs.mkdirSync(home, { recursive: true });
+      const cachePath = resolveDeepseekLimitsCachePath({ home });
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+
+      // Positive control: a valid entry on this exact path is read back, so a
+      // wrong path can never make the rejection cases below vacuously pass.
+      fs.writeFileSync(cachePath, JSON.stringify({
+        deepseek: {
+          is_available: true,
+          balances: [{ currency: "CNY", total: 1 }],
+          cached_at: new Date().toISOString(),
+        },
+      }));
+      const positive = readDeepseekLimitsCache({ home });
+      assert.ok(positive);
+      assert.equal(positive.balances.length, 1);
+
       fs.writeFileSync(cachePath, JSON.stringify({
         deepseek: {
           is_available: true,

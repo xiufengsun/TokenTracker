@@ -300,7 +300,7 @@ export const PROVIDER_LIMIT_SPECS = {
   },
   // DeepSeek (platform.deepseek.com) is pay-as-you-go and publishes no quota
   // windows: the balance card renders through the deepseek_balance extra, so
-  // the window list stays empty and no fake "used 0" bar can appear (#960).
+  // the window list stays empty and no fake "used 0" bar can appear (issue 960).
   deepseek: {
     extra: "deepseek_balance",
     windows() {

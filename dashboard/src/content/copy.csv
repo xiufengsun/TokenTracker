@@ -1663,6 +1663,7 @@ limits.deepseek.unavailable,ui,LimitsPage,UsageLimitsPanel,deepseek_unavailable,
 limits.deepseek.setupHint.title,ui,LimitsPage,UsageLimitsPanel,deepseek_hint_title,"Connect DeepSeek",,active
 limits.deepseek.setupHint.subtitle,ui,LimitsPage,UsageLimitsPanel,deepseek_hint_subtitle,"DeepSeek is pay-as-you-go: TokenTracker shows the prepaid balance from the official API — there are no usage windows.",,active
 limits.deepseek.setupHint.step1,ui,LimitsPage,UsageLimitsPanel,deepseek_hint_step1,"Create an API key in the DeepSeek platform console.",,active
+limits.deepseek.setupHint.cta,ui,LimitsPage,UsageLimitsPanel,deepseek_hint_cta,"Open platform.deepseek.com",,active
 limits.deepseek.setupHint.step2,ui,LimitsPage,UsageLimitsPanel,deepseek_hint_step2,"Paste the API key (it starts with sk-). TokenTracker uses it only for balance requests.",,active
 limits.provider.deepseek,ui,LimitsPage,UsageLimitsPanel,provider_deepseek,"DeepSeek",,active
 limits.label.devin_daily,ui,LimitsPage,UsageLimitsPanel,devin_daily,"Daily",,active
