@@ -74,6 +74,7 @@ struct UsageLimitsView: View {
         "devin": "DevinLogo",
         "workbuddy": "CodeBuddyLogo",
         "workbuddyAi": "CodeBuddyLogo",
+        "deepseek": "DeepseekLogo",
     ]
 
     var body: some View {
@@ -236,6 +237,12 @@ struct UsageLimitsView: View {
             if let workbuddyAi = limits.workbuddyAi, workbuddyAi.configured, workbuddyAi.error == nil {
                 return toolSection(id: id, title: planTitle("WorkBuddy AI", workbuddyAi.planLabel), assetName: "CodeBuddyLogo", toolName: "WorkBuddy AI", specs: workbuddySpecs(workbuddyAi), updatedAtISO: workbuddyAi.cachedAt, isStale: workbuddyAi.stale ?? false)
             }
+        case "deepseek":
+            // Pay-as-you-go balance card: no window bars exist for DeepSeek, so
+            // the section renders balance rows via the dedicated extra (#960).
+            if let deepseek = limits.deepseek, deepseek.configured, deepseek.error == nil {
+                return toolSection(id: id, title: "DeepSeek", assetName: "DeepseekLogo", toolName: "DeepSeek", specs: [], deepseekBalance: deepseek, updatedAtISO: deepseek.cachedAt, isStale: deepseek.stale ?? false)
+            }
         default:
             break
         }
@@ -290,6 +297,8 @@ struct UsageLimitsView: View {
         resetStatus: String? = nil,
         zcodeResetCredits: ZcodeResetCredits? = nil,
         zcodeStartPlan: ZcodeStartPlan? = nil,
+        // DeepSeek's balance card (pay-as-you-go, no window bars — #960).
+        deepseekBalance: DeepseekLimits? = nil,
         /// Inline plan-spec text pinned to the right of the title (e.g. Kimi's
         /// "· Parallel: 20" concurrency cap). Renders caption2/tertiary so it
         /// reads as metadata, not part of the provider name.
@@ -308,16 +317,17 @@ struct UsageLimitsView: View {
         let subscription = subscriptionByProvider[id]
         let hasZcodeReset = zcodeResetBankHasContent(zcodeResetCredits)
         let hasZcodeStart = zcodeStartPlan?.configured == true
+        let hasDeepseekBalance = deepseekBalance != nil
         // No quota rows and no subscription/reset/status content means there is
         // nothing meaningful under the heading — return nil rather than render
         // a bare provider title.
         guard !specs.isEmpty || subscription != nil || !resetRows.isEmpty
             || resetStatus != nil || serviceStatus != nil
-            || hasZcodeReset || hasZcodeStart else {
+            || hasZcodeReset || hasZcodeStart || hasDeepseekBalance else {
             return nil
         }
         if subscription != nil && SubscriptionSectionPolicy.usesSubscriptionOnly(
-            hasQuotaRows: !specs.isEmpty,
+            hasQuotaRows: !specs.isEmpty || hasDeepseekBalance,
             hasResetContent: !resetRows.isEmpty || resetStatus != nil || hasZcodeReset || hasZcodeStart,
             hasServiceStatus: serviceStatus != nil
         ) {
@@ -374,6 +384,9 @@ struct UsageLimitsView: View {
             }
             if hasZcodeStart, let startPlan = zcodeStartPlan {
                 zcodeStartPlanSection(startPlan, toolName: toolName)
+            }
+            if let deepseekBalance {
+                deepseekBalanceSection(deepseekBalance)
             }
             if let serviceStatus {
                 serviceStatusRow(serviceStatus)
@@ -994,6 +1007,55 @@ struct UsageLimitsView: View {
         .padding(.top, 1)
     }
 
+    // MARK: - DeepSeek balance card (#960)
+
+    private static let deepseekAmountFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 2
+        return formatter
+    }()
+
+    private static func deepseekAmountText(_ value: Double) -> String {
+        deepseekAmountFormatter.string(from: NSNumber(value: value)) ?? String(value)
+    }
+
+    /// Pay-as-you-go balance rows: one line per currency with the headline
+    /// total, the grant share when the account carries grant credit, and an
+    /// unavailable notice — deliberately no bar and no reset countdown.
+    private func deepseekBalanceSection(_ limits: DeepseekLimits) -> some View {
+        let balances = limits.balances ?? []
+        return VStack(alignment: .leading, spacing: 4) {
+            ForEach(balances, id: \.currency) { balance in
+                HStack(spacing: 6) {
+                    Text(Strings.deepseekBalanceLabel(balance.currency))
+                        .font(.system(.caption, design: .default))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text(Self.deepseekAmountText(balance.total))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.primary)
+                }
+                if let granted = balance.granted, granted > 0 {
+                    Text(Strings.deepseekGrantedDetail(Self.deepseekAmountText(granted)))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            if limits.isAvailable == false {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.yellow)
+                    Text(Strings.deepseekUnavailable)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private func zcodeStartPlanSection(_ startPlan: ZcodeStartPlan, toolName: String) -> some View {
         let planNames = Array(Set((startPlan.buckets ?? []).compactMap { bucket -> String? in
@@ -1179,7 +1241,7 @@ struct UsageLimitsView: View {
     @ViewBuilder
     private func brandIcon(_ name: String) -> some View {
         switch name {
-        case "CursorLogo", "KimiLogo", "KiroLogo", "GrokLogo", "CopilotLogo", "ZcodeLogo", "OpenCodeLogo", "CommandCodeLogo", "QoderLogo", "QoderCnLogo", "VolcanoArkLogo", "DevinLogo", "CodeBuddyLogo":
+        case "CursorLogo", "KimiLogo", "KiroLogo", "GrokLogo", "CopilotLogo", "ZcodeLogo", "OpenCodeLogo", "CommandCodeLogo", "QoderLogo", "QoderCnLogo", "VolcanoArkLogo", "DevinLogo", "CodeBuddyLogo", "DeepseekLogo":
             let filename: String = {
                 switch name {
                 case "CursorLogo": return "cursor.svg"
@@ -1194,6 +1256,7 @@ struct UsageLimitsView: View {
                 case "VolcanoArkLogo": return "volcano-ark.svg"
                 case "DevinLogo": return "devin.svg"
                 case "CodeBuddyLogo": return "codebuddy.svg"
+                case "DeepseekLogo": return "deepseek.svg"
                 default: return "copilot.svg"
                 }
             }()

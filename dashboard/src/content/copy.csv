@@ -1657,6 +1657,14 @@ limits.provider.workbuddy,ui,LimitsPage,UsageLimitsPanel,provider_workbuddy,"Wor
 limits.provider.workbuddy_ai,ui,LimitsPage,UsageLimitsPanel,provider_workbuddy_ai,"WorkBuddy AI",,active
 limits.label.workbuddy_plan,ui,LimitsPage,UsageLimitsPanel,workbuddy_plan,"Plan",,active
 limits.label.workbuddy_addon,ui,LimitsPage,UsageLimitsPanel,workbuddy_addon,Add-on Credits,,active
+limits.deepseek.balance_label,ui,LimitsPage,UsageLimitsPanel,deepseek_balance_label,"Balance ({{currency}})",,active
+limits.deepseek.granted_detail,ui,LimitsPage,UsageLimitsPanel,deepseek_granted_detail,"incl. grant {{amount}}",,active
+limits.deepseek.unavailable,ui,LimitsPage,UsageLimitsPanel,deepseek_unavailable,"DeepSeek reports this account as unavailable — the balance may be exhausted or the account under review.",,active
+limits.deepseek.setupHint.title,ui,LimitsPage,UsageLimitsPanel,deepseek_hint_title,"Connect DeepSeek",,active
+limits.deepseek.setupHint.subtitle,ui,LimitsPage,UsageLimitsPanel,deepseek_hint_subtitle,"DeepSeek is pay-as-you-go: TokenTracker shows the prepaid balance from the official API — there are no usage windows.",,active
+limits.deepseek.setupHint.step1,ui,LimitsPage,UsageLimitsPanel,deepseek_hint_step1,"Create an API key in the DeepSeek platform console.",,active
+limits.deepseek.setupHint.step2,ui,LimitsPage,UsageLimitsPanel,deepseek_hint_step2,"Paste the API key (it starts with sk-). TokenTracker uses it only for balance requests.",,active
+limits.provider.deepseek,ui,LimitsPage,UsageLimitsPanel,provider_deepseek,"DeepSeek",,active
 limits.label.devin_daily,ui,LimitsPage,UsageLimitsPanel,devin_daily,"Daily",,active
 limits.label.devin_weekly,ui,LimitsPage,UsageLimitsPanel,devin_weekly,"Weekly",,active
 limits.devin.setupHint.title,ui,LimitsPage,UsageLimitsPanel,devin_hint_title,"Connect Devin",,active

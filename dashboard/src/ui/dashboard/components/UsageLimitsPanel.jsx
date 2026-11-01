@@ -21,11 +21,13 @@ const LIMITS_PROVIDER_ICON_CLASS = "shrink-0 text-oai-black dark:text-oai-white"
 const PROVIDER_KEY_ENV = {
   opencodeGo: "OPENCODE_GO_API_KEY",
   commandCode: "COMMAND_CODE_API_KEY",
+  deepseek: "DEEPSEEK_API_KEY",
 };
 
 const PROVIDER_KEY_STORE_ID = {
   opencodeGo: "opencode-go",
   commandCode: "command-code",
+  deepseek: "deepseek",
 };
 
 function commandCodeSetupPlatform() {
@@ -814,7 +816,54 @@ function ZcodeResetBankSection({ data }) {
   );
 }
 
+// DeepSeek has no quota windows: the official source is the prepaid balance,
+// so the row is a balance card — one line per currency, no bar and no reset
+// countdown (#960). Mapping a balance onto the used-percent window shape would
+// render a fake "used 0" bar (owner call: no invented window bars).
+function DeepseekBalanceSection({ data }) {
+  const balances = Array.isArray(data?.balances) ? data.balances : [];
+  return (
+    <div className="mt-1 space-y-1" data-deepseek-balance="">
+      {balances.map((entry) => {
+        const currency = String(entry?.currency || "").toUpperCase();
+        const total = formatCreditAmount(entry?.total, { maximumFractionDigits: 2 });
+        const granted = Number(entry?.granted) > 0
+          ? formatCreditAmount(entry.granted, { maximumFractionDigits: 2 })
+          : null;
+        if (!currency || !total) return null;
+        return (
+          <div key={currency} className="flex items-center gap-2">
+            <span
+              data-limit-label=""
+              className="text-xs sm:text-sm text-oai-gray-500 dark:text-oai-gray-400 shrink-0 whitespace-nowrap"
+              style={{ width: "var(--tt-limits-label-w)" }}
+            >
+              {copy("limits.deepseek.balance_label", { currency })}
+            </span>
+            <span className="text-xs sm:text-sm tabular-nums text-oai-gray-600 dark:text-oai-gray-300">
+              {total}
+            </span>
+            {granted ? (
+              <span className="text-[10.5px] tabular-nums text-oai-gray-400 dark:text-oai-gray-500">
+                {copy("limits.deepseek.granted_detail", { amount: granted })}
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
+      {data?.is_available === false ? (
+        <div className="mt-1">
+          <StatusLine tone="error">{copy("limits.deepseek.unavailable")}</StatusLine>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function renderProviderExtra(kind, data) {
+  if (kind === "deepseek_balance") {
+    return <DeepseekBalanceSection data={data} />;
+  }
   if (kind === "zcode_reset_bank") {
     // Hand LimitWindowSection a real null when the bank is spent: a truthy
     // element that renders nothing would still suppress the no-data line.
@@ -977,7 +1026,7 @@ function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, bad
       toggleOnHeader={id === "zcode"}
     >
       <LimitWindowSection mode={mode} rows={rows} extra={extra} expanded={expanded} />
-      {id === "opencodeGo" || id === "commandCode" ? (
+      {id === "opencodeGo" || id === "commandCode" || id === "deepseek" ? (
         <EnvCredentialNotice providerId={id} data={data} onSaved={onKeySaved} />
       ) : null}
       {subscription ? <SubscriptionBar subscription={subscription} now={now} mode={mode} /> : null}
@@ -1034,6 +1083,7 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
         {id === "codingPlan" ? <SetupHint title={copy("limits.codingPlan.setupHint.title")}><ArkCodingPlanSetupHint /></SetupHint> : null}
         {id === "agentPlan" ? <SetupHint title={copy("limits.agentPlan.setupHint.title")}><ArkAgentPlanSetupHint /></SetupHint> : null}
         {id === "devin" ? <SetupHint title={copy("limits.devin.setupHint.title")}><DevinSetupHint /></SetupHint> : null}
+        {id === "deepseek" ? <SetupHint title={copy("limits.deepseek.setupHint.title")}><DeepseekSetupHint onSaved={onKeySaved} /></SetupHint> : null}
       </>,
       expanded,
       onToggle,
@@ -1061,6 +1111,7 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
         {id === "kiro"
           ? renderProviderExtra(PROVIDER_LIMIT_SPECS.kiro.extra, data)
           : null}
+        {id === "deepseek" ? <SetupHint title={copy("limits.deepseek.setupHint.title")}><DeepseekSetupHint onSaved={onKeySaved} /></SetupHint> : null}
         {id === "opencodeGo" ? <SetupHint title={copy("limits.opencodeGo.setupHint.title")}><OpenCodeGoSetupHint onSaved={onKeySaved} /></SetupHint> : null}
         {id === "commandCode" ? <SetupHint title={copy("limits.commandCode.setupHint.title")}><CommandCodeSetupHint onSaved={onKeySaved} /></SetupHint> : null}
         {id === "codingPlan" ? <SetupHint title={copy("limits.codingPlan.setupHint.title")}><ArkCodingPlanSetupHint /></SetupHint> : null}
@@ -1378,6 +1429,39 @@ function CommandCodeSetupHint({ onSaved }) {
   );
 }
 
+// DeepSeek (platform.deepseek.com) is pay-as-you-go with no desktop app and
+// no usage API: the official balance endpoint keyed by a plain API key is the
+// only documented programmatic source (#960). The key is entered here and
+// stored by the backend in a 0600 file, same flow as OpenCode Go/CommandCode.
+function DeepseekSetupHint({ onSaved }) {
+  return (
+    <div className="mt-3 text-[11px] text-oai-gray-600 dark:text-oai-gray-300">
+      <div className="mt-0.5 leading-snug text-oai-gray-500 dark:text-oai-gray-400">
+        {copy("limits.deepseek.setupHint.subtitle")}
+      </div>
+      <ol className="mt-2.5 space-y-2.5">
+        <HintStep n="1">
+          <div>{copy("limits.deepseek.setupHint.step1")}</div>
+          <a
+            href="https://platform.deepseek.com"
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="mt-1 inline-flex items-center gap-1 rounded-md bg-oai-brand/10 px-2 py-1 font-medium text-oai-brand hover:bg-oai-brand/15 transition-colors"
+          >
+            platform.deepseek.com
+            <ExternalArrow />
+          </a>
+        </HintStep>
+        <HintStep n="2">
+          <div>{copy("limits.deepseek.setupHint.step2")}</div>
+          <ProviderKeyInput provider="deepseek" onSaved={onSaved} />
+        </HintStep>
+      </ol>
+    </div>
+  );
+}
+
 // Devin quota is read through the Devin CLI's saved sign-in on this machine
 // — the backend reuses the session token the CLI wrote to its credentials
 // file, so all the row needs is the CLI installed and signed in once.
@@ -1568,8 +1652,8 @@ function useWidestLabelWidth(containerRef) {
   return labelWidth;
 }
 
-export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi, order, visibility, displayMode, subscriptions = [], showSubscriptions = true, onProviderKeySaved = null }) {
-  const dataById = { claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi };
+export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi, deepseek, order, visibility, displayMode, subscriptions = [], showSubscriptions = true, onProviderKeySaved = null }) {
+  const dataById = { claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi, deepseek };
   const containerRef = useRef(null);
   const labelWidth = useWidestLabelWidth(containerRef);
   const [expandedId, setExpandedId] = useState(null);

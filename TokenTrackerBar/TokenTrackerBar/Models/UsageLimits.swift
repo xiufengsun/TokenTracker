@@ -21,12 +21,14 @@ struct UsageLimitsResponse: Codable, Equatable {
     let devin: DevinLimits?
     let workbuddy: WorkbuddyLimits?
     let workbuddyAi: WorkbuddyLimits?
+    let deepseek: DeepseekLimits?
 
     enum CodingKeys: String, CodingKey {
         case fetchedAt = "fetched_at"
         case claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi
         case opencodeGo = "opencodeGo"
         case commandCode = "commandCode"
+        case deepseek
     }
 }
 
@@ -771,6 +773,38 @@ struct DevinLimits: Codable, Equatable {
     )
 }
 
+/// DeepSeek (platform.deepseek.com) is pay-as-you-go with no quota windows:
+/// the official balance endpoint is the only documented programmatic source,
+/// so this carries a balance card — one entry per currency, no bars (#960).
+struct DeepseekLimits: Codable, Equatable {
+    let configured: Bool
+    let error: String?
+    let isAvailable: Bool?
+    let balances: [DeepseekBalance]?
+    let credentialSource: String?
+    let cachedAt: String?
+    let stale: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case configured, error, stale, balances
+        case isAvailable = "is_available"
+        case credentialSource = "credential_source"
+        case cachedAt = "cached_at"
+    }
+}
+
+struct DeepseekBalance: Codable, Equatable {
+    let currency: String
+    let total: Double
+    let granted: Double?
+    let toppedUp: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case currency, total, granted
+        case toppedUp = "topped_up"
+    }
+}
+
 struct AntigravityLimits: Codable, Equatable {
     let configured: Bool
     let error: String?
@@ -820,6 +854,7 @@ extension UsageLimitsResponse {
             (devin?.configured ?? false, devin?.error),
             (workbuddy?.configured ?? false, workbuddy?.error),
             (workbuddyAi?.configured ?? false, workbuddyAi?.error),
+            (deepseek?.configured ?? false, deepseek?.error),
         ]
         return providers.contains { $0.0 && $0.1 == nil }
     }
@@ -860,7 +895,8 @@ extension UsageLimitsResponse {
             agentPlan: agentPlan,
             devin: .unconfigured,
             workbuddy: workbuddy,
-            workbuddyAi: workbuddyAi
+            workbuddyAi: workbuddyAi,
+            deepseek: deepseek
         )
     }
 }

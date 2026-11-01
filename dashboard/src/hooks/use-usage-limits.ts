@@ -142,6 +142,16 @@ interface UsageLimitsData {
     stale?: boolean;
     cached_at?: string | null;
   };
+  // Pay-as-you-go balance card (#960): no quota windows, one row per currency.
+  deepseek?: {
+    configured: boolean;
+    error?: string | null;
+    is_available?: boolean;
+    balances?: ReadonlyArray<{ currency: string; total: number; granted: number; topped_up: number }>;
+    credential_source?: string | null;
+    stale?: boolean;
+    cached_at?: string | null;
+  };
 }
 
 interface UsageLimitsInitialState {
