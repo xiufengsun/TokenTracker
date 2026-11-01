@@ -27,7 +27,7 @@ function quotaResponse(apiPath) {
   } };
   return { code: 0, data: { Accounts: apiPath.includes("-free-") ? [{
     PackageCode: PLAN, PackageName: "CodeBuddy个人体验版", CycleCapacitySizePrecise: 500,
-    CycleCapacityRemainPrecise: 247.07, CycleEndTime: "2026-10-31 23:59:59",
+    CycleCapacityRemainPrecise: 247.07, CycleEndTime: "2027-10-31 23:59:59",
   }] : [], TotalCount: apiPath.includes("-free-") ? 1 : 0 } };
 }
 
@@ -44,7 +44,7 @@ test("encrypted desktop sessions use authenticated IPC and merge quota with the 
   assert.equal(result.source, "ipc");
   assert.equal(result.plan_label, "Free");
   assert.equal(result.primary_window.used_percent, 50.586);
-  assert.equal(result.primary_window.reset_at, new Date("2026-10-31T23:59:59").toISOString());
+  assert.equal(result.primary_window.reset_at, new Date("2027-10-31T23:59:59").toISOString());
   assert.equal(broker.requests.length, 3);
   assert.ok(broker.requests.every(({ path: apiPath }) => apiPath.startsWith("/billing/meter/")));
   assert.ok(broker.requests.slice(1).every(({ body }) => body.PackageCodes.includes(PLAN) && !body.PackageCodes.includes(REWARD)));
@@ -73,9 +73,12 @@ test("international quota uses only its own proxy and preserves a native English
 
 test("the limits aggregation retains Free and cancels IPC when the provider budget expires", async (t) => {
   const broker = await createWorkbuddyBroker(t, { respond: quotaResponse });
+  // Fixed clock before the fixture's cycle end (2027-10-31): the disk-cache
+  // fallback asserted below must never depend on the wall clock (#951 class).
   const options = {
     home: broker.root, env: { HOME: broker.root, WORKBUDDY_HOME: broker.home },
     trackerDir: path.join(broker.root, "tracker"), providerTimeoutMs: 1000,
+    nowMs: Date.parse("2026-07-08T00:00:00Z"),
     securityRunner: () => ({ status: 1, stdout: "" }),
     commandRunner: () => ({ status: 1, stdout: "" }),
     fetchImpl: async () => ({ ok: false, status: 401, headers: { get: () => null }, json: async () => ({}) }),
@@ -97,7 +100,14 @@ test("the limits aggregation retains Free and cancels IPC when the provider budg
   const timeout = await getUsageLimits({ ...options,
     env: { HOME: broker.root, WORKBUDDY_HOME: stalled.home }, providerTimeoutMs: 60,
   });
-  assert.match(timeout.workbuddy.error, /timed out/);
+  // The budget aborts the stalled IPC inside its grace, so the edition's own
+  // disk-cache fallback — the snapshot the live read above just wrote — lands
+  // and the card keeps its last-good Free windows instead of the bare timeout.
+  assert.equal(timeout.workbuddy.error, null);
+  assert.equal(timeout.workbuddy.source, "disk-cache");
+  assert.equal(timeout.workbuddy.stale, true);
+  assert.equal(timeout.workbuddy.plan_label, "Free");
+  assert.equal(timeout.workbuddy.primary_window.limit_credits, 500);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(stalled.sockets.size, 0);
 });
