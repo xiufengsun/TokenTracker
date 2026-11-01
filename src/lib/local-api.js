@@ -3677,7 +3677,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
 
     // --- usage-limits ---
     if (p === "/functions/tokentracker-usage-limits") {
-      const { getUsageLimits, resetUsageLimitsCache } = require("./usage-limits");
+      const { getUsageLimits, resetUsageLimitsCache, normalizeHiddenProviders } = require("./usage-limits");
       try {
         // Devin quota is opt-in (Settings > Usage & Limits > Providers). An
         // explicit devin=1 without local authentication is rejected before any
@@ -3688,7 +3688,14 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         const localAuthorized = isAuthorizedLocalMutation(req);
         const devinParam = url.searchParams.get("devin");
         const devinEnabled = devinParam === "1" || devinParam === "true";
-        if (devinEnabled && !localAuthorized) {
+        // Provider visibility gate (#956): hidden=<csv> names provider rows to
+        // skip entirely — no upstream call, no credential read. Like devin=1,
+        // an explicit list is honored only together with the loopback auth
+        // header (letting an unauthenticated caller scope the fetch would let
+        // it pick exactly which credentials to leave alone). Unknown ids are
+        // dropped by the normalizer, so the gate only ever narrows.
+        const hiddenProviders = normalizeHiddenProviders(url.searchParams.get("hidden"));
+        if ((devinEnabled || hiddenProviders) && !localAuthorized) {
           json(res, { error: "Unauthorized" }, 401);
           return true;
         }
@@ -3706,6 +3713,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           // cooldown) — an explicit user refresh should hit upstream.
           forceRefresh,
           devinEnabled,
+          hiddenProviders,
         });
         json(res, data);
       } catch (e) {

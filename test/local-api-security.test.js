@@ -1559,3 +1559,79 @@ test("usage-limits honors devin=1 only on locally authenticated requests", async
     restore();
   }
 });
+
+test("usage-limits honors hidden=<csv> only on locally authenticated requests", async () => {
+  const { mod, restore } = loadLocalApiWithSpawn(createSuccessfulSpawn([]));
+  // Same aggregate seam stub as the devin test above: only the forwarded
+  // selection is observed, never real credentials or the network.
+  const usageLimits = require("../src/lib/usage-limits");
+  const originalGet = usageLimits.getUsageLimits;
+  const originalReset = usageLimits.resetUsageLimitsCache;
+  const forwarded = [];
+  let aggregateCalls = 0;
+  usageLimits.getUsageLimits = async (options) => {
+    aggregateCalls += 1;
+    forwarded.push(options);
+    return { fetched_at: "2026-01-01T00:00:00Z", claude: { configured: false } };
+  };
+
+  async function requestLimits({ hidden, token } = {}) {
+    const params = new URLSearchParams();
+    if (hidden) params.set("hidden", hidden);
+    const query = params.size ? `?${params}` : "";
+    const headers = {};
+    if (token) headers["x-tokentracker-local-auth"] = token;
+    const req = createRequest({ method: "GET", headers });
+    const res = createResponse();
+    const handled = await handler(
+      req,
+      res,
+      new URL(`http://127.0.0.1/functions/tokentracker-usage-limits${query}`),
+    );
+    assert.equal(handled, true);
+    return res;
+  }
+
+  const handler = mod.createLocalApiHandler({
+    queuePath: path.join(process.cwd(), "tmp-queue.jsonl"),
+  });
+  try {
+    const localAuthToken = await getLocalAuthToken(handler);
+
+    // An explicit visibility gate without local auth is rejected outright —
+    // letting an unauthenticated caller scope the fetch would let it pick
+    // exactly which credentials to leave alone (#956).
+    for (const token of [undefined, "wrong-token"]) {
+      const res = await requestLimits({ hidden: "claude,codex", token });
+      assert.equal(res.statusCode, 401, `hidden with token=${token} must 401`);
+      assert.deepEqual(JSON.parse(res.body.toString("utf8")), { error: "Unauthorized" });
+    }
+    assert.equal(aggregateCalls, 0, "unauthorized hidden list reached the aggregate");
+
+    // An authenticated gate forwards the normalized id list — sorted,
+    // de-duplicated, unknown ids dropped.
+    const ok = await requestLimits({ hidden: "zcode,claude,claude,not-a-provider", token: localAuthToken });
+    assert.equal(ok.statusCode, 200);
+    assert.deepEqual(
+      forwarded.at(-1).hiddenProviders,
+      ["claude", "zcode"],
+      "authenticated gate forwards the normalized hidden list",
+    );
+
+    // A hidden list of only unknown ids normalizes to nothing: the parameter
+    // only ever narrows, so there is nothing to authenticate and the request
+    // keeps its legacy fetch-everything behavior.
+    const unknownOnly = await requestLimits({ hidden: "not-a-provider", token: undefined });
+    assert.equal(unknownOnly.statusCode, 200, "unknown-only hidden list must not require auth");
+    assert.equal(forwarded.at(-1).hiddenProviders, null, "unknown-only list forwards null");
+
+    // No hidden parameter at all — the legacy contract is untouched.
+    const plain = await requestLimits({ token: undefined });
+    assert.equal(plain.statusCode, 200);
+    assert.equal(forwarded.at(-1).hiddenProviders, null, "absent parameter forwards null");
+  } finally {
+    usageLimits.getUsageLimits = originalGet;
+    usageLimits.resetUsageLimitsCache = originalReset;
+    restore();
+  }
+});
