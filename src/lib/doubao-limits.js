@@ -25,7 +25,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { resolveDoubaoDataDir, readDoubaoCookieSession } = require("./doubao-cookies");
+const { resolveDoubaoDataDir, readDoubaoCookieSession, DOUBAO_SESSION_COOKIE_NAMES } = require("./doubao-cookies");
 
 const DOUBAO_ORIGIN = "https://www.doubao.com";
 const DOUBAO_QUOTA_SUMMARY_URL = DOUBAO_ORIGIN + "/alice/commerce/sale/subscription/quota/summary/";
@@ -241,13 +241,23 @@ function doubaoLimitsCachePath({ home = os.homedir() } = {}) {
 }
 
 // The disk cache outlives API calls, so it must never serve one account's
-// windows to another. A truncated SHA-256 of the active cookie header travels
+// windows to another. A truncated SHA-256 of the session identity travels
 // with every write and gates every read — the cookie itself never touches the
-// disk, and the hash of a high-entropy session id is not reversible.
+// disk, and the hash of a high-entropy session id is not reversible. Only the
+// session cookies carry that identity: the Doubao app rotates non-session
+// cookies on its own, and hashing the full header would orphan a still-valid
+// cache on every such rotation. Headers without any session cookie (manual
+// DOUBAO_COOKIE) keep hashing the full header.
 function doubaoCookieFingerprint(cookieHeader) {
+  const sessionPairs = String(cookieHeader)
+    .split(";")
+    .map((pair) => pair.trim())
+    .filter((pair) => DOUBAO_SESSION_COOKIE_NAMES.has(pair.split("=")[0]))
+    .sort();
+  const identity = sessionPairs.length > 0 ? sessionPairs.join("; ") : cookieHeader;
   return crypto
     .createHash("sha256")
-    .update(`doubao-limits-cache:v1:${cookieHeader}`)
+    .update(`doubao-limits-cache:v1:${identity}`)
     .digest("hex")
     .slice(0, 16);
 }

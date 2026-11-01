@@ -406,6 +406,50 @@ test("fetchDoubaoLimits binds the disk cache to the active account", async () =>
   }
 });
 
+test("the cache fingerprint survives non-session cookie rotation", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-doubao-fingerprint-"));
+  const nowMs = Date.parse("2030-07-29T00:00:00.000Z");
+  try {
+    const summaryFetch = async (url) => {
+      if (url === DOUBAO_QUOTA_SUMMARY_URL) {
+        return jsonResponse({ code: 0, data: { current_subscription: { display: { product_name: "个人订阅" } }, window_limit_section: [] } });
+      }
+      return jsonResponse({
+        code: 0,
+        data: {
+          total_used_percent: 30,
+          window_limit_groups: [
+            { window_type: "5h", used_quota: 30, total_quota: 100, reset_time: Date.parse("2030-07-29T05:00:00.000Z") },
+          ],
+        },
+      });
+    };
+    await fetchDoubaoLimits({
+      home,
+      env: { DOUBAO_COOKIE: "sessionid=account-a; odin_tt=rotation-1" },
+      platform: "darwin",
+      fetchImpl: summaryFetch,
+      nowMs,
+    });
+
+    // The Doubao app rotates non-session cookies on its own; a rotated
+    // odin_tt must not orphan the cache — the session identity is unchanged,
+    // so the stale fallback still serves the previous windows.
+    const rotated = await fetchDoubaoLimits({
+      home,
+      env: { DOUBAO_COOKIE: "sessionid=account-a; odin_tt=rotation-2" },
+      platform: "darwin",
+      fetchImpl: async () => jsonResponse({ code: 0, data: {} }, 500),
+      nowMs,
+    });
+    assert.equal(rotated.error, null);
+    assert.equal(rotated.source, "disk-cache");
+    assert.equal(rotated.primary_window.used_percent, 30);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("fetchDoubaoLimits honors DOUBAO_COOKIE without any local Doubao data directory", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-doubao-cookie-only-"));
   const nowMs = Date.parse("2030-07-29T00:00:00.000Z");
