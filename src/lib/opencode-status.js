@@ -55,8 +55,11 @@ function parseOpenCodeStatusPayload(payload) {
   let worstRank = INDICATOR_RANK[worstIndicator];
   const affected = [];
   for (const component of components) {
-    if (!component || typeof component !== "object") continue;
-    if (typeof component.service !== "string" || typeof component.status !== "string") {
+    // A null/primitive entry is not skippable: it is malformed, and swallowing
+    // it would let an otherwise-operational payload read green (the header
+    // contract throws rather than inventing "operational").
+    if (!component || typeof component !== "object" ||
+        typeof component.service !== "string" || typeof component.status !== "string") {
       throw new Error("OpenCode status: malformed component entry");
     }
     const indicator = statusToIndicator(component.status);

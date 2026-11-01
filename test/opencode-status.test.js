@@ -76,6 +76,10 @@ describe("parseOpenCodeStatusPayload", () => {
     assert.throws(() => parseOpenCodeStatusPayload({ components: [] }));
     assert.throws(() => parseOpenCodeStatusPayload(openCodePayload({ components: { service: "console" } })));
     assert.throws(() => parseOpenCodeStatusPayload(openCodePayload({ components: [{ status: "operational" }] })));
+    // Malformed entries throw even when the rest of the payload looks healthy:
+    // a skipped null entry would read as green instead of a parse failure.
+    assert.throws(() => parseOpenCodeStatusPayload(openCodePayload({ components: [null] })));
+    assert.throws(() => parseOpenCodeStatusPayload(openCodePayload({ components: ["operational"] })));
   });
 });
 
