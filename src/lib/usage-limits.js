@@ -5590,7 +5590,10 @@ async function fetchUsageLimitsUncached({
         clearDevinLimitsCache({ home });
       }
     } else if (isDevinTransientFetchError(devinRaw?.reason)) {
-      const cached = readDevinLimitsCache({ home, nowMs });
+      // The fallback lands after the whole provider round: sample the clock
+      // here (tests keep their injected clock) so a window that rolled over
+      // while the poll was waiting is dropped instead of served.
+      const cached = readDevinLimitsCache({ home, nowMs: injectedNowMs ?? Date.now() });
       if (cached) devinObj = cached;
     }
   }
