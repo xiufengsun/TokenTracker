@@ -198,6 +198,16 @@ const KIMI_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // (mirrors Claude / Codex / Cursor).
 const GROK_LIMITS_CACHE_FILE = "grok-usage-limits-cache.json";
 const GROK_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// Kiro's quota windows come from a local kiro-cli round-trip (2s version probe +
+// 20s per attempt) whose upstream call can time out or return an unparseable
+// panel. Persist the last successful windows so a blip serves stale bars instead
+// (mirrors Claude / Codex / OpenCode Go / Cursor).
+const KIRO_LIMITS_CACHE_FILE = "kiro-usage-limits-cache.json";
+const KIRO_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// kiro-cli persists the signed-in account's CodeWhisperer profile ARN — a
+// non-secret resource id — alongside its tokens in this file. It is the cache
+// partition key, never the token itself.
+const KIRO_AUTH_TOKEN_FILE = "kiro-auth-token.json";
 // A 429 from the usage endpoint carries a long `retry-after` (often 20+ minutes). Persist
 // the cooldown so every surface — this process, the menu bar app's embedded server, a later
 // restart — stops calling until it expires. Hammering during the cooldown just renews the
@@ -1773,6 +1783,112 @@ function readKiroCreditsSummary({ home = os.homedir() } = {}) {
   } catch {
     return null;
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Kiro limits disk cache — last good windows parsed from the kiro-cli panel.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function resolveKiroLimitsCachePath({ home } = {}) {
+  return path.join(home || os.homedir(), ".tokentracker", "tracker", KIRO_LIMITS_CACHE_FILE);
+}
+
+function hasKiroWindow(limits) {
+  return Boolean(limits?.primary_window || limits?.secondary_window);
+}
+
+// Kiro windows carry `reset_at` as an ISO string (the plan's monthly reset date,
+// the bonus credits' own expiry). A window whose reset has already passed is
+// stale data, not a usable fallback, so drop it. Windows without a reset stamp
+// are kept — the overall cached_at max-age gate already bounds them.
+function isKiroCacheWindowUsable(window, { nowMs } = {}) {
+  if (!window || typeof window !== "object") return false;
+  const resetAtMs = parseTimeMs(window.reset_at);
+  if (resetAtMs === null) return true;
+  return resetAtMs > nowMs;
+}
+
+function normalizeKiroCachedLimits(
+  raw,
+  { nowMs = Date.now(), maxAgeMs = KIRO_LIMITS_CACHE_MAX_AGE_MS } = {},
+) {
+  const cachedAtMs = parseTimeMs(raw?.cached_at);
+  if (!Number.isFinite(cachedAtMs)) return null;
+  if (cachedAtMs > nowMs + 60_000) return null;
+  if (nowMs - cachedAtMs > maxAgeMs) return null;
+
+  const cached = {
+    configured: true,
+    error: null,
+    plan_name: typeof raw?.plan_name === "string" ? raw.plan_name : null,
+    primary_window: isKiroCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
+    secondary_window: isKiroCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
+    stale: true,
+    cached_at: raw.cached_at,
+  };
+  return hasKiroWindow(cached) ? cached : null;
+}
+
+// The signed-in Kiro account partitions the cache (zcode / Cursor login-identity
+// precedent): the id is the CodeWhisperer profile ARN kiro-cli itself persists
+// next to its tokens. Reads require the stored identity to match the current
+// one, and a write without an identity is refused — after an account switch the
+// previous account's windows must never resurface as another login's fallback.
+function readKiroLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(resolveKiroLimitsCachePath({ home }), "utf8"));
+    const entry = parsed?.kiro;
+    if (entry?.identity !== identity) return null;
+    return normalizeKiroCachedLimits(entry, { nowMs });
+  } catch (_error) {
+    return null;
+  }
+}
+
+function writeKiroLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return;
+  if (!limits?.configured || limits.error || !hasKiroWindow(limits)) return;
+  const cachePath = resolveKiroLimitsCachePath({ home });
+  const payload = {
+    kiro: {
+      identity,
+      plan_name: limits.plan_name || null,
+      primary_window: limits.primary_window || null,
+      secondary_window: limits.secondary_window || null,
+      cached_at: new Date(nowMs).toISOString(),
+    },
+  };
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    const tmpPath = `${cachePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmpPath, cachePath);
+  } catch (_error) {}
+}
+
+function resolveKiroAuthIdentity({ home } = {}) {
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(
+        path.join(home || os.homedir(), ".aws", "sso", "cache", KIRO_AUTH_TOKEN_FILE),
+        "utf8",
+      ),
+    );
+    const profileArn = parsed?.profileArn;
+    return typeof profileArn === "string" && profileArn ? profileArn : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// Any login-shaped CLI output (not-logged-in banner, oauth error, auth portal
+// failure) collapses into one "Not logged in to Kiro..." error inside
+// parseKiroUsageOutput, so the slot's error string is the whole auth story.
+function isKiroAuthError(message) {
+  return /not logged in to kiro|kiro-cli login|login required|oauth error|failed to initialize auth portal/i.test(
+    String(message || ""),
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5348,6 +5464,46 @@ async function fetchUsageLimitsUncached({
     geminiWithCache = geminiPayload;
   }
 
+  // Kiro: the slot runs the local kiro-cli (its own 2s/20s command budgets,
+  // never rejects), so the failure modes are CLI timeouts, unparseable panels
+  // and backend hiccups — persist the last successful windows and serve them
+  // stale on any of those (mirrors Codex / OpenCode Go / Cursor). A
+  // not-logged-in panel is actionable and must not be hidden behind stale
+  // cache, so it passes through untouched. The credits-only success (kiro-cli
+  // absent, sidecar present) is not a fetch failure and keeps its shape. The
+  // auth file is read fresh on both branches, so a login that changed since the
+  // last poll partitions correctly — no fetcher plumbing needed (the CLI slot
+  // cannot lose its identity the way a timeout race loses a fetcher's marker).
+  const kiroAuthBlocked = isKiroAuthError(kiro?.error);
+  let kiroWithCache;
+  if (!kiro || kiro.configured === false || kiroAuthBlocked) {
+    kiroWithCache = kiro;
+  } else if (!kiro.error && hasKiroWindow(kiro)) {
+    kiroWithCache = {
+      ...kiro,
+      stale: false,
+      cached_at: new Date(nowMs).toISOString(),
+    };
+    if (cacheGeneration === usageLimitsCacheGeneration) {
+      writeKiroLimitsCache(kiroWithCache, {
+        home,
+        nowMs,
+        identity: resolveKiroAuthIdentity({ home }),
+      });
+    }
+  } else if (!kiro.error) {
+    kiroWithCache = kiro;
+  } else {
+    const cached = readKiroLimitsCache({
+      home,
+      nowMs,
+      identity: resolveKiroAuthIdentity({ home }),
+    });
+    // The failed slot already carries the credits-sidecar fields the fetcher
+    // merged in; the cached windows overlay on top of them.
+    kiroWithCache = cached ? { ...kiro, ...cached } : kiro;
+  }
+
   const data = {
     fetched_at: new Date(nowMs).toISOString(),
     claude: withPlanLabel(claude, claudePlanType, "Claude"),
@@ -5359,7 +5515,7 @@ async function fetchUsageLimitsUncached({
     // "Kimi Type_event" (issue #130), so show the bare brand instead.
     kimi: withPlanLabel(kimiWithCache, null, "Kimi"),
     gemini: withPlanLabel(geminiWithCache, geminiWithCache.account_plan, "Gemini"),
-    kiro: withPlanLabel(kiro, kiro.plan_name, "Kiro"),
+    kiro: withPlanLabel(kiroWithCache, kiroWithCache.plan_name, "Kiro"),
     antigravity: withPlanLabel(antigravity, antigravity.account_plan, "Antigravity"),
     copilot: withPlanLabel(copilot, copilot.plan_name, "Copilot"),
     // grok-limits already maps subscriptionTier to xAI's own product names
