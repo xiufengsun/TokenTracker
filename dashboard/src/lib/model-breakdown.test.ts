@@ -169,6 +169,7 @@ describe("buildAllModels", () => {
         usage: 100,
         requests: 0,
         cost: 1,
+        unpriced: false,
         tokens: { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 },
         share: 50,
       },
@@ -178,6 +179,7 @@ describe("buildAllModels", () => {
         usage: 80,
         requests: 0,
         cost: null,
+        unpriced: false,
         tokens: { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 },
         share: 40,
       },
@@ -187,6 +189,7 @@ describe("buildAllModels", () => {
         usage: 20,
         requests: 0,
         cost: 0.2,
+        unpriced: false,
         tokens: { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 },
         share: 10,
       },
@@ -228,10 +231,94 @@ describe("buildAllModels", () => {
         usage: 150,
         requests: 0,
         cost: 1.5,
+        unpriced: false,
         tokens: { input: 30, output: 15, cached: 95, cacheCreate: 9, reasoning: 1 },
         share: 100,
       },
     ]);
+  });
+
+  it("keeps the unpriced flag on aggregated rows when any tool lacks a published rate", () => {
+    const models = buildAllModels([
+      {
+        label: "CODEX",
+        models: [
+          {
+            id: "terra",
+            name: "gpt-6.1-terra",
+            usage: 70,
+            cost: null,
+            pricing: { status: "unpriced" },
+            costSource: "curated",
+          },
+          {
+            id: "reported",
+            name: "reported-model",
+            usage: 10,
+            cost: 0.2,
+            pricing: { status: "unpriced" },
+            costSource: "provider_reported",
+          },
+        ],
+      },
+      {
+        label: "CURSOR",
+        models: [
+          {
+            id: "terra",
+            name: "gpt-6.1-terra",
+            usage: 30,
+            cost: null,
+            pricing: { status: "priced" },
+            costSource: "curated",
+          },
+        ],
+      },
+    ]);
+
+    // One unpriced contributor flags the merged row even though the other
+    // tool prices the same model; a provider-reported cost never flags its
+    // row, and rows without pricing metadata stay unflagged.
+    expect(models).toMatchObject([
+      { id: "gpt-6.1-terra", usage: 100, cost: null, unpriced: true },
+      { id: "reported-model", unpriced: false },
+    ]);
+  });
+
+  it("ignores request-only contributors when aggregating the unpriced flag", () => {
+    const models = buildAllModels([
+      {
+        label: "CODEX",
+        models: [
+          {
+            id: "shared",
+            name: "shared-model",
+            usage: 0,
+            requests: 5,
+            cost: null,
+            pricing: { status: "unpriced" },
+            costSource: "curated",
+          },
+        ],
+      },
+      {
+        label: "CURSOR",
+        models: [
+          {
+            id: "shared",
+            name: "shared-model",
+            usage: 50,
+            cost: null,
+            pricing: { status: "priced" },
+            costSource: "curated",
+          },
+        ],
+      },
+    ]);
+
+    // The token-backed contributor is priced and the request-only one books
+    // no cost either way, so the merged row must not be flagged.
+    expect(models).toMatchObject([{ id: "shared-model", usage: 50, unpriced: false }]);
   });
 
   it("carries API token totals through buildFleetData provider models", () => {
