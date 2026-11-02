@@ -2,10 +2,13 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { DatabaseSync } = require("node:sqlite");
+let DatabaseSync;
+try { ({ DatabaseSync } = require("node:sqlite")); } catch { /* Node 20-22.4: engine declared >=20 */ }
 const { describe, it, beforeEach } = require("node:test");
+const itSqlite = DatabaseSync ? it : it.skip;
 
 const { getUsageLimits, resetUsageLimitsCache } = require("./helpers/usage-limits");
+const { resolveCursorPaths } = require("../src/lib/cursor-config");
 
 const CURSOR_SUMMARY_URL = "https://cursor.com/api/usage-summary";
 const CURSOR_SAND_ACCESS_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandAccessStatus";
@@ -21,31 +24,29 @@ function inactiveRunner() {
 
 // A minimal but real Cursor login state: the access token lives in state.vscdb
 // (read back through the same sqlite3 CLI / node:sqlite path production uses)
-// and the account id in ~/.cursor/cli-config.json, which extractCursorAuth
-// prefers over decoding the JWT. fetchCursorLimits resolves paths against the
-// running platform, so the fixture uses that platform's Cursor layout.
+// and the account id in cli-config.json, which extractCursorAuth prefers over
+// decoding the JWT. The fixture places both files via production's own
+// resolveCursorPaths — with the same arguments fetchCursorLimits passes ({ home }
+// only) — so the platform layout and env redirects (XDG_CONFIG_HOME on Linux,
+// APPDATA on Windows) agree by construction. A hand-rolled platform branch
+// drifted from production here: the ubuntu CI image sets XDG_CONFIG_HOME
+// (actions/runner-images#13049), which silently redirected the fetch side.
 function buildCursorHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-cursor-cache-"));
-  const appDir = process.platform === "darwin"
-    ? path.join(home, "Library", "Application Support", "Cursor")
-    : path.join(home, ".config", "Cursor");
-  const dbPath = path.join(appDir, "User", "globalStorage", "state.vscdb");
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db = new DatabaseSync(dbPath);
+  const { stateDbPath, cliConfigPath } = resolveCursorPaths({ home });
+  fs.mkdirSync(path.dirname(stateDbPath), { recursive: true });
+  const db = new DatabaseSync(stateDbPath);
   db.exec("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)");
   db.prepare("INSERT INTO ItemTable (key, value) VALUES (?, ?)").run("cursorAuth/accessToken", JWT);
   db.close();
-  fs.mkdirSync(path.join(home, ".cursor"), { recursive: true });
-  fs.writeFileSync(
-    path.join(home, ".cursor", "cli-config.json"),
-    JSON.stringify({ authInfo: { authId: AUTH_ID } }),
-  );
+  fs.mkdirSync(path.dirname(cliConfigPath), { recursive: true });
+  fs.writeFileSync(cliConfigPath, JSON.stringify({ authInfo: { authId: AUTH_ID } }));
   return home;
 }
 
 function setCursorAccount(home, authId) {
   fs.writeFileSync(
-    path.join(home, ".cursor", "cli-config.json"),
+    resolveCursorPaths({ home }).cliConfigPath,
     JSON.stringify({ authInfo: { authId } }),
   );
 }
@@ -86,7 +87,6 @@ function cursorFetchImpl({ summary }) {
 function baseOptions(home, overrides = {}) {
   return {
     home,
-    platform: "linux",
     providerTimeoutMs: 2000,
     securityRunner: inactiveRunner,
     commandRunner: inactiveRunner,
@@ -108,7 +108,7 @@ describe("Cursor limits disk-cache fallback", () => {
     resetUsageLimitsCache();
   });
 
-  it("persists a live read and serves it stale when a later fetch fails", async () => {
+  itSqlite("persists a live read and serves it stale when a later fetch fails", async () => {
     const home = buildCursorHome();
     try {
       const live = await getUsageLimits(baseOptions(home, {
@@ -150,7 +150,7 @@ describe("Cursor limits disk-cache fallback", () => {
     }
   });
 
-  it("does not hide a session-expiry error behind stale cache", async () => {
+  itSqlite("does not hide a session-expiry error behind stale cache", async () => {
     const home = buildCursorHome();
     try {
       await getUsageLimits(baseOptions(home, {
@@ -172,7 +172,7 @@ describe("Cursor limits disk-cache fallback", () => {
     }
   });
 
-  it("serves stale cache when the provider timeout wins the race", async () => {
+  itSqlite("serves stale cache when the provider timeout wins the race", async () => {
     const home = buildCursorHome();
     try {
       await getUsageLimits(baseOptions(home, {
@@ -198,7 +198,7 @@ describe("Cursor limits disk-cache fallback", () => {
     }
   });
 
-  it("does not serve another account's cached windows after an account switch", async () => {
+  itSqlite("does not serve another account's cached windows after an account switch", async () => {
     const home = buildCursorHome();
     try {
       await getUsageLimits(baseOptions(home, {
@@ -218,7 +218,7 @@ describe("Cursor limits disk-cache fallback", () => {
     }
   });
 
-  it("drops a cached window whose reset_at has already passed", async () => {
+  itSqlite("drops a cached window whose reset_at has already passed", async () => {
     const home = buildCursorHome();
     try {
       seedCursorCache(home, {
@@ -242,7 +242,7 @@ describe("Cursor limits disk-cache fallback", () => {
     }
   });
 
-  it("ignores a cache entry older than the max-age TTL", async () => {
+  itSqlite("ignores a cache entry older than the max-age TTL", async () => {
     const home = buildCursorHome();
     try {
       seedCursorCache(home, {
