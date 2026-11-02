@@ -866,11 +866,11 @@ function normalizeCursorSandUsageStatus(body, { eligible = true } = {}) {
   return buildWindow({ usedPercent, resetAt, windowSeconds });
 }
 
-async function fetchCursorLimits({ home, fetchImpl = fetch } = {}) {
-  if (!isCursorInstalled({ home })) {
+async function fetchCursorLimits({ home, env, fetchImpl = fetch } = {}) {
+  if (!isCursorInstalled({ home, env })) {
     return { configured: false };
   }
-  const auth = extractCursorAuth({ home });
+  const auth = extractCursorAuth({ home, env });
   if (!auth?.cookie || !auth?.accessToken) {
     return { configured: false };
   }
@@ -2870,9 +2870,9 @@ function writeCursorLimitsCache(limits, { home, nowMs = Date.now(), identity } =
 // Failure-only identity re-derivation for the cache fallback: when the provider slot's
 // result was produced by the outer timeout race, the fetcher's own identity field is
 // lost, so read the (still-local) state DB once to learn who we are serving for.
-function resolveCursorCacheIdentity({ home } = {}) {
+function resolveCursorCacheIdentity({ home, env } = {}) {
   try {
-    return extractCursorAuth({ home })?.userId || null;
+    return extractCursorAuth({ home, env })?.userId || null;
   } catch (_error) {
     return null;
   }
@@ -4337,7 +4337,7 @@ async function fetchUsageLimitsUncached({
           (reason) => ({ status: "rejected", reason }),
         )
       : Promise.resolve(null),
-    hiddenSet.has("cursor") ? hiddenSentinel : withProviderTimeout(fetchCursorLimits({ home, fetchImpl: providerFetch }), "Cursor", providerTimeoutMs)
+    hiddenSet.has("cursor") ? hiddenSentinel : withProviderTimeout(fetchCursorLimits({ home, env, fetchImpl: providerFetch }), "Cursor", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
     hiddenSet.has("kimi") ? hiddenSentinel : withProviderTimeout(fetchKimiLimits({ home, env, fetchImpl: providerFetch }), "Kimi", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
@@ -4706,7 +4706,7 @@ async function fetchUsageLimitsUncached({
         nowMs,
         identity: typeof cursor.cache_identity === "string"
           ? cursor.cache_identity
-          : resolveCursorCacheIdentity({ home }),
+          : resolveCursorCacheIdentity({ home, env }),
       });
     }
   } else {
@@ -4715,7 +4715,7 @@ async function fetchUsageLimitsUncached({
     // re-derive it from the local state DB on this failure-only path.
     const identity = typeof cursor.cache_identity === "string"
       ? cursor.cache_identity
-      : resolveCursorCacheIdentity({ home });
+      : resolveCursorCacheIdentity({ home, env });
     const cached = readCursorLimitsCache({ home, nowMs, identity });
     cursorWithCache = cached || cursor;
   }

@@ -26,14 +26,13 @@ function inactiveRunner() {
 // (read back through the same sqlite3 CLI / node:sqlite path production uses)
 // and the account id in cli-config.json, which extractCursorAuth prefers over
 // decoding the JWT. The fixture places both files via production's own
-// resolveCursorPaths — with the same arguments fetchCursorLimits passes ({ home }
-// only) — so the platform layout and env redirects (XDG_CONFIG_HOME on Linux,
-// APPDATA on Windows) agree by construction. A hand-rolled platform branch
-// drifted from production here: the ubuntu CI image sets XDG_CONFIG_HOME
-// (actions/runner-images#13049), which silently redirected the fetch side.
+// resolveCursorPaths with the same arguments the fetch side receives
+// ({ home, env }) — baseOptions injects an empty env, because on Linux the
+// runner's real XDG_CONFIG_HOME (actions/runner-images#13049) takes precedence
+// over `home` and would silently redirect both sides out of the temp dir.
 function buildCursorHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-cursor-cache-"));
-  const { stateDbPath, cliConfigPath } = resolveCursorPaths({ home });
+  const { stateDbPath, cliConfigPath } = resolveCursorPaths({ home, env: {} });
   fs.mkdirSync(path.dirname(stateDbPath), { recursive: true });
   const db = new DatabaseSync(stateDbPath);
   db.exec("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)");
@@ -46,7 +45,7 @@ function buildCursorHome() {
 
 function setCursorAccount(home, authId) {
   fs.writeFileSync(
-    resolveCursorPaths({ home }).cliConfigPath,
+    resolveCursorPaths({ home, env: {} }).cliConfigPath,
     JSON.stringify({ authInfo: { authId } }),
   );
 }
@@ -87,6 +86,9 @@ function cursorFetchImpl({ summary }) {
 function baseOptions(home, overrides = {}) {
   return {
     home,
+    // Empty env: the fetch side and the cache-identity fallback must resolve
+    // Cursor's files inside the temp home, not under a host XDG_CONFIG_HOME.
+    env: {},
     providerTimeoutMs: 2000,
     securityRunner: inactiveRunner,
     commandRunner: inactiveRunner,
