@@ -242,7 +242,9 @@ function fetchCursorUsageSummary({ cookie, timeoutMs = 30000, fetchImpl = fetch 
     signal: AbortSignal.timeout(timeoutMs),
   }).then(async (res) => {
     if (res.status === 401 || res.status === 403) {
-      throw new Error("Cursor session expired — re-login in Cursor to refresh");
+      const error = new Error("Cursor session expired — re-login in Cursor to refresh");
+      error.code = "AUTH_EXPIRED";
+      throw error;
     }
     if (!res.ok) {
       throw new Error(`Cursor API returned ${res.status}`);
