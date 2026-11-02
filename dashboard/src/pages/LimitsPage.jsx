@@ -359,6 +359,7 @@ export function LimitsPage() {
                 devin={usageLimits?.devin}
                 workbuddy={usageLimits?.workbuddy}
                 workbuddyAi={usageLimits?.workbuddyAi}
+                deepseek={usageLimits?.deepseek}
                 order={prefs.order}
                 visibility={prefs.visibility}
                 displayMode={prefs.displayMode}

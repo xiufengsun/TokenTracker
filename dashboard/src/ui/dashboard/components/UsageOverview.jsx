@@ -264,6 +264,8 @@ export function UsageOverview({
   dataRevision = 0,
   onDeviceChange,
   accountView = false,
+  accountScopeSwitchable = false,
+  onAccountScopeChange = null,
 }) {
   const tabs = normalizePeriods(periods);
   const dateLocale = getDateFnsLocale(getCopyLocale());
@@ -482,12 +484,50 @@ export function UsageOverview({
             })}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Data-scope badge (issue 979): with cloud sync on, this card renders
+            {/* Data-scope control (issue 979): with cloud sync on, this card renders
                 account-scope data that can silently differ from this machine's
                 numbers, so label the scope instead of letting an unpriced cloud
-                row read as a local pricing bug. Local scope stays unlabeled — it
-                is the default for signed-out visitors and share views. */}
-            {accountView ? (
+                row read as a local pricing bug. Where both scopes are live the
+                badge becomes a view-only switcher — flipping it re-renders the
+                other scope without touching the cloud-sync preference, so
+                uploads keep running while the page shows this machine only.
+                Local scope stays unlabeled when the switcher is unavailable —
+                it is the default for signed-out visitors and share views. */}
+            {accountScopeSwitchable && onAccountScopeChange ? (
+              <div
+                role="group"
+                aria-label={copy("usage.overview.scope_switch_aria")}
+                className="inline-flex shrink-0 items-center h-8 rounded-md bg-oai-gray-100 dark:bg-oai-gray-800 p-0.5"
+              >
+                <button
+                  type="button"
+                  aria-pressed={!accountView}
+                  title={copy("usage.overview.scope_local_tip")}
+                  onClick={() => onAccountScopeChange("local")}
+                  className={`inline-flex items-center h-7 px-2.5 text-xs font-medium rounded-md transition-colors duration-200 ${
+                    !accountView
+                      ? "bg-oai-white dark:bg-oai-gray-600 shadow-sm text-oai-black dark:text-oai-white"
+                      : "text-oai-gray-500 dark:text-oai-gray-400 hover:text-oai-black dark:hover:text-oai-white"
+                  }`}
+                >
+                  {copy("usage.overview.scope_local")}
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={accountView}
+                  title={copy("usage.overview.scope_account_tip")}
+                  onClick={() => onAccountScopeChange(null)}
+                  className={`inline-flex items-center h-7 px-2.5 text-xs font-medium rounded-md transition-colors duration-200 ${
+                    accountView
+                      ? "bg-oai-white dark:bg-oai-gray-600 shadow-sm text-oai-black dark:text-oai-white"
+                      : "text-oai-gray-500 dark:text-oai-gray-400 hover:text-oai-black dark:hover:text-oai-white"
+                  }`}
+                >
+                  {copy("usage.overview.scope_account")}
+                </button>
+              </div>
+            ) : null}
+            {!(accountScopeSwitchable && onAccountScopeChange) && accountView ? (
               <span
                 title={copy("usage.overview.scope_account_tip")}
                 className="inline-flex shrink-0 items-center h-8 px-2.5 text-xs font-medium rounded-md bg-oai-gray-100 dark:bg-oai-gray-800 text-oai-gray-700 dark:text-oai-gray-300"

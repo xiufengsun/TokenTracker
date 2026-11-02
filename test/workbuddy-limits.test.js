@@ -5,6 +5,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+  collectExpiringResourceCredits,
   collectPackageRows,
   collectResourceGroups,
   fetchWorkbuddyAiLimits,
@@ -283,6 +284,115 @@ test("an all-zero resource pool yields no window", () => {
   assert.equal(pool.total, 0);
   assert.equal(resourceWindow(pool), null);
   assert.equal(resourceWindow({ total: 0, used: 0, remain: 0, seen: true }), null);
+});
+
+test("expiring resource credits merge same-day grants and report the earliest day", () => {
+  // Zone-less local strings: the day buckets follow the machine's calendar,
+  // so both grants stay on one local day wherever the suite runs.
+  const rows = [
+    { code: "addon-a", total: 100, remain: 40, used: 60, cycleEnd: "2026-07-10 07:49:53" },
+    { code: "addon-b", total: 50, remain: 50, used: 0, cycleEnd: "2026-07-10 23:18:27" },
+    { code: "addon-c", total: 80, remain: 20, used: 60, cycleEnd: "2026-07-12 03:00:00" },
+  ];
+  const expiring = collectExpiringResourceCredits(rows, { code: "" }, T0);
+  assert.deepEqual(expiring, {
+    at: new Date("2026-07-10T23:18:27").toISOString(),
+    firstAt: new Date("2026-07-10T07:49:53").toISOString(),
+    credits: 90,
+  });
+});
+
+test("expiring resource credits drop plan rows, spent grants, and past ends", () => {
+  const rows = [
+    trialRow({ CycleEndTime: "2026-07-10T02:30:00Z" }),
+    { code: REWARD, total: 300, remain: 0, used: 300, cycleEnd: "2026-07-10T02:30:00Z" },
+    { code: "addon-x", total: 100, remain: 40, used: 60, cycleEnd: "2026-07-07T00:00:00Z" },
+    { code: "addon-y", total: 100, remain: 30, used: 70, cycleEnd: "garbage" },
+    { code: "addon-t", total: 100, remain: 55, used: 45, cycleEnd: "2026-07-09T00:00:00Z", terminatedAt: "2026-07-01T00:00:00Z" },
+    { code: "addon-z", total: 90, used: 30, cycleEnd: "2026-07-11T03:00:00Z" },
+  ];
+  const expiring = collectExpiringResourceCredits(rows, { code: TRIAL }, T0);
+  assert.deepEqual(expiring, {
+    at: new Date("2026-07-11T03:00:00Z").toISOString(),
+    firstAt: new Date("2026-07-11T03:00:00Z").toISOString(),
+    credits: 60,
+  });
+});
+
+test("a grant listed by both the summary and the pages is counted once", () => {
+  const grant = { code: REWARD, total: 100, remain: 40, used: 60, cycleEnd: "2026-07-10T02:30:00Z" };
+  const expiring = collectExpiringResourceCredits([grant, { ...grant }, grant], { code: "" }, T0);
+  assert.equal(expiring.credits, 40);
+});
+
+// One resource grant as the free-packages listing returns it (2026-11-01
+// capture): capacities as numeric + Precise string pairs, the grant's own
+// cycle end, and a Status that is 0 while credit remains.
+function grantRow({ code = REWARD, size = 100, remain, end }) {
+  return {
+    PackageCode: code,
+    PackageName: "官方活动发放",
+    CycleCapacitySize: size,
+    CycleCapacityRemain: remain,
+    CycleCapacityUsed: size - remain,
+    CycleCapacitySizePrecise: String(size),
+    CycleCapacityRemainPrecise: String(remain),
+    CycleCapacityUsedPrecise: String(size - remain),
+    CycleEndTime: end,
+    Status: 0,
+  };
+}
+
+test("a live read advertises the pool's earliest expiring grants on the resource window", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wb-cache-"));
+  const authPath = path.join(home, "workbuddy-desktop.info");
+  fs.writeFileSync(authPath, authFileInfo({ token: "cn-token", uid: "uid-cn" }));
+  // Real capture shape: the summary aggregates the benefit pool without a
+  // cycle end; per-grant CycleEndTime only comes back from the listings, and
+  // only when the grant's package code is requested alongside the plan codes.
+  const requestedCodes = [];
+  const live = await fetchWorkbuddyLimits({
+    home,
+    nowMs: T0,
+    env: { HOME: home },
+    authFiles: [authPath],
+    origin: "https://www.workbuddy.cn",
+    fetchImpl: async (url, options) => {
+      if (url.endsWith("get-user-resource-summary")) {
+        return { ok: true, status: 200, json: async () => ({ code: 0, data: {
+          SubscriptionPackageName: "体验版",
+          Packages: [
+            { PackageCode: TRIAL, CycleTotalCapacity: "500", CycleRemainCapacity: "500", CycleUsedCapacity: "0" },
+            { PackageCode: REWARD, CycleTotalCapacity: "6238", CycleRemainCapacity: "4131.03000062", CycleUsedCapacity: "2106.96999938" },
+          ],
+          CreditGroups: [
+            { Kind: "plan_base", CycleTotalCapacity: "500", CycleRemainCapacity: "500", CycleUsedCapacity: "0" },
+            { Kind: "benefit", CycleTotalCapacity: "6238", CycleRemainCapacity: "4131.03000062", CycleUsedCapacity: "2106.96999938" },
+          ],
+        } }) };
+      }
+      if (url.endsWith("get-user-resource-free-packages")) {
+        requestedCodes.push(JSON.parse(options.body).PackageCodes);
+        return { ok: true, status: 200, json: async () => ({ code: 0, data: { Accounts: [
+          grantRow({ code: TRIAL, size: 500, remain: 500, end: "2026-07-31 23:59:59" }),
+          grantRow({ remain: 39, end: "2026-07-10 07:49:53" }),
+          grantRow({ remain: 100, end: "2026-07-10 23:18:27" }),
+          grantRow({ remain: 100, end: "2026-07-12 03:00:00" }),
+        ], TotalCount: 4 } }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ code: 0, data: { Accounts: [], TotalCount: 0 } }) };
+    },
+  });
+  assert.equal(live.error, null);
+  assert.ok(requestedCodes.length > 0);
+  assert.ok(requestedCodes.every((codes) => codes.includes(REWARD)));
+  assert.equal(live.secondary_window.limit_credits, 6238);
+  // Same-day grants merge; the plan tier's cycle end is a renewal point, and
+  // the summary's aggregated pool row has no cycle end to double-count. The
+  // day's first lapse anchors the cache, its last one anchors the display.
+  assert.equal(live.secondary_window.expiring_at, new Date("2026-07-10T23:18:27").toISOString());
+  assert.equal(live.secondary_window.expiring_first_at, new Date("2026-07-10T07:49:53").toISOString());
+  assert.equal(live.secondary_window.expiring_credits, 139);
 });
 
 test("groups that omit CycleRemainCapacity keep remaining_credits exact", () => {
@@ -819,6 +929,41 @@ test("cache windows expire by rollover and by the undated snapshot TTL", () => {
     primary: planWindowFixture(null),
     secondary: { used_percent: 10, reset_at: null, used_credits: 1, limit_credits: 10, remaining_credits: 9 },
   });
+  assert.ok(read(T0 + 11 * 60 * 60 * 1000));
+  assert.equal(read(T0 + 13 * 60 * 60 * 1000), null);
+});
+
+test("a resource pool with expiring_at is trusted until the expiry, not the undated TTL", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wb-cache-"));
+  const write = (secondary) => writeWorkbuddyLimitsCache(
+    {
+      configured: true, error: null, plan_label: "Free",
+      primary_window: null, secondary_window: secondary,
+    },
+    { home, nowMs: T0, variantId: "workbuddy", identity: "uid" },
+  );
+  const read = (nowMs = T0) => readWorkbuddyLimitsCache({ home, nowMs, variantId: "workbuddy", identity: "uid" });
+  const pool = {
+    used_percent: 10, reset_at: null, used_credits: 1, limit_credits: 10, remaining_credits: 9,
+    expiring_at: "2026-07-10T23:18:27Z", expiring_first_at: "2026-07-10T07:49:53Z", expiring_credits: 4,
+  };
+
+  // Past the undated TTL but before the grants lapse, the pool still describes
+  // the account.
+  write(pool);
+  assert.ok(read(T0 + 13 * 60 * 60 * 1000));
+  // The first lapse is when the numbers start to drift, so the snapshot is
+  // dropped there even though the advertised day-end is still ahead.
+  const firstLapse = Date.parse("2026-07-10T07:49:53Z");
+  assert.equal(read(firstLapse + 60_000), null);
+
+  // An unreadable first lapse falls back to the day-end anchor.
+  write({ ...pool, expiring_first_at: "not-a-date" });
+  assert.ok(read(Date.parse("2026-07-10T23:18:27Z") - 60_000));
+  assert.equal(read(Date.parse("2026-07-10T23:18:27Z") + 60_000), null);
+
+  // An unreadable expiring_at is no date at all: back to the snapshot TTL.
+  write({ ...pool, expiring_first_at: "not-a-date", expiring_at: "not-a-date" });
   assert.ok(read(T0 + 11 * 60 * 60 * 1000));
   assert.equal(read(T0 + 13 * 60 * 60 * 1000), null);
 });

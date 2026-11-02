@@ -19,11 +19,13 @@ const { ensureDir, writeFileAtomic, chmod600IfPossible } = require("./fs");
 const PROVIDER_KEY_FILES = {
   "opencode-go": "opencode-go-api-key.json",
   "command-code": "command-code-api-key.json",
+  "deepseek": "deepseek-api-key.json",
 };
 
 const PROVIDER_ENV_NAMES = {
   "opencode-go": "OPENCODE_GO_API_KEY",
   "command-code": "COMMAND_CODE_API_KEY",
+  "deepseek": "DEEPSEEK_API_KEY",
 };
 
 const MIN_API_KEY_LENGTH = 8;
