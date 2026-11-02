@@ -4883,13 +4883,15 @@ async function fetchUsageLimitsUncached({
       stale: false,
       cached_at: new Date(nowMs).toISOString(),
     };
-    if (cacheGeneration === usageLimitsCacheGeneration) {
+    // Write only under the identity the fetch itself carried: re-reading
+    // auth.json here could attribute a finished fetch's windows to an account
+    // that logged in while the request was in flight (opaque → JWT switch).
+    // No fetch-side identity (opaque token) → refuse the write (fail-closed).
+    if (cacheGeneration === usageLimitsCacheGeneration && typeof grok.cache_identity === "string") {
       writeGrokLimitsCache(grokWithCache, {
         home,
         nowMs,
-        identity: typeof grok.cache_identity === "string"
-          ? grok.cache_identity
-          : resolveGrokCacheIdentity({ home, env }),
+        identity: grok.cache_identity,
       });
     }
   } else {

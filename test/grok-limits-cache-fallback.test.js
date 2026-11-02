@@ -281,6 +281,28 @@ describe("Grok limits disk-cache fallback", () => {
     }
   });
 
+  it("does not attribute an in-flight result to an account that logged in mid-fetch", async () => {
+    const home = buildGrokHomeOpaqueToken();
+    try {
+      // auth.json switches to another account's JWT while the billing request
+      // is in flight. The finished fetch carries no identity (opaque token), so
+      // the write must be refused — not re-attributed by re-reading auth.json.
+      const live = await getUsageLimits(baseOptions(home, {
+        fetchImpl: grokFetchImpl({
+          billing: () => {
+            setGrokAccount(home, "grok-user-beta");
+            return Promise.resolve(okResponse(billingBody()));
+          },
+        }),
+      }));
+      assert.equal(live.grok.error, null);
+      assert.equal(fs.existsSync(cachePath(home)), false, "a finished fetch must not be re-attributed to a later login");
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("drops a cached window whose reset_at has already passed", async () => {
     const home = buildGrokHome();
     try {
