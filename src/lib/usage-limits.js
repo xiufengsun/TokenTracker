@@ -172,6 +172,12 @@ const CODEX_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const OPENCODE_GO_LIMITS_CACHE_FILE = "opencode-go-usage-limits-cache.json";
 const OPENCODE_GO_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const OPENCODE_GO_LOCAL_ESTIMATE_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
+// Cursor's web summary (cursor.com) and Grok Bot RPCs (api2.cursor.sh) both traverse
+// proxied routes where a timeout or 5xx previously blanked the card until the next
+// poll. Persist the last successful windows so a blip serves stale bars instead
+// (mirrors Claude / Codex / OpenCode Go).
+const CURSOR_LIMITS_CACHE_FILE = "cursor-usage-limits-cache.json";
+const CURSOR_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // A 429 from the usage endpoint carries a long `retry-after` (often 20+ minutes). Persist
 // the cooldown so every surface — this process, the menu bar app's embedded server, a later
 // restart — stops calling until it expires. Hammering during the cooldown just renews the
@@ -887,11 +893,18 @@ async function fetchCursorLimits({ home, fetchImpl = fetch } = {}) {
       error: null,
       ...normalizeCursorUsageSummary(body),
       quaternary_window: grokBotWindow,
+      // Internal cache-partition key (stripped before the payload is served).
+      cache_identity: auth.userId,
     };
   } catch (error) {
     return {
       configured: true,
       error: error?.message || "Unknown error",
+      // A session-expiry error is actionable (re-login) and must not be hidden
+      // behind the stale disk-cache fallback (opencode-go auth_error precedent).
+      // Internal marker — stripped before the payload is served.
+      ...(error?.code === "AUTH_EXPIRED" ? { auth_error: true } : {}),
+      cache_identity: auth.userId,
     };
   }
 }
@@ -2767,6 +2780,104 @@ function writeOpencodeGoLimitsCache(limits, { trackerDir, home, nowMs = Date.now
   } catch (_error) {}
 }
 
+function resolveCursorLimitsCachePath({ home } = {}) {
+  return path.join(home || os.homedir(), ".tokentracker", "tracker", CURSOR_LIMITS_CACHE_FILE);
+}
+
+function hasCursorWindow(limits) {
+  return Boolean(
+    limits?.primary_window
+    || limits?.secondary_window
+    || limits?.tertiary_window
+    || limits?.quaternary_window,
+  );
+}
+
+// Cursor windows carry `reset_at` as an ISO string (billing-cycle end for the three
+// summary windows, the RPC's own expiry for the Grok Bot window). A window whose reset
+// has already passed is stale data, not a usable fallback, so drop it. Windows without
+// a reset stamp are kept — the overall cached_at max-age gate already bounds them.
+function isCursorCacheWindowUsable(window, { nowMs } = {}) {
+  if (!window || typeof window !== "object") return false;
+  const resetAtMs = parseTimeMs(window.reset_at);
+  if (resetAtMs === null) return true;
+  return resetAtMs > nowMs;
+}
+
+function normalizeCursorCachedLimits(
+  raw,
+  { nowMs = Date.now(), maxAgeMs = CURSOR_LIMITS_CACHE_MAX_AGE_MS } = {},
+) {
+  const cachedAtMs = parseTimeMs(raw?.cached_at);
+  if (!Number.isFinite(cachedAtMs)) return null;
+  if (cachedAtMs > nowMs + 60_000) return null;
+  if (nowMs - cachedAtMs > maxAgeMs) return null;
+
+  const cached = {
+    configured: true,
+    error: null,
+    membership_type: typeof raw?.membership_type === "string" ? raw.membership_type : null,
+    primary_window: isCursorCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
+    secondary_window: isCursorCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
+    tertiary_window: isCursorCacheWindowUsable(raw?.tertiary_window, { nowMs }) ? raw.tertiary_window : null,
+    quaternary_window: isCursorCacheWindowUsable(raw?.quaternary_window, { nowMs }) ? raw.quaternary_window : null,
+    stale: true,
+    cached_at: raw.cached_at,
+  };
+  return hasCursorWindow(cached) ? cached : null;
+}
+
+// The signed-in Cursor account partitions the cache (zcode login-identity precedent):
+// the id is the non-secret normalized subject Cursor itself puts in the session cookie.
+// A single home holds one active login, so one stamped entry suffices; a read requires
+// the stored identity to match the current one, and a write without an identity is
+// refused — an unreadable login must never pin another account's bars in place.
+function readCursorLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(resolveCursorLimitsCachePath({ home }), "utf8"));
+    const entry = parsed?.cursor;
+    if (entry?.identity !== identity) return null;
+    return normalizeCursorCachedLimits(entry, { nowMs });
+  } catch (_error) {
+    return null;
+  }
+}
+
+function writeCursorLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return;
+  if (!limits?.configured || limits.error || !hasCursorWindow(limits)) return;
+  const cachePath = resolveCursorLimitsCachePath({ home });
+  const payload = {
+    cursor: {
+      identity,
+      membership_type: limits.membership_type || null,
+      primary_window: limits.primary_window || null,
+      secondary_window: limits.secondary_window || null,
+      tertiary_window: limits.tertiary_window || null,
+      quaternary_window: limits.quaternary_window || null,
+      cached_at: new Date(nowMs).toISOString(),
+    },
+  };
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    const tmpPath = `${cachePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmpPath, cachePath);
+  } catch (_error) {}
+}
+
+// Failure-only identity re-derivation for the cache fallback: when the provider slot's
+// result was produced by the outer timeout race, the fetcher's own identity field is
+// lost, so read the (still-local) state DB once to learn who we are serving for.
+function resolveCursorCacheIdentity({ home } = {}) {
+  try {
+    return extractCursorAuth({ home })?.userId || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
 function resolveClaudeRateLimitPath({ home } = {}) {
   return path.join(home || os.homedir(), ".tokentracker", "tracker", CLAUDE_RATE_LIMIT_FILE);
 }
@@ -4573,9 +4684,50 @@ async function fetchUsageLimitsUncached({
       : { configured: true, error: reason?.message || "Unknown error" };
   }
 
-  const cursorLimits = cursorSandDuplicatesGrokPool(cursor, grok)
-    ? { ...cursor, quaternary_window: null }
-    : cursor;
+  // Cursor: persist last successful windows so a transient timeout/5xx on the
+  // cursor.com / api2.cursor.sh routes serves stale bars instead of a flashing
+  // "fetch failed" (mirrors Codex / Claude / OpenCode Go). A session-expiry error
+  // (401/403 — "re-login in Cursor") is actionable and must not be hidden behind
+  // stale cache, so it passes through untouched.
+  let cursorWithCache;
+  if (!cursor || cursor.configured === false) {
+    cursorWithCache = cursor;
+  } else if (cursor.auth_error === true) {
+    cursorWithCache = cursor;
+  } else if (!cursor.error && hasCursorWindow(cursor)) {
+    cursorWithCache = {
+      ...cursor,
+      stale: false,
+      cached_at: new Date(nowMs).toISOString(),
+    };
+    if (cacheGeneration === usageLimitsCacheGeneration) {
+      writeCursorLimitsCache(cursorWithCache, {
+        home,
+        nowMs,
+        identity: typeof cursor.cache_identity === "string"
+          ? cursor.cache_identity
+          : resolveCursorCacheIdentity({ home }),
+      });
+    }
+  } else {
+    // The slot's error object loses the fetcher's identity field when the outer
+    // timeout race wins (the common failure mode this cache exists for), so
+    // re-derive it from the local state DB on this failure-only path.
+    const identity = typeof cursor.cache_identity === "string"
+      ? cursor.cache_identity
+      : resolveCursorCacheIdentity({ home });
+    const cached = readCursorLimitsCache({ home, nowMs, identity });
+    cursorWithCache = cached || cursor;
+  }
+  // cache_identity / auth_error are internal cache-plumbing markers, not payload.
+  if (cursorWithCache && ("cache_identity" in cursorWithCache || "auth_error" in cursorWithCache)) {
+    const { cache_identity: _identity, auth_error: _authError, ...cursorPayload } = cursorWithCache;
+    cursorWithCache = cursorPayload;
+  }
+
+  const cursorLimits = cursorSandDuplicatesGrokPool(cursorWithCache, grok)
+    ? { ...cursorWithCache, quaternary_window: null }
+    : cursorWithCache;
 
   const data = {
     fetched_at: new Date(nowMs).toISOString(),
