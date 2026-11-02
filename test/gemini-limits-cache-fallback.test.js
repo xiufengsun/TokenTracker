@@ -8,6 +8,7 @@ const { getUsageLimits, resetUsageLimitsCache } = require("./helpers/usage-limit
 
 const CODE_ASSIST_URL = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
 const QUOTA_URL = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
+const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
 const EMAIL = "alpha@gmail.com";
 const SWITCHED_EMAIL = "beta@gmail.com";
@@ -59,6 +60,13 @@ function setGeminiAuthType(home, selectedType) {
   );
 }
 
+function expireGeminiCredentials(home) {
+  const credsPath = path.join(home, ".gemini", "oauth_creds.json");
+  const creds = JSON.parse(fs.readFileSync(credsPath, "utf8"));
+  creds.expiry_date = Date.now() - 60_000;
+  fs.writeFileSync(credsPath, JSON.stringify(creds));
+}
+
 function quotaBody() {
   const future = new Date(Date.now() + 20 * 3_600_000).toISOString();
   // remainingFraction values chosen so 100 - f*100 is an exact integer —
@@ -87,12 +95,13 @@ const errorResponse = (status) => ({
 // Live Gemini quota fetch, other endpoints silent. loadCodeAssist answers a
 // free tier so account_plan is pinned too; its failures are tolerated by
 // design, so a 500 there would be equally valid.
-function geminiFetchImpl({ quota }) {
+function geminiFetchImpl({ quota, token }) {
   return (url) => {
     if (url === QUOTA_URL) return Promise.resolve().then(quota);
     if (url === CODE_ASSIST_URL) {
       return Promise.resolve(okResponse({ currentTier: { id: "free-tier" } }));
     }
+    if (url === OAUTH_TOKEN_URL) return Promise.resolve().then(token);
     return Promise.resolve(errorResponse(500));
   };
 }
@@ -305,6 +314,157 @@ describe("Gemini limits disk-cache fallback", () => {
       assert.equal(switched.gemini.error, "Gemini API key auth not supported. Use Google account (OAuth) instead.");
       assert.notEqual(switched.gemini.stale, true);
       assert.ok(!("auth_error" in switched.gemini), "internal auth marker must not reach the payload");
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not hide a dead refresh token behind stale cache", async () => {
+    const home = buildGeminiHome();
+    try {
+      await getUsageLimits(baseOptions(home, {
+        fetchImpl: geminiFetchImpl({ quota: () => okResponse(quotaBody()) }),
+      }));
+      resetUsageLimitsCache();
+
+      expireGeminiCredentials(home);
+      // invalid_grant (400) is a confirmed credential failure: the session is
+      // gone and re-login is actionable, so the cache must not cover it.
+      const dead = await getUsageLimits(baseOptions(home, {
+        fetchImpl: geminiFetchImpl({ quota: () => errorResponse(500), token: () => errorResponse(400) }),
+      }));
+      assert.equal(dead.gemini.error, "Not logged in to Gemini. Run 'gemini' in Terminal to authenticate.");
+      assert.notEqual(dead.gemini.stale, true);
+      assert.equal(dead.gemini.primary_window, undefined);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a transient token-refresh failure cache-eligible", async () => {
+    const home = buildGeminiHome();
+    try {
+      await getUsageLimits(baseOptions(home, {
+        fetchImpl: geminiFetchImpl({ quota: () => okResponse(quotaBody()) }),
+      }));
+      resetUsageLimitsCache();
+
+      expireGeminiCredentials(home);
+      // A 503 from the token endpoint says nothing about the credentials —
+      // the stale fallback must still land instead of a "Not logged in" error.
+      const stale = await getUsageLimits(baseOptions(home, {
+        fetchImpl: geminiFetchImpl({ quota: () => errorResponse(500), token: () => errorResponse(503) }),
+      }));
+      assert.equal(stale.gemini.configured, true);
+      assert.equal(stale.gemini.error, null);
+      assert.equal(stale.gemini.stale, true);
+      assert.equal(stale.gemini.primary_window.used_percent, 58);
+      assert.equal(stale.gemini.provenance.source, "disk-cache");
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not serve stale OAuth bars after a mid-flight switch to api-key auth", async () => {
+    const home = buildGeminiHome();
+    try {
+      seedGeminiCache(home, {
+        identity: EMAIL,
+        account_email: EMAIL,
+        account_plan: "Free",
+        primary_window: { used_percent: 58, reset_at: new Date(Date.now() + 86_400_000).toISOString() },
+        secondary_window: null,
+        tertiary_window: null,
+        cached_at: new Date(Date.now() - 60_000).toISOString(),
+      });
+
+      // The fetcher reads settings.json once at entry (still OAuth here); the
+      // CLI switches to api-key while the quota call is in flight. The punch-
+      // through branch never ran, so the failure path must revalidate the
+      // auth mode before touching the cache.
+      const switched = await getUsageLimits(baseOptions(home, {
+        fetchImpl: geminiFetchImpl({
+          quota: () => {
+            setGeminiAuthType(home, "api-key");
+            return errorResponse(500);
+          },
+        }),
+      }));
+      assert.equal(switched.gemini.error, "Gemini API error: HTTP 500");
+      assert.notEqual(switched.gemini.stale, true);
+      assert.equal(switched.gemini.primary_window, undefined);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not serve the previous account's entry after a mid-flight account switch", async () => {
+    const home = buildGeminiHome();
+    try {
+      seedGeminiCache(home, {
+        identity: EMAIL,
+        account_email: EMAIL,
+        account_plan: "Free",
+        primary_window: { used_percent: 58, reset_at: new Date(Date.now() + 86_400_000).toISOString() },
+        secondary_window: null,
+        tertiary_window: null,
+        cached_at: new Date(Date.now() - 60_000).toISOString(),
+      });
+
+      // The fetcher decoded account A's identity at entry; the credentials
+      // switch to account B while the quota call is in flight. The failure
+      // path re-derives the identity from the current credentials, so the
+      // read's identity gate refuses account A's entry.
+      const switched = await getUsageLimits(baseOptions(home, {
+        fetchImpl: geminiFetchImpl({
+          quota: () => {
+            setGeminiAccount(home, SWITCHED_EMAIL);
+            return errorResponse(500);
+          },
+        }),
+      }));
+      assert.equal(switched.gemini.error, "Gemini API error: HTTP 500");
+      assert.notEqual(switched.gemini.stale, true);
+      assert.equal(switched.gemini.primary_window, undefined);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not clobber the switched account's disk entry with a late in-flight write", async () => {
+    const home = buildGeminiHome();
+    try {
+      seedGeminiCache(home, {
+        identity: SWITCHED_EMAIL,
+        account_email: SWITCHED_EMAIL,
+        account_plan: "Free",
+        primary_window: { used_percent: 58, reset_at: new Date(Date.now() + 86_400_000).toISOString() },
+        secondary_window: null,
+        tertiary_window: null,
+        cached_at: new Date(Date.now() - 60_000).toISOString(),
+      });
+
+      // The fetch started under account A; the credentials switch to account
+      // B mid-flight and the quota read still succeeds. The snapshot's
+      // identity no longer matches the current credentials, so the late
+      // write must be refused and B's entry must survive on disk.
+      const result = await getUsageLimits(baseOptions(home, {
+        fetchImpl: geminiFetchImpl({
+          quota: () => {
+            setGeminiAccount(home, SWITCHED_EMAIL);
+            return okResponse(quotaBody());
+          },
+        }),
+      }));
+      assert.equal(result.gemini.account_email, EMAIL, "the payload still shows what was fetched");
+      const disk = JSON.parse(fs.readFileSync(cachePath(home), "utf8"));
+      assert.equal(disk.gemini.identity, SWITCHED_EMAIL, "the late write must not clobber account B's entry");
+      assert.equal(disk.gemini.account_email, SWITCHED_EMAIL);
     } finally {
       resetUsageLimitsCache();
       fs.rmSync(home, { recursive: true, force: true });

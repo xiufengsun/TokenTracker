@@ -1251,7 +1251,12 @@ async function refreshGeminiAccessToken({
   });
   if (!res.ok) {
     const error = new Error(GEMINI_NOT_LOGGED_IN_MESSAGE);
-    error.code = "AUTH_EXPIRED";
+    // Confirmed credential failures only (invalid_grant = 400, invalid_client
+    // = 401/403): a transient 429/5xx from the token endpoint must stay
+    // cache-eligible so the stale fallback can still serve bars.
+    if (res.status === 400 || res.status === 401 || res.status === 403) {
+      error.code = "AUTH_EXPIRED";
+    }
     throw error;
   }
 
@@ -1449,6 +1454,15 @@ async function fetchGeminiLimits({ home, env, fetchImpl = fetch, commandRunner }
     });
     if (res.status === 401) {
       const error = new Error(GEMINI_NOT_LOGGED_IN_MESSAGE);
+      error.code = "AUTH_EXPIRED";
+      throw error;
+    }
+    if (res.status === 403) {
+      // PERMISSION_DENIED (seen for Enterprise accounts, gemini-cli#25512):
+      // re-login cannot fix it, but stale bars for a project the account can
+      // no longer see would mislead — punch through like an auth error while
+      // keeping the displayed message unchanged.
+      const error = new Error(`Gemini API error: HTTP ${res.status}`);
       error.code = "AUTH_EXPIRED";
       throw error;
     }
@@ -4910,23 +4924,37 @@ async function fetchUsageLimitsUncached({
       cached_at: new Date(nowMs).toISOString(),
     };
     if (cacheGeneration === usageLimitsCacheGeneration) {
-      writeGeminiLimitsCache(geminiWithCache, {
-        home,
-        nowMs,
-        identity: typeof gemini.cache_identity === "string"
-          ? gemini.cache_identity
-          : resolveGeminiCacheIdentity({ home, env }),
-      });
+      // A slow in-flight fetch must not clobber the on-disk entry of an
+      // account that has since been switched away: only write when the
+      // snapshot's identity still matches the current credentials.
+      const currentIdentity = resolveGeminiCacheIdentity({ home, env });
+      const snapshotIdentity = typeof gemini.cache_identity === "string"
+        ? gemini.cache_identity
+        : currentIdentity;
+      if (snapshotIdentity && snapshotIdentity === currentIdentity) {
+        writeGeminiLimitsCache(geminiWithCache, {
+          home,
+          nowMs,
+          identity: snapshotIdentity,
+        });
+      }
     }
   } else {
     // The slot's error object loses the fetcher's identity field when the outer
-    // timeout race wins (the common failure mode this cache exists for), so
-    // re-derive it from the local credentials on this failure-only path.
-    const identity = typeof gemini.cache_identity === "string"
-      ? gemini.cache_identity
-      : resolveGeminiCacheIdentity({ home, env });
-    const cached = readGeminiLimitsCache({ home, nowMs, identity });
-    geminiWithCache = cached || gemini;
+    // timeout race wins (the common failure mode this cache exists for). Always
+    // re-derive from the CURRENT local credentials — the request may have
+    // started under an account that has since been switched away, in which
+    // case the read's identity gate refuses the old entry. Revalidate the auth
+    // mode too: a mid-flight switch to api-key/vertex-ai never reached the
+    // punch-through branch above, but stale OAuth bars would still mislead.
+    const selectedType = loadGeminiSettings({ home, env })?.security?.auth?.selectedType ?? null;
+    if (selectedType === "api-key" || selectedType === "vertex-ai") {
+      geminiWithCache = gemini;
+    } else {
+      const identity = resolveGeminiCacheIdentity({ home, env });
+      const cached = readGeminiLimitsCache({ home, nowMs, identity });
+      geminiWithCache = cached || gemini;
+    }
   }
   // cache_identity / auth_error are internal cache-plumbing markers, not payload.
   if (geminiWithCache && ("cache_identity" in geminiWithCache || "auth_error" in geminiWithCache)) {
