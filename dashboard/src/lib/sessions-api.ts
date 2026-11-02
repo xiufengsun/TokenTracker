@@ -27,45 +27,51 @@ export interface SessionPricing {
   cache_write: number;
 }
 
-// Every field here is always present: the server densifies model_usage rows at
-// the response boundary (modelUsageForAggregation in src/lib/session-analytics.js),
-// so the sparse on-disk sidecar shape never reaches this client. Adding a field
-// here means adding it to MODEL_USAGE_SUM_FIELDS there; test/session-analytics
-// .test.js asserts the emitted key set matches for both producer paths.
+// With `include_model_detail=1` (the default) every field here is present: the
+// server densifies model_usage rows at the response boundary
+// (modelUsageForAggregation in src/lib/session-analytics.js), so the sparse
+// on-disk sidecar shape never reaches this client. Adding a field means adding
+// it to MODEL_USAGE_SUM_FIELDS there; test/session-analytics.test.js asserts the
+// emitted key set matches for both producer paths.
+//
+// The session list sends `include_model_detail=0`, which projects each row down
+// to BROWSER_MODEL_USAGE_FIELDS — exactly what this page renders. Everything
+// below that line is optional so a list row cannot be read as if it carried the
+// per-model token counters it deliberately omits.
 export interface SessionModelUsage {
   model: string;
-  input_tokens: number;
-  cached_input_tokens: number;
-  cache_creation_input_tokens: number;
-  output_tokens: number;
-  reasoning_output_tokens: number;
   total_tokens: number;
-  long_context_input_tokens: number;
-  long_context_cached_input_tokens: number;
-  long_context_cache_creation_input_tokens: number;
-  long_context_output_tokens: number;
-  long_context_reasoning_output_tokens: number;
-  priority_input_tokens: number;
-  priority_cached_input_tokens: number;
-  priority_cache_creation_input_tokens: number;
-  priority_output_tokens: number;
-  priority_reasoning_output_tokens: number;
-  priority_long_context_input_tokens: number;
-  priority_long_context_cached_input_tokens: number;
-  priority_long_context_cache_creation_input_tokens: number;
-  priority_long_context_output_tokens: number;
-  priority_long_context_reasoning_output_tokens: number;
-  usage_events: number;
-  rerouted_usage_events: number;
-  long_context_usage_events: number;
-  priority_usage_events: number;
-  edit_turns: number;
-  selected_models: string[];
-  reroute_reasons: string[];
-  model_attribution: "selected" | "effective";
   cost_usd: number;
   performance?: SessionPerformance;
   pricing?: SessionPricing;
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  output_tokens?: number;
+  reasoning_output_tokens?: number;
+  long_context_input_tokens?: number;
+  long_context_cached_input_tokens?: number;
+  long_context_cache_creation_input_tokens?: number;
+  long_context_output_tokens?: number;
+  long_context_reasoning_output_tokens?: number;
+  priority_input_tokens?: number;
+  priority_cached_input_tokens?: number;
+  priority_cache_creation_input_tokens?: number;
+  priority_output_tokens?: number;
+  priority_reasoning_output_tokens?: number;
+  priority_long_context_input_tokens?: number;
+  priority_long_context_cached_input_tokens?: number;
+  priority_long_context_cache_creation_input_tokens?: number;
+  priority_long_context_output_tokens?: number;
+  priority_long_context_reasoning_output_tokens?: number;
+  usage_events?: number;
+  rerouted_usage_events?: number;
+  long_context_usage_events?: number;
+  priority_usage_events?: number;
+  edit_turns?: number;
+  selected_models?: string[];
+  reroute_reasons?: string[];
+  model_attribution?: "selected" | "effective";
 }
 
 export interface SessionRow {
@@ -155,6 +161,7 @@ interface FetchOptions {
   limit?: number;
   refresh?: boolean;
   includeBuckets?: boolean;
+  includeModelDetail?: boolean;
 }
 
 export async function getSessions(options: FetchOptions = {}): Promise<SessionsResponse> {
@@ -164,6 +171,7 @@ export async function getSessions(options: FetchOptions = {}): Promise<SessionsR
   if (options.limit) url.searchParams.set("limit", String(options.limit));
   if (options.refresh) url.searchParams.set("refresh", "1");
   if (options.includeBuckets === false) url.searchParams.set("include_buckets", "0");
+  if (options.includeModelDetail === false) url.searchParams.set("include_model_detail", "0");
   if (options.from || options.to) {
     const timeZone = getBrowserTimeZone();
     if (timeZone) url.searchParams.set("tz", timeZone);

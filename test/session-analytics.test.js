@@ -380,6 +380,43 @@ test("session analytics reuses unchanged file records during an incremental rebu
   assert.equal(rebuilt.find((row) => row.project_key === "project-b").turns, 2);
 });
 
+test("recheck skips the TTL but still reuses unchanged files", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tt-session-recheck-"));
+  const writeSession = (project, sessionId) => {
+    const projectDir = path.join(home, ".claude", "projects", project);
+    fs.mkdirSync(projectDir, { recursive: true });
+    const filePath = path.join(projectDir, `${sessionId}.jsonl`);
+    const rows = [
+      { type: "user", sessionId, cwd: projectDir, timestamp: "2026-07-18T06:00:00Z", message: { content: "build" } },
+      { type: "assistant", sessionId, cwd: projectDir, timestamp: "2026-07-18T06:00:01Z", message: { id: `${sessionId}-message`, model: "claude-recheck", usage: { input_tokens: 10, output_tokens: 2 }, content: [] } },
+    ];
+    fs.writeFileSync(filePath, `${rows.map(JSON.stringify).join("\n")}\n`);
+    return filePath;
+  };
+  writeSession("project-a", "session-a");
+
+  await buildSessionAnalytics({ home, force: true });
+  const sidecarPath = path.join(home, ".tokentracker", "tracker", "session.queue.jsonl");
+  const cachedRows = fs.readFileSync(sidecarPath, "utf8").trim().split("\n").map(JSON.parse);
+  cachedRows[0].title = "cached-proof";
+  fs.writeFileSync(sidecarPath, `${cachedRows.map(JSON.stringify).join("\n")}\n`);
+  writeSession("project-b", "session-b");
+
+  // Inside the TTL a plain build answers from the cached snapshot, so the new
+  // session stays invisible. That is exactly the behaviour refresh must not
+  // inherit: it used to force a full re-parse to see the new file.
+  const ttlHit = await buildSessionAnalytics({ home });
+  assert.equal(ttlHit.length, 1);
+  assert.equal(ttlHit[0].title, "cached-proof");
+
+  // recheck ignores the TTL, walks the tree, picks up the new file and still
+  // reuses the untouched one instead of re-parsing it.
+  const rechecked = await buildSessionAnalytics({ home, recheck: true });
+  assert.equal(rechecked.length, 2);
+  assert.equal(rechecked.find((row) => row.project_key === "project-a").title, "cached-proof");
+  assert.equal(rechecked.find((row) => row.project_key === "project-b").turns, 1);
+});
+
 test("Claude session title uses the ai-title record, never the prompt body", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-session-title-"));
   const filePath = path.join(dir, "session.jsonl");

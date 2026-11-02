@@ -246,7 +246,7 @@ describe("SessionsPage", () => {
     expect(within(grokDetails).getByText("Context 31.4K / 500K (6%)")).toBeInTheDocument();
     await userEvent.click(within(grokDetails).getByRole("button", { name: "Close session statistics" }));
     // The list is metadata-only and scoped to the selected range; no row cap.
-    expect(getSessions).toHaveBeenCalledWith({ refresh: false, includeBuckets: false });
+    expect(getSessions).toHaveBeenCalledWith({ refresh: false, includeBuckets: false, includeModelDetail: false });
 
     await chooseSelect("Filter by session source", "Codex");
     expect(screen.queryByText("Fix authentication flow")).not.toBeInTheDocument();

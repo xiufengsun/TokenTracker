@@ -2320,7 +2320,11 @@ async function writeAtomic(filePath, content) {
   await fsp.rename(temp, filePath);
 }
 
-async function buildSessionAnalyticsInternal({ home = os.homedir(), force = false, cacheTtlMs = 5 * 60_000 } = {}) {
+// `force` rescans every session file. `recheck` (a user-triggered refresh)
+// only ignores the TTL: it still reuses every file whose stat key is unchanged
+// and rescans the rest, so Refresh costs one directory walk plus the delta
+// instead of a full re-parse of all transcripts.
+async function buildSessionAnalyticsInternal({ home = os.homedir(), force = false, recheck = false, cacheTtlMs = 5 * 60_000 } = {}) {
   const sidecarPath = resolveSessionSidecarPath(home);
   const metaPath = `${sidecarPath}.meta.json`;
   // A lock/permission failure need not alter the database's stat signature.
@@ -2342,6 +2346,9 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       previousMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
       const checkedAt = Date.parse(previousMeta.checked_at || previousMeta.generated_at || "");
       if (
+        // `recheck` deliberately skips the TTL so Refresh always re-walks the
+        // directories; the per-file stat reuse below still avoids re-parsing.
+        !recheck &&
         !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION &&
         Number.isFinite(checkedAt) &&
         Date.now() - checkedAt < Math.max(0, Number(cacheTtlMs) || 0)
@@ -2383,6 +2390,8 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     // db + its WAL sidecars: the trio is one logical file for change detection.
     ...[...(discovered.zcode || []), ...(discovered.opencode || [])].flatMap((dbPath) => [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]),
   ]);
+  // The signature covers every discovered file's stat key, so an identical
+  // signature proves the cached rows are current — refresh included.
   if (!force && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.signature === signature) {
     await writeAtomic(metaPath, `${JSON.stringify({ ...previousMeta, checked_at: new Date().toISOString() })}\n`);
     return readSidecarWithMeta(sidecarPath, previousMeta);
@@ -2557,17 +2566,22 @@ function buildSessionAnalytics(options = {}) {
   const normalizedOptions = options && typeof options === "object" ? options : {};
   const home = path.resolve(String(normalizedOptions.home || os.homedir()));
   const force = Boolean(normalizedOptions.force);
+  const recheck = Boolean(normalizedOptions.recheck);
   const existing = sessionAnalyticsBuilds.get(home);
   // Joining an in-flight build is only correct when that build is at least as
   // thorough as what this caller asked for. A refresh that landed while a plain
   // build was running used to be handed the un-refreshed result: the spinner
   // stopped and nothing had actually been re-scanned. Chain instead of joining
   // — never run two scans at once, they race the atomic sidecar write.
-  if (existing && (!force || existing.force)) return existing.promise;
+  if (existing && (!force && !recheck || existing.force || (recheck && existing.recheck))) return existing.promise;
 
-  const run = () => buildSessionAnalyticsInternal({ ...normalizedOptions, home, force });
+  const run = () => buildSessionAnalyticsInternal({ ...normalizedOptions, home, force, recheck });
   const promise = existing ? existing.promise.then(run, run) : run();
-  const entry = { promise, force: force || Boolean(existing?.force) };
+  const entry = {
+    promise,
+    force: force || Boolean(existing?.force),
+    recheck: recheck || Boolean(existing?.recheck),
+  };
   sessionAnalyticsBuilds.set(home, entry);
   const clear = () => {
     if (sessionAnalyticsBuilds.get(home) === entry) sessionAnalyticsBuilds.delete(home);
@@ -2853,7 +2867,21 @@ function resumeCommandFor(source, sessionId) {
   return null;
 }
 
-function toSessionBrowserRow(row, { includeBuckets = true } = {}) {
+// The list page reads a model name plus a token/cost/performance triple per
+// model row; every other counter in the dense 44-field model_usage row only
+// feeds the detail modal. Keeping this projection here (rather than deleting
+// fields at the HTTP layer) guarantees the shape stays declared by
+// dashboard/src/lib/sessions-api.ts.
+const BROWSER_MODEL_USAGE_FIELDS = ["model", "total_tokens", "cost_usd", "performance", "pricing"];
+
+function projectModelUsageForBrowser(rows, includeModelDetail) {
+  if (includeModelDetail) return rows;
+  return rows.map((row) => Object.fromEntries(
+    BROWSER_MODEL_USAGE_FIELDS.filter((field) => row[field] !== undefined).map((field) => [field, row[field]]),
+  ));
+}
+
+function toSessionBrowserRow(row, { includeBuckets = true, includeModelDetail = true } = {}) {
   const tokens = row.tokens && typeof row.tokens === "object" ? row.tokens : {};
   return {
     session_hash: row.session_hash,
@@ -2879,7 +2907,7 @@ function toSessionBrowserRow(row, { includeBuckets = true } = {}) {
     // browser can show where a session ran and compose a resume command.
     project_ref: row.project_ref || null,
     model: row.model,
-    model_usage: modelUsageForAggregation(row),
+    model_usage: projectModelUsageForBrowser(modelUsageForAggregation(row), includeModelDetail),
     ...(includeBuckets && Array.isArray(row.usage_buckets) ? { usage_buckets: row.usage_buckets } : {}),
     performance: normalizePerformance(row.performance),
     started_at: row.started_at || null,
@@ -3172,7 +3200,7 @@ function buildSessionBrowserFacets(rows) {
 // summarizeSessions (cloud/CSV safe), this retains session_id + project_ref so
 // the UI can offer one-click resume. Callers must only expose it over the
 // local API.
-function listSessionsForBrowser(sessions, { from = "", to = "", limit = 0, includeBuckets = true, timeZone, offsetMinutes } = {}) {
+function listSessionsForBrowser(sessions, { from = "", to = "", limit = 0, includeBuckets = true, includeModelDetail = true, timeZone, offsetMinutes } = {}) {
   const context = { timeZone, offsetMinutes };
   // Only sessions that actually spent tokens are worth listing. This drops
   // two kinds of noise: non-session logs under ~/.claude/projects
@@ -3196,7 +3224,7 @@ function listSessionsForBrowser(sessions, { from = "", to = "", limit = 0, inclu
     returned_count: limited.length,
     skipped_files: finite(sessions?.skippedFiles),
     facets,
-    sessions: limited.map((row) => toSessionBrowserRow(row, { includeBuckets })),
+    sessions: limited.map((row) => toSessionBrowserRow(row, { includeBuckets, includeModelDetail })),
     provenance: {
       source: "local-session-log",
       confidence: "observed",

@@ -72,7 +72,7 @@ const SESSIONS_RESPONSE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 const SESSIONS_RESPONSE_CACHE_TTL_MS = 60 * 1000;
 const sessionsResponseCache = new Map();
 
-function sessionsResponseCacheKey({ sidecarPath, from, to, limit, includeBuckets, timeZone, offsetMinutes }) {
+function sessionsResponseCacheKey({ sidecarPath, from, to, limit, includeBuckets, includeModelDetail, timeZone, offsetMinutes }) {
   try {
     const stat = fs.statSync(sidecarPath);
     return [
@@ -87,6 +87,7 @@ function sessionsResponseCacheKey({ sidecarPath, from, to, limit, includeBuckets
       to,
       limit,
       includeBuckets ? 1 : 0,
+      includeModelDetail ? 1 : 0,
       timeZone || "",
       Number.isFinite(offsetMinutes) ? offsetMinutes : "",
     ].join("\0");
@@ -2755,7 +2756,9 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       const refresh = ["1", "true"].includes(url.searchParams.get("refresh"));
       try {
         const { buildSessionAnalytics, summarizeSessions, sessionsToCsv } = require("./session-analytics");
-        const sessions = await buildSessionAnalytics({ force: refresh });
+        // Refresh means "re-walk the session files", not "re-parse everything":
+        // recheck skips the TTL but keeps per-file stat reuse.
+        const sessions = await buildSessionAnalytics({ recheck: refresh });
         const wantsCsv = url.searchParams.get("format") === "csv";
         const includeSessions = wantsCsv || ["1", "true"].includes(url.searchParams.get("include_sessions"));
         const result = summarizeSessions(sessions, { from, to, includeSessions, ...getTimeZoneContext(url) });
@@ -2786,6 +2789,10 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       const limitParam = parseInt(url.searchParams.get("limit") || "0", 10);
       const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 2000) : 0;
       const includeBuckets = !["0", "false"].includes(String(url.searchParams.get("include_buckets") || "").toLowerCase());
+      // The list page renders one model name plus a token/cost/performance
+      // triple per model; the remaining per-model counters (~39 of 44 fields)
+      // only feed the detail modal, so the browser can opt out of them.
+      const includeModelDetail = !["0", "false"].includes(String(url.searchParams.get("include_model_detail") || "").toLowerCase());
       // This payload contains local paths and resumable session identifiers.
       // The server is loopback-only; additionally prevent browser/proxy caches
       // from retaining the response after the page is closed.
@@ -2800,6 +2807,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           to,
           limit,
           includeBuckets,
+          includeModelDetail,
           ...timeZoneContext,
         };
         const beforeCacheKey = sessionsResponseCacheKey(cacheParams);
@@ -2809,8 +2817,8 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           await sendSessionsResponse(req, res, cached);
           return true;
         }
-        const sessions = await buildSessionAnalytics({ force: refresh });
-        const result = listSessionsForBrowser(sessions, { from, to, limit, includeBuckets, ...timeZoneContext });
+        const sessions = await buildSessionAnalytics({ recheck: refresh });
+        const result = listSessionsForBrowser(sessions, { from, to, limit, includeBuckets, includeModelDetail, ...timeZoneContext });
         const afterBuildCacheKey = sessionsResponseCacheKey(cacheParams);
         const body = JSON.stringify({ from, to, ...result });
         const afterSerializeCacheKey = sessionsResponseCacheKey(cacheParams);

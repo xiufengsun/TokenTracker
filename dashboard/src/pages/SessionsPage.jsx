@@ -494,7 +494,7 @@ export function SessionsPage() {
     else setIsLoading(true);
     setError(null);
     try {
-      const result = await getSessions({ refresh, includeBuckets: false, ...rangeQuery });
+      const result = await getSessions({ refresh, includeBuckets: false, includeModelDetail: false, ...rangeQuery });
       // A cold scan can take several seconds; never let an older response
       // overwrite a newer one.
       if (requestId === requestIdRef.current) {
