@@ -862,14 +862,18 @@ async function fetchGrokLimits({ home, env, fetchImpl = fetch, timeoutMs, nowMs 
       error: null,
       ...limits,
       // Internal cache-partition key (stripped before the payload is served).
-      cache_identity: grokTokenSubject(accessToken) || resolved.loaded?.scopeKey || null,
+      // An opaque token yields null → the cache write/read is refused, so an
+      // unattributable login can never pin another account's bars (no token
+      // fingerprint fallback: credentials must not enter even a label hash —
+      // CodeQL js/insufficient-password-hash precedent).
+      cache_identity: grokTokenSubject(accessToken),
     };
   } catch (error) {
     return {
       configured: true,
       error: error?.message || "Unknown error",
       ...(isGrokAuthErrorCode(error) ? { auth_error: true } : {}),
-      cache_identity: grokTokenSubject(accessToken) || resolved.loaded?.scopeKey || null,
+      cache_identity: grokTokenSubject(accessToken),
     };
   }
 }

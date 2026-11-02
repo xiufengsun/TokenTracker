@@ -45,6 +45,17 @@ function setGrokAccount(home, subject) {
   }));
 }
 
+// An auth.json whose access token is opaque (no JWT structure / no sub claim).
+function buildGrokHomeOpaqueToken() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-grok-cache-"));
+  const authPath = path.join(resolveGrokHome({ home, env: {} }), "auth.json");
+  fs.mkdirSync(path.dirname(authPath), { recursive: true });
+  fs.writeFileSync(authPath, JSON.stringify({
+    [SCOPE_KEY]: { key: "opaque-access-token" },
+  }));
+  return home;
+}
+
 function billingBody() {
   return {
     subscriptionTier: "supergrok",
@@ -227,6 +238,43 @@ describe("Grok limits disk-cache fallback", () => {
       }));
       assert.match(switched.grok.error, /Grok billing API returned 500/);
       assert.notEqual(switched.grok.stale, true);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses the cache entirely for an opaque token without a subject", async () => {
+    const home = buildGrokHomeOpaqueToken();
+    try {
+      // The live read succeeds (the token still authenticates billing), but no
+      // identity can be derived, so nothing is written to disk.
+      const live = await getUsageLimits(baseOptions(home, {
+        fetchImpl: grokFetchImpl({ billing: () => okResponse(billingBody()) }),
+      }));
+      assert.equal(live.grok.configured, true);
+      assert.equal(live.grok.error, null);
+      assert.equal(live.grok.primary_window.used_percent, 42);
+      assert.equal(fs.existsSync(cachePath(home)), false, "an unattributable login must not write a cache entry");
+
+      // A later failure has no fallback to serve: the scope key stays constant
+      // across account switches, so it must not stand in for an identity.
+      // (Seed a scope-key-stamped entry by hand — production refused to write.)
+      resetUsageLimitsCache();
+      fs.mkdirSync(path.dirname(cachePath(home)), { recursive: true });
+      fs.writeFileSync(cachePath(home), JSON.stringify({
+        grok: {
+          identity: SCOPE_KEY,
+          plan_label: "SuperGrok",
+          primary_window: { used_percent: 42, reset_at: new Date(Date.now() + 86_400_000).toISOString() },
+          cached_at: new Date(Date.now() - 60_000).toISOString(),
+        },
+      }));
+      const failed = await getUsageLimits(baseOptions(home, {
+        fetchImpl: grokFetchImpl({ billing: () => errorResponse(500) }),
+      }));
+      assert.match(failed.grok.error, /Grok billing API returned 500/, "a scope-key-seeded entry must not be served");
+      assert.notEqual(failed.grok.stale, true);
     } finally {
       resetUsageLimitsCache();
       fs.rmSync(home, { recursive: true, force: true });

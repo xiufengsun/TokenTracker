@@ -2939,12 +2939,14 @@ function normalizeGrokCachedLimits(
 }
 
 // The signed-in Grok account partitions the cache (zcode login-identity precedent):
-// the id is the non-secret OIDC subject inside the access token, falling back to
-// the auth.json scope key ("issuer::client_id") when the token is opaque — the
-// credential itself never enters the id. A single auth.json holds one active
-// login, so one stamped entry suffices; a read requires the stored identity to
-// match the current one, and a write without an identity is refused — an
-// unreadable login must never pin another account's bars in place.
+// the id is the non-secret OIDC `sub` claim inside the access token — the
+// credential itself never enters the id (no token fingerprint fallback: CodeQL
+// js/insufficient-password-hash precedent). auth.x.ai issues JWT access tokens
+// (RFC 9068), so the subject is present in practice; an opaque token yields no
+// identity and the cache is simply refused on both the write and the read path
+// (fail-closed) — an unattributable login must never pin another account's bars,
+// which a scope-key fallback cannot guarantee because `issuer::client_id` stays
+// constant across account switches.
 function readGrokLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
   if (!identity) return null;
   try {
@@ -2989,10 +2991,10 @@ function writeGrokLimitsCache(limits, { home, nowMs = Date.now(), identity } = {
 // Failure-only identity re-derivation for the cache fallback: when the provider
 // slot's result was produced by the outer timeout race, the fetcher's own
 // identity field is lost, so read auth.json once to learn who we are serving for.
+// Opaque tokens yield null → the read is refused (fail-closed, see above).
 function resolveGrokCacheIdentity({ home, env } = {}) {
   try {
-    const loaded = loadGrokAuthEntry({ home, env });
-    return grokTokenSubject(loaded?.entry?.key) || loaded?.scopeKey || null;
+    return grokTokenSubject(loadGrokAuthEntry({ home, env })?.entry?.key);
   } catch (_error) {
     return null;
   }
