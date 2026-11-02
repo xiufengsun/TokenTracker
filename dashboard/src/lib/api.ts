@@ -826,7 +826,7 @@ export async function getUsageLimits(
  * sent to the loopback server and is never logged or echoed back.
  */
 export async function saveProviderApiKey(
-  provider: "opencode-go" | "command-code",
+  provider: "opencode-go" | "command-code" | "deepseek",
   apiKey: string,
 ): Promise<{ ok: boolean; configured: boolean; source: string }> {
   const authHeaders = await getLocalApiAuthHeaders();

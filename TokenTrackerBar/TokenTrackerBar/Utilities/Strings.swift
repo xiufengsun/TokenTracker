@@ -142,6 +142,22 @@ enum Strings {
     static func kimiParallelLabel(_ count: Int) -> String {
         t("Parallel: \(count)", "并发：\(count)", "併發：\(count)", "並列：\(count)", "병렬: \(count)")
     }
+    // MARK: DeepSeek balance card (pay-as-you-go, no quota windows — #960)
+    static func deepseekBalanceLabel(_ currency: String) -> String {
+        t("Balance (\(currency))", "余额（\(currency)）", "餘額（\(currency)）", "残高（\(currency)）", "잔액 (\(currency))")
+    }
+    static func deepseekGrantedDetail(_ amount: String) -> String {
+        t("incl. grant \(amount)", "含赠款 \(amount)", "含贈款 \(amount)", "付与クレジット込 \(amount)", "증정 크레딧 포함 \(amount)")
+    }
+    static var deepseekUnavailable: String {
+        t(
+            "DeepSeek reports this account as unavailable — the balance may be exhausted or the account under review.",
+            "DeepSeek 报告该账号暂不可用——余额可能已耗尽或账号受限。",
+            "DeepSeek 回報該帳號暫不可用——餘額可能已耗盡或帳號受限。",
+            "DeepSeek がこのアカウントを利用不可と報告しています。残高を使い切ったか、アカウントが審査中の可能性があります。",
+            "DeepSeek에서 이 계정을 사용할 수 없다고 보고했습니다. 잔액이 소진되었거나 계정이 심사 중일 수 있습니다."
+        )
+    }
     static var codexResetBankSectionTitle: String {
         t("Resets", "重置权益", "重置權益", "リセット", "리셋")
     }
