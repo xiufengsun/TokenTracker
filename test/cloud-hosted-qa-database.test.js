@@ -32,7 +32,8 @@ test.before(async () => {
     "20261007120000_cloud-waffo.sql", "20261007130000_cloud-waffo-retry.sql", "20261007140000_cloud-waffo-attempts.sql",
     "20261007150000_cloud-waffo-authorizations.sql", "20261007160000_cloud-waffo-sandbox-periods.sql", "20261008120000_self-hosted-access.sql"]) await db.exec(migration(name));
   const files = ["20260918041500_fold-account-summary-and-heatmap-aggregation.sql", "20260918043000_fold-account-model-breakdown-aggregation.sql",
-    "20260918050000_fold-account-daily-aggregation.sql", "20261002090000_compact-account-model-wire.sql", "20261003093000_compact-account-summary-model-wire.sql"];
+    "20260918050000_fold-account-daily-aggregation.sql", "20261002090000_compact-account-model-wire.sql", "20261003093000_compact-account-summary-model-wire.sql",
+    "20261102090000_add-conversations-to-account-model-breakdown-wire.sql"];
   for (const name of files) {
     const source = migration(name);
     const functions = [...source.matchAll(/CREATE OR REPLACE FUNCTION public\.(\w+)\(/g)].map(match => match[1]);
@@ -153,6 +154,20 @@ test("QA restore and exact erasure preserve the real ledger and another user's u
   assert.deepEqual((await db.query("SELECT to_jsonb(p) r FROM tokentracker_cloud_payments p ORDER BY id")).rows, financial);
   assert.deepEqual(await publicRpc("cloud_membership", [a, "sandbox"]), member);
   assert.equal((await db.query("SELECT count(*)::int n FROM auth.users WHERE id=$1", [a])).rows[0].n, 1);
+});
+
+test("model breakdown compact and wire carry request-only rows to the edge (#990)", async () => {
+  // Erasure above revoked every device, so issue a fresh one for the scoped read.
+  const fresh = await issue(a); assert.equal(fresh.ok, true);
+  await db.query(`DELETE FROM ${table("tokentracker_account_usage_cache")}`, []);
+  await db.query(`INSERT INTO ${table("tokentracker_hourly")}(user_id,device_id,source,model,hour_start,input_tokens,
+    cached_input_tokens,cache_creation_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,billable_total_tokens,conversations,total_cost_usd)
+    VALUES($1,$2,'codex','gpt-6',$3,0,0,0,0,0,0,0,0,0),($1,$2,'qoder','credit-plan',$3,0,0,0,0,0,0,0,5,0)`, [a, fresh.device_id, day + "T06:00:00Z"]);
+  const args = [a, null, day + "T00:00:00Z", day + "T23:59:59Z", "UTC", null, day, day];
+  const compact = await rpc("account_model_breakdown_compact", args);
+  assert.deepEqual(compact, [["codex", "gpt-6", "peak", 0, 0, 0, 0, 0, 0, 0], ["qoder", "credit-plan", "peak", 0, 0, 0, 0, 0, 0, 5]]);
+  const wire = await rpc("account_model_breakdown_wire", args);
+  assert.deepEqual(wire, compact, "tiny payloads keep the legacy array form");
 });
 
 test("installer replay preserves QA rows and original RPCs and rejects another scope", async () => {
