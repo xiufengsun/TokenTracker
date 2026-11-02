@@ -47,7 +47,10 @@ test("encrypted desktop sessions use authenticated IPC and merge quota with the 
   assert.equal(result.primary_window.reset_at, new Date("2027-10-31T23:59:59").toISOString());
   assert.equal(broker.requests.length, 3);
   assert.ok(broker.requests.every(({ path: apiPath }) => apiPath.startsWith("/billing/meter/")));
-  assert.ok(broker.requests.slice(1).every(({ body }) => body.PackageCodes.includes(PLAN) && !body.PackageCodes.includes(REWARD)));
+  // The reward code rides along so the listings surface each grant's own
+  // cycle end; plan selection still excludes reward rows, which the Free
+  // label and the plan-only primary window above pin down.
+  assert.ok(broker.requests.slice(1).every(({ body }) => body.PackageCodes.includes(PLAN) && body.PackageCodes.includes(REWARD)));
   assert.ok(!JSON.stringify(broker.packets).includes(broker.ticket));
   assert.ok(!JSON.stringify(broker.packets).includes("legacy-unused"));
 });
