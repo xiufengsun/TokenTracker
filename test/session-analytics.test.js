@@ -80,6 +80,8 @@ test("Claude session analytics retains metadata but never content", async () => 
   assert.equal(session.one_shot, true);
   assert.equal(session.subagent_calls, 1);
   assert.equal(session.total_tokens, 185);
+  assert.equal(session.usage_buckets.length, 2);
+  assert.equal(session.usage_buckets.reduce((sum, bucket) => sum + bucket.total_tokens, 0), 185);
   assert.equal(JSON.stringify(session).includes(secret), false);
 
   const summary = summarizeSessions([session]);
@@ -765,6 +767,8 @@ test("Grok session analytics bills from turn_completed.usage and keeps titles lo
   // Grok inputTokens is cache-inclusive, and outputTokens includes reasoning.
   // All stored columns are mutually exclusive and still sum to totalTokens.
   assert.equal(session.total_tokens, 120);
+  assert.equal(session.usage_buckets.length, 1);
+  assert.equal(session.usage_buckets[0].total_tokens, 120);
   assert.equal(session.tokens.input_tokens, 80);
   assert.equal(session.tokens.cached_input_tokens, 10);
   assert.equal(session.tokens.cache_creation_input_tokens, 10);

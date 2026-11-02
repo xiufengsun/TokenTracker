@@ -26,6 +26,7 @@ const IS_LOCAL_HOST = isLocalDashboardHost();
 // Stable empty array so the memos below don't recompute on every render while
 // there is no data yet.
 const NO_SESSIONS = [];
+const EMPTY_RANGE_QUERY = Object.freeze({});
 
 // How many rows to put in the DOM at once. The whole (already fetched) list is
 // filtered in memory; only the rendered slice grows as the user scrolls, so a
@@ -52,10 +53,8 @@ const DATE_RANGES = [
 ];
 
 // Earliest timestamp a range chip admits, as epoch ms in the *viewer's* time
-// zone. The whole list is fetched once and filtered here, so the range chips
-// never re-query: switching them is instant and cannot drop rows the way a
-// server-side day-string comparison did (a UTC-sliced day boundary put a
-// UTC+8 user's early-morning sessions on the wrong calendar day).
+// zone. The server receives the matching local day strings; this boundary also
+// keeps the client-side overlap filter consistent.
 function rangeStartMs(rangeId) {
   const days = DATE_RANGES.find((range) => range.id === rangeId)?.days || 0;
   if (!days) return 0;
@@ -64,6 +63,13 @@ function rangeStartMs(rangeId) {
   start.setDate(start.getDate() - (days - 1));
   start.setHours(0, 0, 0, 0);
   return start.getTime();
+}
+
+function dayKeyFromMs(ms) {
+  const date = new Date(ms);
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 // A session counts as inside the window when it *overlaps* it: one that started
@@ -445,33 +451,75 @@ export function SessionsPage() {
   const [expandedThreads, setExpandedThreads] = useState(() => new Set());
   const [threadModelFilters, setThreadModelFilters] = useState(() => new Map());
   const requestIdRef = useRef(0);
+  const dataRef = useRef(null);
+  // A server that predates facets cannot describe the lifetime filter set, so
+  // remember every option the loaded rows have ever offered instead of letting
+  // a narrow date range shrink the dropdowns.
+  const legacyFilterOptionsRef = useRef({ projects: [], models: [] });
   const { resolvedLocale } = useLocale();
   const { currency, rate } = useCurrency();
 
-  // Fetch the whole list once. The payload contains only session metadata
-  // over loopback, and the server builds every session regardless of the date
-  // range anyway, so a server-side window would cost a round trip without
-  // saving any work — and it would make the source/project/search filters mean
-  // "within the fetched page" instead of "within your sessions".
+  // Fetch the list for the selected date range. The response is metadata-only
+  // (usage buckets stay on the server), so a range switch is one cheap local
+  // round trip instead of shipping the full 9MB session list every time.
+  // Preset ranges end today, so a page left open past local midnight would keep
+  // asking for yesterday's window. `dayTick` advances once at the next local
+  // midnight and re-derives the query.
+  const [dayTick, setDayTick] = useState(0);
+  useEffect(() => {
+    const next = new Date();
+    next.setHours(24, 0, 0, 250);
+    const timer = setTimeout(() => setDayTick((tick) => tick + 1), Math.max(1000, next.getTime() - Date.now()));
+    return () => clearTimeout(timer);
+  }, [dayTick]);
+
+  const rangeQuery = useMemo(() => {
+    if (rangeFilter === "custom") {
+      let from = customFrom;
+      let to = customTo;
+      if (from && to && from > to) [from, to] = [to, from];
+      if (!from && !to) return EMPTY_RANGE_QUERY;
+      return { ...(from ? { from } : {}), ...(to ? { to } : {}) };
+    }
+    const startMs = rangeStartMs(rangeFilter);
+    if (!startMs) return EMPTY_RANGE_QUERY;
+    return { from: dayKeyFromMs(startMs), to: dayKeyFromMs(Date.now()) };
+    // dayTick is the trigger, not an input: it re-runs this memo after midnight.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeFilter, customFrom, customTo, dayTick]);
+
   const load = useCallback(async (refresh = false) => {
     const requestId = ++requestIdRef.current;
-    if (refresh) setRefreshing(true);
+    if (refresh || dataRef.current) setRefreshing(true);
     else setIsLoading(true);
     setError(null);
     try {
-      const result = await getSessions({ refresh });
+      const result = await getSessions({ refresh, includeBuckets: false, ...rangeQuery });
       // A cold scan can take several seconds; never let an older response
       // overwrite a newer one.
-      if (requestId === requestIdRef.current) setData(result);
+      if (requestId === requestIdRef.current) {
+        dataRef.current = result;
+        setData(result);
+        setError(null);
+      }
     } catch (err) {
-      if (requestId === requestIdRef.current) setError(err?.message || String(err));
+      if (requestId !== requestIdRef.current) return;
+      const message = err?.message || String(err);
+      setError(message);
+      // The previous response belongs to the range that was just abandoned.
+      // Keeping it would filter old rows under the new window and silently show
+      // a wrong (or empty) list, so drop it and let the error panel explain.
+      if (dataRef.current) {
+        dataRef.current = null;
+        setData(null);
+      }
     } finally {
       if (requestId === requestIdRef.current) {
         setIsLoading(false);
         setRefreshing(false);
       }
     }
-  }, []);
+  }, [rangeQuery]);
 
   useEffect(() => {
     if (IS_LOCAL_HOST || isMockEnabled()) void load(false);
@@ -479,28 +527,48 @@ export function SessionsPage() {
   }, [load]);
 
   const allSessions = data?.sessions || NO_SESSIONS;
-  // Distinct project names present in the loaded sessions, for the project
-  // filter dropdown. Keyed by project_key (what the row filter matches on).
+  const lifetimeSessionCount = useMemo(() => {
+    if (Number.isFinite(Number(data?.lifetime_session_count))) {
+      const reported = Number(data.lifetime_session_count);
+      legacyFilterOptionsRef.current.count = reported;
+      return reported;
+    }
+    // A server without the field only knows its own range, so keep the largest
+    // population seen rather than letting a narrow range shrink the total.
+    const count = Math.max(allSessions.length, legacyFilterOptionsRef.current.count || 0);
+    legacyFilterOptionsRef.current.count = count;
+    return count;
+  }, [data, allSessions]);
+  // Filter options come from the server's lifetime facets so switching to a
+  // narrow range never removes a project/model the user may want to clear.
+  // Fall back to the loaded rows for a server that predates facets.
   const projectOptions = useMemo(() => {
-    const seen = new Set();
-    const options = [];
+    if (Array.isArray(data?.facets?.projects)) {
+      return data.facets.projects.map((key) => ({ value: key, label: key }));
+    }
+    const seen = new Set(legacyFilterOptionsRef.current.projects);
     for (const row of allSessions) {
       const key = row.project_key;
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      options.push({ value: key, label: key });
+      if (key) seen.add(key);
     }
-    return options.sort((a, b) => a.label.localeCompare(b.label));
-  }, [allSessions]);
+    legacyFilterOptionsRef.current.projects = [...seen];
+    return [...seen]
+      .sort((a, b) => a.localeCompare(b))
+      .map((key) => ({ value: key, label: key }));
+  }, [data, allSessions]);
   const modelOptions = useMemo(() => {
-    const models = new Set();
+    if (Array.isArray(data?.facets?.models)) {
+      return data.facets.models.map((model) => ({ value: model, label: model }));
+    }
+    const models = new Set(legacyFilterOptionsRef.current.models);
     for (const session of allSessions) {
       for (const usage of sessionModels(session)) {
         if (usage.model) models.add(usage.model);
       }
     }
+    legacyFilterOptionsRef.current.models = [...models];
     return [...models].sort().map((model) => ({ value: model, label: model }));
-  }, [allSessions]);
+  }, [data, allSessions]);
 
   // Typing stays responsive on long lists: the filter runs against a deferred
   // copy of the query, so keystrokes paint before the list re-filters.
@@ -750,7 +818,7 @@ export function SessionsPage() {
             <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
               <div className="flex min-w-0 flex-wrap items-center gap-x-3 text-xs tabular-nums text-oai-gray-500 dark:text-oai-gray-400">
                 <span>
-                  {grouped.foldedCount > 0 ? copy("sessions.thread.result_count", { roots: grouped.roots.length, subagents: grouped.foldedCount }) : copy("sessions.filter.result_count", { filtered: filtered.length, total: allSessions.length })}
+                  {grouped.foldedCount > 0 ? copy("sessions.thread.result_count", { roots: grouped.roots.length, subagents: grouped.foldedCount }) : copy("sessions.filter.result_count", { filtered: filtered.length, total: lifetimeSessionCount })}
                 </span>
                 {anyFilter ? <button type="button" onClick={clearFilters} className="inline-flex min-h-10 items-center rounded text-oai-gray-700 underline decoration-oai-gray-300 underline-offset-4 hover:text-oai-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500 dark:text-oai-gray-200 dark:decoration-oai-gray-600 dark:hover:text-white sm:min-h-0">{copy("sessions.filter.clear")}</button> : null}
               </div>
@@ -792,9 +860,6 @@ export function SessionsPage() {
             </div>
           ) : (
             <>
-              {error ? (
-                <p className="mb-4 text-sm text-red-500 dark:text-red-400">{copy("shared.error.prefix", { error })}</p>
-              ) : null}
               <div className="sessions-row-grid sessions-list-header border-b border-oai-gray-200 py-2 text-xs text-oai-gray-500 dark:border-oai-gray-800 dark:text-oai-gray-400" aria-hidden>
                 <span>{copy("sessions.col.session")}</span>
                 <span className="text-right">{copy("sessions.col.tokens")}</span>

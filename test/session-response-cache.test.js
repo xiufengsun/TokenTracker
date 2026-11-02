@@ -85,3 +85,48 @@ test("refresh caches the response after creating the sidecar", async () => {
     await fs.promises.rm(tmp, { recursive: true, force: true });
   }
 });
+
+test("include_buckets is part of the response cache key and omits usage buckets", async () => {
+  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tt-sessions-buckets-cache-"));
+  const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+  await fs.promises.mkdir(trackerDir, { recursive: true });
+  await fs.promises.writeFile(path.join(trackerDir, "session.queue.jsonl"), "");
+  const originalHome = os.homedir;
+  const originalBuild = sessionAnalytics.buildSessionAnalytics;
+  let buildCalls = 0;
+  const row = {
+    session_hash: "bucket-row",
+    session_id: "bucket-row-id",
+    source: "claude",
+    project_key: "project",
+    project_ref: "/project",
+    model: "model",
+    started_at: "2026-07-18T01:00:00Z",
+    ended_at: "2026-07-18T02:00:00Z",
+    tokens: { input_tokens: 3, total_tokens: 3 },
+    total_tokens: 3,
+    cost_usd: 0,
+    model_usage: [{ model: "model", input_tokens: 3, total_tokens: 3, cost_usd: 0 }],
+    usage_buckets: [{ timestamp: "2026-07-18T01:10:00Z", model: "model", input_tokens: 3, total_tokens: 3, cost_usd: 0 }],
+  };
+  os.homedir = () => tmp;
+  sessionAnalytics.buildSessionAnalytics = async () => {
+    buildCalls += 1;
+    return [row];
+  };
+  try {
+    const handler = createLocalApiHandler({ queuePath: path.join(tmp, "queue.jsonl") });
+    const endpoint = "/functions/tokentracker-sessions?from=2026-07-18&to=2026-07-18&tz=UTC";
+    const full = await callEndpoint(handler, endpoint);
+    assert.equal(full.sessions[0].usage_buckets.length, 1);
+    const summary = await callEndpoint(handler, `${endpoint}&include_buckets=0`);
+    assert.equal(Object.hasOwn(summary.sessions[0], "usage_buckets"), false);
+    const summaryAgain = await callEndpoint(handler, `${endpoint}&include_buckets=0`);
+    assert.equal(Object.hasOwn(summaryAgain.sessions[0], "usage_buckets"), false);
+    assert.equal(buildCalls, 2, "the bucket-less response should have its own cache entry");
+  } finally {
+    os.homedir = originalHome;
+    sessionAnalytics.buildSessionAnalytics = originalBuild;
+    await fs.promises.rm(tmp, { recursive: true, force: true });
+  }
+});

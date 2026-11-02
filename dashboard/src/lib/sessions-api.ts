@@ -2,6 +2,7 @@
 // session id and local project path so the dashboard can offer one-click
 // resume; it is never served from the cloud account view.
 import { copy } from "./copy";
+import { getBrowserTimeZone, getBrowserTimeZoneOffsetMinutes } from "./timezone";
 
 const SLUG = "tokentracker-sessions";
 
@@ -130,13 +131,20 @@ export interface SessionRow {
   pricing?: SessionPricing;
 }
 
+export interface SessionFacets {
+  projects: string[];
+  models: string[];
+}
+
 export interface SessionsResponse {
   from: string;
   to: string;
   available: boolean;
   session_count: number;
+  lifetime_session_count?: number;
   returned_count: number;
   sessions: SessionRow[];
+  facets?: SessionFacets;
   provenance?: Record<string, unknown>;
   error?: string;
 }
@@ -146,6 +154,7 @@ interface FetchOptions {
   to?: string;
   limit?: number;
   refresh?: boolean;
+  includeBuckets?: boolean;
 }
 
 export async function getSessions(options: FetchOptions = {}): Promise<SessionsResponse> {
@@ -154,6 +163,12 @@ export async function getSessions(options: FetchOptions = {}): Promise<SessionsR
   if (options.to) url.searchParams.set("to", options.to);
   if (options.limit) url.searchParams.set("limit", String(options.limit));
   if (options.refresh) url.searchParams.set("refresh", "1");
+  if (options.includeBuckets === false) url.searchParams.set("include_buckets", "0");
+  if (options.from || options.to) {
+    const timeZone = getBrowserTimeZone();
+    if (timeZone) url.searchParams.set("tz", timeZone);
+    url.searchParams.set("tz_offset_minutes", String(getBrowserTimeZoneOffsetMinutes()));
+  }
   const response = await fetch(url.toString(), {
     headers: { Accept: "application/json" },
     cache: "no-store",
