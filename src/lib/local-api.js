@@ -176,6 +176,7 @@ const {
   MODEL_PRICING,
   getModelPricing,
   computeRowCost,
+  computeRowTierCosts,
   ensurePricingLoaded,
   getPricingRevision,
   getModelPricingInfo,
@@ -211,6 +212,19 @@ const CLAUDE_MEM_OBSERVER_PROJECT_KEY = deriveProjectKeyFromRef(
   CLAUDE_MEM_OBSERVER_PROJECT_REF,
 );
 const PROJECT_USAGE_MAX_ENTRIES = 10;
+
+// Speed-tier subset columns surfaced by /usage-model-breakdown (issue 886):
+// the Codex parser persists these on queue rows as annotations of the base
+// columns ("how much of this row came from Fast/Ultrafast requests"), so the
+// model breakdown can sum them per model without re-adding volume.
+const SPEED_TIER_SUBSET_PREFIXES = ["priority_", "ultrafast_"];
+const SPEED_TIER_SUBSET_TOKEN_FIELDS = [
+  "input_tokens",
+  "cached_input_tokens",
+  "cache_creation_input_tokens",
+  "output_tokens",
+  "reasoning_output_tokens",
+];
 const MAX_TIME_ZONE_CACHE_ENTRIES = 16;
 const AGGREGATION_BATCH_ROWS = 256;
 
@@ -2919,6 +2933,18 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         // row is intact. Summing the base columns first and pricing once silently
         // dropped every premium — same tokens, fewer dollars than the hero.
         ma.totals.total_cost_usd = Number(ma.totals.total_cost_usd || 0) + computeRowCost(row);
+        // Surface the Fast/Ultrafast split (issue 886): per-tier cost allocation
+        // plus the observed subset token columns. Tier costs and the implicit
+        // standard tier (total minus both) always add up to total_cost_usd.
+        const tierCosts = computeRowTierCosts(row);
+        ma.totals.priority_cost_usd = Number(ma.totals.priority_cost_usd || 0) + tierCosts.priority;
+        ma.totals.ultrafast_cost_usd = Number(ma.totals.ultrafast_cost_usd || 0) + tierCosts.ultrafast;
+        for (const prefix of SPEED_TIER_SUBSET_PREFIXES) {
+          for (const field of SPEED_TIER_SUBSET_TOKEN_FIELDS) {
+            const key = `${prefix}${field}`;
+            ma.totals[key] = (ma.totals[key] || 0) + (Number(row[key]) || 0);
+          }
+        }
       }
       if (pricingRevision !== getPricingRevision()) return handleLocalApi(req, res, url);
 
@@ -2926,7 +2952,12 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         s.models = Array.from(s.models.values())
           .map((m) => ({
             ...m,
-            totals: { ...m.totals, total_cost_usd: Number(m.totals.total_cost_usd || 0).toFixed(6) },
+            totals: {
+              ...m.totals,
+              total_cost_usd: Number(m.totals.total_cost_usd || 0).toFixed(6),
+              priority_cost_usd: Number(m.totals.priority_cost_usd || 0).toFixed(6),
+              ultrafast_cost_usd: Number(m.totals.ultrafast_cost_usd || 0).toFixed(6),
+            },
           }))
           .sort((a, b) => b.totals.total_tokens - a.totals.total_tokens);
         const sourceCost = s.models.reduce((sum, m) => sum + Number(m.totals.total_cost_usd), 0);

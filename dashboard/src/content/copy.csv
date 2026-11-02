@@ -726,6 +726,10 @@ usage.overview.expand,ui,DashboardPage,UsageOverview,expand,"expand",,active
 usage.overview.collapse,ui,DashboardPage,UsageOverview,collapse,"collapse",,active
 usage.overview.model_count,ui,DashboardPage,UsageOverview,model_count,"{{count}} models",,active
 usage.overview.request_count,ui,DashboardPage,UsageOverview,request_count,"{{count}} requests",,active
+usage.overview.tier_standard,ui,DashboardPage,UsageOverview,tier_standard,"Standard",,active
+usage.overview.tier_fast,ui,DashboardPage,UsageOverview,tier_fast,"Fast",,active
+usage.overview.tier_ultrafast,ui,DashboardPage,UsageOverview,tier_ultrafast,"Ultrafast",,active
+usage.overview.tier_rate_label,ui,DashboardPage,UsageOverview,tier_rate_label,"{{label}} ({{rate}}×)",,active
 usage.overview.request_only_item,ui,DashboardPage,UsageOverview,request_only_item,"{{label}} · {{count}} requests",,active
 usage.overview.request_only_note,ui,DashboardPage,UsageOverview,request_only_note,"Active without token data: {{items}}. Per-model detail in All models.",,active
 usage.overview.scope_account,ui,DashboardPage,UsageOverview,scope_account,"Account-wide",,active

@@ -112,6 +112,136 @@ export function hasModelTokenSplits(model: any) {
   return modelTokenSplitsTotal(model?.tokens) > 0;
 }
 
+// ---------------------------------------------------------------------------
+// Speed tiers (issue 886): Codex Fast (`priority_*`) and Ultrafast
+// (`ultrafast_*`) subsets that /usage-model-breakdown sums onto each model's
+// totals, with the per-tier cost the backend allocates. Tier `tokens` reuse
+// the MODEL_TOKEN_SPLIT_KEYS shape so the same totals helpers apply.
+// ---------------------------------------------------------------------------
+
+export type ModelSpeedTierKey = "priority" | "ultrafast";
+
+export const MODEL_SPEED_TIER_KEYS: ModelSpeedTierKey[] = ["priority", "ultrafast"];
+
+export interface ModelSpeedTierSplit {
+  tokens: { input: number; output: number; cached: number; cacheCreate: number; reasoning: number };
+  cost: number;
+}
+
+export type ModelSpeedTiers = Partial<Record<ModelSpeedTierKey, ModelSpeedTierSplit>>;
+
+// Typed view of MODEL_TOKEN_SPLIT_KEYS so the strictly-shaped tier token
+// objects can be indexed without implicit-any string indexing.
+const SPEED_TIER_SPLIT_KEYS = MODEL_TOKEN_SPLIT_KEYS as (keyof ModelSpeedTierSplit["tokens"])[];
+
+const SPEED_TIER_API_FIELDS: Record<ModelSpeedTierKey, { tokens: Record<string, string>; cost: string }> = {
+  priority: {
+    tokens: {
+      input: "priority_input_tokens",
+      cached: "priority_cached_input_tokens",
+      cacheCreate: "priority_cache_creation_input_tokens",
+      output: "priority_output_tokens",
+      reasoning: "priority_reasoning_output_tokens",
+    },
+    cost: "priority_cost_usd",
+  },
+  ultrafast: {
+    tokens: {
+      input: "ultrafast_input_tokens",
+      cached: "ultrafast_cached_input_tokens",
+      cacheCreate: "ultrafast_cache_creation_input_tokens",
+      output: "ultrafast_output_tokens",
+      reasoning: "ultrafast_reasoning_output_tokens",
+    },
+    cost: "ultrafast_cost_usd",
+  },
+};
+
+/** Tier subsets observed on one model's API totals; null when the model has none. */
+function extractSpeedTiers(rawTotals: any): ModelSpeedTiers | null {
+  const tiers: ModelSpeedTiers = {};
+  let hasAny = false;
+  for (const key of MODEL_SPEED_TIER_KEYS) {
+    const spec = SPEED_TIER_API_FIELDS[key];
+    const tokens = {
+      input: Math.max(0, toFiniteNumber(rawTotals?.[spec.tokens.input]) ?? 0),
+      output: Math.max(0, toFiniteNumber(rawTotals?.[spec.tokens.output]) ?? 0),
+      cached: Math.max(0, toFiniteNumber(rawTotals?.[spec.tokens.cached]) ?? 0),
+      cacheCreate: Math.max(0, toFiniteNumber(rawTotals?.[spec.tokens.cacheCreate]) ?? 0),
+      reasoning: Math.max(0, toFiniteNumber(rawTotals?.[spec.tokens.reasoning]) ?? 0),
+    };
+    const cost = Math.max(0, toFiniteNumber(rawTotals?.[spec.cost]) ?? 0);
+    if (modelTokenSplitsTotal(tokens) <= 0 && cost <= 0) continue;
+    tiers[key] = { tokens, cost };
+    hasAny = true;
+  }
+  return hasAny ? tiers : null;
+}
+
+/** Sum two tier maps (alias/source/model merges); either side may be null. */
+function mergeSpeedTiers(target: ModelSpeedTiers | null, add: ModelSpeedTiers | null): ModelSpeedTiers | null {
+  if (!add || !Object.keys(add).length) return target;
+  const merged: ModelSpeedTiers = { ...(target || {}) };
+  for (const key of MODEL_SPEED_TIER_KEYS) {
+    const added = add[key];
+    if (!added) continue;
+    const current = merged[key];
+    if (!current) {
+      merged[key] = { tokens: { ...added.tokens }, cost: added.cost };
+      continue;
+    }
+    for (const splitKey of SPEED_TIER_SPLIT_KEYS) {
+      current.tokens[splitKey] += added.tokens[splitKey] || 0;
+    }
+    current.cost += added.cost || 0;
+  }
+  return merged;
+}
+
+/** Whether a model entry carries any observed Fast/Ultrafast subsets. */
+export function hasModelSpeedTiers(model: any): boolean {
+  return Boolean(model?.tiers?.priority || model?.tiers?.ultrafast);
+}
+
+/** One tier's multiplier from the backend pricing info; 0 when unavailable or not >1. */
+export function modelSpeedTierMultiplier(model: any, tier: ModelSpeedTierKey): number {
+  const value = Number(model?.pricing?.[`${tier}_multiplier`]);
+  return Number.isFinite(value) && value > 1 ? value : 0;
+}
+
+/**
+ * The implicit Standard tier of a model with speed tiers: base columns minus
+ * both observed subsets (tokens), model cost minus both tier costs. Null when
+ * the model has no tiers or nothing is left after both subsets — an empty
+ * Standard row is noise, not information.
+ */
+export function modelSpeedTierStandard(model: any): ModelSpeedTierSplit | null {
+  if (!hasModelSpeedTiers(model)) return null;
+  const tokens = {
+    input: 0,
+    output: 0,
+    cached: 0,
+    cacheCreate: 0,
+    reasoning: 0,
+  };
+  let anyTokens = false;
+  for (const splitKey of SPEED_TIER_SPLIT_KEYS) {
+    let residual = Math.max(0, Number(model?.tokens?.[splitKey]) || 0);
+    for (const tierKey of MODEL_SPEED_TIER_KEYS) {
+      residual -= Math.max(0, Number(model?.tiers?.[tierKey]?.tokens?.[splitKey]) || 0);
+    }
+    tokens[splitKey] = Math.max(0, residual);
+    if (tokens[splitKey] > 0) anyTokens = true;
+  }
+  let cost = Math.max(0, toFiniteNumber(model?.cost) ?? 0);
+  for (const tierKey of MODEL_SPEED_TIER_KEYS) {
+    cost -= Math.max(0, Number(model?.tiers?.[tierKey]?.cost) || 0);
+  }
+  cost = Math.max(0, cost);
+  if (!anyTokens && cost <= 0) return null;
+  return { tokens, cost };
+}
+
 /**
  * True when a row's cost is unknown because no published rate prices it and
  * the cost is not provider-reported. Fleet rows carry `pricing`/`costSource`
@@ -166,9 +296,16 @@ function mergeSourcesByAlias(sources: any[]) {
       const id = model?.model_id || model?.model || "";
       if (!id) continue;
       let modelRow = merged.models.get(id);
+      // Speed tiers live on the API totals, which addTotalsInto rebuilds from
+      // TOKEN_TOTAL_KEYS only — extract them here so they survive the merge
+      // (issue 886).
+      const modelTiers = extractSpeedTiers(model?.totals);
       if (!modelRow) {
         modelRow = { ...model, model: model?.model || id, model_id: id, totals: emptyTotals() };
+        modelRow.tiers = modelTiers;
         merged.models.set(id, modelRow);
+      } else {
+        modelRow.tiers = mergeSpeedTiers(modelRow.tiers ?? null, modelTiers);
       }
       addTotalsInto(modelRow.totals, model?.totals);
     }
@@ -252,7 +389,8 @@ export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) 
                   : null;
           // Per-model token-type splits feed the expandable detail rows in
           // the All-models and per-provider model lists. The API already
-          // returns them; previously they were dropped here.
+          // returns them; previously they were dropped here. Speed tiers were
+          // extracted from the API totals during alias merging.
           const rawTotals = model?.totals || {};
           return {
             id,
@@ -268,6 +406,7 @@ export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) 
               cacheCreate: Math.max(0, toFiniteNumber(rawTotals?.cache_creation_input_tokens) ?? 0),
               reasoning: Math.max(0, toFiniteNumber(rawTotals?.reasoning_output_tokens) ?? 0),
             },
+            tiers: model?.tiers ?? null,
             pricing: model?.pricing || null,
             costSource: model?.cost_source || null,
           };
@@ -348,6 +487,8 @@ export function buildAllModels(fleetData: any) {
       unpriced: false,
       nameWeight: 0,
       tokens: { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 },
+      tiers: null as ModelSpeedTiers | null,
+      pricing: null as any,
     };
     current.usage += usage;
     current.requests += requests;
@@ -356,6 +497,11 @@ export function buildAllModels(fleetData: any) {
     for (const splitKey of MODEL_TOKEN_SPLIT_KEYS) {
       current.tokens[splitKey] += Math.max(0, Number(splits[splitKey]) || 0);
     }
+    // Speed tiers merge the same way, so a model run on Fast/Ultrafast through
+    // several tools keeps one combined tier split. Pricing info (tier
+    // multipliers) rides along from the first source that carries it.
+    current.tiers = mergeSpeedTiers(current.tiers, model?.tiers ?? null);
+    if (!current.pricing && model?.pricing) current.pricing = model.pricing;
     // OR-combined so a merged row keeps the flag when any contributing tool
     // lacks a published rate for the model. Request-only contributors never
     // set it: they book no cost regardless of pricing, so their unpriced
@@ -390,6 +536,8 @@ export function buildAllModels(fleetData: any) {
       cost: model.hasCost ? model.cost : null,
       unpriced: model.unpriced === true,
       tokens: { ...model.tokens },
+      tiers: model.tiers,
+      pricing: model.pricing,
       share: totalUsage > 0
         ? Math.round((model.usage / totalUsage) * 1000) / 10
         : 0,

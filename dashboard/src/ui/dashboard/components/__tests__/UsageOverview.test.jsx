@@ -735,6 +735,134 @@ describe("UsageOverview", () => {
     expect(screen.getByText(copy("usage.overview.week_cross_month_hint"))).toBeTruthy();
   });
 
+  it("reveals the Standard/Fast/Ultrafast speed-tier split under an expanded Codex model row", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <UsageOverview
+        period="month"
+        periods={["month"]}
+        summaryLabel="Total"
+        summaryValue="300"
+        fleetData={[
+          {
+            source: "codex",
+            label: "CODEX",
+            totalPercent: "100.00",
+            usage: 300,
+            usd: 2,
+            models: [
+              {
+                id: "gpt-6.1-sol",
+                name: "gpt-6.1-sol",
+                share: 100,
+                usage: 300,
+                cost: 2,
+                tokens: { input: 100, output: 20, cached: 170, cacheCreate: 5, reasoning: 5 },
+                pricing: { priority_multiplier: 2, ultrafast_multiplier: 6 },
+                tiers: {
+                  priority: {
+                    tokens: { input: 60, output: 10, cached: 0, cacheCreate: 0, reasoning: 0 },
+                    cost: 0.7,
+                  },
+                  ultrafast: {
+                    tokens: { input: 0, output: 4, cached: 0, cacheCreate: 0, reasoning: 0 },
+                    cost: 1.2,
+                  },
+                },
+              },
+              {
+                id: "plain-model",
+                name: "plain-model",
+                share: 0,
+                usage: 0,
+                cost: 0,
+              },
+            ],
+          },
+        ]}
+        from="2026-10-01"
+        to="2026-10-31"
+      />,
+    );
+
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: /All tools:/i }));
+    });
+
+    // Tier rows stay hidden until the model row itself is expanded.
+    expect(screen.queryByText(copy("usage.overview.tier_ultrafast"))).toBeNull();
+    expect(container.querySelectorAll("[data-model-speed-tiers]")).toHaveLength(0);
+
+    const rowButton = screen.getByRole("button", { name: /gpt-6\.1-sol/i });
+    await act(async () => {
+      await user.click(rowButton);
+    });
+
+    // Multiplier suffix comes from the model's pricing info, never hardcoded.
+    const fastLabel = copy("usage.overview.tier_rate_label", {
+      label: copy("usage.overview.tier_fast"),
+      rate: "2",
+    });
+    const ultrafastLabel = copy("usage.overview.tier_rate_label", {
+      label: copy("usage.overview.tier_ultrafast"),
+      rate: "6",
+    });
+    expect(screen.getByText(fastLabel)).toBeVisible();
+    expect(screen.getByText(ultrafastLabel)).toBeVisible();
+    expect(screen.getByText(copy("usage.overview.tier_standard"))).toBeVisible();
+    expect(container.querySelectorAll("[data-model-speed-tiers]")).toHaveLength(1);
+
+    await act(async () => {
+      await user.click(rowButton);
+    });
+    expect(container.querySelectorAll("[data-model-speed-tiers]")).toHaveLength(0);
+  });
+
+  it("keeps model rows without speed-tier data free of tier rows", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <UsageOverview
+        period="month"
+        periods={["month"]}
+        summaryLabel="Total"
+        summaryValue="150"
+        fleetData={[
+          {
+            source: "opencode",
+            label: "OPENCODE",
+            totalPercent: "100.00",
+            usage: 150,
+            usd: 1.5,
+            models: [
+              {
+                id: "gpt-6.1-sol-fast",
+                name: "gpt-6.1-sol-fast",
+                share: 100,
+                usage: 150,
+                cost: 1.5,
+                tokens: { input: 100, output: 20, cached: 0, cacheCreate: 0, reasoning: 0 },
+              },
+            ],
+          },
+        ]}
+        from="2026-10-01"
+        to="2026-10-31"
+      />,
+    );
+
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: /All tools:/i }));
+    });
+    const rowButton = screen.getByRole("button", { name: /gpt-6\.1-sol-fast/i });
+    await act(async () => {
+      await user.click(rowButton);
+    });
+    // Token-type splits render, but no speed-tier block without backend tiers.
+    expect(screen.getByText("Cached input")).toBeVisible();
+    expect(container.querySelectorAll("[data-model-speed-tiers]")).toHaveLength(0);
+    expect(screen.queryByText(copy("usage.overview.tier_standard"))).toBeNull();
+  });
+
   it("renders Devin with its icon and shows the unpriced-models notice in provider and All views", async () => {
     const user = userEvent.setup();
     const fleetData = [

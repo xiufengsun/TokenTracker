@@ -3,7 +3,10 @@ import {
   buildAllModels,
   buildFleetData,
   buildTopModels,
+  hasModelSpeedTiers,
   hasModelTokenSplits,
+  modelSpeedTierMultiplier,
+  modelSpeedTierStandard,
   modelTokenSplitsTotal,
 } from "./model-breakdown";
 
@@ -171,6 +174,8 @@ describe("buildAllModels", () => {
         cost: 1,
         unpriced: false,
         tokens: { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 },
+        tiers: null,
+        pricing: null,
         share: 50,
       },
       {
@@ -181,6 +186,8 @@ describe("buildAllModels", () => {
         cost: null,
         unpriced: false,
         tokens: { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 },
+        tiers: null,
+        pricing: null,
         share: 40,
       },
       {
@@ -191,6 +198,8 @@ describe("buildAllModels", () => {
         cost: 0.2,
         unpriced: false,
         tokens: { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 },
+        tiers: null,
+        pricing: null,
         share: 10,
       },
     ]);
@@ -233,6 +242,8 @@ describe("buildAllModels", () => {
         cost: 1.5,
         unpriced: false,
         tokens: { input: 30, output: 15, cached: 95, cacheCreate: 9, reasoning: 1 },
+        tiers: null,
+        pricing: null,
         share: 100,
       },
     ]);
@@ -353,10 +364,142 @@ describe("buildAllModels", () => {
         requests: 0,
         cost: 0,
         tokens: { input: 100, output: 20, cached: 170, cacheCreate: 5, reasoning: 5 },
+        tiers: null,
         pricing: null,
         costSource: null,
       },
     ]);
+  });
+});
+
+describe("speed tiers (issue 886)", () => {
+  const tierTotals = {
+    billable_total_tokens: 300,
+    input_tokens: 100,
+    output_tokens: 20,
+    cached_input_tokens: 170,
+    cache_creation_input_tokens: 5,
+    reasoning_output_tokens: 5,
+    total_cost_usd: "2.000000",
+    priority_input_tokens: 60,
+    priority_output_tokens: 10,
+    priority_cost_usd: "0.700000",
+    ultrafast_output_tokens: 4,
+    ultrafast_cost_usd: "1.200000",
+  };
+
+  it("extracts observed speed tiers and the standard residual in buildFleetData", () => {
+    const fleet = buildFleetData({
+      sources: [
+        {
+          source: "codex",
+          totals: { billable_total_tokens: 300 },
+          models: [
+            {
+              model_id: "gpt-6.1-sol",
+              totals: tierTotals,
+              pricing: { priority_multiplier: 2, ultrafast_multiplier: 6 },
+            },
+          ],
+        },
+      ],
+    });
+    const model = fleet[0].models[0];
+    expect(model.tiers).toEqual({
+      priority: {
+        tokens: { input: 60, output: 10, cached: 0, cacheCreate: 0, reasoning: 0 },
+        cost: 0.7,
+      },
+      ultrafast: {
+        tokens: { input: 0, output: 4, cached: 0, cacheCreate: 0, reasoning: 0 },
+        cost: 1.2,
+      },
+    });
+    expect(hasModelSpeedTiers(model)).toBe(true);
+    expect(modelSpeedTierMultiplier(model, "priority")).toBe(2);
+    expect(modelSpeedTierMultiplier(model, "ultrafast")).toBe(6);
+    const standard = modelSpeedTierStandard(model);
+    expect(standard?.tokens).toEqual({
+      input: 40,
+      output: 6,
+      cached: 170,
+      cacheCreate: 5,
+      reasoning: 5,
+    });
+    // Model cost minus both tier costs — the residual the backend leaves to
+    // the standard tier.
+    expect(standard?.cost).toBeCloseTo(0.1, 10);
+  });
+
+  it("keeps tier-less models tier-less and drops empty standard rows", () => {
+    const fleet = buildFleetData({
+      sources: [
+        {
+          source: "claude",
+          totals: { billable_total_tokens: 10 },
+          models: [{ model_id: "claude-sonnet", totals: { billable_total_tokens: 10 } }],
+        },
+      ],
+    });
+    const model = fleet[0].models[0];
+    expect(model.tiers).toBeNull();
+    expect(hasModelSpeedTiers(model)).toBe(false);
+    expect(modelSpeedTierStandard(model)).toBeNull();
+    expect(modelSpeedTierMultiplier(model, "priority")).toBe(0);
+  });
+
+  it("merges tier subsets when the same model is combined across tools", () => {
+    const models = buildAllModels([
+      {
+        label: "CODEX",
+        models: [
+          {
+            id: "gpt-6.1-sol",
+            name: "gpt-6.1-sol",
+            usage: 100,
+            cost: 2,
+            pricing: { priority_multiplier: 2, ultrafast_multiplier: 6 },
+            tiers: {
+              priority: { tokens: { input: 60, output: 10, cached: 0, cacheCreate: 0, reasoning: 0 }, cost: 0.7 },
+            },
+          },
+        ],
+      },
+      {
+        label: "CURSOR",
+        models: [
+          {
+            id: "gpt-6.1-sol",
+            name: "gpt-6.1-sol",
+            usage: 50,
+            cost: 1,
+            tiers: {
+              priority: { tokens: { input: 10, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 }, cost: 0.1 },
+              ultrafast: { tokens: { input: 0, output: 4, cached: 0, cacheCreate: 0, reasoning: 0 }, cost: 1.2 },
+            },
+          },
+        ],
+      },
+    ]);
+    expect(models[0].tiers.priority.tokens).toEqual({
+      input: 70,
+      output: 10,
+      cached: 0,
+      cacheCreate: 0,
+      reasoning: 0,
+    });
+    expect(models[0].tiers.priority.cost).toBeCloseTo(0.8, 10);
+    expect(models[0].tiers.ultrafast.tokens).toEqual({
+      input: 0,
+      output: 4,
+      cached: 0,
+      cacheCreate: 0,
+      reasoning: 0,
+    });
+    expect(models[0].tiers.ultrafast.cost).toBe(1.2);
+    // Pricing info (tier multipliers) survives the merge from the first
+    // source that carries it.
+    expect(models[0].pricing).toEqual({ priority_multiplier: 2, ultrafast_multiplier: 6 });
   });
 });
 

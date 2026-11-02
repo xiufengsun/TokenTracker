@@ -511,7 +511,19 @@ async function runLocalSyncCommand(extraEnv = {}, opts = {}) {
 // at require-time, so dev-server mocks still get LiteLLM-backed cost data.
 const __viteRequire = createRequire(import.meta.url);
 const __pricing = __viteRequire(path.resolve(REPO_ROOT, "src/lib/pricing"));
-const { getModelPricing, computeRowCost } = __pricing;
+const { getModelPricing, computeRowCost, computeRowTierCosts } = __pricing;
+
+// Speed-tier subset columns the real /usage-model-breakdown sums per model
+// (issue 886); the dev mock mirrors that shape so the dashboard tier UI gets
+// exercised in dev too.
+const SPEED_TIER_SUBSET_PREFIXES = ["priority_", "ultrafast_"];
+const SPEED_TIER_SUBSET_TOKEN_FIELDS = [
+  "input_tokens",
+  "cached_input_tokens",
+  "cache_creation_input_tokens",
+  "output_tokens",
+  "reasoning_output_tokens",
+];
 
 async function handleLocalApi(req, res, url) {
   // Honor the dashboard's tz / tz_offset_minutes params so hourly/daily
@@ -1044,6 +1056,15 @@ async function handleLocalApi(req, res, url) {
       modelAgg.totals.reasoning_output_tokens += row.reasoning_output_tokens || 0;
       modelAgg.totals.total_cost_usd = Number(modelAgg.totals.total_cost_usd || 0)
         + (Number(row.total_cost_usd) || 0);
+      const tierCosts = computeRowTierCosts(row);
+      modelAgg.totals.priority_cost_usd = Number(modelAgg.totals.priority_cost_usd || 0) + tierCosts.priority;
+      modelAgg.totals.ultrafast_cost_usd = Number(modelAgg.totals.ultrafast_cost_usd || 0) + tierCosts.ultrafast;
+      for (const prefix of SPEED_TIER_SUBSET_PREFIXES) {
+        for (const field of SPEED_TIER_SUBSET_TOKEN_FIELDS) {
+          const key = `${prefix}${field}`;
+          modelAgg.totals[key] = (modelAgg.totals[key] || 0) + (Number(row[key]) || 0);
+        }
+      }
     }
 
     // 转换为最终格式
@@ -1054,7 +1075,15 @@ async function handleLocalApi(req, res, url) {
           model: m.model,
           source: s.source,
         });
-        return { ...m, totals: { ...m.totals, total_cost_usd: cost.toFixed(6) } };
+        return {
+          ...m,
+          totals: {
+            ...m.totals,
+            total_cost_usd: cost.toFixed(6),
+            priority_cost_usd: Number(m.totals.priority_cost_usd || 0).toFixed(6),
+            ultrafast_cost_usd: Number(m.totals.ultrafast_cost_usd || 0).toFixed(6),
+          },
+        };
       }).sort((a, b) => b.totals.total_tokens - a.totals.total_tokens);
       const sourceCost = s.models.reduce((sum, m) => sum + Number(m.totals.total_cost_usd), 0);
       s.totals.total_cost_usd = sourceCost.toFixed(6);
