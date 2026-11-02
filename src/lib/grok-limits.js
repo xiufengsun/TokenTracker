@@ -264,6 +264,29 @@ function grokEntryAccessToken(entry) {
   return entry && typeof entry.key === "string" ? entry.key.trim() : "";
 }
 
+// Non-secret account id for cache partitioning: the OIDC `sub` claim inside the
+// access token, read with an unverified decode (only "who is this token for" —
+// never trusted for auth). Opaque tokens return null.
+function grokTokenSubject(token) {
+  if (typeof token !== "string" || !token.trim()) return null;
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    const subject = payload?.sub;
+    return typeof subject === "string" && subject.trim() ? subject.trim() : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// Errors that tell the user to re-login. They are actionable and must surface
+// instead of being masked by the stale disk-cache fallback (opencode-go
+// auth_error precedent).
+function isGrokAuthErrorCode(error) {
+  return error?.code === "GROK_AUTH_REQUIRED" || error?.code === "GROK_REAUTH_REQUIRED";
+}
+
 /**
  * Public xAI OIDC client refresh (auth method "none").
  * Matches Grok Build CLI's refresh against https://auth.x.ai/oauth2/token.
@@ -776,6 +799,10 @@ async function fetchGrokLimits({ home, env, fetchImpl = fetch, timeoutMs, nowMs 
     return {
       configured: true,
       error: error?.message || "Unknown error",
+      // A rejected refresh is actionable (re-login) and must not be hidden
+      // behind the stale disk-cache fallback. Internal marker — stripped
+      // before the payload is served.
+      ...(isGrokAuthErrorCode(error) ? { auth_error: true } : {}),
     };
   }
 
@@ -786,13 +813,16 @@ async function fetchGrokLimits({ home, env, fetchImpl = fetch, timeoutMs, nowMs 
     return {
       configured: true,
       error: resolved.error?.message || grokAuthError().message,
+      ...(isGrokAuthErrorCode(resolved.error) ? { auth_error: true } : {}),
     };
   }
 
   const startedAtMs = Date.now();
+  // Hoisted so the catch below can still derive the cache identity from the
+  // token the failing attempt used.
+  let accessToken = resolved.accessToken;
   try {
     let body;
-    let accessToken = resolved.accessToken;
     try {
       body = await fetchGrokBilling(resolved.accessToken, { fetchImpl, env, timeoutMs });
     } catch (error) {
@@ -831,11 +861,15 @@ async function fetchGrokLimits({ home, env, fetchImpl = fetch, timeoutMs, nowMs 
       configured: true,
       error: null,
       ...limits,
+      // Internal cache-partition key (stripped before the payload is served).
+      cache_identity: grokTokenSubject(accessToken) || resolved.loaded?.scopeKey || null,
     };
   } catch (error) {
     return {
       configured: true,
       error: error?.message || "Unknown error",
+      ...(isGrokAuthErrorCode(error) ? { auth_error: true } : {}),
+      cache_identity: grokTokenSubject(accessToken) || resolved.loaded?.scopeKey || null,
     };
   }
 }
@@ -849,6 +883,7 @@ module.exports = {
   loadGrokAuthEntry,
   readGrokAccessToken,
   isGrokAccessTokenExpired,
+  grokTokenSubject,
   resolveGrokOidcClientId,
   resolveGrokOidcIssuer,
   resolveGrokTokenEndpoint,
