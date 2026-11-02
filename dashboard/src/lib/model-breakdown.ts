@@ -112,6 +112,19 @@ export function hasModelTokenSplits(model: any) {
   return modelTokenSplitsTotal(model?.tokens) > 0;
 }
 
+/**
+ * True when a row's cost is unknown because no published rate prices it and
+ * the cost is not provider-reported. Fleet rows carry `pricing`/`costSource`
+ * straight from the edge; aggregated ranking rows from buildAllModels carry
+ * the precomputed `unpriced` flag instead. Same rule as the cost analysis
+ * modal: only an explicit "unpriced" status counts, so rows without pricing
+ * metadata (older CLI, undeployed edge) and free models stay unflagged.
+ */
+export function isUnpricedModel(model: any) {
+  if (model?.unpriced === true) return true;
+  return model?.costSource !== "provider_reported" && model?.pricing?.status === "unpriced";
+}
+
 function addTotalsInto(target: any, add: any) {
   for (const key of TOKEN_TOTAL_KEYS) {
     target[key] = (Number(target[key]) || 0) + (Number(add?.[key]) || 0);
@@ -332,6 +345,7 @@ export function buildAllModels(fleetData: any) {
       requests: 0,
       cost: 0,
       hasCost: false,
+      unpriced: false,
       nameWeight: 0,
       tokens: { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 },
     };
@@ -341,6 +355,13 @@ export function buildAllModels(fleetData: any) {
     const splits = model?.tokens || {};
     for (const splitKey of MODEL_TOKEN_SPLIT_KEYS) {
       current.tokens[splitKey] += Math.max(0, Number(splits[splitKey]) || 0);
+    }
+    // OR-combined so a merged row keeps the flag when any contributing tool
+    // lacks a published rate for the model. Request-only contributors never
+    // set it: they book no cost regardless of pricing, so their unpriced
+    // status says nothing about the merged row's cost.
+    if (usage > 0 && isUnpricedModel(model)) {
+      current.unpriced = true;
     }
     const cost = toFiniteNumber(model?.cost);
     if (cost != null) {
@@ -367,6 +388,7 @@ export function buildAllModels(fleetData: any) {
       usage: model.usage,
       requests: model.requests,
       cost: model.hasCost ? model.cost : null,
+      unpriced: model.unpriced === true,
       tokens: { ...model.tokens },
       share: totalUsage > 0
         ? Math.round((model.usage / totalUsage) * 1000) / 10
