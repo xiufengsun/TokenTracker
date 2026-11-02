@@ -44,6 +44,11 @@ export function AccountViewProvider({ children }) {
   const [cloudSyncOn, setCloudSyncOn] = useState(() => getCloudSyncEnabled());
   const [cloudUsageReady, setCloudUsageReady] = useState(() => getCloudUsageReady());
   const [revision, setRevision] = useState(0);
+  // View-only scope override (issue 979 part 3): flips the rendered data scope
+  // without touching the persisted cloud-sync preference — uploads keep
+  // following the preference, only what the page shows changes. Session-scoped
+  // on purpose: a reload falls back to whatever the preference resolves to.
+  const [scopeOverride, setScopeOverride] = useState(null);
   const cloudUsageReadyRef = React.useRef(cloudUsageReady);
 
   useEffect(() => {
@@ -90,12 +95,18 @@ export function AccountViewProvider({ children }) {
 
   // Public host: cloud is mandatory for signed-in users; signed-out users
   // get a no-data state (false) but the page should redirect to /login.
-  // Local host: opt-in via the toggle.
+  // Local host: opt-in via the toggle, overridable per session (issue 979
+  // part 3) once the first sync has landed. The switcher is only offered
+  // where both scopes are live — public hosts are pinned to cloud, and
+  // signed-out or not-yet-synced states have nothing to switch between.
+  const scopeSwitchable = Boolean(
+    authEnabled && signedIn && localHost && cloudSyncOn && cloudUsageReady,
+  );
   const accountView = useMemo(() => {
     if (!authEnabled || !signedIn) return false;
     if (!localHost) return true;
-    return cloudSyncOn && cloudUsageReady;
-  }, [authEnabled, signedIn, localHost, cloudSyncOn, cloudUsageReady]);
+    return cloudSyncOn && cloudUsageReady && scopeOverride !== "local";
+  }, [authEnabled, signedIn, localHost, cloudSyncOn, cloudUsageReady, scopeOverride]);
 
   // Single source of truth for revision bumps: fire when the *resolved*
   // accountView flips. Covers signIn/signOut, host change, and the
@@ -120,9 +131,21 @@ export function AccountViewProvider({ children }) {
   const expectCloud = authEnabled && (!localHost || (cloudSyncOn && cloudUsageReady));
   const resolving = authLoading && expectCloud;
 
+  const updateScopeOverride = React.useCallback((next) => {
+    setScopeOverride((prev) => (prev === next ? prev : next));
+  }, []);
+
   const value = useMemo(
-    () => ({ accountView, revision, localHost, resolving }),
-    [accountView, revision, localHost, resolving],
+    () => ({
+      accountView,
+      revision,
+      localHost,
+      resolving,
+      scopeSwitchable,
+      scopeOverride,
+      setScopeOverride: updateScopeOverride,
+    }),
+    [accountView, revision, localHost, resolving, scopeSwitchable, scopeOverride, updateScopeOverride],
   );
 
   return (
@@ -133,5 +156,13 @@ export function AccountViewProvider({ children }) {
 export function useAccountView() {
   const ctx = useContext(AccountViewContext);
   if (ctx) return ctx;
-  return { accountView: false, revision: 0, localHost: true, resolving: false };
+  return {
+    accountView: false,
+    revision: 0,
+    localHost: true,
+    resolving: false,
+    scopeSwitchable: false,
+    scopeOverride: null,
+    setScopeOverride: () => {},
+  };
 }

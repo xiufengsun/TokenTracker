@@ -730,6 +730,9 @@ usage.overview.request_only_item,ui,DashboardPage,UsageOverview,request_only_ite
 usage.overview.request_only_note,ui,DashboardPage,UsageOverview,request_only_note,"Active without token data: {{items}}. Per-model detail in All models.",,active
 usage.overview.scope_account,ui,DashboardPage,UsageOverview,scope_account,"Account-wide",,active
 usage.overview.scope_account_tip,ui,DashboardPage,UsageOverview,scope_account_tip,"Totals from every device synced to your account, not just this machine.",,active
+usage.overview.scope_local,ui,DashboardPage,UsageOverview,scope_local,"This device",,active
+usage.overview.scope_local_tip,ui,DashboardPage,UsageOverview,scope_local_tip,"Showing this machine only. Cloud sync keeps running in the background — switching does not pause uploads.",,active
+usage.overview.scope_switch_aria,ui,DashboardPage,UsageOverview,scope_switch_aria,"Data scope",,active
 usage.overview.request_only_separator,ui,DashboardPage,UsageOverview,request_only_separator,", ",,active
 usage.overview.model_details_aria,ui,DashboardPage,UsageOverview,model_details_aria,"{{provider}} model details",,active
 usage.overview.all_tools,ui,DashboardPage,UsageOverview,all_tools,"All",,active

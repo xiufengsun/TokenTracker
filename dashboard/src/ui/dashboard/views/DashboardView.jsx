@@ -123,6 +123,8 @@ export function DashboardView(props) {
     publicMode,
     isLocalMode,
     accountView,
+    accountScopeSwitchable,
+    onAccountScopeChange,
     shouldShowInstall,
     installPrompt,
     handleCopyInstall,
@@ -315,6 +317,8 @@ export function DashboardView(props) {
           <FadeIn delay={delay}>
             <UsageOverview
               accountView={accountView}
+              accountScopeSwitchable={accountScopeSwitchable}
+              onAccountScopeChange={onAccountScopeChange}
               period={period}
               periods={periodsForDisplay}
               onPeriodChange={setSelectedPeriod}

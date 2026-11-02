@@ -46,5 +46,39 @@ describe("AccountViewProvider", () => {
     const { result } = renderHook(() => useAccountView(), { wrapper });
 
     expect(result.current.accountView).toBe(true);
+    expect(result.current.scopeSwitchable).toBe(false);
+  });
+
+  it("flips the rendered scope without touching the sync preference", () => {
+    prefState.ready = true;
+    const wrapper = ({ children }) => <AccountViewProvider>{children}</AccountViewProvider>;
+    const { result } = renderHook(() => useAccountView(), { wrapper });
+
+    expect(result.current.scopeSwitchable).toBe(true);
+    expect(result.current.scopeOverride).toBeNull();
+
+    const revisionBefore = result.current.revision;
+    act(() => result.current.setScopeOverride("local"));
+    expect(result.current.scopeOverride).toBe("local");
+    expect(result.current.accountView).toBe(false);
+    expect(result.current.revision).toBeGreaterThan(revisionBefore);
+
+    const revisionAfterFlip = result.current.revision;
+    act(() => result.current.setScopeOverride("local"));
+    expect(result.current.revision).toBe(revisionAfterFlip);
+
+    act(() => result.current.setScopeOverride(null));
+    expect(result.current.scopeOverride).toBeNull();
+    expect(result.current.accountView).toBe(true);
+  });
+
+  it("stays local when sync is not ready despite a local override", () => {
+    prefState.ready = false;
+    const wrapper = ({ children }) => <AccountViewProvider>{children}</AccountViewProvider>;
+    const { result } = renderHook(() => useAccountView(), { wrapper });
+
+    act(() => result.current.setScopeOverride("local"));
+    expect(result.current.scopeSwitchable).toBe(false);
+    expect(result.current.accountView).toBe(false);
   });
 });
