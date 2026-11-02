@@ -254,6 +254,7 @@ export function UsageOverview({
   selectedDevice = "",
   dataRevision = 0,
   onDeviceChange,
+  accountView = false,
 }) {
   const tabs = normalizePeriods(periods);
   const dateLocale = getDateFnsLocale(getCopyLocale());
@@ -472,6 +473,19 @@ export function UsageOverview({
             })}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Data-scope badge (issue 979): with cloud sync on, this card renders
+                account-scope data that can silently differ from this machine's
+                numbers, so label the scope instead of letting an unpriced cloud
+                row read as a local pricing bug. Local scope stays unlabeled — it
+                is the default for signed-out visitors and share views. */}
+            {accountView ? (
+              <span
+                title={copy("usage.overview.scope_account_tip")}
+                className="inline-flex shrink-0 items-center h-8 px-2.5 text-xs font-medium rounded-md bg-oai-gray-100 dark:bg-oai-gray-800 text-oai-gray-700 dark:text-oai-gray-300"
+              >
+                {copy("usage.overview.scope_account")}
+              </span>
+            ) : null}
             {deviceOptions.length > 1 ? (
               <Select
                 value={selectedDevice}

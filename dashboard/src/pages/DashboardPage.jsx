@@ -1390,6 +1390,7 @@ export function DashboardPage({
     <>
     <DashboardView
       copy={copy}
+      accountView={accountView}
       onOpenShare={openShareModal}
       screenshotMode={screenshotMode}
       showExpiredGate={showExpiredGate}
