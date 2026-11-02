@@ -139,6 +139,7 @@ describe("Kiro limits disk-cache fallback", () => {
       assert.equal(live.kiro.primary_window.used_percent, 25);
       assert.equal(live.kiro.plan_label, "Pro");
       assert.equal(live.kiro.provenance.source, "provider-api");
+      assert.ok(!("cache_identity" in live.kiro), "internal identity marker must not reach the payload");
 
       // Pin the on-disk schema: identity stamp + windows only, no usage-sidecar bleed.
       const disk = JSON.parse(fs.readFileSync(cachePath(home), "utf8"));
@@ -162,6 +163,7 @@ describe("Kiro limits disk-cache fallback", () => {
       // The credits sidecar stays live-read on the fallback path, matching the
       // fetcher's own contract of merging it into every slot result.
       assert.equal(stale.kiro.tracked_credits, 1796.45);
+      assert.ok(!("cache_identity" in stale.kiro), "internal identity marker must not reach the payload");
     } finally {
       resetUsageLimitsCache();
       fs.rmSync(home, { recursive: true, force: true });
@@ -263,6 +265,37 @@ describe("Kiro limits disk-cache fallback", () => {
         false,
         "no readable identity must mean no disk entry",
       );
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to cache when the account switches while the CLI round-trip runs", async () => {
+    const home = makeHome();
+    try {
+      // The PTY handler performs the re-login mid-flight: the fetcher captured
+      // the pre-switch identity, so the finished panel may belong to the
+      // previous account and must not be stamped under the new one.
+      const switcherPty = () => {
+        seedKiroAuth(home, OTHER_PROFILE_ARN);
+        return okPty();
+      };
+      const live = await getUsageLimits(baseOptions(home, kiroCommandRunner(switcherPty)));
+      assert.equal(live.kiro.error, null);
+      assert.equal(live.kiro.primary_window.used_percent, 25);
+      assert.equal(
+        fs.existsSync(cachePath(home)),
+        false,
+        "a mid-flight account switch must refuse the disk write",
+      );
+
+      // With nothing cached, a later failure surfaces instead of bleeding the
+      // previous account's windows into the new login.
+      resetUsageLimitsCache();
+      const later = await getUsageLimits(baseOptions(home, kiroCommandRunner(failedPty)));
+      assert.equal(later.kiro.error, "Kiro CLI failed with status 1.");
+      assert.notEqual(later.kiro.stale, true);
     } finally {
       resetUsageLimitsCache();
       fs.rmSync(home, { recursive: true, force: true });

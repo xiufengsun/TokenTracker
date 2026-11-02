@@ -2332,11 +2332,16 @@ async function fetchKiroLimits({
   platform = process.platform,
   home = os.homedir(),
 } = {}) {
+  // Identity captured BEFORE the CLI runs: if the account switches while
+  // /usage is in flight, the write side can compare against a fresh read and
+  // refuse instead of stamping the previous account's panel under the new
+  // login. Internal marker — stripped before the payload is served.
+  const cacheIdentity = resolveKiroAuthIdentity({ home });
   const trackedCredits = readKiroCreditsSummary({ home });
   const binaryPath = await whichBinary("kiro-cli", { commandRunner });
   if (!binaryPath) {
     return trackedCredits
-      ? { configured: true, error: null, ...trackedCredits }
+      ? { configured: true, error: null, cache_identity: cacheIdentity, ...trackedCredits }
       : { configured: false };
   }
 
@@ -2394,6 +2399,7 @@ async function fetchKiroLimits({
           configured: true,
           error: null,
           ...parseKiroCommandResult(result, { now }),
+          cache_identity: cacheIdentity,
           ...(trackedCredits || {}),
         };
       } catch (error) {
@@ -2405,6 +2411,7 @@ async function fetchKiroLimits({
     return {
       configured: true,
       error: error?.message || "Unknown error",
+      cache_identity: cacheIdentity,
       ...(trackedCredits || {}),
     };
   }
@@ -5470,10 +5477,11 @@ async function fetchUsageLimitsUncached({
   // stale on any of those (mirrors Codex / OpenCode Go / Cursor). A
   // not-logged-in panel is actionable and must not be hidden behind stale
   // cache, so it passes through untouched. The credits-only success (kiro-cli
-  // absent, sidecar present) is not a fetch failure and keeps its shape. The
-  // auth file is read fresh on both branches, so a login that changed since the
-  // last poll partitions correctly — no fetcher plumbing needed (the CLI slot
-  // cannot lose its identity the way a timeout race loses a fetcher's marker).
+  // absent, sidecar present) is not a fetch failure and keeps its shape.
+  // Identity comes from the fetcher's pre-CLI capture (cache_identity), and a
+  // write only lands while a fresh read of the auth file still agrees — an
+  // account switch mid-flight refuses the write instead of stamping the
+  // previous account's panel under the new login.
   const kiroAuthBlocked = isKiroAuthError(kiro?.error);
   let kiroWithCache;
   if (!kiro || kiro.configured === false || kiroAuthBlocked) {
@@ -5485,23 +5493,34 @@ async function fetchUsageLimitsUncached({
       cached_at: new Date(nowMs).toISOString(),
     };
     if (cacheGeneration === usageLimitsCacheGeneration) {
-      writeKiroLimitsCache(kiroWithCache, {
-        home,
-        nowMs,
-        identity: resolveKiroAuthIdentity({ home }),
-      });
+      const identity = typeof kiro.cache_identity === "string"
+        ? kiro.cache_identity
+        : resolveKiroAuthIdentity({ home });
+      if (identity && identity === resolveKiroAuthIdentity({ home })) {
+        writeKiroLimitsCache(kiroWithCache, { home, nowMs, identity });
+      }
     }
   } else if (!kiro.error) {
     kiroWithCache = kiro;
   } else {
     const cached = readKiroLimitsCache({
       home,
-      nowMs,
+      // Gate against the wall clock, not the aggregate's entry stamp: a slow
+      // failed CLI read can straddle a reset, and an expired window must not
+      // pass the reset gate on a timestamp from before the read started.
+      nowMs: Date.now(),
+      // The current login, never the fetch-time capture — a switch that
+      // happened mid-flight must not match the previous account's entry.
       identity: resolveKiroAuthIdentity({ home }),
     });
     // The failed slot already carries the credits-sidecar fields the fetcher
     // merged in; the cached windows overlay on top of them.
     kiroWithCache = cached ? { ...kiro, ...cached } : kiro;
+  }
+  // cache_identity is internal cache plumbing, not payload.
+  if (kiroWithCache && "cache_identity" in kiroWithCache) {
+    const { cache_identity: _identity, ...kiroPayload } = kiroWithCache;
+    kiroWithCache = kiroPayload;
   }
 
   const data = {
