@@ -41,6 +41,7 @@ import {
   modelSpeedTierMultiplier,
   modelSpeedTierStandard,
   modelTokenSplitsTotal,
+  isUnpricedModel,
 } from "../../../lib/model-breakdown";
 import { ContextBreakdownPanel } from "./ContextBreakdownPanel.jsx";
 
@@ -262,6 +263,7 @@ export function UsageOverview({
   selectedDevice = "",
   dataRevision = 0,
   onDeviceChange,
+  accountView = false,
 }) {
   const tabs = normalizePeriods(periods);
   const dateLocale = getDateFnsLocale(getCopyLocale());
@@ -480,6 +482,19 @@ export function UsageOverview({
             })}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Data-scope badge (issue 979): with cloud sync on, this card renders
+                account-scope data that can silently differ from this machine's
+                numbers, so label the scope instead of letting an unpriced cloud
+                row read as a local pricing bug. Local scope stays unlabeled — it
+                is the default for signed-out visitors and share views. */}
+            {accountView ? (
+              <span
+                title={copy("usage.overview.scope_account_tip")}
+                className="inline-flex shrink-0 items-center h-8 px-2.5 text-xs font-medium rounded-md bg-oai-gray-100 dark:bg-oai-gray-800 text-oai-gray-700 dark:text-oai-gray-300"
+              >
+                {copy("usage.overview.scope_account")}
+              </span>
+            ) : null}
             {deviceOptions.length > 1 ? (
               <Select
                 value={selectedDevice}
@@ -845,9 +860,11 @@ function ModelSpeedTierRows({ model }) {
 
 /**
  * Grid cells of one model row: name, token total, cost and share. The share
- * cell carries a rotating chevron when the row has token splits.
+ * cell carries a rotating chevron when the row has token splits. A token-
+ * backed row with no computable cost shows the unpriced label instead of an
+ * empty cell, matching the cost analysis modal's wording.
  */
-function ModelRowHeader({ model, tokensLabel, costLabel, expandable, isExpanded }) {
+function ModelRowHeader({ model, tokensLabel, costLabel, unpricedLabel, expandable, isExpanded }) {
   const { formatTokensTooltip } = useTokenFormat();
   return (
     <>
@@ -863,8 +880,11 @@ function ModelRowHeader({ model, tokensLabel, costLabel, expandable, isExpanded 
       >
         {tokensLabel}
       </span>
-      <span className="col-start-3 row-start-1 text-right whitespace-nowrap text-sm text-oai-gray-500 dark:text-oai-gray-400 tabular-nums">
-        {costLabel}
+      <span
+        title={unpricedLabel ? copy("dashboard.cost_breakdown.unpriced") : undefined}
+        className="col-start-3 row-start-1 text-right whitespace-nowrap text-sm text-oai-gray-500 dark:text-oai-gray-400 tabular-nums"
+      >
+        {costLabel ?? unpricedLabel}
       </span>
       <span className="col-start-4 row-start-1 flex w-full items-center justify-end gap-1 whitespace-nowrap text-sm text-oai-black dark:text-oai-white tabular-nums">
         {model.share}%
@@ -903,6 +923,13 @@ function ModelUsageRows({ models, color }) {
       {models.map((model) => {
         const tokensLabel = modelTokensCellLabel(model, formatTokens);
         const costLabel = formatCost(model.cost, currency, rate);
+        // A blank cost cell on a token-backed row means "no published rate",
+        // not "free" — spell it out instead of leaving an empty column that
+        // reads as broken. Request-only rows (no tokens) keep the blank cell:
+        // their missing cost means "nothing booked", not "unpriced".
+        const unpricedLabel = !costLabel && Number(model.usage) > 0 && isUnpricedModel(model)
+          ? copy("dashboard.cost_breakdown.unpriced_label")
+          : null;
         const clampedShare = Math.max(0, Math.min(100, Number(model.share) || 0));
         const rowKey = model.id || model.name;
         // A row expands only when the backend supplied token-type splits;
@@ -912,7 +939,7 @@ function ModelUsageRows({ models, color }) {
         const expandable = hasModelTokenSplits(model);
         const isExpanded = expandable && expandedModel === rowKey;
         const gridClassName = MODEL_ROW_GRID;
-        const headerProps = { model, tokensLabel, costLabel, expandable, isExpanded };
+        const headerProps = { model, tokensLabel, costLabel, unpricedLabel, expandable, isExpanded };
         return (
           <div key={rowKey} data-model-rank-row>
             {expandable ? (
