@@ -2791,7 +2791,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       const includeBuckets = !["0", "false"].includes(String(url.searchParams.get("include_buckets") || "").toLowerCase());
       // The list page renders one model name plus a token/cost/performance
       // triple per model; the remaining per-model counters (~39 of 44 fields)
-      // only feed the detail modal, so the browser can opt out of them.
+      // are not read by the dashboard, so the browser can opt out of them.
       const includeModelDetail = !["0", "false"].includes(String(url.searchParams.get("include_model_detail") || "").toLowerCase());
       // This payload contains local paths and resumable session identifiers.
       // The server is loopback-only; additionally prevent browser/proxy caches

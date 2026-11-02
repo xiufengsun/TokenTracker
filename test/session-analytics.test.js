@@ -417,6 +417,45 @@ test("recheck skips the TTL but still reuses unchanged files", async () => {
   assert.equal(rechecked.find((row) => row.project_key === "project-b").turns, 1);
 });
 
+test("recheck retries a previous run that skipped transcripts", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tt-session-recheck-skipped-"));
+  const projectDir = path.join(home, ".claude", "projects", "project-a");
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "session-a.jsonl"), `${JSON.stringify({ type: "user", sessionId: "session-a", cwd: projectDir, timestamp: "2026-07-18T06:00:00Z", message: { content: "build" } })}\n`);
+
+  await buildSessionAnalytics({ home, force: true });
+  const metaPath = path.join(home, ".tokentracker", "tracker", "session.queue.jsonl.meta.json");
+  // Simulate a run that had to skip a transcript (transient read/parse error).
+  // Nothing on disk changes, so only an explicit refresh may retry it.
+  const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+  meta.skipped_files = 1;
+  fs.writeFileSync(metaPath, `${JSON.stringify(meta)}\n`);
+
+  const refreshed = await buildSessionAnalytics({ home, recheck: true });
+  assert.equal(refreshed.length, 1);
+  // The rebuild recomputed the real skip count (0) instead of trusting the
+  // cached "1"; a plain TTL/signature hit would have preserved it.
+  assert.equal(JSON.parse(fs.readFileSync(metaPath, "utf8")).skipped_files, 0);
+});
+
+test("recheck rebuilds a corrupt sidecar instead of serving the empty cache", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tt-session-recheck-sidecar-"));
+  const projectDir = path.join(home, ".claude", "projects", "project-a");
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "session-a.jsonl"), `${JSON.stringify({ type: "user", sessionId: "session-a", cwd: projectDir, timestamp: "2026-07-18T06:00:00Z", message: { content: "build" } })}\n`);
+
+  await buildSessionAnalytics({ home, force: true });
+  const sidecarPath = path.join(home, ".tokentracker", "tracker", "session.queue.jsonl");
+  // Keep the meta signature valid but destroy the sidecar: the signature still
+  // matches, so only the sidecarReadFailed guard forces a rebuild.
+  fs.writeFileSync(sidecarPath, "{not valid json\n");
+
+  const rebuilt = await buildSessionAnalytics({ home, recheck: true });
+  assert.equal(rebuilt.length, 1);
+  const persisted = fs.readFileSync(sidecarPath, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  assert.equal(persisted.length, 1);
+});
+
 test("Claude session title uses the ai-title record, never the prompt body", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-session-title-"));
   const filePath = path.join(dir, "session.jsonl");

@@ -2169,7 +2169,10 @@ function filesSignature(files) {
   for (const filePath of files) {
     try {
       const stat = fs.statSync(filePath);
-      hash.update(`${filePath}\0${stat.size}\0${stat.mtimeMs}\n`);
+      // Keep this in sync with sessionFileStatKey(): a size+mtime-only hash
+      // misses rewrites that preserve both (backup restore, mtime-preserving
+      // editors, atomic replace with identical size), while ctime changes.
+      hash.update(`${filePath}\0${stat.size}\0${stat.mtimeMs}\0${stat.ctimeMs}\n`);
     } catch { /* vanished during discovery */ }
   }
   return hash.digest("hex");
@@ -2391,10 +2394,20 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     ...[...(discovered.zcode || []), ...(discovered.opencode || [])].flatMap((dbPath) => [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]),
   ]);
   // The signature covers every discovered file's stat key, so an identical
-  // signature proves the cached rows are current — refresh included.
-  if (!force && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.signature === signature) {
-    await writeAtomic(metaPath, `${JSON.stringify({ ...previousMeta, checked_at: new Date().toISOString() })}\n`);
-    return readSidecarWithMeta(sidecarPath, previousMeta);
+  // signature proves the cached rows are current — refresh included. The one
+  // exception: an explicit refresh re-parses after a previous run skipped a
+  // transcript, so a transient read/parse failure can recover without waiting
+  // for the file itself to change.
+  const retrySkippedOnRecheck = recheck && Number(previousMeta?.skipped_files) > 0;
+  if (!force && !retrySkippedOnRecheck && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.signature === signature) {
+    const cached = readSidecarWithMeta(sidecarPath, previousMeta);
+    // A missing/corrupt sidecar reads as an empty list. The source signature
+    // can still match, so only an explicit refresh used to notice the loss;
+    // rebuild instead of returning an empty cache.
+    if (!cached.sidecarReadFailed) {
+      await writeAtomic(metaPath, `${JSON.stringify({ ...previousMeta, checked_at: new Date().toISOString() })}\n`);
+      return cached;
+    }
   }
 
   const previousRows = !force && previousMeta?.version === SIDECAR_VERSION
@@ -2868,9 +2881,9 @@ function resumeCommandFor(source, sessionId) {
 }
 
 // The list page reads a model name plus a token/cost/performance triple per
-// model row; every other counter in the dense 44-field model_usage row only
-// feeds the detail modal. Keeping this projection here (rather than deleting
-// fields at the HTTP layer) guarantees the shape stays declared by
+// model row; the other counters in the dense 44-field model_usage row are not
+// read by the dashboard at all. Keeping this projection here (rather than
+// deleting fields at the HTTP layer) guarantees the shape stays declared by
 // dashboard/src/lib/sessions-api.ts.
 const BROWSER_MODEL_USAGE_FIELDS = ["model", "total_tokens", "cost_usd", "performance", "pricing"];
 
