@@ -214,6 +214,13 @@ const KIRO_AUTH_TOKEN_FILE = "kiro-auth-token.json";
 // Cursor).
 const COPILOT_LIMITS_CACHE_FILE = "copilot-usage-limits-cache.json";
 const COPILOT_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// Devin's GetPlanStatus RPC (server.codeium.com) is the only source of its
+// daily/weekly quota windows — window state lives server-side. A transient
+// timeout / 5xx previously blanked the card until the next poll — persist the
+// last successful windows so a blip serves stale bars instead
+// (mirrors OpenCode Go / Cursor).
+const DEVIN_LIMITS_CACHE_FILE = "devin-usage-limits-cache.json";
+const DEVIN_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // A 429 from the usage endpoint carries a long `retry-after` (often 20+ minutes). Persist
 // the cooldown so every surface — this process, the menu bar app's embedded server, a later
 // restart — stops calling until it expires. Hammering during the cooldown just renews the
@@ -3595,6 +3602,80 @@ async function resolveCopilotCacheIdentity({
   }
 }
 
+function resolveDevinLimitsCachePath({ home } = {}) {
+  return path.join(home || os.homedir(), ".tokentracker", "tracker", DEVIN_LIMITS_CACHE_FILE);
+}
+
+function hasDevinWindow(limits) {
+  return Boolean(limits?.primary_window || limits?.secondary_window);
+}
+
+// Devin windows carry `reset_at` as an ISO string. A window whose reset has
+// already passed is stale data, not a usable fallback, so drop it. Windows
+// without a reset stamp are kept — the overall cached_at max-age gate already
+// bounds them.
+function isDevinCacheWindowUsable(window, { nowMs } = {}) {
+  if (!window || typeof window !== "object") return false;
+  const resetAtMs = parseTimeMs(window.reset_at);
+  if (resetAtMs === null) return true;
+  return resetAtMs > nowMs;
+}
+
+function normalizeDevinCachedLimits(
+  raw,
+  { nowMs = Date.now(), maxAgeMs = DEVIN_LIMITS_CACHE_MAX_AGE_MS } = {},
+) {
+  const cachedAtMs = parseTimeMs(raw?.cached_at);
+  if (!Number.isFinite(cachedAtMs)) return null;
+  if (cachedAtMs > nowMs + 60_000) return null;
+  if (nowMs - cachedAtMs > maxAgeMs) return null;
+
+  const cached = {
+    configured: true,
+    error: null,
+    plan_label: typeof raw?.plan_label === "string" ? raw.plan_label : null,
+    primary_window: isDevinCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
+    secondary_window: isDevinCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
+    stale: true,
+    cached_at: raw.cached_at,
+  };
+  return hasDevinWindow(cached) ? cached : null;
+}
+
+// Devin has no locally readable, non-secret identity to partition by: the CLI
+// stores only the session token (hashing it for a label is out — the CodeQL
+// js/insufficient-password-hash precedent), and the provider deliberately
+// never reads the identity-bearing GetUserStatus RPC. The credentials file's
+// single token slot makes the cache single-tenant, mirroring OpenCode Go: one
+// entry, overwritten by the next successful fetch, bounded by the gates above.
+function readDevinLimitsCache({ home, nowMs = Date.now() } = {}) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(resolveDevinLimitsCachePath({ home }), "utf8"));
+    return normalizeDevinCachedLimits(parsed?.devin, { nowMs });
+  } catch (_error) {
+    return null;
+  }
+}
+
+function writeDevinLimitsCache(limits, { home, nowMs = Date.now() } = {}) {
+  if (!limits?.configured || limits.error || !hasDevinWindow(limits)) return;
+  const cachePath = resolveDevinLimitsCachePath({ home });
+  const payload = {
+    devin: {
+      plan_label: limits.plan_label || null,
+      primary_window: limits.primary_window || null,
+      secondary_window: limits.secondary_window || null,
+      cached_at: new Date(nowMs).toISOString(),
+    },
+  };
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    const tmpPath = `${cachePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmpPath, cachePath);
+  } catch (_error) {}
+}
+
 function resolveClaudeRateLimitPath({ home } = {}) {
   return path.join(home || os.homedir(), ".tokentracker", "tracker", CLAUDE_RATE_LIMIT_FILE);
 }
@@ -5196,9 +5277,10 @@ async function fetchUsageLimitsUncached({
       ),
     // Devin (devin.ai): daily/weekly subscription quota from the official
     // GetPlanStatus RPC, keyed by the session token the Devin CLI stores in
-    // ~/.local/share/devin/credentials.toml. No local fallback — window state
-    // lives server-side. fetchDevinLimits throws on auth expiry so the
-    // assemble step below can flag auth_action_required.
+    // ~/.local/share/devin/credentials.toml — window state lives server-side,
+    // so the assemble step below serves the last-good disk cache when this
+    // poll fails transiently. fetchDevinLimits throws on auth expiry so the
+    // assemble step can flag auth_action_required.
     hiddenSet.has("devin") ? hiddenSettled : withProviderTimeout(fetchDevinLimits({ home, env, enabled: devinEnabled === true, fetchImpl: providerFetch }), "Devin", providerTimeoutMs)
       .then(
         (value) => ({ status: "fulfilled", value }),
@@ -5448,8 +5530,13 @@ async function fetchUsageLimitsUncached({
 
   // Devin: server-owned quota windows like CommandCode — a fulfilled
   // `configured: false` means no CLI credentials; a rejected fetch with
-  // AUTH_EXPIRED flags auth_action_required for the re-sign-in hint.
+  // AUTH_EXPIRED flags auth_action_required for the re-sign-in hint, and a
+  // CREDENTIALS_INVALID error is a broken local sign-in (unreadable file,
+  // missing token, unsupported api_server_url) — both actionable, never
+  // masked by the disk cache below.
   let devinObj;
+  const devinCredentialsInvalid =
+    devinRaw?.status === "rejected" && devinRaw.reason?.code === "CREDENTIALS_INVALID";
   if (devinRaw?.status === "fulfilled") {
     const value = devinRaw.value;
     devinObj = value && value.configured === false
@@ -5460,6 +5547,27 @@ async function fetchUsageLimitsUncached({
     devinObj = reason?.code === "AUTH_EXPIRED"
       ? { configured: true, error: reason?.message || "Unknown error", auth_action_required: "reauth" }
       : { configured: true, error: reason?.message || "Unknown error" };
+  }
+
+  // Devin: persist last successful windows so a transient timeout/5xx on the
+  // server.codeium.com route serves stale bars instead of a flashing "fetch
+  // failed" (mirrors OpenCode Go / Cursor). An opted-out / unconfigured
+  // provider has no window state to fall back on, and legacy billing plans
+  // without quota windows never write an entry.
+  if (
+    devinObj
+    && devinObj.configured !== false
+    && devinObj.auth_action_required !== "reauth"
+    && !devinCredentialsInvalid
+  ) {
+    if (!devinObj.error && hasDevinWindow(devinObj)) {
+      if (cacheGeneration === usageLimitsCacheGeneration) {
+        writeDevinLimitsCache(devinObj, { home, nowMs });
+      }
+    } else if (devinObj.error) {
+      const cached = readDevinLimitsCache({ home, nowMs });
+      if (cached) devinObj = cached;
+    }
   }
 
   // Cursor: persist last successful windows so a transient timeout/5xx on the

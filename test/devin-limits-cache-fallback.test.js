@@ -1,0 +1,302 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { describe, it, beforeEach } = require("node:test");
+
+const {
+  getUsageLimits,
+  resetUsageLimitsCache,
+} = require("./helpers/usage-limits");
+
+const TEST_TOKEN = "devin-test-session-token";
+
+function jsonResponse(status, body) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async json() {
+      return body;
+    },
+  };
+}
+
+// Resets are pinned to the future relative to the run: a cached window whose
+// reset has already passed is dropped, so a "now-relative" fixture is the only
+// stable shape across slow CI machines.
+function futureResetUnix(secondsFromNow) {
+  return Math.floor(Date.now() / 1000) + secondsFromNow;
+}
+
+function planStatusBody({
+  planName = "Pro",
+  billingStrategy = "BILLING_STRATEGY_QUOTA",
+  dailyRemaining = 58,
+  weeklyRemaining = 30,
+} = {}) {
+  return {
+    planStatus: {
+      planInfo: {
+        planName,
+        billingStrategy,
+      },
+      dailyQuotaRemainingPercent: dailyRemaining,
+      weeklyQuotaRemainingPercent: weeklyRemaining,
+      dailyQuotaResetAtUnix: String(futureResetUnix(86_400)),
+      weeklyQuotaResetAtUnix: String(futureResetUnix(7 * 86_400)),
+    },
+  };
+}
+
+function makeDevinHome() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-devin-cache-"));
+  const home = path.join(tmp, "home");
+  const credentialsPath = path.join(home, ".local", "share", "devin", "credentials.toml");
+  fs.mkdirSync(path.dirname(credentialsPath), { recursive: true });
+  fs.writeFileSync(credentialsPath, `windsurf_api_key = "${TEST_TOKEN}"\n`);
+  return { tmp, home, credentialsPath };
+}
+
+function cachePath(home) {
+  return path.join(home, ".tokentracker", "tracker", "devin-usage-limits-cache.json");
+}
+
+function seedDevinCache(home, entry) {
+  fs.mkdirSync(path.dirname(cachePath(home)), { recursive: true });
+  fs.writeFileSync(cachePath(home), JSON.stringify({ devin: entry }));
+}
+
+// Live Devin fetch, other providers silent.
+function devinFetchImpl(handler, { seen = null } = {}) {
+  return async (url) => {
+    if (String(url).includes("GetPlanStatus")) {
+      if (seen) seen.calls += 1;
+      return handler();
+    }
+    return jsonResponse(404, {});
+  };
+}
+
+function baseOptions(home, overrides = {}) {
+  return {
+    home,
+    env: { CLAUDE_CONFIG_DIR: path.join(home, "no-claude") },
+    devinEnabled: true,
+    fetchImpl: devinFetchImpl(() => jsonResponse(404, {})),
+    ...overrides,
+  };
+}
+
+describe("Devin limits disk-cache fallback", () => {
+  beforeEach(() => {
+    resetUsageLimitsCache();
+  });
+
+  it("persists a live read and serves it stale when a later fetch fails", async () => {
+    const { tmp, home } = makeDevinHome();
+    try {
+      const live = await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(200, planStatusBody())),
+      }));
+      assert.equal(live.devin.configured, true);
+      assert.equal(live.devin.error, null);
+      assert.equal(live.devin.stale, false);
+      assert.equal(live.devin.plan_label, "Pro");
+      assert.equal(live.devin.primary_window.used_percent, 42);
+      assert.equal(live.devin.secondary_window.used_percent, 70);
+      assert.equal(live.devin.provenance.source, "provider-api");
+
+      // Pin the on-disk schema: windows and label only — no timestamps or
+      // credentials material beyond the fetch outcome.
+      const disk = JSON.parse(fs.readFileSync(cachePath(home), "utf8"));
+      assert.deepEqual(Object.keys(disk.devin).sort(), [
+        "cached_at", "plan_label", "primary_window", "secondary_window",
+      ]);
+      assert.equal(disk.devin.plan_label, "Pro");
+      assert.equal(disk.devin.primary_window.used_percent, 42);
+
+      resetUsageLimitsCache();
+      const stale = await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(503, {})),
+      }));
+      assert.equal(stale.devin.configured, true);
+      assert.equal(stale.devin.error, null, "stale cache must be served instead of a red error");
+      assert.equal(stale.devin.stale, true);
+      assert.equal(stale.devin.plan_label, "Pro");
+      assert.equal(stale.devin.primary_window.used_percent, 42);
+      assert.equal(stale.devin.secondary_window.used_percent, 70);
+      assert.equal(stale.devin.cached_at, live.devin.cached_at, "stale read must preserve the original cached_at");
+      assert.equal(stale.devin.provenance.source, "disk-cache");
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("does not hide a session-expiry error behind stale cache", async () => {
+    const { tmp, home } = makeDevinHome();
+    try {
+      await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(200, planStatusBody())),
+      }));
+      resetUsageLimitsCache();
+
+      const expired = await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(401, {})),
+      }));
+      // The cache file is on disk, but a 401 means re-login and must surface.
+      assert.equal(expired.devin.configured, true);
+      assert.match(expired.devin.error, /devin auth login/);
+      assert.equal(expired.devin.auth_action_required, "reauth");
+      assert.notEqual(expired.devin.stale, true);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("serves stale cache when the provider timeout wins the race", async () => {
+    const { tmp, home } = makeDevinHome();
+    try {
+      await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(200, planStatusBody())),
+      }));
+      resetUsageLimitsCache();
+
+      // A hung upstream + a tiny provider budget: the outer timeout race is the
+      // common failure mode this cache exists for, and the fallback must still
+      // land from the assemble step.
+      const stale = await getUsageLimits(baseOptions(home, {
+        providerTimeoutMs: 50,
+        fetchImpl: devinFetchImpl(() => new Promise(() => {})),
+      }));
+      assert.equal(stale.devin.configured, true);
+      assert.equal(stale.devin.error, null);
+      assert.equal(stale.devin.stale, true);
+      assert.equal(stale.devin.primary_window.used_percent, 42);
+      assert.equal(stale.devin.provenance.source, "disk-cache");
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("does not mask a broken local sign-in behind stale cache", async () => {
+    const { tmp, home, credentialsPath } = makeDevinHome();
+    try {
+      await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(200, planStatusBody())),
+      }));
+      resetUsageLimitsCache();
+
+      // Swap the credentials file for a directory: every read fails with
+      // EISDIR on every platform — a deterministic "unreadable" fixture.
+      fs.rmSync(credentialsPath);
+      fs.mkdirSync(credentialsPath);
+      const seen = { calls: 0 };
+      const broken = await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(200, planStatusBody()), { seen }),
+      }));
+      assert.equal(seen.calls, 0, "a broken credentials file must fail before any request");
+      assert.match(broken.devin.error, /could not read/i);
+      assert.match(broken.devin.error, /devin auth login/);
+      assert.ok(!broken.devin.error.includes(tmp), "leaked fs path");
+      assert.notEqual(broken.devin.stale, true);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("drops a cached window whose reset_at has already passed", async () => {
+    const { tmp, home } = makeDevinHome();
+    try {
+      seedDevinCache(home, {
+        plan_label: "Pro",
+        primary_window: { used_percent: 42, reset_at: new Date(Date.now() - 3_600_000).toISOString() },
+        secondary_window: null,
+        cached_at: new Date(Date.now() - 60_000).toISOString(),
+      });
+
+      const result = await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(503, {})),
+      }));
+      assert.equal(
+        result.devin.error,
+        "Devin quota request was rejected (HTTP 503).",
+        "a rolled-over window is stale data, not a fallback",
+      );
+      assert.notEqual(result.devin.stale, true);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a cache entry older than the max-age TTL", async () => {
+    const { tmp, home } = makeDevinHome();
+    try {
+      seedDevinCache(home, {
+        plan_label: "Pro",
+        primary_window: { used_percent: 42, reset_at: new Date(Date.now() + 86_400_000).toISOString() },
+        secondary_window: null,
+        cached_at: new Date(Date.now() - 8 * 86_400_000).toISOString(),
+      });
+
+      const result = await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(503, {})),
+      }));
+      assert.equal(result.devin.error, "Devin quota request was rejected (HTTP 503).");
+      assert.notEqual(result.devin.stale, true);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("does not cache a legacy billing plan without quota windows", async () => {
+    const { tmp, home } = makeDevinHome();
+    try {
+      const live = await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(200, planStatusBody({
+          billingStrategy: "BILLING_STRATEGY_ACU",
+        }))),
+      }));
+      assert.equal(live.devin.configured, true);
+      assert.equal(live.devin.plan_label, "Pro");
+      assert.equal(live.devin.primary_window, null);
+      assert.equal(live.devin.secondary_window, null);
+      assert.ok(!fs.existsSync(cachePath(home)), "a windowless plan must not write a cache entry");
+
+      resetUsageLimitsCache();
+      const failed = await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(503, {})),
+      }));
+      assert.equal(failed.devin.error, "Devin quota request was rejected (HTTP 503).");
+      assert.notEqual(failed.devin.stale, true);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the opted-out selection a bare sentinel even with a cache on disk", async () => {
+    const { tmp, home } = makeDevinHome();
+    try {
+      seedDevinCache(home, {
+        plan_label: "Pro",
+        primary_window: { used_percent: 42, reset_at: new Date(Date.now() + 86_400_000).toISOString() },
+        secondary_window: null,
+        cached_at: new Date(Date.now() - 60_000).toISOString(),
+      });
+
+      const disabled = await getUsageLimits(baseOptions(home, { devinEnabled: false }));
+      assert.deepEqual(disabled.devin, { configured: false });
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

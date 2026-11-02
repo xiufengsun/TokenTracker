@@ -28,6 +28,15 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+// Local sign-in problems are persistent configuration errors, not transient
+// fetch failures: the aggregator's disk-cache fallback must never mask them,
+// so they carry a distinctive code the assembly can gate on.
+function credentialsError(message) {
+  const error = new Error(message);
+  error.code = "CREDENTIALS_INVALID";
+  return error;
+}
+
 // Minimal root-level TOML reader for the CLI-written credentials file: bare
 // `key = value` lines before the first `[section]`, nothing else.
 function parseDevinCredentialsToml(raw) {
@@ -68,7 +77,7 @@ function readDevinCredentials({ home, env = process.env } = {}) {
     raw = fs.readFileSync(base, "utf8");
   } catch (error) {
     if (error && error.code === "ENOENT") return null;
-    throw new Error(
+    throw credentialsError(
       "Could not read the Devin CLI credentials file — check its permissions or run `devin auth login` to sign in again.",
     );
   }
@@ -77,7 +86,7 @@ function readDevinCredentials({ home, env = process.env } = {}) {
     ? fields.windsurf_api_key.trim()
     : null;
   if (!apiKey) {
-    throw new Error(
+    throw credentialsError(
       "Devin credentials file has no sign-in token — run `devin auth login`.",
     );
   }
@@ -85,7 +94,7 @@ function readDevinCredentials({ home, env = process.env } = {}) {
     ? fields.api_server_url.trim().replace(/\/+$/, "")
     : null;
   if (apiServerUrl && apiServerUrl !== DEVIN_API_ORIGIN) {
-    throw new Error(
+    throw credentialsError(
       "Devin credentials point at a custom api_server_url, which this quota provider does not support.",
     );
   }
