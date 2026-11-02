@@ -235,9 +235,14 @@ async function fetchDevinLimits({ home, env = process.env, enabled = false, fetc
     throw error;
   }
   if (!response?.ok) {
-    throw new Error(
+    const error = new Error(
       `Devin quota request was rejected (HTTP ${response?.status ?? "?"}).`,
     );
+    // The aggregate's disk-cache fallback only covers transient failures:
+    // carrying the status lets it tell a 429/5xx blip from an ambiguous or
+    // persistent rejection like HTTP 400 (docs/devin-limits.md).
+    if (typeof response?.status === "number") error.statusCode = response.status;
+    throw error;
   }
   let body;
   try {

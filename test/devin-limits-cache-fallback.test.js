@@ -157,6 +157,82 @@ describe("Devin limits disk-cache fallback", () => {
     }
   });
 
+  it("does not mask an ambiguous HTTP 400 behind stale cache", async () => {
+    const { tmp, home } = makeDevinHome();
+    try {
+      await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(200, planStatusBody())),
+      }));
+      resetUsageLimitsCache();
+
+      const ambiguous = await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(400, { code: "invalid_argument" })),
+      }));
+      // docs/devin-limits.md pins 400 as an ambiguous rejection, not proof of
+      // expiry and not a transient blip — it surfaces instead of stale bars.
+      assert.equal(ambiguous.devin.error, "Devin quota request was rejected (HTTP 400).");
+      assert.notEqual(ambiguous.devin.stale, true);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps serving stale cache on a rate-limited poll", async () => {
+    const { tmp, home } = makeDevinHome();
+    try {
+      await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(200, planStatusBody())),
+      }));
+      resetUsageLimitsCache();
+
+      const limited = await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(429, {})),
+      }));
+      assert.equal(limited.devin.configured, true);
+      assert.equal(limited.devin.error, null);
+      assert.equal(limited.devin.stale, true);
+      assert.equal(limited.devin.primary_window.used_percent, 42);
+      assert.equal(limited.devin.provenance.source, "disk-cache");
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("clears the disk cache when a plan stops reporting quota windows", async () => {
+    const { tmp, home } = makeDevinHome();
+    try {
+      seedDevinCache(home, {
+        plan_label: "Pro",
+        primary_window: { used_percent: 42, reset_at: new Date(Date.now() + 86_400_000).toISOString() },
+        secondary_window: null,
+        cached_at: new Date(Date.now() - 60_000).toISOString(),
+      });
+
+      // The account moves to a legacy billing strategy: the successful read
+      // has no windows, so the prior quota entry must not survive to serve
+      // the former plan's bars on a later blip.
+      const live = await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(200, planStatusBody({
+          billingStrategy: "BILLING_STRATEGY_ACU",
+        }))),
+      }));
+      assert.equal(live.devin.primary_window, null);
+      assert.ok(!fs.existsSync(cachePath(home)), "a windowless successful read must clear the prior entry");
+
+      resetUsageLimitsCache();
+      const failed = await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(503, {})),
+      }));
+      assert.equal(failed.devin.error, "Devin quota request was rejected (HTTP 503).");
+      assert.notEqual(failed.devin.stale, true);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("serves stale cache when the provider timeout wins the race", async () => {
     const { tmp, home } = makeDevinHome();
     try {

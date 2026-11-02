@@ -69,7 +69,7 @@ Every failure surfaces through owned, fixed messages — the provider never forw
 - No credentials file → `configured: false` and the panel shows the sign-in hint.
 - A credentials file that exists but cannot be read (permissions, wrong type) → a fixed credential-read error pointing at `devin auth login`; only `ENOENT` counts as "not signed in". Local sign-in problems (unreadable file, missing token, unsupported `api_server_url`) are persistent configuration errors flagged `CREDENTIALS_INVALID`, so the disk-cache fallback below never masks them.
 - `401` / `403` → the saved session token expired or was rejected. The aggregate flags `auth_action_required: "reauth"` and the panel points at `devin auth login`.
-- `400` → an ambiguous request rejection, **not** proof of expiry; surfaced as a plain provider error.
+- `400` → an ambiguous request rejection, **not** proof of expiry; surfaced as a plain provider error. Like the other non-auth 4xx rejections it is potentially persistent, so the disk-cache fallback never masks it — only timeouts, transport failures, schema-malformed responses, 429 and 5xx serve last-good bars.
 - Transport failures → a fixed `Devin quota request failed.` (aborts report as a timeout); schema failures → a fixed malformed-response error.
 
 ## Brand asset

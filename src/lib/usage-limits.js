@@ -3676,6 +3676,24 @@ function writeDevinLimitsCache(limits, { home, nowMs = Date.now() } = {}) {
   } catch (_error) {}
 }
 
+function clearDevinLimitsCache({ home } = {}) {
+  try {
+    fs.rmSync(resolveDevinLimitsCachePath({ home }), { force: true });
+  } catch (_error) {}
+}
+
+// Only transient failures fall back to the disk cache. Requests without a
+// status (timeouts, transport failures, non-JSON or schema-malformed bodies)
+// are blips by construction; 429 and 5xx are the classic retryable classes.
+// Everything else — the ambiguous HTTP 400 the docs pin as a plain provider
+// error, and any other non-auth 4xx — is potentially persistent, and stale
+// bars must not mask it for up to the whole TTL.
+function isDevinTransientFetchError(reason) {
+  const status = reason?.statusCode;
+  if (typeof status !== "number") return true;
+  return status === 429 || status >= 500;
+}
+
 function resolveClaudeRateLimitPath({ home } = {}) {
   return path.join(home || os.homedir(), ".tokentracker", "tracker", CLAUDE_RATE_LIMIT_FILE);
 }
@@ -5551,9 +5569,12 @@ async function fetchUsageLimitsUncached({
 
   // Devin: persist last successful windows so a transient timeout/5xx on the
   // server.codeium.com route serves stale bars instead of a flashing "fetch
-  // failed" (mirrors OpenCode Go / Cursor). An opted-out / unconfigured
-  // provider has no window state to fall back on, and legacy billing plans
-  // without quota windows never write an entry.
+  // failed" (mirrors OpenCode Go / Cursor). Auth and broken-credential errors
+  // punch through above, ambiguous/persistent HTTP rejections punch through
+  // below, an opted-out / unconfigured provider has no window state to fall
+  // back on, and a successful windowless read (legacy billing strategy)
+  // invalidates any prior entry instead of leaving it for a later blip to
+  // resurrect the former plan's bars.
   if (
     devinObj
     && devinObj.configured !== false
@@ -5564,7 +5585,11 @@ async function fetchUsageLimitsUncached({
       if (cacheGeneration === usageLimitsCacheGeneration) {
         writeDevinLimitsCache(devinObj, { home, nowMs });
       }
-    } else if (devinObj.error) {
+    } else if (!devinObj.error) {
+      if (cacheGeneration === usageLimitsCacheGeneration) {
+        clearDevinLimitsCache({ home });
+      }
+    } else if (isDevinTransientFetchError(devinRaw?.reason)) {
       const cached = readDevinLimitsCache({ home, nowMs });
       if (cached) devinObj = cached;
     }
