@@ -180,8 +180,13 @@ export function DashboardPage({
     accountView: accountViewBase,
     revision: cloudAccountRevision,
     resolving: accountResolvingBase,
+    scopeSwitchable: accountScopeSwitchableBase,
+    setScopeOverride: setAccountScopeOverride,
   } = useAccountView();
   const accountView = accountViewBase && !publicMode;
+  // In-page scope switcher (issue 979 part 3): the override is view-only, so
+  // share views never offer it either.
+  const accountScopeSwitchable = accountScopeSwitchableBase && !publicMode;
   const accountAccessToken = accountView ? effectiveAuthToken : null;
   // While the resolved scope is still unknown (auth loading + cloud likely),
   // hooks hold a loading state instead of painting local data that would be
@@ -1391,6 +1396,8 @@ export function DashboardPage({
     <DashboardView
       copy={copy}
       accountView={accountView}
+      accountScopeSwitchable={accountScopeSwitchable}
+      onAccountScopeChange={setAccountScopeOverride}
       onOpenShare={openShareModal}
       screenshotMode={screenshotMode}
       showExpiredGate={showExpiredGate}

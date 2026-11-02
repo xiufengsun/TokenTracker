@@ -52,6 +52,53 @@ describe("UsageOverview", () => {
     expect(screen.queryByText(copy("usage.overview.scope_account"))).toBeNull();
   });
 
+  it("keeps the static badge when the scope switcher is unavailable", () => {
+    render(
+      <UsageOverview
+        period="day"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="0"
+        fleetData={[]}
+        from="2026-07-16"
+        to="2026-07-16"
+        accountView
+      />,
+    );
+
+    expect(screen.queryByRole("group", { name: copy("usage.overview.scope_switch_aria") })).toBeNull();
+    expect(screen.getByTitle(copy("usage.overview.scope_account_tip"))).toBeVisible();
+  });
+
+  it("switches the data scope in place when both scopes are live", async () => {
+    const user = userEvent.setup();
+    const onAccountScopeChange = vi.fn();
+    render(
+      <UsageOverview
+        period="day"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="0"
+        fleetData={[]}
+        from="2026-07-16"
+        to="2026-07-16"
+        accountView
+        accountScopeSwitchable
+        onAccountScopeChange={onAccountScopeChange}
+      />,
+    );
+
+    const group = screen.getByRole("group", { name: copy("usage.overview.scope_switch_aria") });
+    expect(group).toBeVisible();
+    expect(screen.queryByTitle(copy("usage.overview.scope_local_tip"))).toBeVisible();
+    expect(screen.queryByTitle(copy("usage.overview.scope_account_tip"))).toBeVisible();
+
+    await user.click(screen.getByTitle(copy("usage.overview.scope_local_tip")));
+    expect(onAccountScopeChange).toHaveBeenCalledWith("local");
+    await user.click(screen.getByTitle(copy("usage.overview.scope_account_tip")));
+    expect(onAccountScopeChange).toHaveBeenCalledWith(null);
+  });
+
   it("closes stale session details when the local import ledger changes", async () => {
     const props = { period: "month", periods: [], summaryValue: "100", from: "2026-10-01", to: "2026-10-31",
       fleetData: [{ source: "codex", label: "CODEX", usage: 100, totalPercent: "100", usd: 0,
