@@ -3578,15 +3578,18 @@ function resolveGrokCacheIdentity({ home, env } = {}) {
 // Failure-only identity re-derivation for the cache fallback: when the provider slot's
 // result was produced by the outer timeout race, the fetcher's identity field is lost,
 // so re-resolve the (still-local) auth store — mirroring the token-source priority so
-// the identity always belongs to the account the token resolution would pick.
-function resolveCopilotCacheIdentity({
+// the identity always belongs to the account the token resolution would pick. Async
+// like the fetcher's own resolution so a failed poll never blocks the embedded
+// server's event loop on SQLite / Keychain.
+async function resolveCopilotCacheIdentity({
   home = os.homedir(),
   platform = process.platform,
   securityRunner,
   sqliteReader,
 } = {}) {
   try {
-    return readCopilotAuth({ home, platform, securityRunner, sqliteReader })?.identity || null;
+    const resolved = await readCopilotAuthAsync({ home, platform, securityRunner, sqliteReader });
+    return resolved?.identity || null;
   } catch (_error) {
     return null;
   }
@@ -5571,7 +5574,7 @@ async function fetchUsageLimitsUncached({
         nowMs,
         identity: typeof copilot.cache_identity === "string"
           ? copilot.cache_identity
-          : resolveCopilotCacheIdentity({ home, platform, securityRunner }),
+          : await resolveCopilotCacheIdentity({ home, platform, securityRunner }),
       });
     }
   } else {
@@ -5580,7 +5583,7 @@ async function fetchUsageLimitsUncached({
     // re-derive it from the local auth store on this failure-only path.
     const identity = typeof copilot.cache_identity === "string"
       ? copilot.cache_identity
-      : resolveCopilotCacheIdentity({ home, platform, securityRunner });
+      : await resolveCopilotCacheIdentity({ home, platform, securityRunner });
     const cached = readCopilotLimitsCache({ home, nowMs, identity });
     copilotWithCache = cached ? { ...copilot, ...cached } : copilot;
   }
