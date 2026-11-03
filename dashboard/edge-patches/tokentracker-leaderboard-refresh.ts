@@ -308,6 +308,11 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "cursor-grok-4.6-fast": { input: 4, output: 12, cache_read: 1, cache_write: 0 },
   "cursor-grok-4.7": { input: 2, output: 6, cache_read: 0.5, cache_write: 0 },
   "cursor-grok-4.7-fast": { input: 4, output: 12, cache_read: 1, cache_write: 0 },
+  // Bare ids for the same SKUs (ZCode / Grok Build record grok-4.7 and
+  // grok-4.7-build-fast). Explicit keys so they do not ride on the
+  // "grok-4.7" / "grok-4.7"+fast fuzzy matchers below.
+  "grok-4.7": { input: 2, output: 6, cache_read: 0.5, cache_write: 0 },
+  "grok-4.7-build-fast": { input: 4, output: 12, cache_read: 1, cache_write: 0 },
   "grok-4-0709": { input: 3.00, output: 15.00, cache_read: 0.75 },
   "grok-4": { input: 3.00, output: 15.00, cache_read: 0.75 },
   "grok-4-latest": { input: 3.00, output: 15.00, cache_read: 0.75 },
