@@ -2821,6 +2821,9 @@ function writeCodexLimitsCache(limits, { home, nowMs = Date.now() } = {}) {
 const opencodeGoLimitsCache = createLimitsCache({
   file: OPENCODE_GO_LIMITS_CACHE_FILE,
   key: "opencodeGo",
+  // The dashboard's configured tracker data dir overrides the default
+  // tracker directory for this provider's cache.
+  dirOverride: "trackerDir",
   // The max-age is source-dependent: local estimates are heuristic readings,
   // not provider truth, so they expire within the hour.
   maxAgeMs: (raw) => (raw?.source === "local-estimate"

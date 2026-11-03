@@ -290,6 +290,25 @@ describe("limits-cache parameter space", () => {
     assert.equal(cache.read({ home, nowMs: now + 2 * HOUR }), null);
   });
 
+  it("honors dirOverride so a caller-supplied tracker dir wins", () => {
+    const cache = createLimitsCache({
+      file: "test-dir-override-cache.json",
+      key: "test",
+      windowKeys: ["primary_window"],
+      dirOverride: "trackerDir",
+    });
+    const now = 1_000_000_000_000;
+    const trackerDir = fs.mkdtempSync(path.join(os.tmpdir(), "limits-cache-dir-"));
+    cache.write({ configured: true, error: null, primary_window: windowAt(now + HOUR) },
+      { home, nowMs: now, trackerDir });
+    assert.ok(fs.existsSync(path.join(trackerDir, "test-dir-override-cache.json")),
+      "the override dir receives the file");
+    assert.equal(fs.existsSync(cache.path({ home })), false, "the default dir does not");
+    assert.ok(cache.read({ home, nowMs: now + 1, trackerDir }));
+    // Without the override the dir is silently ignored again.
+    assert.equal(cache.read({ home, nowMs: now + 1 }), null);
+  });
+
   it("honors a custom writeGuard (ark: no window check)", () => {
     const cache = createLimitsCache({
       file: "test-guard-cache.json",
