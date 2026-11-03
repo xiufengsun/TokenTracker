@@ -245,8 +245,8 @@ describe("SessionsPage", () => {
     expect(within(grokDetails).getByText("Model calls 7 · API 55.9s · Tools 5 · Errors 1")).toBeInTheDocument();
     expect(within(grokDetails).getByText("Context 31.4K / 500K (6%)")).toBeInTheDocument();
     await userEvent.click(within(grokDetails).getByRole("button", { name: "Close session statistics" }));
-    // The whole list is fetched once; no row cap and no server-side window.
-    expect(getSessions).toHaveBeenCalledWith({ refresh: false });
+    // The list is metadata-only and scoped to the selected range; no row cap.
+    expect(getSessions).toHaveBeenCalledWith({ refresh: false, includeBuckets: false, includeModelDetail: false });
 
     await chooseSelect("Filter by session source", "Codex");
     expect(screen.queryByText("Fix authentication flow")).not.toBeInTheDocument();
@@ -556,31 +556,36 @@ describe("SessionsPage", () => {
     expect(screen.queryByRole("button", { name: /Expand .* subagents/ })).not.toBeInTheDocument();
   });
 
-  it("filters the date range client-side without re-querying", async () => {
-    getSessions.mockResolvedValue({
+  it("queries the date range server-side and keeps spanning sessions", async () => {
+    const recentSessions = [
+      { ...response.sessions[0], started_at: daysAgo(1), ended_at: daysAgo(1) },
+      // Started well before a 7d window but ran into it: must stay visible.
+      {
+        ...response.sessions[1],
+        session_hash: "spanning-row",
+        title: "Long running migration",
+        started_at: daysAgo(40),
+        ended_at: daysAgo(2),
+      },
+    ];
+    const allSessions = [
+      ...recentSessions,
+      {
+        ...response.sessions[1],
+        session_hash: "old-row",
+        title: "Ancient session",
+        started_at: daysAgo(60),
+        ended_at: daysAgo(59),
+      },
+    ];
+    getSessions.mockImplementation((options = {}) => Promise.resolve({
       ...response,
-      session_count: 3,
-      returned_count: 3,
-      sessions: [
-        { ...response.sessions[0], started_at: daysAgo(1), ended_at: daysAgo(1) },
-        // Started well before a 7d window but ran into it: must stay visible.
-        // Filtering on started_at alone used to drop exactly these.
-        {
-          ...response.sessions[1],
-          session_hash: "spanning-row",
-          title: "Long running migration",
-          started_at: daysAgo(40),
-          ended_at: daysAgo(2),
-        },
-        {
-          ...response.sessions[1],
-          session_hash: "old-row",
-          title: "Ancient session",
-          started_at: daysAgo(60),
-          ended_at: daysAgo(59),
-        },
-      ],
-    });
+      from: options.from || "",
+      to: options.to || "",
+      session_count: options.from ? recentSessions.length : allSessions.length,
+      returned_count: options.from ? recentSessions.length : allSessions.length,
+      sessions: options.from ? recentSessions : allSessions,
+    }));
 
     render(<SessionsPage />);
     await screen.findByText("Ancient session");
@@ -588,11 +593,16 @@ describe("SessionsPage", () => {
 
     await chooseSelect("Filter by date range", "7d");
 
-    expect(screen.getByText("Fix authentication flow")).toBeInTheDocument();
+    await waitFor(() => expect(getSessions).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("Fix authentication flow")).toBeInTheDocument();
     expect(screen.getByText("Long running migration")).toBeInTheDocument();
     expect(screen.queryByText("Ancient session")).not.toBeInTheDocument();
-    // Range chips filter what is already loaded — no extra round trip.
-    expect(getSessions).toHaveBeenCalledTimes(1);
+    expect(getSessions.mock.calls.at(-1)[0]).toEqual(expect.objectContaining({
+      refresh: false,
+      includeBuckets: false,
+      from: expect.any(String),
+      to: expect.any(String),
+    }));
   });
 
   it("copies the project path from the project label", async () => {
@@ -706,9 +716,9 @@ describe("SessionsPage", () => {
     expect(screen.getByLabelText("Sessions from")).toHaveValue("2026-07-23");
 
     fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
-    expect(screen.getByText("Fix authentication flow")).toBeInTheDocument();
+    expect(await screen.findByText("Fix authentication flow")).toBeInTheDocument();
     expect(screen.getByText("Debug local proxy")).toBeInTheDocument();
-    expect(getSessions).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(getSessions).toHaveBeenCalledTimes(2));
   });
 
   it("filters whole mixed model sessions and recomputes their full own consumption", async () => {

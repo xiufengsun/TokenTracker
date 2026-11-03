@@ -194,17 +194,24 @@ export default async function (req: Request): Promise<Response> {
   }));
 
   // Dedupe within the batch by (hour_start, source, model), keeping the row
-  // with the largest total_tokens. The CLI's queue.jsonl is append-only and
-  // re-emits the same logical bucket multiple times as a session fills out
-  // (each emission carries the cumulative running total, so MAX wins). Two
-  // rows sharing the conflict key in one upsert make Postgres throw
+  // with the largest total_tokens, ties broken by conversations. The CLI's
+  // queue.jsonl is append-only and re-emits the same logical bucket multiple
+  // times as a session fills out (each emission carries the cumulative running
+  // total, so MAX wins). The conversations tie-break matters for request-only
+  // sources whose emissions all carry 0 tokens (#990): a pure `>` kept the
+  // first 0-token row even when a later emission carried a higher request
+  // count, and the DB upsert only heals across batches.
+  // Two rows sharing the conflict key in one upsert make Postgres throw
   // "ON CONFLICT DO UPDATE command cannot affect row a second time" and
   // reject the entire batch — which stalled all clients until this dedupe.
   const dedupedMap = new Map<string, typeof mappedRows[number]>();
   for (const r of mappedRows) {
     const key = `${r.hour_start}|${r.source}|${r.model}`;
     const prev = dedupedMap.get(key);
-    if (!prev || (Number(r.total_tokens) || 0) > (Number(prev.total_tokens) || 0)) {
+    if (!prev
+      || (Number(r.total_tokens) || 0) > (Number(prev.total_tokens) || 0)
+      || ((Number(r.total_tokens) || 0) === (Number(prev.total_tokens) || 0)
+        && (Number(r.conversations) || 0) > (Number(prev.conversations) || 0))) {
       dedupedMap.set(key, r);
     }
   }

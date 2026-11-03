@@ -27,7 +27,7 @@ const {
   fetchCursorSandAccessStatus,
   fetchCursorSandUsageStatus,
 } = require("./cursor-config");
-const { fetchGrokLimits } = require("./grok-limits");
+const { fetchGrokLimits, grokTokenSubject, loadGrokAuthEntry } = require("./grok-limits");
 const { fetchZcodeLimits } = require("./zcode-limits");
 const { fetchOpencodeGoLimits } = require("./opencode-go-limits");
 const { fetchCommandcodeLimits } = require("./commandcode-limits");
@@ -185,6 +185,18 @@ const CURSOR_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // stale bars instead (mirrors Cursor / Codex / OpenCode Go).
 const GEMINI_LIMITS_CACHE_FILE = "gemini-usage-limits-cache.json";
 const GEMINI_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// The Kimi coding API (api.kimi.com / api.kimi.ai) is another proxied route where
+// a timeout or 5xx previously blanked the card until the next poll. Persist the
+// last successful windows so a blip serves stale bars instead
+// (mirrors Cursor / Codex / OpenCode Go).
+const KIMI_LIMITS_CACHE_FILE = "kimi-usage-limits-cache.json";
+const KIMI_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// Grok Build's billing proxy (cli-chat-proxy.grok.com) sits behind the same kind of
+// proxied routes where a timeout or 5xx previously blanked the card until the next
+// poll. Persist the last successful windows so a blip serves stale bars instead
+// (mirrors Claude / Codex / Cursor).
+const GROK_LIMITS_CACHE_FILE = "grok-usage-limits-cache.json";
+const GROK_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // A 429 from the usage endpoint carries a long `retry-after` (often 20+ minutes). Persist
 // the cooldown so every surface — this process, the menu bar app's embedded server, a later
 // restart — stops calling until it expires. Hammering during the cooldown just renews the
@@ -984,7 +996,9 @@ function kimiCredentialsExpired(creds, nowMs = Date.now()) {
 
 async function refreshKimiAccessToken({ refreshToken, profile, fetchImpl = fetch } = {}) {
   if (typeof refreshToken !== "string" || !refreshToken.trim()) {
-    throw new Error("Not logged in to Kimi. Run 'kimi' in Terminal to authenticate.");
+    const error = new Error("Not logged in to Kimi. Run 'kimi' in Terminal to authenticate.");
+    error.code = "AUTH_EXPIRED";
+    throw error;
   }
 
   const body = new URLSearchParams({
@@ -1003,7 +1017,9 @@ async function refreshKimiAccessToken({ refreshToken, profile, fetchImpl = fetch
     body,
   });
   if (res.status === 401 || res.status === 403) {
-    throw new Error("Not logged in to Kimi. Run 'kimi' in Terminal to authenticate.");
+    const error = new Error("Not logged in to Kimi. Run 'kimi' in Terminal to authenticate.");
+    error.code = "AUTH_EXPIRED";
+    throw error;
   }
   if (!res.ok) {
     throw new Error(`Kimi token refresh failed (HTTP ${res.status})`);
@@ -1037,7 +1053,11 @@ async function fetchKimiUsage(accessToken, { profile, fetchImpl = fetch } = {}) 
     },
   });
   if (res.status === 401) {
-    throw new Error("token_expired");
+    // The retry-with-refresh path keys off this message; the code marks the
+    // error actionable (re-login) so the cache fallback never hides it.
+    const error = new Error("token_expired");
+    error.code = "AUTH_EXPIRED";
+    throw error;
   }
   if (!res.ok) {
     throw new Error(`Kimi API returned ${res.status}`);
@@ -1050,12 +1070,17 @@ async function fetchKimiLimits({ home, env, fetchImpl = fetch } = {}) {
   if (!profile.configured) {
     return { configured: false };
   }
-  if (profile.error) return { configured: true, error: profile.error };
+  // A profile misconfiguration (unsupported endpoints, non-file credential
+  // storage) is actionable — the user must fix their config — so it must not
+  // be hidden behind the stale disk-cache fallback. Internal marker —
+  // stripped before the payload is served.
+  if (profile.error) return { configured: true, error: profile.error, config_error: true };
   const creds = loadKimiCredentials({ profile });
   let accessToken = typeof creds?.access_token === "string" ? creds.access_token.trim() : "";
   if (!accessToken) {
     return { configured: false };
   }
+  const cacheIdentity = kimiProfileIdentity(profile);
   try {
     if (kimiCredentialsExpired(creds) && creds?.refresh_token) {
       accessToken = await refreshKimiAccessToken({
@@ -1083,11 +1108,18 @@ async function fetchKimiLimits({ home, env, fetchImpl = fetch } = {}) {
       configured: true,
       error: null,
       ...normalizeKimiUsageResponse(body),
+      // Internal cache-partition key (stripped before the payload is served).
+      cache_identity: cacheIdentity,
     };
   } catch (error) {
     return {
       configured: true,
       error: error?.message || "Unknown error",
+      // A session-expiry error is actionable (re-login) and must not be hidden
+      // behind the stale disk-cache fallback (opencode-go auth_error precedent).
+      // Internal marker — stripped before the payload is served.
+      ...(error?.code === "AUTH_EXPIRED" ? { auth_error: true } : {}),
+      cache_identity: cacheIdentity,
     };
   }
 }
@@ -3036,6 +3068,225 @@ function resolveGeminiCacheIdentity({ home, env } = {}) {
   }
 }
 
+// The active Kimi profile partitions the cache (ark profile_identity precedent):
+// mainland and global logins — and any KIMI_HOME override — resolve to different
+// endpoint-scoped credential slots, and one slot must never serve another's
+// windows. The profile home plus OAuth host is non-secret and derivable from
+// local files alone (the credential file holds no account id).
+function kimiProfileIdentity(profile) {
+  if (!profile?.home || !profile?.oauthHost) return null;
+  return `${profile.home}::${profile.oauthHost}`;
+}
+
+// Failure-only identity re-derivation for the cache fallback: when the provider
+// slot's result was produced by the outer timeout race, the fetcher's own
+// identity field is lost, so re-resolve the (still-local) Kimi profile.
+function resolveKimiCacheIdentity({ home, env } = {}) {
+  try {
+    return kimiProfileIdentity(resolveKimiProfile({ home, env }));
+  } catch (_error) {
+    return null;
+  }
+}
+
+function resolveKimiLimitsCachePath({ home } = {}) {
+  return path.join(home || os.homedir(), ".tokentracker", "tracker", KIMI_LIMITS_CACHE_FILE);
+}
+
+function hasKimiWindow(limits) {
+  return Boolean(
+    limits?.primary_window
+    || limits?.secondary_window
+    || limits?.tertiary_window,
+  );
+}
+
+// Kimi windows carry `reset_at` (ISO) when the API reports a cycle end; a window
+// whose reset has already passed is stale data, not a usable fallback, so drop
+// it. Windows without a reset stamp are kept — the overall cached_at max-age
+// gate already bounds them.
+function isKimiCacheWindowUsable(window, { nowMs } = {}) {
+  if (!window || typeof window !== "object") return false;
+  const resetAtMs = parseTimeMs(window.reset_at);
+  if (resetAtMs === null) return true;
+  return resetAtMs > nowMs;
+}
+
+function normalizeKimiCachedLimits(
+  raw,
+  { nowMs = Date.now(), maxAgeMs = KIMI_LIMITS_CACHE_MAX_AGE_MS } = {},
+) {
+  const cachedAtMs = parseTimeMs(raw?.cached_at);
+  if (!Number.isFinite(cachedAtMs)) return null;
+  if (cachedAtMs > nowMs + 60_000) return null;
+  if (nowMs - cachedAtMs > maxAgeMs) return null;
+
+  const cached = {
+    configured: true,
+    error: null,
+    membership_level: typeof raw?.membership_level === "string" ? raw.membership_level : null,
+    subscription_type: typeof raw?.subscription_type === "string" ? raw.subscription_type : null,
+    parallel_limit: Number.isFinite(raw?.parallel_limit) ? raw.parallel_limit : null,
+    primary_window: isKimiCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
+    secondary_window: isKimiCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
+    tertiary_window: isKimiCacheWindowUsable(raw?.tertiary_window, { nowMs }) ? raw.tertiary_window : null,
+    stale: true,
+    cached_at: raw.cached_at,
+  };
+  return hasKimiWindow(cached) ? cached : null;
+}
+
+function readKimiLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(resolveKimiLimitsCachePath({ home }), "utf8"));
+    const entry = parsed?.kimi;
+    if (entry?.identity !== identity) return null;
+    return normalizeKimiCachedLimits(entry, { nowMs });
+  } catch (_error) {
+    return null;
+  }
+}
+
+function writeKimiLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return;
+  if (!limits?.configured || limits.error || !hasKimiWindow(limits)) return;
+  const cachePath = resolveKimiLimitsCachePath({ home });
+  const payload = {
+    kimi: {
+      identity,
+      membership_level: limits.membership_level || null,
+      subscription_type: limits.subscription_type || null,
+      parallel_limit: Number.isFinite(limits.parallel_limit) ? limits.parallel_limit : null,
+      primary_window: limits.primary_window || null,
+      secondary_window: limits.secondary_window || null,
+      tertiary_window: limits.tertiary_window || null,
+      cached_at: new Date(nowMs).toISOString(),
+    },
+  };
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    const tmpPath = `${cachePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmpPath, cachePath);
+  } catch (_error) {}
+}
+
+function resolveGrokLimitsCachePath({ home } = {}) {
+  return path.join(home || os.homedir(), ".tokentracker", "tracker", GROK_LIMITS_CACHE_FILE);
+}
+
+function hasGrokWindow(limits) {
+  return Boolean(limits?.primary_window || limits?.secondary_window);
+}
+
+// Grok windows carry `reset_at` as an ISO string — the billing-period end shared
+// by the pool, on-demand, and per-product windows. A window whose reset has
+// already passed is stale data, not a usable fallback, so drop it. Windows
+// without a reset stamp are kept — the overall cached_at max-age gate already
+// bounds them (mirrors Cursor).
+function isGrokCacheWindowUsable(window, { nowMs } = {}) {
+  if (!window || typeof window !== "object") return false;
+  const resetAtMs = parseTimeMs(window.reset_at);
+  if (resetAtMs === null) return true;
+  return resetAtMs > nowMs;
+}
+
+function normalizeGrokCachedLimits(
+  raw,
+  { nowMs = Date.now(), maxAgeMs = GROK_LIMITS_CACHE_MAX_AGE_MS } = {},
+) {
+  const cachedAtMs = parseTimeMs(raw?.cached_at);
+  if (!Number.isFinite(cachedAtMs)) return null;
+  if (cachedAtMs > nowMs + 60_000) return null;
+  if (nowMs - cachedAtMs > maxAgeMs) return null;
+
+  const cached = {
+    configured: true,
+    error: null,
+    plan_label: typeof raw?.plan_label === "string" ? raw.plan_label : null,
+    period_type: typeof raw?.period_type === "string" ? raw.period_type : null,
+    monthly_credits_limit: raw?.monthly_credits_limit ?? null,
+    monthly_credits_used: raw?.monthly_credits_used ?? null,
+    credit_usage_percent: raw?.credit_usage_percent ?? null,
+    on_demand_cap: raw?.on_demand_cap ?? null,
+    on_demand_used: raw?.on_demand_used ?? null,
+    billing_period_start: typeof raw?.billing_period_start === "string" ? raw.billing_period_start : null,
+    primary_window: isGrokCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
+    secondary_window: isGrokCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
+    // Per-product shares of the pool, not independent windows — each is gated
+    // by the same reset stamp as the pool window it attributes.
+    products: Array.isArray(raw?.products)
+      ? raw.products.filter((entry) => isGrokCacheWindowUsable(entry?.window, { nowMs }))
+      : [],
+    stale: true,
+    cached_at: raw.cached_at,
+  };
+  return hasGrokWindow(cached) ? cached : null;
+}
+
+// The signed-in Grok account partitions the cache (zcode login-identity precedent):
+// the id is the non-secret OIDC `sub` claim inside the access token — the
+// credential itself never enters the id (no token fingerprint fallback: CodeQL
+// js/insufficient-password-hash precedent). auth.x.ai issues JWT access tokens
+// (RFC 9068), so the subject is present in practice; an opaque token yields no
+// identity and the cache is simply refused on both the write and the read path
+// (fail-closed) — an unattributable login must never pin another account's bars,
+// which a scope-key fallback cannot guarantee because `issuer::client_id` stays
+// constant across account switches.
+function readGrokLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(resolveGrokLimitsCachePath({ home }), "utf8"));
+    const entry = parsed?.grok;
+    if (entry?.identity !== identity) return null;
+    return normalizeGrokCachedLimits(entry, { nowMs });
+  } catch (_error) {
+    return null;
+  }
+}
+
+function writeGrokLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return;
+  if (!limits?.configured || limits.error || !hasGrokWindow(limits)) return;
+  const cachePath = resolveGrokLimitsCachePath({ home });
+  const payload = {
+    grok: {
+      identity,
+      plan_label: limits.plan_label || null,
+      period_type: limits.period_type || null,
+      monthly_credits_limit: limits.monthly_credits_limit ?? null,
+      monthly_credits_used: limits.monthly_credits_used ?? null,
+      credit_usage_percent: limits.credit_usage_percent ?? null,
+      on_demand_cap: limits.on_demand_cap ?? null,
+      on_demand_used: limits.on_demand_used ?? null,
+      billing_period_start: limits.billing_period_start || null,
+      primary_window: limits.primary_window || null,
+      secondary_window: limits.secondary_window || null,
+      products: Array.isArray(limits.products) ? limits.products : [],
+      cached_at: new Date(nowMs).toISOString(),
+    },
+  };
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    const tmpPath = `${cachePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmpPath, cachePath);
+  } catch (_error) {}
+}
+
+// Failure-only identity re-derivation for the cache fallback: when the provider
+// slot's result was produced by the outer timeout race, the fetcher's own
+// identity field is lost, so read auth.json once to learn who we are serving for.
+// Opaque tokens yield null → the read is refused (fail-closed, see above).
+function resolveGrokCacheIdentity({ home, env } = {}) {
+  try {
+    return grokTokenSubject(loadGrokAuthEntry({ home, env })?.entry?.key);
+  } catch (_error) {
+    return null;
+  }
+}
+
 function resolveClaudeRateLimitPath({ home } = {}) {
   return path.join(home || os.homedir(), ".tokentracker", "tracker", CLAUDE_RATE_LIMIT_FILE);
 }
@@ -4902,9 +5153,101 @@ async function fetchUsageLimitsUncached({
     cursorWithCache = cursorPayload;
   }
 
-  const cursorLimits = cursorSandDuplicatesGrokPool(cursorWithCache, grok)
+  // Grok: persist last successful windows so a transient timeout/5xx on the
+  // cli-chat-proxy.grok.com route serves stale bars instead of a flashing
+  // "fetch failed" (mirrors Codex / Claude / Cursor). A re-login error
+  // (GROK_AUTH_REQUIRED / GROK_REAUTH_REQUIRED — "run `grok login`") is
+  // actionable and must not be hidden behind stale cache, so it passes
+  // through untouched.
+  let grokWithCache;
+  if (!grok || grok.configured === false) {
+    grokWithCache = grok;
+  } else if (grok.auth_error === true) {
+    grokWithCache = grok;
+  } else if (!grok.error && hasGrokWindow(grok)) {
+    grokWithCache = {
+      ...grok,
+      stale: false,
+      cached_at: new Date(nowMs).toISOString(),
+    };
+    // Write only under the identity the fetch itself carried: re-reading
+    // auth.json here could attribute a finished fetch's windows to an account
+    // that logged in while the request was in flight (opaque → JWT switch).
+    // No fetch-side identity (opaque token) → refuse the write (fail-closed).
+    if (cacheGeneration === usageLimitsCacheGeneration && typeof grok.cache_identity === "string") {
+      writeGrokLimitsCache(grokWithCache, {
+        home,
+        nowMs,
+        identity: grok.cache_identity,
+      });
+    }
+  } else {
+    // The slot's error object loses the fetcher's identity field when the outer
+    // timeout race wins (the common failure mode this cache exists for), so
+    // re-derive it from auth.json on this failure-only path.
+    const identity = typeof grok.cache_identity === "string"
+      ? grok.cache_identity
+      : resolveGrokCacheIdentity({ home, env });
+    const cached = readGrokLimitsCache({ home, nowMs, identity });
+    grokWithCache = cached || grok;
+  }
+  // cache_identity / auth_error are internal cache-plumbing markers, not payload.
+  if (grokWithCache && ("cache_identity" in grokWithCache || "auth_error" in grokWithCache)) {
+    const { cache_identity: _identity, auth_error: _authError, ...grokPayload } = grokWithCache;
+    grokWithCache = grokPayload;
+  }
+
+  const cursorLimits = cursorSandDuplicatesGrokPool(cursorWithCache, grokWithCache)
     ? { ...cursorWithCache, quaternary_window: null }
     : cursorWithCache;
+
+  // Kimi: persist last successful windows so a transient timeout/5xx on the
+  // api.kimi.com / api.kimi.ai coding routes serves stale bars instead of a
+  // flashing "fetch failed" (mirrors Cursor / Codex / OpenCode Go). Re-login
+  // errors ("Not logged in to Kimi" / "token_expired") and actionable profile
+  // misconfigurations must not be hidden behind stale cache, so they pass
+  // through untouched.
+  let kimiWithCache;
+  if (!kimi || kimi.configured === false) {
+    kimiWithCache = kimi;
+  } else if (kimi.auth_error === true || kimi.config_error === true) {
+    kimiWithCache = kimi;
+  } else if (!kimi.error && hasKimiWindow(kimi)) {
+    kimiWithCache = {
+      ...kimi,
+      stale: false,
+      cached_at: new Date(nowMs).toISOString(),
+    };
+    if (cacheGeneration === usageLimitsCacheGeneration) {
+      writeKimiLimitsCache(kimiWithCache, {
+        home,
+        nowMs,
+        identity: typeof kimi.cache_identity === "string"
+          ? kimi.cache_identity
+          : resolveKimiCacheIdentity({ home, env }),
+      });
+    }
+  } else {
+    // The slot's error object loses the fetcher's identity field when the outer
+    // timeout race wins (the common failure mode this cache exists for), so
+    // re-derive it from the local Kimi profile on this failure-only path.
+    const identity = typeof kimi.cache_identity === "string"
+      ? kimi.cache_identity
+      : resolveKimiCacheIdentity({ home, env });
+    const cached = readKimiLimitsCache({ home, nowMs, identity });
+    kimiWithCache = cached || kimi;
+  }
+  // cache_identity / auth_error / config_error are internal cache-plumbing
+  // markers, not payload.
+  if (kimiWithCache && ("cache_identity" in kimiWithCache || "auth_error" in kimiWithCache || "config_error" in kimiWithCache)) {
+    const {
+      cache_identity: _kimiIdentity,
+      auth_error: _kimiAuthError,
+      config_error: _kimiConfigError,
+      ...kimiPayload
+    } = kimiWithCache;
+    kimiWithCache = kimiPayload;
+  }
 
   // Gemini: persist last successful windows so a transient timeout/5xx on the
   // cloudcode-pa.googleapis.com routes serves stale bars instead of a flashing
@@ -4971,7 +5314,7 @@ async function fetchUsageLimitsUncached({
     // tier, and membership.level is an opaque enum (LEVEL_INTERMEDIATE) with no
     // authoritative human-readable plan mapping. Both rendered as garbage like
     // "Kimi Type_event" (issue #130), so show the bare brand instead.
-    kimi: withPlanLabel(kimi, null, "Kimi"),
+    kimi: withPlanLabel(kimiWithCache, null, "Kimi"),
     gemini: withPlanLabel(geminiWithCache, geminiWithCache.account_plan, "Gemini"),
     kiro: withPlanLabel(kiro, kiro.plan_name, "Kiro"),
     antigravity: withPlanLabel(antigravity, antigravity.account_plan, "Antigravity"),
@@ -4982,7 +5325,7 @@ async function fetchUsageLimitsUncached({
     // outright, so surface the label as-is like CommandCode below. Error and
     // unconfigured branches never carry plan_label, so the panel still falls
     // back to the bare brand name.
-    grok,
+    grok: grokWithCache,
     zcode: withPlanLabel(zcode, zcode.plan_label, "ZCode"),
     opencodeGo: withPlanLabel(opencodeGo, opencodeGo?.plan_label, "OpenCode Go"),
     // CommandCode tiers are acronym brands (GOAT/Pro/Max) — the fetcher already
