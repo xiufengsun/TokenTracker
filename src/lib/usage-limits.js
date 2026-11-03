@@ -27,7 +27,7 @@ const {
   fetchCursorSandAccessStatus,
   fetchCursorSandUsageStatus,
 } = require("./cursor-config");
-const { fetchGrokLimits } = require("./grok-limits");
+const { fetchGrokLimits, grokTokenSubject, loadGrokAuthEntry } = require("./grok-limits");
 const { fetchZcodeLimits } = require("./zcode-limits");
 const { fetchOpencodeGoLimits } = require("./opencode-go-limits");
 const { fetchCommandcodeLimits } = require("./commandcode-limits");
@@ -185,6 +185,12 @@ const CURSOR_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // (mirrors Cursor / Codex / OpenCode Go).
 const KIMI_LIMITS_CACHE_FILE = "kimi-usage-limits-cache.json";
 const KIMI_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// Grok Build's billing proxy (cli-chat-proxy.grok.com) sits behind the same kind of
+// proxied routes where a timeout or 5xx previously blanked the card until the next
+// poll. Persist the last successful windows so a blip serves stale bars instead
+// (mirrors Claude / Codex / Cursor).
+const GROK_LIMITS_CACHE_FILE = "grok-usage-limits-cache.json";
+const GROK_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // A 429 from the usage endpoint carries a long `retry-after` (often 20+ minutes). Persist
 // the cooldown so every surface — this process, the menu bar app's embedded server, a later
 // restart — stops calling until it expires. Hammering during the cooldown just renews the
@@ -3009,6 +3015,121 @@ function writeKimiLimitsCache(limits, { home, nowMs = Date.now(), identity } = {
   } catch (_error) {}
 }
 
+function resolveGrokLimitsCachePath({ home } = {}) {
+  return path.join(home || os.homedir(), ".tokentracker", "tracker", GROK_LIMITS_CACHE_FILE);
+}
+
+function hasGrokWindow(limits) {
+  return Boolean(limits?.primary_window || limits?.secondary_window);
+}
+
+// Grok windows carry `reset_at` as an ISO string — the billing-period end shared
+// by the pool, on-demand, and per-product windows. A window whose reset has
+// already passed is stale data, not a usable fallback, so drop it. Windows
+// without a reset stamp are kept — the overall cached_at max-age gate already
+// bounds them (mirrors Cursor).
+function isGrokCacheWindowUsable(window, { nowMs } = {}) {
+  if (!window || typeof window !== "object") return false;
+  const resetAtMs = parseTimeMs(window.reset_at);
+  if (resetAtMs === null) return true;
+  return resetAtMs > nowMs;
+}
+
+function normalizeGrokCachedLimits(
+  raw,
+  { nowMs = Date.now(), maxAgeMs = GROK_LIMITS_CACHE_MAX_AGE_MS } = {},
+) {
+  const cachedAtMs = parseTimeMs(raw?.cached_at);
+  if (!Number.isFinite(cachedAtMs)) return null;
+  if (cachedAtMs > nowMs + 60_000) return null;
+  if (nowMs - cachedAtMs > maxAgeMs) return null;
+
+  const cached = {
+    configured: true,
+    error: null,
+    plan_label: typeof raw?.plan_label === "string" ? raw.plan_label : null,
+    period_type: typeof raw?.period_type === "string" ? raw.period_type : null,
+    monthly_credits_limit: raw?.monthly_credits_limit ?? null,
+    monthly_credits_used: raw?.monthly_credits_used ?? null,
+    credit_usage_percent: raw?.credit_usage_percent ?? null,
+    on_demand_cap: raw?.on_demand_cap ?? null,
+    on_demand_used: raw?.on_demand_used ?? null,
+    billing_period_start: typeof raw?.billing_period_start === "string" ? raw.billing_period_start : null,
+    primary_window: isGrokCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
+    secondary_window: isGrokCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
+    // Per-product shares of the pool, not independent windows — each is gated
+    // by the same reset stamp as the pool window it attributes.
+    products: Array.isArray(raw?.products)
+      ? raw.products.filter((entry) => isGrokCacheWindowUsable(entry?.window, { nowMs }))
+      : [],
+    stale: true,
+    cached_at: raw.cached_at,
+  };
+  return hasGrokWindow(cached) ? cached : null;
+}
+
+// The signed-in Grok account partitions the cache (zcode login-identity precedent):
+// the id is the non-secret OIDC `sub` claim inside the access token — the
+// credential itself never enters the id (no token fingerprint fallback: CodeQL
+// js/insufficient-password-hash precedent). auth.x.ai issues JWT access tokens
+// (RFC 9068), so the subject is present in practice; an opaque token yields no
+// identity and the cache is simply refused on both the write and the read path
+// (fail-closed) — an unattributable login must never pin another account's bars,
+// which a scope-key fallback cannot guarantee because `issuer::client_id` stays
+// constant across account switches.
+function readGrokLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(resolveGrokLimitsCachePath({ home }), "utf8"));
+    const entry = parsed?.grok;
+    if (entry?.identity !== identity) return null;
+    return normalizeGrokCachedLimits(entry, { nowMs });
+  } catch (_error) {
+    return null;
+  }
+}
+
+function writeGrokLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return;
+  if (!limits?.configured || limits.error || !hasGrokWindow(limits)) return;
+  const cachePath = resolveGrokLimitsCachePath({ home });
+  const payload = {
+    grok: {
+      identity,
+      plan_label: limits.plan_label || null,
+      period_type: limits.period_type || null,
+      monthly_credits_limit: limits.monthly_credits_limit ?? null,
+      monthly_credits_used: limits.monthly_credits_used ?? null,
+      credit_usage_percent: limits.credit_usage_percent ?? null,
+      on_demand_cap: limits.on_demand_cap ?? null,
+      on_demand_used: limits.on_demand_used ?? null,
+      billing_period_start: limits.billing_period_start || null,
+      primary_window: limits.primary_window || null,
+      secondary_window: limits.secondary_window || null,
+      products: Array.isArray(limits.products) ? limits.products : [],
+      cached_at: new Date(nowMs).toISOString(),
+    },
+  };
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    const tmpPath = `${cachePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmpPath, cachePath);
+  } catch (_error) {}
+}
+
+// Failure-only identity re-derivation for the cache fallback: when the provider
+// slot's result was produced by the outer timeout race, the fetcher's own
+// identity field is lost, so read auth.json once to learn who we are serving for.
+// Opaque tokens yield null → the read is refused (fail-closed, see above).
+function resolveGrokCacheIdentity({ home, env } = {}) {
+  try {
+    return grokTokenSubject(loadGrokAuthEntry({ home, env })?.entry?.key);
+  } catch (_error) {
+    return null;
+  }
+}
+
 function resolveClaudeRateLimitPath({ home } = {}) {
   return path.join(home || os.homedir(), ".tokentracker", "tracker", CLAUDE_RATE_LIMIT_FILE);
 }
@@ -4875,7 +4996,51 @@ async function fetchUsageLimitsUncached({
     cursorWithCache = cursorPayload;
   }
 
-  const cursorLimits = cursorSandDuplicatesGrokPool(cursorWithCache, grok)
+  // Grok: persist last successful windows so a transient timeout/5xx on the
+  // cli-chat-proxy.grok.com route serves stale bars instead of a flashing
+  // "fetch failed" (mirrors Codex / Claude / Cursor). A re-login error
+  // (GROK_AUTH_REQUIRED / GROK_REAUTH_REQUIRED — "run `grok login`") is
+  // actionable and must not be hidden behind stale cache, so it passes
+  // through untouched.
+  let grokWithCache;
+  if (!grok || grok.configured === false) {
+    grokWithCache = grok;
+  } else if (grok.auth_error === true) {
+    grokWithCache = grok;
+  } else if (!grok.error && hasGrokWindow(grok)) {
+    grokWithCache = {
+      ...grok,
+      stale: false,
+      cached_at: new Date(nowMs).toISOString(),
+    };
+    // Write only under the identity the fetch itself carried: re-reading
+    // auth.json here could attribute a finished fetch's windows to an account
+    // that logged in while the request was in flight (opaque → JWT switch).
+    // No fetch-side identity (opaque token) → refuse the write (fail-closed).
+    if (cacheGeneration === usageLimitsCacheGeneration && typeof grok.cache_identity === "string") {
+      writeGrokLimitsCache(grokWithCache, {
+        home,
+        nowMs,
+        identity: grok.cache_identity,
+      });
+    }
+  } else {
+    // The slot's error object loses the fetcher's identity field when the outer
+    // timeout race wins (the common failure mode this cache exists for), so
+    // re-derive it from auth.json on this failure-only path.
+    const identity = typeof grok.cache_identity === "string"
+      ? grok.cache_identity
+      : resolveGrokCacheIdentity({ home, env });
+    const cached = readGrokLimitsCache({ home, nowMs, identity });
+    grokWithCache = cached || grok;
+  }
+  // cache_identity / auth_error are internal cache-plumbing markers, not payload.
+  if (grokWithCache && ("cache_identity" in grokWithCache || "auth_error" in grokWithCache)) {
+    const { cache_identity: _identity, auth_error: _authError, ...grokPayload } = grokWithCache;
+    grokWithCache = grokPayload;
+  }
+
+  const cursorLimits = cursorSandDuplicatesGrokPool(cursorWithCache, grokWithCache)
     ? { ...cursorWithCache, quaternary_window: null }
     : cursorWithCache;
 
@@ -4947,7 +5112,7 @@ async function fetchUsageLimitsUncached({
     // outright, so surface the label as-is like CommandCode below. Error and
     // unconfigured branches never carry plan_label, so the panel still falls
     // back to the bare brand name.
-    grok,
+    grok: grokWithCache,
     zcode: withPlanLabel(zcode, zcode.plan_label, "ZCode"),
     opencodeGo: withPlanLabel(opencodeGo, opencodeGo?.plan_label, "OpenCode Go"),
     // CommandCode tiers are acronym brands (GOAT/Pro/Max) — the fetcher already
