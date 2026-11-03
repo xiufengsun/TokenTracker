@@ -90,6 +90,44 @@ describe("parseCursorCsv — with Cloud Agent ID columns", () => {
   });
 });
 
+// ── parseCursorCsv — request-only rows (issue #998) ──
+
+describe("parseCursorCsv — request-only rows", () => {
+  const csvText = `Date,Cloud Agent ID,Automation ID,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost
+"2026-10-01T08:00:00.000Z","","","Included","grok-bot-automation","No","0","0","0","0","0","0.00"
+"2026-10-01T09:00:00.000Z","","","Included","","No","0","0","0","0","0","0.00"
+"2026-10-01T10:00:00.000Z","","","Included","auto","No","0","0","500","0","0","0.00"`;
+
+  it("keeps a 0-token row that carries a model identity", () => {
+    const records = parseCursorCsv(csvText);
+    assert.equal(records.length, 2);
+    const r = records[0];
+    assert.equal(r.date, "2026-10-01T08:00:00.000Z");
+    assert.equal(r.model, "grok-bot-automation");
+    assert.equal(r.kind, "Included");
+    assert.equal(r.inputTokens, 0);
+    assert.equal(r.cacheReadTokens, 0);
+    assert.equal(r.outputTokens, 0);
+    assert.equal(r.totalTokens, 0);
+  });
+
+  it("still drops a 0-token row without any model", () => {
+    const records = parseCursorCsv(csvText);
+    assert.ok(!records.some((r) => r.model === ""));
+  });
+
+  it("keeps a cache-read-only row even when the Total column is 0", () => {
+    // Component columns are the source of truth: isAllZeroUsage downstream
+    // counts cacheReadTokens, so dropping on Total Tokens alone would lose
+    // rows the incremental parser would otherwise import.
+    const records = parseCursorCsv(csvText);
+    const r = records.find((rec) => rec.model === "auto");
+    assert.ok(r, "cache-read-only row kept");
+    assert.equal(r.cacheReadTokens, 500);
+    assert.equal(r.totalTokens, 0);
+  });
+});
+
 describe("Cursor billing kind classification", () => {
   it("treats included and on-demand usage as billable-ish", () => {
     assert.equal(isCursorBillableKind("Included"), true);

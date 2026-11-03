@@ -3501,6 +3501,77 @@ test("parseCursorApiIncremental treats Cursor CSV as authoritative and replaces 
   }
 });
 
+test("parseCursorApiIncremental keeps request-only rows as 1-request records (issue #998)", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-cursor-request-only-"));
+  try {
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+
+    const result = await parseCursorApiIncremental({
+      records: [
+        {
+          date: "2026-10-01T08:00:00.000Z",
+          model: "grok-bot-automation",
+          kind: "Included",
+          inputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+        },
+      ],
+      cursors,
+      queuePath,
+      source: "cursor",
+    });
+    assert.equal(result.eventsAggregated, 1);
+
+    const queued = await readJsonLines(queuePath);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].conversation_count, 1);
+    assert.equal(queued[0].total_tokens, 0);
+    assert.equal(
+      cursors.hourly.buckets["cursor|grok-bot-automation|2026-10-01T08:00:00.000Z"].totals
+        .conversation_count,
+      1,
+    );
+    assert.equal(cursors.cursorApi.lastRecordTimestamp, "2026-10-01T08:00:00.000Z");
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseCursorApiIncremental still skips all-zero rows without a model identity", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-cursor-degenerate-"));
+  try {
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+
+    const result = await parseCursorApiIncremental({
+      records: [
+        {
+          date: "2026-10-01T08:00:00.000Z",
+          model: "",
+          kind: "Included",
+          inputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+        },
+      ],
+      cursors,
+      queuePath,
+      source: "cursor",
+    });
+    assert.equal(result.eventsAggregated, 0);
+    assert.equal(result.bucketsQueued, 0);
+    assert.equal((await readJsonLines(queuePath)).length, 0);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("parseCursorApiIncremental preserves history older than a windowed/truncated export", async () => {
   // Guard (2026-06 audit): the wipe-then-refill design assumes the Cursor
   // export is full-history. If the endpoint ever returns a windowed export
