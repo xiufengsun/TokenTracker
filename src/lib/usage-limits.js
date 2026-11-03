@@ -131,6 +131,7 @@ const ANTIGRAVITY_QUOTA_SUMMARY_URLS = Object.freeze([
   "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
   "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
 ]);
+const ANTIGRAVITY_AVAILABLE_MODELS_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
 const ANTIGRAVITY_USER_AGENT = "antigravity/2.9.1";
 const ANTIGRAVITY_TOKEN_REFRESH_SKEW_MS = 60 * 1000;
 // Per-step ceilings for the Antigravity serial chain. `providerTimeoutMs` bounds the
@@ -3999,6 +4000,11 @@ async function fetchAntigravityQuotaSummaryJson(fetchImpl, accessToken, signal) 
   for (const url of ANTIGRAVITY_QUOTA_SUMMARY_URLS) {
     try {
       const res = await postAntigravityCloudCode(fetchImpl, url, accessToken, {}, signal);
+      if (res.status === 403 && await isAntigravitySubscriptionRequired(res)) {
+        const err = new Error("Antigravity quota summary requires a subscription.");
+        err.code = "SUBSCRIPTION_REQUIRED";
+        throw err;
+      }
       if (res.status === 401 || res.status === 403) {
         const err = new Error(ANTIGRAVITY_AUTH_EXPIRED_MESSAGE);
         err.code = "AUTH_EXPIRED";
@@ -4011,11 +4017,42 @@ async function fetchAntigravityQuotaSummaryJson(fetchImpl, accessToken, signal) 
       }
       return await res.json();
     } catch (error) {
-      if (error?.code === "AUTH_EXPIRED") throw error;
+      if (error?.code === "AUTH_EXPIRED" || error?.code === "SUBSCRIPTION_REQUIRED") throw error;
       lastError = error;
     }
   }
   throw lastError || new Error("Antigravity quota request failed.");
+}
+
+// Free-tier ("Starter Quota") accounts get 403 SUBSCRIPTION_REQUIRED from
+// retrieveUserQuotaSummary even with a valid token — that is not an auth failure.
+async function isAntigravitySubscriptionRequired(res) {
+  try {
+    const body = await res.json();
+    const details = Array.isArray(body?.error?.details) ? body.error.details : [];
+    return details.some((d) => d?.reason === "SUBSCRIPTION_REQUIRED");
+  } catch {
+    return false;
+  }
+}
+
+// Per-model quotaInfo, available to every tier. Reshaped into the language
+// server's clientModelConfigs so normalizeAntigravityResponse can pick windows.
+async function fetchAntigravityAvailableModelsLimits(fetchImpl, accessToken, signal) {
+  const res = await postAntigravityCloudCode(fetchImpl, ANTIGRAVITY_AVAILABLE_MODELS_URL, accessToken, {}, signal);
+  if (res.status === 401 || res.status === 403) {
+    const err = new Error(ANTIGRAVITY_AUTH_EXPIRED_MESSAGE);
+    err.code = "AUTH_EXPIRED";
+    err.status = res.status;
+    throw err;
+  }
+  if (!res.ok) throw new Error(`Antigravity API error: HTTP ${res.status}`);
+  const json = await res.json();
+  const models = json?.models && typeof json.models === "object" ? json.models : {};
+  const clientModelConfigs = Object.entries(models)
+    .filter(([, m]) => typeof m?.displayName === "string" && m.displayName)
+    .map(([id, m]) => ({ label: m.displayName, modelOrAlias: { model: id }, quotaInfo: m.quotaInfo }));
+  return normalizeAntigravityResponse({ clientModelConfigs }, { fallbackToConfigs: true });
 }
 
 /** Read the paid plan label without failing a successful quota response if this lookup fails. */
@@ -4057,8 +4094,14 @@ async function fetchAntigravityRemoteLimits({
   if (!resolvedCreds) return null;
 
   const loadWithToken = async (accessToken) => {
-    const payload = await fetchAntigravityQuotaSummaryJson(fetchImpl, accessToken, signal);
-    const windows = normalizeAntigravityQuotaSummary(payload);
+    let windows;
+    try {
+      const payload = await fetchAntigravityQuotaSummaryJson(fetchImpl, accessToken, signal);
+      windows = normalizeAntigravityQuotaSummary(payload);
+    } catch (error) {
+      if (error?.code !== "SUBSCRIPTION_REQUIRED") throw error;
+      windows = await fetchAntigravityAvailableModelsLimits(fetchImpl, accessToken, signal);
+    }
     const accountPlan = windows.account_plan || await fetchAntigravityPlanLabel(fetchImpl, accessToken, signal);
     return {
       configured: true,

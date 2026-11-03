@@ -4485,6 +4485,65 @@ describe("fetchAntigravityLimits remote OAuth", () => {
     }
   });
 
+  it("falls back to fetchAvailableModels when the quota summary requires a subscription", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-remote-free-tier-"));
+    try {
+      writeAntigravityOauthToken(tmp);
+      const calls = [];
+      const base = antigravityRemoteFetchImpl({ calls, load: { currentTier: { id: "free-tier" } } });
+      const fetchImpl = async (url, opts) => {
+        const href = String(url);
+        if (href.includes("retrieveUserQuotaSummary")) {
+          calls.push(href);
+          return {
+            ok: false,
+            status: 403,
+            async json() {
+              return { error: { code: 403, details: [{ reason: "SUBSCRIPTION_REQUIRED" }] } };
+            },
+          };
+        }
+        if (href.includes("fetchAvailableModels")) {
+          calls.push(href);
+          return {
+            ok: true,
+            status: 200,
+            async json() {
+              return {
+                models: {
+                  "claude-sonnet-4-6": {
+                    displayName: "Claude Sonnet 4.6 (Thinking)",
+                    quotaInfo: { remainingFraction: 0.7, resetTime: "2026-09-07T00:00:00Z" },
+                  },
+                  "gemini-3.8-flash-high": {
+                    displayName: "Gemini 3.8 Flash (High)",
+                    quotaInfo: { remainingFraction: 0.9, resetTime: "2026-09-07T00:00:00Z" },
+                  },
+                  tab_flash_lite_preview: { quotaInfo: { remainingFraction: 1 } },
+                },
+              };
+            },
+          };
+        }
+        return base(url, opts);
+      };
+      const result = await fetchAntigravityLimits({
+        platform: "linux",
+        home: tmp,
+        commandRunner() { return { status: 1, stdout: "" }; },
+        fetchImpl,
+        nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
+      });
+      assert.equal(result.configured, true);
+      assert.equal(result.error, null);
+      assert.equal(Math.round(result.primary_window.used_percent), 30);
+      assert.ok(calls.includes("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"));
+      assert.ok(!calls.some((url) => url.includes("oauth2.googleapis.com/token")));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("refreshes an expired access token before calling Cloud Code", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-remote-refresh-"));
     try {
