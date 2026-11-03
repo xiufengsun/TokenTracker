@@ -95,7 +95,7 @@ describe("ActivityHeatmap reset tabs", () => {
     );
   });
 
-  it("keeps a focused reset day's tooltip when the pointer leaves it", async () => {
+  it("keeps a focused reset day's tooltip through pointer moves and scrolling", async () => {
     renderHeatmap();
     fireEvent.click(screen.getByRole("tab", { name: copy("heatmap.view.codex") }));
     await waitFor(() => expect(cell("2026-11-01").getAttribute("tabindex")).toBe("0"));
@@ -104,7 +104,15 @@ describe("ActivityHeatmap reset tabs", () => {
       act(() => cell("2026-11-01").focus());
       fireEvent.mouseLeave(cell("2026-11-01"));
       act(() => vi.advanceTimersByTime(500));
-      expect(screen.getByRole("tooltip")).toBeTruthy();
+      expect(screen.getByRole("tooltip").textContent).toContain("Banked 1/2");
+      fireEvent.mouseEnter(cell("2026-10-28"));
+      expect(screen.getByRole("tooltip").textContent).toContain("Banked bonus");
+      fireEvent.mouseLeave(cell("2026-10-28"));
+      act(() => vi.advanceTimersByTime(500));
+      expect(screen.getByRole("tooltip").textContent).toContain("Banked 1/2");
+      fireEvent.scroll(cell("2026-11-01").closest(".overflow-x-auto"));
+      expect(screen.getByRole("tooltip").textContent).toContain("Banked 1/2");
+      expect(cell("2026-11-01").getAttribute("aria-describedby")).toBe(screen.getByRole("tooltip").id);
       act(() => cell("2026-11-01").blur());
       act(() => vi.advanceTimersByTime(500));
       expect(screen.queryByRole("tooltip")).toBeNull();
@@ -127,6 +135,7 @@ describe("ActivityHeatmap reset tabs", () => {
       await act(async () => controller.abort(new DOMException("timed out", "TimeoutError")));
       await waitFor(() => expect(screen.getByText(copy("heatmap.resets.error"))).toBeTruthy());
       expect(screen.queryByText(copy("heatmap.resets.loading"))).toBeNull();
+      expect(timeoutSpy).toHaveBeenCalledWith(15_000);
     } finally {
       timeoutSpy.mockRestore();
     }

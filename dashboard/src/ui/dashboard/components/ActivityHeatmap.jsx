@@ -88,6 +88,32 @@ function buildMonthMarkers(weeksCount, to, weekStartsOn, monthLabels) {
   return markers;
 }
 
+function tooltipPosFor(el) {
+  // Tooltip is portaled to document.body with position: fixed, so use viewport
+  // coordinates directly. This keeps it visible inside the leaderboard
+  // profile modal, where the Dialog.Popup has both `overflow-hidden` and
+  // a `transform` (from the open/close transition) — that combo clips any
+  // absolute-positioned tooltip rendered inside the modal subtree.
+  const rect = el.getBoundingClientRect();
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1024;
+  const x = rect.left + rect.width / 2;
+
+  // Flip below the cell when there isn't room above (cells near the viewport
+  // top would clip the tooltip); 300px covers the tallest tooltip variant.
+  const flipY = rect.top < 300;
+  const y = flipY ? rect.bottom : rect.top;
+
+  const halfWidth = 140;
+  let shiftX = 0;
+  if (x < halfWidth) {
+    shiftX = halfWidth - x;
+  } else if (x > viewportWidth - halfWidth) {
+    shiftX = (viewportWidth - halfWidth) - x;
+  }
+
+  return { x, y, shiftX, flipY };
+}
+
 export function ActivityHeatmap({
   heatmap,
   timeZoneLabel,
@@ -115,6 +141,7 @@ export function ActivityHeatmap({
   const tooltipId = useId();
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0, shiftX: 0, flipY: false });
   const hideTimeoutRef = useRef(null);
+  const focusedCellRef = useRef(null);
 
   // 卸载时回收防抖定时器
   useEffect(() => {
@@ -153,40 +180,35 @@ export function ActivityHeatmap({
       hideTimeoutRef.current = null;
     }
     setHoveredCell(cell);
-
-    // Tooltip is portaled to document.body with position: fixed, so use viewport
-    // coordinates directly. This keeps it visible inside the leaderboard
-    // profile modal, where the Dialog.Popup has both `overflow-hidden` and
-    // a `transform` (from the open/close transition) — that combo clips any
-    // absolute-positioned tooltip rendered inside the modal subtree.
-    const rect = e.currentTarget.getBoundingClientRect();
-    const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1024;
-    const x = rect.left + rect.width / 2;
-
-    // Flip below the cell when there isn't room above (cells near the viewport
-    // top would clip the tooltip); 300px covers the tallest tooltip variant.
-    const flipY = rect.top < 300;
-    const y = flipY ? rect.bottom : rect.top;
-
-    const halfWidth = 140;
-    let shiftX = 0;
-    if (x < halfWidth) {
-      shiftX = halfWidth - x;
-    } else if (x > viewportWidth - halfWidth) {
-      shiftX = (viewportWidth - halfWidth) - x;
-    }
-
-    setTooltipPos({ x, y, shiftX, flipY });
+    setTooltipPos(tooltipPosFor(e.currentTarget));
   };
 
-  const handleCellMouseLeave = (e) => {
-    // A keyboard-focused reset day keeps its tooltip until blur.
-    if (e?.type === "mouseleave" && e.currentTarget === document.activeElement) return;
-    if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
-    hideTimeoutRef.current = setTimeout(() => {
+  // Fall back to the keyboard-focused reset day, if any, instead of hiding.
+  const showFocusedOrHide = () => {
+    const focused = focusedCellRef.current;
+    if (focused && focused.el.isConnected && document.activeElement === focused.el) {
+      setHoveredCell(focused.cell);
+      setTooltipPos(tooltipPosFor(focused.el));
+    } else {
       setHoveredCell(null);
-    }, 150);
+    }
   };
+
+  const handleCellFocus = (e, cell) => {
+    focusedCellRef.current = { el: e.currentTarget, cell };
+    handleCellMouseEnter(e, cell);
+  };
+
+  const handleCellBlur = () => {
+    focusedCellRef.current = null;
+    handleCellMouseLeave();
+  };
+
+  const handleCellMouseLeave = () => {
+    if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
+    hideTimeoutRef.current = setTimeout(showFocusedOrHide, 150);
+  };
+
 
   const handleOpenModal = () => {
     setIsClosing(false);
@@ -306,7 +328,7 @@ export function ActivityHeatmap({
         clearTimeout(hideTimeoutRef.current);
         hideTimeoutRef.current = null;
       }
-      setHoveredCell(null);
+      showFocusedOrHide();
     };
     el.addEventListener("scroll", handleScroll);
     return () => el.removeEventListener("scroll", handleScroll);
@@ -612,8 +634,8 @@ export function ActivityHeatmap({
                             tabIndex: 0,
                             role: "img",
                             "aria-label": resetCellLabel(cell.day, resetBucket),
-                            onFocus: (e) => handleCellMouseEnter(e, cell),
-                            onBlur: handleCellMouseLeave,
+                            onFocus: (e) => handleCellFocus(e, cell),
+                            onBlur: handleCellBlur,
                             "aria-describedby": hoveredCell?.day === cell.day ? tooltipId : undefined,
                           }
                         : null)}
