@@ -99,6 +99,9 @@ describe("ActivityHeatmap reset tabs", () => {
     renderHeatmap();
     fireEvent.click(screen.getByRole("tab", { name: copy("heatmap.view.codex") }));
     await waitFor(() => expect(cell("2026-11-01").getAttribute("tabindex")).toBe("0"));
+    const rectAt = (left) => ({ left, right: left + 10, top: 400, bottom: 410, width: 10, height: 10 });
+    const rect = vi.spyOn(cell("2026-11-01"), "getBoundingClientRect").mockReturnValue(rectAt(300));
+    const tooltipLeft = () => screen.getByRole("tooltip").parentElement.style.left;
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       act(() => cell("2026-11-01").focus());
@@ -110,14 +113,21 @@ describe("ActivityHeatmap reset tabs", () => {
       fireEvent.mouseLeave(cell("2026-10-28"));
       act(() => vi.advanceTimersByTime(500));
       expect(screen.getByRole("tooltip").textContent).toContain("Banked 1/2");
+      expect(tooltipLeft()).toBe("305px");
+      rect.mockReturnValue(rectAt(500));
       fireEvent.scroll(cell("2026-11-01").closest(".overflow-x-auto"));
       expect(screen.getByRole("tooltip").textContent).toContain("Banked 1/2");
+      expect(tooltipLeft()).toBe("505px");
+      rect.mockReturnValue(rectAt(200));
+      fireEvent.scroll(window);
+      expect(tooltipLeft()).toBe("205px");
       expect(cell("2026-11-01").getAttribute("aria-describedby")).toBe(screen.getByRole("tooltip").id);
       act(() => cell("2026-11-01").blur());
       act(() => vi.advanceTimersByTime(500));
       expect(screen.queryByRole("tooltip")).toBeNull();
     } finally {
       vi.useRealTimers();
+      rect.mockRestore();
     }
   });
 

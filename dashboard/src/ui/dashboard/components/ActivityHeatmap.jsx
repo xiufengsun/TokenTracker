@@ -321,8 +321,8 @@ export function ActivityHeatmap({
   }, [heatmap?.weeks, showGrid]);
 
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
+    // Capture phase sees both grid and page scrolls, either of which moves the
+    // cell under the fixed-position tooltip.
     const handleScroll = () => {
       if (hideTimeoutRef.current) {
         clearTimeout(hideTimeoutRef.current);
@@ -330,8 +330,8 @@ export function ActivityHeatmap({
       }
       showFocusedOrHide();
     };
-    el.addEventListener("scroll", handleScroll);
-    return () => el.removeEventListener("scroll", handleScroll);
+    window.addEventListener("scroll", handleScroll, { capture: true, passive: true });
+    return () => window.removeEventListener("scroll", handleScroll, { capture: true });
   }, []);
 
   const weekStartsOn = heatmap?.week_starts_on === "mon" ? "mon" : "sun";
