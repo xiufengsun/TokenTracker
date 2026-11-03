@@ -80,6 +80,8 @@ test("Claude session analytics retains metadata but never content", async () => 
   assert.equal(session.one_shot, true);
   assert.equal(session.subagent_calls, 1);
   assert.equal(session.total_tokens, 185);
+  assert.equal(session.usage_buckets.length, 2);
+  assert.equal(session.usage_buckets.reduce((sum, bucket) => sum + bucket.total_tokens, 0), 185);
   assert.equal(JSON.stringify(session).includes(secret), false);
 
   const summary = summarizeSessions([session]);
@@ -376,6 +378,82 @@ test("session analytics reuses unchanged file records during an incremental rebu
   const rebuilt = await buildSessionAnalytics({ home, cacheTtlMs: 0 });
   assert.equal(rebuilt.find((row) => row.project_key === "project-a").title, "cached-proof");
   assert.equal(rebuilt.find((row) => row.project_key === "project-b").turns, 2);
+});
+
+test("recheck skips the TTL but still reuses unchanged files", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tt-session-recheck-"));
+  const writeSession = (project, sessionId) => {
+    const projectDir = path.join(home, ".claude", "projects", project);
+    fs.mkdirSync(projectDir, { recursive: true });
+    const filePath = path.join(projectDir, `${sessionId}.jsonl`);
+    const rows = [
+      { type: "user", sessionId, cwd: projectDir, timestamp: "2026-07-18T06:00:00Z", message: { content: "build" } },
+      { type: "assistant", sessionId, cwd: projectDir, timestamp: "2026-07-18T06:00:01Z", message: { id: `${sessionId}-message`, model: "claude-recheck", usage: { input_tokens: 10, output_tokens: 2 }, content: [] } },
+    ];
+    fs.writeFileSync(filePath, `${rows.map(JSON.stringify).join("\n")}\n`);
+    return filePath;
+  };
+  writeSession("project-a", "session-a");
+
+  await buildSessionAnalytics({ home, force: true });
+  const sidecarPath = path.join(home, ".tokentracker", "tracker", "session.queue.jsonl");
+  const cachedRows = fs.readFileSync(sidecarPath, "utf8").trim().split("\n").map(JSON.parse);
+  cachedRows[0].title = "cached-proof";
+  fs.writeFileSync(sidecarPath, `${cachedRows.map(JSON.stringify).join("\n")}\n`);
+  writeSession("project-b", "session-b");
+
+  // Inside the TTL a plain build answers from the cached snapshot, so the new
+  // session stays invisible. That is exactly the behaviour refresh must not
+  // inherit: it used to force a full re-parse to see the new file.
+  const ttlHit = await buildSessionAnalytics({ home });
+  assert.equal(ttlHit.length, 1);
+  assert.equal(ttlHit[0].title, "cached-proof");
+
+  // recheck ignores the TTL, walks the tree, picks up the new file and still
+  // reuses the untouched one instead of re-parsing it.
+  const rechecked = await buildSessionAnalytics({ home, recheck: true });
+  assert.equal(rechecked.length, 2);
+  assert.equal(rechecked.find((row) => row.project_key === "project-a").title, "cached-proof");
+  assert.equal(rechecked.find((row) => row.project_key === "project-b").turns, 1);
+});
+
+test("recheck retries a previous run that skipped transcripts", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tt-session-recheck-skipped-"));
+  const projectDir = path.join(home, ".claude", "projects", "project-a");
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "session-a.jsonl"), `${JSON.stringify({ type: "user", sessionId: "session-a", cwd: projectDir, timestamp: "2026-07-18T06:00:00Z", message: { content: "build" } })}\n`);
+
+  await buildSessionAnalytics({ home, force: true });
+  const metaPath = path.join(home, ".tokentracker", "tracker", "session.queue.jsonl.meta.json");
+  // Simulate a run that had to skip a transcript (transient read/parse error).
+  // Nothing on disk changes, so only an explicit refresh may retry it.
+  const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+  meta.skipped_files = 1;
+  fs.writeFileSync(metaPath, `${JSON.stringify(meta)}\n`);
+
+  const refreshed = await buildSessionAnalytics({ home, recheck: true });
+  assert.equal(refreshed.length, 1);
+  // The rebuild recomputed the real skip count (0) instead of trusting the
+  // cached "1"; a plain TTL/signature hit would have preserved it.
+  assert.equal(JSON.parse(fs.readFileSync(metaPath, "utf8")).skipped_files, 0);
+});
+
+test("recheck rebuilds a corrupt sidecar instead of serving the empty cache", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tt-session-recheck-sidecar-"));
+  const projectDir = path.join(home, ".claude", "projects", "project-a");
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "session-a.jsonl"), `${JSON.stringify({ type: "user", sessionId: "session-a", cwd: projectDir, timestamp: "2026-07-18T06:00:00Z", message: { content: "build" } })}\n`);
+
+  await buildSessionAnalytics({ home, force: true });
+  const sidecarPath = path.join(home, ".tokentracker", "tracker", "session.queue.jsonl");
+  // Keep the meta signature valid but destroy the sidecar: the signature still
+  // matches, so only the sidecarReadFailed guard forces a rebuild.
+  fs.writeFileSync(sidecarPath, "{not valid json\n");
+
+  const rebuilt = await buildSessionAnalytics({ home, recheck: true });
+  assert.equal(rebuilt.length, 1);
+  const persisted = fs.readFileSync(sidecarPath, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  assert.equal(persisted.length, 1);
 });
 
 test("Claude session title uses the ai-title record, never the prompt body", async () => {
@@ -765,6 +843,8 @@ test("Grok session analytics bills from turn_completed.usage and keeps titles lo
   // Grok inputTokens is cache-inclusive, and outputTokens includes reasoning.
   // All stored columns are mutually exclusive and still sum to totalTokens.
   assert.equal(session.total_tokens, 120);
+  assert.equal(session.usage_buckets.length, 1);
+  assert.equal(session.usage_buckets[0].total_tokens, 120);
   assert.equal(session.tokens.input_tokens, 80);
   assert.equal(session.tokens.cached_input_tokens, 10);
   assert.equal(session.tokens.cache_creation_input_tokens, 10);

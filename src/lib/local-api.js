@@ -63,11 +63,16 @@ const avatarProxyCache = new Map();
 // new source session files without requiring a sidecar rebuild; sync's
 // writeAtomic() replaces the sidecar and invalidates immediately. Force-refresh
 // requests bypass reads but still refresh the cache.
-const SESSIONS_RESPONSE_CACHE_MAX = 2;
+// Keyed by sidecar signature + pricing revision + query, so one entry per
+// (include_buckets, range) variant the dashboard has open. Keep a few variants
+// but bound the total bytes: the bucket-less summary is ~2.9MB raw while the
+// full legacy variant is ~9MB.
+const SESSIONS_RESPONSE_CACHE_MAX = 8;
+const SESSIONS_RESPONSE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 const SESSIONS_RESPONSE_CACHE_TTL_MS = 60 * 1000;
 const sessionsResponseCache = new Map();
 
-function sessionsResponseCacheKey({ sidecarPath, from, to, limit, timeZone, offsetMinutes }) {
+function sessionsResponseCacheKey({ sidecarPath, from, to, limit, includeBuckets, includeModelDetail, timeZone, offsetMinutes }) {
   try {
     const stat = fs.statSync(sidecarPath);
     return [
@@ -81,6 +86,8 @@ function sessionsResponseCacheKey({ sidecarPath, from, to, limit, timeZone, offs
       from,
       to,
       limit,
+      includeBuckets ? 1 : 0,
+      includeModelDetail ? 1 : 0,
       timeZone || "",
       Number.isFinite(offsetMinutes) ? offsetMinutes : "",
     ].join("\0");
@@ -89,11 +96,22 @@ function sessionsResponseCacheKey({ sidecarPath, from, to, limit, timeZone, offs
   }
 }
 
+function sessionsResponseCacheBytes() {
+  let total = 0;
+  for (const entry of sessionsResponseCache.values()) {
+    total += entry.raw.length + (entry.gzip?.length || 0) + (entry.br?.length || 0);
+  }
+  return total;
+}
+
 function rememberSessionsResponse(key, body) {
   const entry = { raw: body, gzip: null, br: null, expiresAt: Date.now() + SESSIONS_RESPONSE_CACHE_TTL_MS };
   if (!key) return entry;
+  // Re-inserting moves the entry to the end, so eviction stays least-recently-used.
+  sessionsResponseCache.delete(key);
   sessionsResponseCache.set(key, entry);
-  while (sessionsResponseCache.size > SESSIONS_RESPONSE_CACHE_MAX) {
+  while (sessionsResponseCache.size > SESSIONS_RESPONSE_CACHE_MAX
+    || (sessionsResponseCache.size > 1 && sessionsResponseCacheBytes() > SESSIONS_RESPONSE_CACHE_MAX_BYTES)) {
     sessionsResponseCache.delete(sessionsResponseCache.keys().next().value);
   }
   return entry;
@@ -2738,7 +2756,9 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       const refresh = ["1", "true"].includes(url.searchParams.get("refresh"));
       try {
         const { buildSessionAnalytics, summarizeSessions, sessionsToCsv } = require("./session-analytics");
-        const sessions = await buildSessionAnalytics({ force: refresh });
+        // Refresh means "re-walk the session files", not "re-parse everything":
+        // recheck skips the TTL but keeps per-file stat reuse.
+        const sessions = await buildSessionAnalytics({ recheck: refresh });
         const wantsCsv = url.searchParams.get("format") === "csv";
         const includeSessions = wantsCsv || ["1", "true"].includes(url.searchParams.get("include_sessions"));
         const result = summarizeSessions(sessions, { from, to, includeSessions, ...getTimeZoneContext(url) });
@@ -2768,6 +2788,11 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       const refresh = ["1", "true"].includes(url.searchParams.get("refresh"));
       const limitParam = parseInt(url.searchParams.get("limit") || "0", 10);
       const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 2000) : 0;
+      const includeBuckets = !["0", "false"].includes(String(url.searchParams.get("include_buckets") || "").toLowerCase());
+      // The list page renders one model name plus a token/cost/performance
+      // triple per model; the remaining per-model counters (~39 of 44 fields)
+      // are not read by the dashboard, so the browser can opt out of them.
+      const includeModelDetail = !["0", "false"].includes(String(url.searchParams.get("include_model_detail") || "").toLowerCase());
       // This payload contains local paths and resumable session identifiers.
       // The server is loopback-only; additionally prevent browser/proxy caches
       // from retaining the response after the page is closed.
@@ -2781,6 +2806,8 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           from,
           to,
           limit,
+          includeBuckets,
+          includeModelDetail,
           ...timeZoneContext,
         };
         const beforeCacheKey = sessionsResponseCacheKey(cacheParams);
@@ -2790,8 +2817,8 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           await sendSessionsResponse(req, res, cached);
           return true;
         }
-        const sessions = await buildSessionAnalytics({ force: refresh });
-        const result = listSessionsForBrowser(sessions, { from, to, limit, ...timeZoneContext });
+        const sessions = await buildSessionAnalytics({ recheck: refresh });
+        const result = listSessionsForBrowser(sessions, { from, to, limit, includeBuckets, includeModelDetail, ...timeZoneContext });
         const afterBuildCacheKey = sessionsResponseCacheKey(cacheParams);
         const body = JSON.stringify({ from, to, ...result });
         const afterSerializeCacheKey = sessionsResponseCacheKey(cacheParams);
