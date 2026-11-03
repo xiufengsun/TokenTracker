@@ -6024,3 +6024,93 @@ describe("OpenCode Go limits cache credential provenance", () => {
     }
   });
 });
+
+describe("getUsageLimits qoder local credits", () => {
+  const sidecarPayload = (extra = {}) => JSON.stringify({
+    version: 1,
+    source: "qoder-usage-summary",
+    total_credits: 8360.73,
+    record_count: 51304,
+    session_count: 96,
+    file_count: 357,
+    latest_at: "2026-11-03T14:00:00.000Z",
+    updated_at: "2026-11-03T14:05:00.000Z",
+    ...extra,
+  });
+
+  const withTrackerDir = (tmp, file, contents) => {
+    const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+    fs.mkdirSync(trackerDir, { recursive: true });
+    if (contents !== null) fs.writeFileSync(path.join(trackerDir, file), contents);
+    return trackerDir;
+  };
+
+  it("surfaces transcript credits when the quota session is gone", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-qoder-credits-"));
+    try {
+      withTrackerDir(tmp, "qoder-credits.json", sidecarPayload());
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "darwin",
+        providerTimeoutMs: 1000,
+        commandRunner() { return { status: 1, stdout: "" }; },
+        fetchImpl() { return new Promise(() => {}); },
+      });
+      // No Qoder app session on this home, so the quota fetch cannot report a
+      // plan. The sidecar exists only because sync read real transcripts, which
+      // is first-party enough to keep the card alive with local consumption.
+      assert.equal(result.qoder.configured, true);
+      assert.equal(result.qoder.tracked_credits, 8360.73);
+      assert.equal(result.qoder.tracked_credit_records, 51304);
+      assert.equal(result.qoder.tracked_credit_sessions, 96);
+      assert.equal(
+        result.qoderCn.tracked_credits,
+        undefined,
+        "the CN card reads qoder-cn-credits.json, not the international one",
+      );
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("stays unconfigured when no sidecar was ever written", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-qoder-nosidecar-"));
+    try {
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "darwin",
+        providerTimeoutMs: 1000,
+        commandRunner() { return { status: 1, stdout: "" }; },
+        fetchImpl() { return new Promise(() => {}); },
+      });
+      assert.equal(result.qoder.configured, false);
+      assert.equal(result.qoder.tracked_credits, undefined);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a sidecar it cannot trust", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-qoder-badsidecar-"));
+    try {
+      withTrackerDir(tmp, "qoder-credits.json", sidecarPayload({ version: 2 }));
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "darwin",
+        providerTimeoutMs: 1000,
+        commandRunner() { return { status: 1, stdout: "" }; },
+        fetchImpl() { return new Promise(() => {}); },
+      });
+      assert.equal(result.qoder.tracked_credits, undefined, "a v2 sidecar is not this reader's shape");
+      assert.equal(result.qoder.configured, false);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

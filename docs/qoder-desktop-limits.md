@@ -50,6 +50,34 @@
 - 缓存仍遵循原有 TTL：无 `reset_at` 的窗口保留 12 小时；带未来 `reset_at` 的窗口保留到 `reset_at`，整体缓存超过 7 天且没有未过期的日期窗口时丢弃。
 - 只有用量面板触发过请求、或日志被轮转清理时，桌面-only 环境可能暂时没有数据；可设置 `QODER_COOKIE` / `QODER_CN_COOKIE`，国内版也可登录 Qoder CN CLI（见 [qoder-cn-limits.md](qoder-cn-limits.md)）。
 
+## 本地 credit 消耗（transcript sidecar）
+
+限额是账号侧的“还能用多少”，与本地实际消耗是两件事。
+
+Qoder 2026-08 起（app 0.1.2+）不再写 `SharedClientCache/local.db`，会话记录改为
+`~/.qoder/projects/<slug>/<sessionId>.jsonl`（国内版为 `~/.qoder-cn/projects`）。这些 JSONL 的
+`message.usage` 只有 credit 字段，token 列全部为 0：
+
+```json
+{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,
+ "credits":3.2,"original_credits":3.2,"billable":false,"context_usage_ratio":0.31}
+```
+
+`parseQoderNewIncremental` 因此只把这类行计为活动（`conversation_count`），不伪造 token，也不计算
+成本；credit 汇总写入队列旁边的 `~/.tokentracker/tracker/qoder-credits.json`（CN 为
+`qoder-cn-credits.json`，权限 `0600`）。sidecar 形状与 Kiro 共用同一份写入器：每个安装目录一条
+`installs` 记录，顶层给出合计，30 天未更新的安装会被剔除。
+
+- `usage-limits` 用 `readQoderCreditsSummary()` 读回，并通过 `withQoderTrackedCredits()` 合并到
+  `qoder` / `qoderCn` 面板数据；用量面板以「Local usage: N credits · M turns」一行展示。
+- 0.4.x 桌面环境拿不到 `SharedClientCache/.info.json`，限额链路会返回 `configured:false`。此时只要
+  sidecar 存在（说明本地确实解析过会话），面板仍显示本地消耗，而不是“未连接”。
+- 不存在官方的 credit→token 或 credit→USD 汇率，所以这个数字始终以 credit 为单位呈现，任何换算都会是猜测。
+- 隐私边界不变：sidecar 只含数量与时间，不含提示词或回复内容。
+
+回归测试：`node --test test/qoder-new-parser.test.js`（去重、幂等、多安装、CN 独立文件、删除会话后归零）
+与 `node --test test/usage-limits.test.js`（`getUsageLimits` 在限额不可用时仍上报本地 credit）。
+
 ## 验证证据
 
 2026-10-29 在 macOS 上用 Qoder CN Desktop 0.4.11 实测：

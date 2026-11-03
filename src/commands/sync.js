@@ -1551,6 +1551,7 @@ async function cmdSync(argv, context = {}) {
             onProgress: makeProviderProgress("Qoder (new)"),
             sourceKey: "qoder",
             cursorKey: "qoderNew",
+            creditsInstallKey: projectsDir,
           });
           qoderResult = {
             recordsProcessed: qoderResult.recordsProcessed + (parsed.messagesProcessed || 0),
@@ -1641,6 +1642,7 @@ async function cmdSync(argv, context = {}) {
               onProgress: makeProviderProgress("Qoder CN (new)"),
               sourceKey: "qoder-cn",
               cursorKey: "qoderCnNew",
+              creditsInstallKey: cnProjectsDir,
             });
             qoderCnResult = {
               recordsProcessed: qoderCnResult.recordsProcessed + (parsed.messagesProcessed || 0),

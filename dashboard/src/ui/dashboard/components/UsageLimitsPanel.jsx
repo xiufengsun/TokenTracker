@@ -881,10 +881,12 @@ function renderProviderExtra(kind, data) {
     return <StatusLine>{copy("limits.label.kimi_parallel", { count: data.parallel_limit })}</StatusLine>;
   }
   if (
-    kind === "kiro_credits" &&
+    (kind === "kiro_credits" || kind === "qoder_credits") &&
     Number.isFinite(Number(data.tracked_credits)) &&
     Number(data.tracked_credit_records) > 0
   ) {
+    // Shared with Qoder: the copy line is provider-neutral ("Local usage: …
+    // credits · … turns") and both providers report the same sidecar fields.
     const credits = formatCreditAmount(data.tracked_credits, {
       maximumFractionDigits: 2,
     });

@@ -197,6 +197,8 @@ const GROK_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // penalty, which is what kept the panel stuck on the error.
 const CLAUDE_RATE_LIMIT_FILE = "claude-usage-rate-limit.json";
 const KIRO_CREDITS_SIDECAR_FILE = "kiro-credits.json";
+const QODER_CREDITS_SIDECAR_FILE = "qoder-credits.json";
+const QODER_CN_CREDITS_SIDECAR_FILE = "qoder-cn-credits.json";
 const CLAUDE_RATE_LIMIT_DEFAULT_COOLDOWN_SEC = 5 * 60;
 const CLAUDE_RATE_LIMIT_MAX_COOLDOWN_SEC = 60 * 60;
 
@@ -1680,12 +1682,16 @@ function parseKiroUsageOutput(output, { now = new Date() } = {}) {
   };
 }
 
-function readKiroCreditsSummary({ home = os.homedir() } = {}) {
+// Shared reader for the credits sidecars written by rollout.js (see
+// writeCreditsSidecar). A sidecar is the only consumption figure a
+// credit-billed provider can report — its transcripts carry no token counts and
+// there is no first-party credit→token rate, so nothing here converts units.
+function readCreditsSummary({ home = os.homedir(), sidecarFile } = {}) {
   const sidecarPath = path.join(
     home,
     ".tokentracker",
     "tracker",
-    KIRO_CREDITS_SIDECAR_FILE,
+    sidecarFile,
   );
   try {
     const parsed = JSON.parse(fs.readFileSync(sidecarPath, "utf8"));
@@ -1715,6 +1721,33 @@ function readKiroCreditsSummary({ home = os.homedir() } = {}) {
   } catch {
     return null;
   }
+}
+
+function readKiroCreditsSummary({ home = os.homedir() } = {}) {
+  return readCreditsSummary({ home, sidecarFile: KIRO_CREDITS_SIDECAR_FILE });
+}
+
+function readQoderCreditsSummary({
+  home = os.homedir(),
+  sidecarFile = QODER_CREDITS_SIDECAR_FILE,
+} = {}) {
+  return readCreditsSummary({ home, sidecarFile });
+}
+
+// Qoder quota needs a live signed-in session (IPC to the app), and on the
+// 2026-08+ layout that session can be gone — `configured:false` with no error.
+// The transcripts still prove local credit spend, and a sidecar means the
+// install really is here, so upgrade the result instead of hiding the card.
+function withQoderTrackedCredits(value, { home = os.homedir(), sidecarFile } = {}) {
+  const tracked = readQoderCreditsSummary({ home, sidecarFile });
+  if (!tracked) return value;
+  if (!value || typeof value !== "object") {
+    return { configured: true, error: null, ...tracked };
+  }
+  if (value.configured === false && !value.error) {
+    return { ...value, configured: true, error: null, ...tracked };
+  }
+  return { ...value, ...tracked };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4635,7 +4668,10 @@ async function fetchUsageLimitsUncached({
       }),
       "Qoder",
       providerTimeoutMs,
-    ).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
+    ).then((value) => withQoderTrackedCredits(value, {
+      home,
+      sidecarFile: QODER_CREDITS_SIDECAR_FILE,
+    })).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
     hiddenSet.has("qoderCn") ? hiddenSentinel : withProviderTimeout(
       fetchQoderCnLimits({
         home,
@@ -4645,7 +4681,10 @@ async function fetchUsageLimitsUncached({
       }),
       "Qoder CN",
       providerTimeoutMs,
-    ).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
+    ).then((value) => withQoderTrackedCredits(value, {
+      home,
+      sidecarFile: QODER_CN_CREDITS_SIDECAR_FILE,
+    })).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
     // Ark Coding Plan / Agent Plan (火山方舟): two parallel subscription
     // products sharing the same arkcli binary. No token-consumption source —
     // consumption for the compatible CLIs is already counted from their
@@ -5230,6 +5269,9 @@ module.exports = {
   normalizeKimiUsageResponse,
   parseKiroUsageOutput,
   readKiroCreditsSummary,
+  readQoderCreditsSummary,
+  QODER_CREDITS_SIDECAR_FILE,
+  QODER_CN_CREDITS_SIDECAR_FILE,
   fetchKiroLimits,
   normalizeAntigravityResponse,
   normalizeAntigravityQuotaSummary,

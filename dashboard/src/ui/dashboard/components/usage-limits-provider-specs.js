@@ -203,6 +203,9 @@ export const PROVIDER_LIMIT_SPECS = {
   // default rounds amounts ≥100 to integers, which would hide fractional
   // add-on credits. The three buckets mirror Qoder's own Credits page.
   qoder: {
+    // Local credit consumption from the transcripts (Qoder's newer builds report
+    // no token counts), rendered by the same line Kiro uses.
+    extra: "qoder_credits",
     windows(data) {
       return [
         { key: "credits", labelKey: "limits.label.qoder_credits", window: dropEmptyQoderWindow(data.primary_window), creditPrecision: 2, showCreditDetail: true },
@@ -220,6 +223,8 @@ export const PROVIDER_LIMIT_SPECS = {
   // Same windows and detail as the international edition; only the labels
   // differ between the two installs.
   qoderCn: {
+    // Reads its own sidecar (qoder-cn-credits.json), never the international one.
+    extra: "qoder_credits",
     windows(data) {
       return [
         { key: "credits", labelKey: "limits.label.qoder_cn_credits", window: dropEmptyQoderWindow(data.primary_window), creditPrecision: 2, showCreditDetail: true },

@@ -439,6 +439,53 @@ describe("UsageLimitsPanel", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows Qoder credits tracked from local transcripts with no quota to show", () => {
+    const { rerender } = render(
+      <UsageLimitsPanel
+        qoder={{
+          configured: true,
+          error: null,
+          tracked_credits: 8360.73125242593,
+          tracked_credit_records: 51304,
+          tracked_credit_sessions: 96,
+        }}
+        order={["qoder"]}
+      />,
+    );
+
+    expect(screen.getByText("Qoder")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        copy("limits.label.kiro_tracked_credits", {
+          credits: "8,360.73",
+          count: 51304,
+        }),
+      ),
+    ).toBeInTheDocument();
+
+    // The CN install reads its own sidecar and shows the same line.
+    rerender(
+      <UsageLimitsPanel
+        qoderCn={{
+          configured: true,
+          error: null,
+          tracked_credits: 12.25,
+          tracked_credit_records: 40,
+          tracked_credit_sessions: 3,
+        }}
+        order={["qoderCn"]}
+      />,
+    );
+    expect(
+      screen.getByText(
+        copy("limits.label.kiro_tracked_credits", {
+          credits: "12.25",
+          count: 40,
+        }),
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("renders OpenCode Go 5h / Weekly / Monthly windows", () => {
     const { rerender } = render(
       <UsageLimitsPanel
