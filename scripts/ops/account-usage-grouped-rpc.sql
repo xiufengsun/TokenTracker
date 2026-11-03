@@ -250,7 +250,13 @@ AS $func$
       END AS bucket,
       hourly.source, hourly.model,
       CASE
+        -- '%deepseek-v4-flash%' does not match deepseek-v4.1-flash (the ".1"
+        -- breaks the substring run). deepseek-v4.1-flash is the OpenRouter /
+        -- Command Code / WorkBuddy id and bare deepseek-flash its app-facing
+        -- alias; both ride the same peak/off-peak calendar (#1010).
         WHEN lower(hourly.model) LIKE '%deepseek-v4-flash%'
+          OR lower(hourly.model) LIKE '%deepseek-v4.1-flash%'
+          OR lower(hourly.model) LIKE '%deepseek-flash%'
           OR lower(hourly.model) LIKE '%deepseek-v4-pro%'
         THEN CASE
           WHEN extract(hour FROM hourly.hour_start AT TIME ZONE 'UTC') >= 1

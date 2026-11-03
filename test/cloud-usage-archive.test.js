@@ -58,6 +58,24 @@ test('archive wiring retains canonical pricing and denies direct client access',
   assert.equal(await rpc('leaderboard_pricing_tier', ['deepseek-v4-pro', '2026-08-16T02:00:00Z']), 'peak');
 });
 
+test('canonical pricing recognizes every deepseek time-priced model id', async () => {
+  // deepseek-v4.1-flash is the OpenRouter / Command Code / WorkBuddy id; the
+  // ".1" breaks the '%deepseek-v4-flash%' substring run, and bare deepseek-flash
+  // never contained it. Both must ride the same Beijing peak/off-peak calendar
+  // as deepseek-v4-flash across the canonical function and the account RPC.
+  const sunday = '2026-11-01T02:00:00Z'; // Beijing 10:00, inside the whole-weekend off-peak window
+  const mondayPeak = '2026-11-02T02:00:00Z'; // Beijing 10:00, inside the UTC 1-4 peak window
+  const mondayOffPeak = '2026-11-02T05:00:00Z'; // Beijing 13:00, outside both peak windows
+  for (const model of ['deepseek-v4.1-flash', 'deepseek-v4.1-flash-free', 'cline-free/deepseek-v4.1-flash', 'deepseek-flash']) {
+    assert.equal(await rpc('leaderboard_pricing_tier', [model, sunday]), 'off_peak');
+    assert.equal(await rpc('leaderboard_pricing_tier', [model, mondayPeak]), 'peak');
+    assert.equal(await rpc('leaderboard_pricing_tier', [model, mondayOffPeak]), 'off_peak');
+  }
+  const id = await user(), dev = await device(id);
+  await write(id, dev, 10, sunday, 'claude', 'deepseek-v4.1-flash');
+  assert.equal((await grouped(id, [dev]))[0].pricing_tier, 'off_peak');
+});
+
 test('server revisions replace decreasing and zero values and invalidate private cache', async () => {
   const id = await user(), dev = await device(id);
   await write(id, dev);
