@@ -96,7 +96,7 @@ brew install xiufengsun/tokentracker/tokentracker
 - 📊 **漂亮的 Dashboard** —— 用量趋势、按模型的成本分解、GitHub 风格活跃度热力图、按项目归因
 - 🖥️ **原生桌面 App** —— macOS 菜单栏（含桌面小组件）与 Windows 系统托盘，各自内嵌服务 + 原生 WebView Dashboard
 - 🎨 **4 种桌面小组件** —— 用量 / 热力图 / 热门模型 / 使用限额 直接钉桌面
-- 📈 **实时限额追踪** —— Claude / Codex / Cursor / Gemini / Kimi / Kiro / Grok / Copilot / Antigravity / ZCode / OpenCode Go / Qoder / Qoder CN / Command Code / Ark Coding Plan / Ark Agent Plan / Devin / WorkBuddy 的配额窗口；本地 provider App 暂时退出时保留 last-good 缓存
+- 📈 **实时限额追踪** —— Claude / Codex / Cursor / Gemini / Kimi / Kiro / Grok / Copilot / Antigravity / ZCode / OpenCode Go / Qoder / Qoder CN / Command Code / Ark Coding Plan / Ark Agent Plan / Devin / WorkBuddy / Doubao 的配额窗口；本地 provider App 暂时退出时保留 last-good 缓存
 - 🟢 **服务状态页** —— 直接汇总 8 家 provider 官方状态页的实时运行与事故状态
 - 💰 **成本引擎** —— 内置 70+ 模型定价表，精确到 USD
 - 🌐 **可选排行榜** —— 与全球开发者对比；列可拖拽排序，聚焦你关心的 provider（需登录参与）
@@ -213,6 +213,7 @@ brew install xiufengsun/tokentracker/tokentracker
 | **DeepSeek Harness** | ✅ 自动 | 被动读取会话日志（`~/.dsh/sessions/**/session.jsonl[.zstd]`；解析会话头部与 assistant 事件，支持多帧 zstd 解压） |
 | **TRAE（国际版）** | ✅ 自动 | 默认使用共享应用密钥读取 TRAE / TRAE SOLO 本地 SQLCipher 用量元数据；可通过 `TOKENTRACKER_TRAE_SQLCIPHER_KEY` 覆盖密钥。不调用厂商 API。[配置与限制](docs/trae.md)。 |
 | **TRAE Work CN** | ✅ 自动 | **需要显式开启：设置 `TOKENTRACKER_TRAE_CN_USAGE=1`。** 读取用量会把本地保存的登录授权发送到 TRAE 的内部 API，因此在你开启之前不会发出任何请求。开启后：仅在存在本地 TRAE Work CN 登录授权的可执行非后台同步期间，读取 macOS / Windows 本地登录应用的 session-token 用量；内部 API 可能变化 |
+| **Doubao**（豆包桌面版） | ✅ 仅限额 | 复用豆包桌面版的本地登录：解密其 Chromium Cookie 库（`~/Library/Application Support/Doubao/**/Cookies`，经 `Doubao Safe Storage` 钥匙串解锁——macOS 首次会弹一次授权），随后调用豆包自己的订阅额度接口，展示 5 小时 / 7 天 / 套餐月三个额度窗口。豆包不暴露任何 token 级记账数据，因此该 provider 不产生 token 用量。可用 `DOUBAO_COOKIE`（手动 cookie，优先）或 `DOUBAO_HOME`（数据目录）覆盖。详见 [Doubao 限额](docs/doubao-limits.md) |
 
 > **需要手动装什么插件 / hook 吗？** 不需要。`tokentracker`（或 `tokentracker init`）第一次跑的时候会全部搞定：
 > - **基于 hook 的工具**（Claude Code、Codex、AStudio、Gemini、Every Code、**CodeBuddy**、**WorkBuddy**、**Grok Build**）—— 我们把 SessionEnd hook 或 TOML notify 条目写入它们自己的配置文件
@@ -241,7 +242,7 @@ brew install xiufengsun/tokentracker/tokentracker
 | **本地优先分析** | ✅ | ✅ | ✅ |
 | **原生桌面 App** | ✅ macOS、Windows、Linux | ❌ | ❌ |
 | **桌面小组件** | ✅ 4 个小组件 | ❌ | ❌ |
-| **限额追踪** | ✅ 18 家 provider | 较少（Claude 周期/用量） | 覆盖多个 provider |
+| **限额追踪** | ✅ 19 家 provider | 较少（Claude 周期/用量） | 覆盖多个 provider |
 | **终端数据分析** | 基础 CLI（`status`、`--json`） | 完善的 CLI 报表能力 | 丰富的交互式 TUI 与 CLI |
 | **JSON 导出** | ✅ | ✅ | ✅ |
 | **公开排行榜** | 可选（需主动登录参与） | ❌ | 可选（`submit`） |

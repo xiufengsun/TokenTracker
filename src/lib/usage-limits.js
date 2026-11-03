@@ -33,6 +33,7 @@ const { fetchOpencodeGoLimits } = require("./opencode-go-limits");
 const { fetchCommandcodeLimits } = require("./commandcode-limits");
 const { fetchDevinLimits } = require("./devin-limits");
 const { fetchQoderLimits, fetchQoderCnLimits } = require("./qoder-limits");
+const { fetchDoubaoLimits, readDoubaoLimitsFallback } = require("./doubao-limits");
 const { fetchArkCodingPlanLimits } = require("./ark-coding-plan-limits");
 const { fetchArkAgentPlanLimits } = require("./ark-agent-plan-limits");
 const { fetchWorkbuddyLimits, fetchWorkbuddyAiLimits } = require("./workbuddy-limits");
@@ -71,7 +72,7 @@ const USAGE_LIMITS_PROVIDER_IDS = Object.freeze([
   "claude", "codex", "cursor", "gemini", "kimi", "kiro", "grok",
   "copilot", "antigravity", "zcode", "opencodeGo", "commandCode",
   "qoder", "qoderCn", "codingPlan", "agentPlan", "devin",
-  "workbuddy", "workbuddyAi", "deepseek",
+  "workbuddy", "workbuddyAi", "deepseek", "doubao",
 ]);
 
 // Normalize a caller-supplied hidden-provider list (array, Set, or
@@ -4572,7 +4573,7 @@ async function fetchUsageLimitsUncached({
   // (#956).
   const hiddenSentinel = Promise.resolve({ configured: false });
   const hiddenSettled = Promise.resolve({ status: "fulfilled", value: { configured: false } });
-  const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, devinRaw, workbuddy, workbuddyAi, deepseek, claudeServiceStatus] = await Promise.all([
+  const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, devinRaw, workbuddy, workbuddyAi, deepseek, doubao, claudeServiceStatus] = await Promise.all([
     claudeToken && !freshClaudeCache && !claudeRetryAtMs
       ? withProviderTimeout(fetchClaudeUsageLimits(claudeToken, { fetchImpl: providerFetch, maxAttempts: 1 }), "Claude", providerTimeoutMs).then(
           (value) => ({ status: "fulfilled", value }),
@@ -4725,6 +4726,20 @@ async function fetchUsageLimitsUncached({
       "DeepSeek",
       providerTimeoutMs,
     ).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
+    // Doubao (豆包): subscription credits windows from Doubao's web endpoints,
+    // keyed by the desktop app's local session (DOUBAO_COOKIE env or decrypted
+    // Chromium cookies). Limits-only — Doubao exposes no token accounting.
+    hiddenSet.has("doubao") ? hiddenSentinel : withProviderTimeout(
+      fetchDoubaoLimits({ home, env, platform, fetchImpl: providerFetch, securityRunner, nowMs }),
+      "Doubao",
+      providerTimeoutMs,
+    ).catch(async (reason) => {
+      // The timeout race discards fetchDoubaoLimits' own cache fallback, so
+      // re-serve it here (readDoubaoLimitsFallback binds it to the active
+      // session); otherwise the error result keeps the section actionable.
+      const cached = await readDoubaoLimitsFallback({ home, env, platform, securityRunner, nowMs });
+      return cached || { configured: true, error: reason?.message || "Unknown error" };
+    }),
     // Public status-page probe (fail-soft, own 5-min cache in provider-status.js).
     // Only probed for configured accounts — without a token the Claude section
     // never renders, so the reading would have nowhere to go.
@@ -5135,6 +5150,7 @@ async function fetchUsageLimitsUncached({
     // stamps cached_at/stale on both its live and last-good paths, so pass it
     // through verbatim like grok.
     deepseek,
+    doubao: withPlanLabel(doubao, doubao?.plan_label, "Doubao"),
   };
 
   for (const [providerName, provider] of Object.entries(data)) {
@@ -5259,6 +5275,7 @@ module.exports = {
   fetchCommandcodeLimits,
   fetchQoderLimits,
   fetchQoderCnLimits,
+  readMacosKeychainGenericPasswordAsync,
   fetchWorkbuddyLimits,
   fetchWorkbuddyAiLimits,
   withWorkbuddyProviderTimeout,

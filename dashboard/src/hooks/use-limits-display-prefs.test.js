@@ -153,6 +153,7 @@ describe("useLimitsDisplayPrefs", () => {
         "cursor",
         "deepseek",
         "devin",
+        "doubao",
         "gemini",
         "workbuddy",
         "workbuddyAi",
