@@ -1141,6 +1141,9 @@ test("sidecar file is owner-readable only", async (t) => {
   const { queuePath } = await runOne(t, [
     qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "p1" }),
   ]);
-  const mode = fs.statSync(path.join(path.dirname(queuePath), "qoder-credits.json")).mode & 0o777;
-  assert.equal(mode, 0o600);
+  const sidecarPath = path.join(path.dirname(queuePath), "qoder-credits.json");
+  // POSIX mode bits do not describe Windows NTFS access permissions.
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(sidecarPath).mode & 0o777, 0o600);
+  }
 });
