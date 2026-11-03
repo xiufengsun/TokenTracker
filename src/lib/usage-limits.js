@@ -29,6 +29,10 @@ const {
   fetchCursorSandUsageStatus,
 } = require("./cursor-config");
 const { fetchGrokLimits, grokTokenSubject, loadGrokAuthEntry } = require("./grok-limits");
+const {
+  createLimitsCache,
+  withLimitsCacheFallback,
+} = require("./limits-cache");
 const { fetchZcodeLimits } = require("./zcode-limits");
 const { fetchOpencodeGoLimits } = require("./opencode-go-limits");
 const { fetchCommandcodeLimits } = require("./commandcode-limits");
@@ -3093,92 +3097,24 @@ function writeOpencodeGoLimitsCache(limits, { trackerDir, home, nowMs = Date.now
   } catch (_error) {}
 }
 
-function resolveCursorLimitsCachePath({ home } = {}) {
-  return path.join(home || os.homedir(), ".tokentracker", "tracker", CURSOR_LIMITS_CACHE_FILE);
-}
-
-function hasCursorWindow(limits) {
-  return Boolean(
-    limits?.primary_window
-    || limits?.secondary_window
-    || limits?.tertiary_window
-    || limits?.quaternary_window,
-  );
-}
-
-// Cursor windows carry `reset_at` as an ISO string (billing-cycle end for the three
-// summary windows, the RPC's own expiry for the Grok Bot window). A window whose reset
-// has already passed is stale data, not a usable fallback, so drop it. Windows without
-// a reset stamp are kept — the overall cached_at max-age gate already bounds them.
-function isCursorCacheWindowUsable(window, { nowMs } = {}) {
-  if (!window || typeof window !== "object") return false;
-  const resetAtMs = parseTimeMs(window.reset_at);
-  if (resetAtMs === null) return true;
-  return resetAtMs > nowMs;
-}
-
-function normalizeCursorCachedLimits(
-  raw,
-  { nowMs = Date.now(), maxAgeMs = CURSOR_LIMITS_CACHE_MAX_AGE_MS } = {},
-) {
-  const cachedAtMs = parseTimeMs(raw?.cached_at);
-  if (!Number.isFinite(cachedAtMs)) return null;
-  if (cachedAtMs > nowMs + 60_000) return null;
-  if (nowMs - cachedAtMs > maxAgeMs) return null;
-
-  const cached = {
-    configured: true,
-    error: null,
-    membership_type: typeof raw?.membership_type === "string" ? raw.membership_type : null,
-    primary_window: isCursorCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
-    secondary_window: isCursorCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
-    tertiary_window: isCursorCacheWindowUsable(raw?.tertiary_window, { nowMs }) ? raw.tertiary_window : null,
-    quaternary_window: isCursorCacheWindowUsable(raw?.quaternary_window, { nowMs }) ? raw.quaternary_window : null,
-    stale: true,
-    cached_at: raw.cached_at,
-  };
-  return hasCursorWindow(cached) ? cached : null;
-}
-
 // The signed-in Cursor account partitions the cache (zcode login-identity precedent):
 // the id is the non-secret normalized subject Cursor itself puts in the session cookie.
 // A single home holds one active login, so one stamped entry suffices; a read requires
 // the stored identity to match the current one, and a write without an identity is
 // refused — an unreadable login must never pin another account's bars in place.
-function readCursorLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
-  if (!identity) return null;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(resolveCursorLimitsCachePath({ home }), "utf8"));
-    const entry = parsed?.cursor;
-    if (entry?.identity !== identity) return null;
-    return normalizeCursorCachedLimits(entry, { nowMs });
-  } catch (_error) {
-    return null;
-  }
-}
-
-function writeCursorLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
-  if (!identity) return;
-  if (!limits?.configured || limits.error || !hasCursorWindow(limits)) return;
-  const cachePath = resolveCursorLimitsCachePath({ home });
-  const payload = {
-    cursor: {
-      identity,
-      membership_type: limits.membership_type || null,
-      primary_window: limits.primary_window || null,
-      secondary_window: limits.secondary_window || null,
-      tertiary_window: limits.tertiary_window || null,
-      quaternary_window: limits.quaternary_window || null,
-      cached_at: new Date(nowMs).toISOString(),
-    },
-  };
-  try {
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const tmpPath = `${cachePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(tmpPath, cachePath);
-  } catch (_error) {}
-}
+const cursorLimitsCache = createLimitsCache({
+  file: CURSOR_LIMITS_CACHE_FILE,
+  key: "cursor",
+  maxAgeMs: CURSOR_LIMITS_CACHE_MAX_AGE_MS,
+  fields: { membership_type: "string" },
+  // Billing-cycle end for the three summary windows, the RPC's own expiry for
+  // the Grok Bot window. A window whose reset has already passed is stale
+  // data, not a usable fallback, so drop it; windows without a reset stamp
+  // are kept — the overall cached_at max-age gate already bounds them.
+  windowKeys: ["primary_window", "secondary_window", "tertiary_window", "quaternary_window"],
+  identityField: "identity",
+  identityRequired: true,
+});
 
 // Failure-only identity re-derivation for the cache fallback: when the provider slot's
 // result was produced by the outer timeout race, the fetcher's own identity field is
@@ -3312,88 +3248,20 @@ function resolveKimiCacheIdentity({ home, env } = {}) {
   }
 }
 
-function resolveKimiLimitsCachePath({ home } = {}) {
-  return path.join(home || os.homedir(), ".tokentracker", "tracker", KIMI_LIMITS_CACHE_FILE);
-}
-
-function hasKimiWindow(limits) {
-  return Boolean(
-    limits?.primary_window
-    || limits?.secondary_window
-    || limits?.tertiary_window,
-  );
-}
-
-// Kimi windows carry `reset_at` (ISO) when the API reports a cycle end; a window
-// whose reset has already passed is stale data, not a usable fallback, so drop
-// it. Windows without a reset stamp are kept — the overall cached_at max-age
-// gate already bounds them.
-function isKimiCacheWindowUsable(window, { nowMs } = {}) {
-  if (!window || typeof window !== "object") return false;
-  const resetAtMs = parseTimeMs(window.reset_at);
-  if (resetAtMs === null) return true;
-  return resetAtMs > nowMs;
-}
-
-function normalizeKimiCachedLimits(
-  raw,
-  { nowMs = Date.now(), maxAgeMs = KIMI_LIMITS_CACHE_MAX_AGE_MS } = {},
-) {
-  const cachedAtMs = parseTimeMs(raw?.cached_at);
-  if (!Number.isFinite(cachedAtMs)) return null;
-  if (cachedAtMs > nowMs + 60_000) return null;
-  if (nowMs - cachedAtMs > maxAgeMs) return null;
-
-  const cached = {
-    configured: true,
-    error: null,
-    membership_level: typeof raw?.membership_level === "string" ? raw.membership_level : null,
-    subscription_type: typeof raw?.subscription_type === "string" ? raw.subscription_type : null,
-    parallel_limit: Number.isFinite(raw?.parallel_limit) ? raw.parallel_limit : null,
-    primary_window: isKimiCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
-    secondary_window: isKimiCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
-    tertiary_window: isKimiCacheWindowUsable(raw?.tertiary_window, { nowMs }) ? raw.tertiary_window : null,
-    stale: true,
-    cached_at: raw.cached_at,
-  };
-  return hasKimiWindow(cached) ? cached : null;
-}
-
-function readKimiLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
-  if (!identity) return null;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(resolveKimiLimitsCachePath({ home }), "utf8"));
-    const entry = parsed?.kimi;
-    if (entry?.identity !== identity) return null;
-    return normalizeKimiCachedLimits(entry, { nowMs });
-  } catch (_error) {
-    return null;
-  }
-}
-
-function writeKimiLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
-  if (!identity) return;
-  if (!limits?.configured || limits.error || !hasKimiWindow(limits)) return;
-  const cachePath = resolveKimiLimitsCachePath({ home });
-  const payload = {
-    kimi: {
-      identity,
-      membership_level: limits.membership_level || null,
-      subscription_type: limits.subscription_type || null,
-      parallel_limit: Number.isFinite(limits.parallel_limit) ? limits.parallel_limit : null,
-      primary_window: limits.primary_window || null,
-      secondary_window: limits.secondary_window || null,
-      tertiary_window: limits.tertiary_window || null,
-      cached_at: new Date(nowMs).toISOString(),
-    },
-  };
-  try {
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const tmpPath = `${cachePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(tmpPath, cachePath);
-  } catch (_error) {}
-}
+// The endpoint-scoped profile (home + OAuth host) partitions the cache: one
+// slot must never serve another region's windows (ark profile_identity
+// precedent). Windows carry `reset_at` (ISO) when the API reports a cycle
+// end; a window whose reset has already passed is stale data, not a usable
+// fallback, so drop it.
+const kimiLimitsCache = createLimitsCache({
+  file: KIMI_LIMITS_CACHE_FILE,
+  key: "kimi",
+  maxAgeMs: KIMI_LIMITS_CACHE_MAX_AGE_MS,
+  fields: { membership_level: "string", subscription_type: "string", parallel_limit: "number" },
+  windowKeys: ["primary_window", "secondary_window", "tertiary_window"],
+  identityField: "identity",
+  identityRequired: true,
+});
 
 function resolveGrokLimitsCachePath({ home } = {}) {
   return path.join(home || os.homedir(), ".tokentracker", "tracker", GROK_LIMITS_CACHE_FILE);
@@ -5635,41 +5503,23 @@ async function fetchUsageLimitsUncached({
   // "fetch failed" (mirrors Codex / Claude / OpenCode Go). A session-expiry error
   // (401/403 — "re-login in Cursor") is actionable and must not be hidden behind
   // stale cache, so it passes through untouched.
-  let cursorWithCache;
-  if (!cursor || cursor.configured === false) {
-    cursorWithCache = cursor;
-  } else if (cursor.auth_error === true) {
-    cursorWithCache = cursor;
-  } else if (!cursor.error && hasCursorWindow(cursor)) {
-    cursorWithCache = {
-      ...cursor,
-      stale: false,
-      cached_at: new Date(nowMs).toISOString(),
-    };
-    if (cacheGeneration === usageLimitsCacheGeneration) {
-      writeCursorLimitsCache(cursorWithCache, {
-        home,
-        nowMs,
-        identity: typeof cursor.cache_identity === "string"
-          ? cursor.cache_identity
-          : resolveCursorCacheIdentity({ home, env, trackerDir }),
-      });
-    }
-  } else {
+  const cursorWithCache = await withLimitsCacheFallback(cursor, {
+    cache: cursorLimitsCache,
+    nowMs,
+    home,
+    env,
+    isCurrentGeneration: () => cacheGeneration === usageLimitsCacheGeneration,
     // The slot's error object loses the fetcher's identity field when the outer
-    // timeout race wins (the common failure mode this cache exists for), so
-    // re-derive it from the local state DB on this failure-only path.
-    const identity = typeof cursor.cache_identity === "string"
+    // timeout race wins (the common failure mode this cache exists for), so the
+    // read path re-derives it from the local state DB.
+    resolveWriteIdentity: (slot) => typeof slot.cache_identity === "string"
+      ? slot.cache_identity
+      : resolveCursorCacheIdentity({ home, env }),
+    resolveReadIdentity: () => typeof cursor.cache_identity === "string"
       ? cursor.cache_identity
-      : resolveCursorCacheIdentity({ home, env, trackerDir });
-    const cached = readCursorLimitsCache({ home, nowMs, identity });
-    cursorWithCache = cached || cursor;
-  }
-  // cache_identity / auth_error are internal cache-plumbing markers, not payload.
-  if (cursorWithCache && ("cache_identity" in cursorWithCache || "auth_error" in cursorWithCache)) {
-    const { cache_identity: _identity, auth_error: _authError, ...cursorPayload } = cursorWithCache;
-    cursorWithCache = cursorPayload;
-  }
+      : resolveCursorCacheIdentity({ home, env, trackerDir }),
+    passthrough: (slot) => slot.auth_error === true,
+  });
 
   // Grok: persist last successful windows so a transient timeout/5xx on the
   // cli-chat-proxy.grok.com route serves stale bars instead of a flashing
@@ -5764,47 +5614,23 @@ async function fetchUsageLimitsUncached({
   // errors ("Not logged in to Kimi" / "token_expired") and actionable profile
   // misconfigurations must not be hidden behind stale cache, so they pass
   // through untouched.
-  let kimiWithCache;
-  if (!kimi || kimi.configured === false) {
-    kimiWithCache = kimi;
-  } else if (kimi.auth_error === true || kimi.config_error === true) {
-    kimiWithCache = kimi;
-  } else if (!kimi.error && hasKimiWindow(kimi)) {
-    kimiWithCache = {
-      ...kimi,
-      stale: false,
-      cached_at: new Date(nowMs).toISOString(),
-    };
-    if (cacheGeneration === usageLimitsCacheGeneration) {
-      writeKimiLimitsCache(kimiWithCache, {
-        home,
-        nowMs,
-        identity: typeof kimi.cache_identity === "string"
-          ? kimi.cache_identity
-          : resolveKimiCacheIdentity({ home, env }),
-      });
-    }
-  } else {
-    // The slot's error object loses the fetcher's identity field when the outer
-    // timeout race wins (the common failure mode this cache exists for), so
-    // re-derive it from the local Kimi profile on this failure-only path.
-    const identity = typeof kimi.cache_identity === "string"
+  const kimiWithCache = await withLimitsCacheFallback(kimi, {
+    cache: kimiLimitsCache,
+    nowMs,
+    home,
+    env,
+    isCurrentGeneration: () => cacheGeneration === usageLimitsCacheGeneration,
+    resolveWriteIdentity: (slot) => typeof slot.cache_identity === "string"
+      ? slot.cache_identity
+      : resolveKimiCacheIdentity({ home, env }),
+    // Re-derive from the local Kimi profile: the timeout race strips the
+    // fetcher's own identity field.
+    resolveReadIdentity: () => typeof kimi.cache_identity === "string"
       ? kimi.cache_identity
-      : resolveKimiCacheIdentity({ home, env });
-    const cached = readKimiLimitsCache({ home, nowMs, identity });
-    kimiWithCache = cached || kimi;
-  }
-  // cache_identity / auth_error / config_error are internal cache-plumbing
-  // markers, not payload.
-  if (kimiWithCache && ("cache_identity" in kimiWithCache || "auth_error" in kimiWithCache || "config_error" in kimiWithCache)) {
-    const {
-      cache_identity: _kimiIdentity,
-      auth_error: _kimiAuthError,
-      config_error: _kimiConfigError,
-      ...kimiPayload
-    } = kimiWithCache;
-    kimiWithCache = kimiPayload;
-  }
+      : resolveKimiCacheIdentity({ home, env }),
+    passthrough: (slot) => slot.auth_error === true || slot.config_error === true,
+    markers: ["cache_identity", "auth_error", "config_error"],
+  });
 
   // Gemini: persist last successful windows so a transient timeout/5xx on the
   // cloudcode-pa.googleapis.com routes serves stale bars instead of a flashing
