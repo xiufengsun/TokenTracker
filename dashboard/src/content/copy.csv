@@ -244,6 +244,7 @@ heatmap.resets.type.regular,ui,ActivityHeatmap,ActivityHeatmap,resets_type_regul
 heatmap.resets.type.banked,ui,ActivityHeatmap,ActivityHeatmap,resets_type_banked,"Banked reset",,active
 heatmap.resets.legend.none,ui,ActivityHeatmap,ActivityHeatmap,resets_legend_none,"No reset",,active
 heatmap.resets.tooltip.none,ui,ActivityHeatmap,ActivityHeatmap,resets_tooltip_none,"No reset announced this day.",,active
+heatmap.resets.cell_label,ui,ActivityHeatmap,ActivityHeatmap,resets_cell_label,"{{day}}: {{types}}",,active
 heatmap.resets.loading,ui,ActivityHeatmap,ActivityHeatmap,resets_loading,"Loading reset history…",,active
 heatmap.resets.error,ui,ActivityHeatmap,ActivityHeatmap,resets_error,"Couldn't load reset history.",,active
 heatmap.resets.source,ui,ActivityHeatmap,ActivityHeatmap,resets_source,"Source: claude-resets.com",,active

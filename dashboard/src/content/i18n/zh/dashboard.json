@@ -1050,6 +1050,7 @@
   "heatmap.resets.type.banked": "存储重置",
   "heatmap.resets.legend.none": "无重置",
   "heatmap.resets.tooltip.none": "当天没有公布重置。",
+  "heatmap.resets.cell_label": "{{day}}：{{types}}",
   "heatmap.resets.loading": "正在加载重置记录…",
   "heatmap.resets.error": "无法加载重置记录。",
   "heatmap.resets.source": "来源：claude-resets.com"

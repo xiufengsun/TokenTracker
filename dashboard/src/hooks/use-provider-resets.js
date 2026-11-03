@@ -11,7 +11,9 @@ let inflight = null;
 function loadResets() {
   if (cache && Date.now() - cache.fetchedAtMs < CACHE_TTL_MS) return Promise.resolve(cache.data);
   if (!inflight) {
-    inflight = fetchProviderResets({ signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
+    // AbortSignal.timeout is missing on Safari < 16 (macOS 12 WebViews).
+    const signal = typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(REQUEST_TIMEOUT_MS) : undefined;
+    inflight = fetchProviderResets({ signal })
       .then((data) => {
         cache = { data, fetchedAtMs: Date.now() };
         return data;

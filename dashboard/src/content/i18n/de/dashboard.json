@@ -668,6 +668,7 @@
   "heatmap.resets.type.banked": "Gespeicherte Zurücksetzung",
   "heatmap.resets.legend.none": "Keine Zurücksetzung",
   "heatmap.resets.tooltip.none": "An diesem Tag wurde keine Zurücksetzung angekündigt.",
+  "heatmap.resets.cell_label": "{{day}}: {{types}}",
   "heatmap.resets.loading": "Verlauf wird geladen…",
   "heatmap.resets.error": "Verlauf konnte nicht geladen werden.",
   "heatmap.resets.source": "Quelle: claude-resets.com"

@@ -10,7 +10,7 @@ import { TOKEN_FORMAT_MODES } from "../../../lib/token-format.js";
 import { ActivityHeatmap3D, PALETTES, getAITooltipMessage } from "./ActivityHeatmap3D";
 import { useProviderResets } from "../../../hooks/use-provider-resets.js";
 import { groupResetsByDay } from "../../../lib/provider-resets.js";
-import { ResetLegend, ResetTooltipBody, resetCellClassName } from "./ResetHeatmapParts.jsx";
+import { ResetLegend, ResetTooltipBody, resetCellClassName, resetCellLabel } from "./ResetHeatmapParts.jsx";
 import { Maximize2, RotateCcw, X, Flame, Terminal, TrendingUp, Info, Play, Pause } from "lucide-react";
 
 const CELL_SIZE = 12;
@@ -179,7 +179,9 @@ export function ActivityHeatmap({
     setTooltipPos({ x, y, shiftX, flipY });
   };
 
-  const handleCellMouseLeave = () => {
+  const handleCellMouseLeave = (e) => {
+    // A keyboard-focused reset day keeps its tooltip until blur.
+    if (e?.type === "mouseleave" && e.currentTarget === document.activeElement) return;
     if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
     hideTimeoutRef.current = setTimeout(() => {
       setHoveredCell(null);
@@ -596,7 +598,8 @@ export function ActivityHeatmap({
                   if (!cell) return null;
                   const key = cell.day || `e-${wi}-${di}`;
                   const level = Number(cell.level) || 0;
-                  const resetClass = isResetView ? resetCellClassName(resetsByDay?.get(cell.day)) : null;
+                  const resetBucket = isResetView ? resetsByDay?.get(cell.day) : null;
+                  const resetClass = resetCellClassName(resetBucket);
                   const color = isResetView ? heatmapColors[0] : heatmapColors[level] || heatmapColors[0];
                   return (
                     <span
@@ -607,6 +610,8 @@ export function ActivityHeatmap({
                       {...(resetClass
                         ? {
                             tabIndex: 0,
+                            role: "img",
+                            "aria-label": resetCellLabel(cell.day, resetBucket),
                             onFocus: (e) => handleCellMouseEnter(e, cell),
                             onBlur: handleCellMouseLeave,
                             "aria-describedby": hoveredCell?.day === cell.day ? tooltipId : undefined,

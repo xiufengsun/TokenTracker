@@ -30,6 +30,13 @@ function resetTypeLabel(type) {
   return type === RESET_TYPE_BANKED ? copy("heatmap.resets.type.banked") : copy("heatmap.resets.type.regular");
 }
 
+export function resetCellLabel(day, bucket) {
+  const types = [];
+  if (bucket?.banked.length) types.push(copy("heatmap.resets.type.banked"));
+  if (bucket?.regular.length) types.push(copy("heatmap.resets.type.regular"));
+  return copy("heatmap.resets.cell_label", { day, types: types.join(", ") });
+}
+
 function ResetEventRow({ event }) {
   const style = RESET_STYLES[event.type] || RESET_STYLES.regular;
   return (

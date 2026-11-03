@@ -66,7 +66,6 @@ describe("ActivityHeatmap reset tabs", () => {
       "https://claude-resets.com",
     );
     expect(window.localStorage.getItem("tt:heatmap-view")).toBe("codex");
-    expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
   });
 
   it("shows Claude's automatic resets and the event in the tooltip", async () => {
@@ -91,6 +90,59 @@ describe("ActivityHeatmap reset tabs", () => {
     const tooltip = screen.getByRole("tooltip");
     expect(tooltip.textContent).toContain("Banked 1/2");
     expect(cell("2026-11-01").getAttribute("aria-describedby")).toBe(tooltip.id);
+    expect(cell("2026-10-28").getAttribute("aria-label")).toBe(
+      `2026-10-28: ${copy("heatmap.resets.type.banked")}, ${copy("heatmap.resets.type.regular")}`,
+    );
+  });
+
+  it("keeps a focused reset day's tooltip when the pointer leaves it", async () => {
+    renderHeatmap();
+    fireEvent.click(screen.getByRole("tab", { name: copy("heatmap.view.codex") }));
+    await waitFor(() => expect(cell("2026-11-01").getAttribute("tabindex")).toBe("0"));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      act(() => cell("2026-11-01").focus());
+      fireEvent.mouseLeave(cell("2026-11-01"));
+      act(() => vi.advanceTimersByTime(500));
+      expect(screen.getByRole("tooltip")).toBeTruthy();
+      act(() => cell("2026-11-01").blur());
+      act(() => vi.advanceTimersByTime(500));
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops loading and shows the error when the request times out", async () => {
+    const controller = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    fetchMock.mockImplementation(
+      (_url, { signal }) =>
+        new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason))),
+    );
+    try {
+      renderHeatmap();
+      fireEvent.click(screen.getByRole("tab", { name: copy("heatmap.view.codex") }));
+      await waitFor(() => expect(screen.getByText(copy("heatmap.resets.loading"))).toBeTruthy());
+      await act(async () => controller.abort(new DOMException("timed out", "TimeoutError")));
+      await waitFor(() => expect(screen.getByText(copy("heatmap.resets.error"))).toBeTruthy());
+      expect(screen.queryByText(copy("heatmap.resets.loading"))).toBeNull();
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("still fetches where AbortSignal.timeout is unavailable", async () => {
+    const original = AbortSignal.timeout;
+    delete AbortSignal.timeout;
+    try {
+      renderHeatmap();
+      fireEvent.click(screen.getByRole("tab", { name: copy("heatmap.view.codex") }));
+      await waitFor(() => expect(cell("2026-11-01").className).toContain("bg-amber-500"));
+      expect(fetchMock.mock.calls[0][1].signal).toBeUndefined();
+    } finally {
+      AbortSignal.timeout = original;
+    }
   });
 
   it("keeps the grid and reports an error when the tracker is unreachable", async () => {
