@@ -188,7 +188,11 @@ export function ActivityHeatmap({
     const focused = focusedCellRef.current;
     if (focused && focused.el.isConnected && document.activeElement === focused.el) {
       setHoveredCell(focused.cell);
-      setTooltipPos(tooltipPosFor(focused.el));
+      const next = tooltipPosFor(focused.el);
+      // Unrelated scrolls fire this too; skip the re-render when nothing moved.
+      setTooltipPos((prev) =>
+        prev.x === next.x && prev.y === next.y && prev.shiftX === next.shiftX && prev.flipY === next.flipY ? prev : next,
+      );
     } else {
       setHoveredCell(null);
     }
