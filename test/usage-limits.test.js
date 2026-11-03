@@ -4537,6 +4537,7 @@ describe("fetchAntigravityLimits remote OAuth", () => {
       assert.equal(result.configured, true);
       assert.equal(result.error, null);
       assert.equal(Math.round(result.primary_window.used_percent), 30);
+      assert.equal(Math.round(result.tertiary_window.used_percent), 10);
       assert.ok(calls.includes("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"));
       assert.ok(!calls.some((url) => url.includes("oauth2.googleapis.com/token")));
     } finally {
