@@ -126,6 +126,15 @@ describe("parseCursorCsv — request-only rows", () => {
     assert.equal(r.cacheReadTokens, 500);
     assert.equal(r.totalTokens, 0);
   });
+
+  it("keeps a token-bearing row that has no model", () => {
+    const csv = `Date,Cloud Agent ID,Automation ID,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost
+"2026-10-01T11:00:00.000Z","","","Included","","No","0","0","500","0","0","0.00"`;
+    const records = parseCursorCsv(csv);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].model, "");
+    assert.equal(records[0].cacheReadTokens, 500);
+  });
 });
 
 describe("Cursor billing kind classification", () => {
