@@ -45,6 +45,11 @@
 --         spec; semantics pinned by test/account-usage-dedup.test.js).
 -- DEPLOYMENT: this function reads tokentracker_account_session_states —
 -- apply the account-session-states migration BEFORE this updated RPC.
+-- The peak/off-peak calendar below mirrors the canonical
+-- leaderboard_pricing_tier(text,timestamptz) that the leaderboard rollup and
+-- grouping SQL read: apply that function's update BEFORE or WITH this script,
+-- or off-peak rows for the time-priced DeepSeek ids disagree between account
+-- usage and the leaderboard (#1010).
 -- The account-level source list MUST stay in sync with ACCOUNT_LEVEL_SOURCES in
 -- src/lib/source-metadata.js (parity asserted by test/account-source-parity.test.js).
 --
