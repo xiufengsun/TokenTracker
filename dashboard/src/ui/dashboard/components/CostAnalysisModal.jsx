@@ -5,6 +5,7 @@ import { copy } from "../../../lib/copy";
 import { formatCompactNumber, formatUsdCurrency, toFiniteNumber } from "../../../lib/format";
 import { useCurrency } from "../../../hooks/useCurrency.js";
 import { CURRENCY_USD, getCurrencySymbol } from "../../../lib/currency";
+import { isUnpricedModel } from "../../../lib/model-breakdown";
 
 function formatHeroTotal(value, currency, rate) {
   if (!Number.isFinite(value)) return copy("shared.placeholder.short");
@@ -72,7 +73,7 @@ export const CostAnalysisModal = React.memo(function CostAnalysisModal({
   // counts. A server that sends no pricing (older CLI, undeployed edge) keeps
   // the exact total instead of turning every free model into "≥".
   const hasUnpricedUsage = normalizedFleet.some((fleet) => fleet.models.some((model) =>
-    model.costSource !== "provider_reported" && model.pricing?.status === "unpriced",
+    isUnpricedModel(model),
   ));
   const totalLabel = useMemo(() => {
     const totalUsd = normalizedFleet.reduce((acc, fleet) => acc + fleet.usdValue, 0);

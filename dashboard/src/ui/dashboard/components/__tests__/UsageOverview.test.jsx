@@ -18,6 +18,87 @@ vi.mock("../../../../hooks/useTheme.js", () => ({
 }));
 
 describe("UsageOverview", () => {
+  it("labels account-scope data on the usage card", () => {
+    render(
+      <UsageOverview
+        period="day"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="0"
+        fleetData={[]}
+        from="2026-07-16"
+        to="2026-07-16"
+        accountView
+      />,
+    );
+
+    expect(screen.getByText(copy("usage.overview.scope_account"))).toBeVisible();
+    expect(screen.getByTitle(copy("usage.overview.scope_account_tip"))).toBeVisible();
+  });
+
+  it("keeps local-scope data unlabeled", () => {
+    render(
+      <UsageOverview
+        period="day"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="0"
+        fleetData={[]}
+        from="2026-07-16"
+        to="2026-07-16"
+      />,
+    );
+
+    expect(screen.queryByText(copy("usage.overview.scope_account"))).toBeNull();
+  });
+
+  it("keeps the static badge when the scope switcher is unavailable", () => {
+    render(
+      <UsageOverview
+        period="day"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="0"
+        fleetData={[]}
+        from="2026-07-16"
+        to="2026-07-16"
+        accountView
+      />,
+    );
+
+    expect(screen.queryByRole("group", { name: copy("usage.overview.scope_switch_aria") })).toBeNull();
+    expect(screen.getByTitle(copy("usage.overview.scope_account_tip"))).toBeVisible();
+  });
+
+  it("switches the data scope in place when both scopes are live", async () => {
+    const user = userEvent.setup();
+    const onAccountScopeChange = vi.fn();
+    render(
+      <UsageOverview
+        period="day"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="0"
+        fleetData={[]}
+        from="2026-07-16"
+        to="2026-07-16"
+        accountView
+        accountScopeSwitchable
+        onAccountScopeChange={onAccountScopeChange}
+      />,
+    );
+
+    const group = screen.getByRole("group", { name: copy("usage.overview.scope_switch_aria") });
+    expect(group).toBeVisible();
+    expect(screen.queryByTitle(copy("usage.overview.scope_local_tip"))).toBeVisible();
+    expect(screen.queryByTitle(copy("usage.overview.scope_account_tip"))).toBeVisible();
+
+    await user.click(screen.getByTitle(copy("usage.overview.scope_local_tip")));
+    expect(onAccountScopeChange).toHaveBeenCalledWith("local");
+    await user.click(screen.getByTitle(copy("usage.overview.scope_account_tip")));
+    expect(onAccountScopeChange).toHaveBeenCalledWith(null);
+  });
+
   it("closes stale session details when the local import ledger changes", async () => {
     const props = { period: "month", periods: [], summaryValue: "100", from: "2026-10-01", to: "2026-10-31",
       fleetData: [{ source: "codex", label: "CODEX", usage: 100, totalPercent: "100", usd: 0,
@@ -283,6 +364,162 @@ describe("UsageOverview", () => {
     expect(screen.queryByText("Cached input")).toBeNull();
   });
 
+  it("labels token-backed unpriced rows in the cost column instead of a blank cell", async () => {
+    const user = userEvent.setup();
+    const fleetData = [
+      {
+        source: "codex",
+        label: "CODEX",
+        totalPercent: "100.00",
+        usage: 130,
+        usd: 0.2,
+        models: [
+          {
+            id: "gpt-6.1-terra",
+            name: "gpt-6.1-terra",
+            share: 60,
+            usage: 80,
+            cost: null,
+            pricing: { status: "unpriced" },
+            costSource: "curated",
+          },
+          {
+            id: "free-model",
+            name: "free-model",
+            share: 15,
+            usage: 20,
+            cost: 0,
+            pricing: { status: "free" },
+            costSource: "curated",
+          },
+          {
+            id: "legacy-model",
+            name: "legacy-model",
+            share: 10,
+            usage: 20,
+            cost: null,
+          },
+          {
+            id: "req-only-model",
+            name: "req-only-model",
+            share: 0,
+            usage: 0,
+            requests: 5,
+            cost: null,
+            pricing: { status: "unpriced" },
+            costSource: "curated",
+          },
+          {
+            id: "reported-model",
+            name: "reported-model",
+            share: 15,
+            usage: 10,
+            cost: 0.2,
+            pricing: { status: "unpriced" },
+            costSource: "provider_reported",
+          },
+        ],
+      },
+    ];
+    const { container } = render(
+      <UsageOverview
+        period="month"
+        periods={["month"]}
+        summaryLabel="Total"
+        summaryValue="130"
+        fleetData={fleetData}
+        from="2026-11-01"
+        to="2026-11-30"
+      />,
+    );
+
+    const unpricedLabel = copy("dashboard.cost_breakdown.unpriced_label");
+
+    // All-tools ranking: only the token-backed unpriced row is flagged —
+    // free rows, rows without pricing metadata, request-only rows, and
+    // provider-reported rows keep their cells as before.
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: /All tools:/i }));
+    });
+    expect(container.querySelectorAll("[data-model-rank-row]")).toHaveLength(5);
+    const badges = screen.getAllByText(unpricedLabel);
+    expect(badges).toHaveLength(1);
+    expect(badges[0]).toBeVisible();
+    expect(badges[0]).toHaveAttribute("title", copy("dashboard.cost_breakdown.unpriced"));
+    expect(badges[0].closest("[data-model-rank-row]")).toHaveTextContent("gpt-6.1-terra");
+
+    // Per-provider rows read pricing straight from the fleet entry.
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: /CODEX:/i }));
+    });
+    const providerBadges = screen.getAllByText(unpricedLabel);
+    expect(providerBadges).toHaveLength(1);
+    expect(providerBadges[0].closest("[data-model-rank-row]")).toHaveTextContent("gpt-6.1-terra");
+  });
+
+  it("does not label a merged row whose only unpriced contributor is request-only", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <UsageOverview
+        period="month"
+        periods={["month"]}
+        summaryLabel="Total"
+        summaryValue="100"
+        fleetData={[
+          {
+            source: "codex",
+            label: "CODEX",
+            totalPercent: "50.00",
+            usage: 100,
+            usd: 0,
+            models: [
+              {
+                id: "shared-model",
+                name: "shared-model",
+                share: 100,
+                usage: 100,
+                cost: null,
+                pricing: { status: "priced" },
+                costSource: "curated",
+              },
+            ],
+          },
+          {
+            source: "qoder",
+            label: "QODER",
+            totalPercent: "0.00",
+            usage: 0,
+            usd: 0,
+            models: [
+              {
+                id: "shared-model",
+                name: "shared-model",
+                share: 0,
+                usage: 0,
+                requests: 5,
+                cost: null,
+                pricing: { status: "unpriced" },
+                costSource: "curated",
+              },
+            ],
+          },
+        ]}
+        from="2026-11-01"
+        to="2026-11-30"
+      />,
+    );
+
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: /All tools:/i }));
+    });
+
+    // The two contributors merge into one row: its tokens are priced and the
+    // request-only side books no cost either way — no unpriced label.
+    expect(container.querySelectorAll("[data-model-rank-row]")).toHaveLength(1);
+    expect(container.querySelector("[data-model-rank-row]")).toHaveTextContent("shared-model");
+    expect(screen.queryByText(copy("dashboard.cost_breakdown.unpriced_label"))).toBeNull();
+  });
+
   it("renders AnythingLLM with its official name, icon, and stable accent", () => {
     const { container } = render(
       <UsageOverview
@@ -498,6 +735,134 @@ describe("UsageOverview", () => {
     expect(screen.getByText(copy("usage.overview.week_cross_month_hint"))).toBeTruthy();
   });
 
+  it("reveals the Standard/Fast/Ultrafast speed-tier split under an expanded Codex model row", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <UsageOverview
+        period="month"
+        periods={["month"]}
+        summaryLabel="Total"
+        summaryValue="300"
+        fleetData={[
+          {
+            source: "codex",
+            label: "CODEX",
+            totalPercent: "100.00",
+            usage: 300,
+            usd: 2,
+            models: [
+              {
+                id: "gpt-6.1-sol",
+                name: "gpt-6.1-sol",
+                share: 100,
+                usage: 300,
+                cost: 2,
+                tokens: { input: 100, output: 20, cached: 170, cacheCreate: 5, reasoning: 5 },
+                pricing: { priority_multiplier: 2, ultrafast_multiplier: 6 },
+                tiers: {
+                  priority: {
+                    tokens: { input: 60, output: 10, cached: 0, cacheCreate: 0, reasoning: 0 },
+                    cost: 0.7,
+                  },
+                  ultrafast: {
+                    tokens: { input: 0, output: 4, cached: 0, cacheCreate: 0, reasoning: 0 },
+                    cost: 1.2,
+                  },
+                },
+              },
+              {
+                id: "plain-model",
+                name: "plain-model",
+                share: 0,
+                usage: 0,
+                cost: 0,
+              },
+            ],
+          },
+        ]}
+        from="2026-10-01"
+        to="2026-10-31"
+      />,
+    );
+
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: /All tools:/i }));
+    });
+
+    // Tier rows stay hidden until the model row itself is expanded.
+    expect(screen.queryByText(copy("usage.overview.tier_ultrafast"))).toBeNull();
+    expect(container.querySelectorAll("[data-model-speed-tiers]")).toHaveLength(0);
+
+    const rowButton = screen.getByRole("button", { name: /gpt-6\.1-sol/i });
+    await act(async () => {
+      await user.click(rowButton);
+    });
+
+    // Multiplier suffix comes from the model's pricing info, never hardcoded.
+    const fastLabel = copy("usage.overview.tier_rate_label", {
+      label: copy("usage.overview.tier_fast"),
+      rate: "2",
+    });
+    const ultrafastLabel = copy("usage.overview.tier_rate_label", {
+      label: copy("usage.overview.tier_ultrafast"),
+      rate: "6",
+    });
+    expect(screen.getByText(fastLabel)).toBeVisible();
+    expect(screen.getByText(ultrafastLabel)).toBeVisible();
+    expect(screen.getByText(copy("usage.overview.tier_standard"))).toBeVisible();
+    expect(container.querySelectorAll("[data-model-speed-tiers]")).toHaveLength(1);
+
+    await act(async () => {
+      await user.click(rowButton);
+    });
+    expect(container.querySelectorAll("[data-model-speed-tiers]")).toHaveLength(0);
+  });
+
+  it("keeps model rows without speed-tier data free of tier rows", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <UsageOverview
+        period="month"
+        periods={["month"]}
+        summaryLabel="Total"
+        summaryValue="150"
+        fleetData={[
+          {
+            source: "opencode",
+            label: "OPENCODE",
+            totalPercent: "100.00",
+            usage: 150,
+            usd: 1.5,
+            models: [
+              {
+                id: "gpt-6.1-sol-fast",
+                name: "gpt-6.1-sol-fast",
+                share: 100,
+                usage: 150,
+                cost: 1.5,
+                tokens: { input: 100, output: 20, cached: 0, cacheCreate: 0, reasoning: 0 },
+              },
+            ],
+          },
+        ]}
+        from="2026-10-01"
+        to="2026-10-31"
+      />,
+    );
+
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: /All tools:/i }));
+    });
+    const rowButton = screen.getByRole("button", { name: /gpt-6\.1-sol-fast/i });
+    await act(async () => {
+      await user.click(rowButton);
+    });
+    // Token-type splits render, but no speed-tier block without backend tiers.
+    expect(screen.getByText("Cached input")).toBeVisible();
+    expect(container.querySelectorAll("[data-model-speed-tiers]")).toHaveLength(0);
+    expect(screen.queryByText(copy("usage.overview.tier_standard"))).toBeNull();
+  });
+
   it("renders Devin with its icon and shows the unpriced-models notice in provider and All views", async () => {
     const user = userEvent.setup();
     const fleetData = [
@@ -673,5 +1038,70 @@ describe("UsageOverview", () => {
     expect(screen.getByText(copy("usage.overview.trae_notice_body"))).toBeVisible();
     showSource("codex");
     expect(screen.queryByText(copy("usage.overview.trae_notice_body"))).toBeNull();
+  });
+
+  it("keeps request-only providers out of the card grid and shows one notice row", () => {
+    render(
+      <UsageOverview
+        period="day"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="0"
+        hasSummary
+        fleetData={[{
+          source: "codex",
+          label: "CODEX",
+          totalPercent: "100.00",
+          totalPercentValue: 100,
+          usage: 100,
+          requests: 0,
+          usd: 0,
+          models: [{ id: "gpt-5", name: "gpt-5", share: 100, usage: 100, requests: 0, cost: 0 }],
+        }, {
+          source: "qoder",
+          label: "QODER",
+          totalPercent: "0.00",
+          totalPercentValue: 0,
+          usage: 0,
+          requests: 19,
+          usd: 0,
+          models: [{ id: "qfmodel", name: "qfmodel", share: 0, usage: 0, requests: 19, cost: null }],
+        }]}
+        from="2026-11-01"
+        to="2026-11-01"
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /QODER/ })).toBeNull();
+    const notice = screen.getByText(/Active without token data:/);
+    expect(notice).toBeVisible();
+    expect(notice.textContent).toContain("19 requests");
+  });
+
+  it("keeps the All card reachable when only request-only providers exist", () => {
+    render(
+      <UsageOverview
+        period="day"
+        periods={[]}
+        summaryLabel="Total"
+        summaryValue="0"
+        hasSummary
+        fleetData={[{
+          source: "qoder",
+          label: "QODER",
+          totalPercent: "0.00",
+          totalPercentValue: 0,
+          usage: 0,
+          requests: 19,
+          usd: 0,
+          models: [{ id: "qfmodel", name: "qfmodel", share: 0, usage: 0, requests: 19, cost: null }],
+        }]}
+        from="2026-11-01"
+        to="2026-11-01"
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /All tools/ })).toBeTruthy();
+    expect(screen.getByText(/Active without token data:/)).toBeVisible();
   });
 });

@@ -166,6 +166,10 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "claude-opus-5-fast": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
   "claude-opus-4-6": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
   "claude-opus-4-5-20250414": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+  // Bare undated alias (LiteLLM key "claude-opus-4-5", standard Opus tier).
+  // Promoted from LiteLLM-only coverage so cloud account views price the
+  // bare id exactly like local (#929).
+  "claude-opus-4-5": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
   "claude-sonnet-5": { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
   "claude-opus-5-5": { input: 4, output: 20, cache_read: 0.2, cache_write: 5 },
   "claude-sonnet-5-5": { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
@@ -199,6 +203,10 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "gpt-5.2-codex-high": { input: 1.75, output: 14, cache_read: 0.175 },
   "gpt-5.3-codex": { input: 1.75, output: 14, cache_read: 0.175 },
   "gpt-5.3-codex-high": { input: 1.75, output: 14, cache_read: 0.175 },
+  // Codex spark capacity tier — not a separate LiteLLM key; local
+  // (reverse-substring) and the gpt-5.3 matcher below both bill the base
+  // gpt-5.3-codex rate. Exact entry pins that on the cloud side too (#929).
+  "gpt-5.3-codex-spark": { input: 1.75, output: 14, cache_read: 0.175 },
   "gpt-5.4": { input: 2.5, output: 15, cache_read: 0.25 },
   "gpt-5.4-mini": { input: 0.75, output: 4.5, cache_read: 0.075 },
   // gpt-5.4-pro per developers.openai.com/api/docs/pricing; cache_read 3
@@ -230,6 +238,11 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   // https://developers.openai.com/api/docs/models/gpt-6.1-terra
   // Cache write uses 30-minute retention ($1.25). Fast is 2x; Ultrafast not published.
   "gpt-6.1-terra": { input: 1, output: 5, cache_read: 0.05, cache_write: 1.25 },
+  // GPT-6 Luna lightweight tier, Standard USD/MTok (LiteLLM entry sourced
+  // from developers.openai.com/api/docs/pricing, cached 2026-10-31):
+  // $0.10/$0.50, cache_read $0.01, cache_write $0.125. Distinct from
+  // gpt-5.6-luna. Promoted from LiteLLM-only coverage (#929).
+  "gpt-6-luna": { input: 0.1, output: 0.5, cache_read: 0.01, cache_write: 0.125 },
   "gpt-5-mini": { input: 0.25, output: 2, cache_read: 0.025 },
   "o3": { input: 2, output: 8, cache_read: 0.5 },
   // ── Google Gemini ──
@@ -346,6 +359,11 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "mimo-v2-pro-free": { input: 0, output: 0, cache_read: 0 },
   "muse-spark-1.2-contributor-free": { input: 0, output: 0, cache_read: 0, cache_write: 0 },
   "muse-spark-1.3-contributor-free": { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+  // Paid Muse contributor SKUs — LiteLLM provider-qualified entries agree on
+  // $0.10/$0.20 per MTok, $0.002 cache read (meta and opencode_go). Promoted
+  // from LiteLLM prefix-strip coverage so cloud account views price them (#929).
+  "muse-spark-1.2-contributor": { input: 0.1, output: 0.2, cache_read: 0.002 },
+  "muse-spark-1.3-contributor": { input: 0.1, output: 0.2, cache_read: 0.002 },
   "minimax-m2.1-free": { input: 0, output: 0, cache_read: 0 },
   "MiniMax-M2.1": { input: 0.5, output: 3, cache_read: 0.05 },
   // ── Xiaomi MiMo (mirrored from src/lib/pricing/seed-snapshot.json LiteLLM
@@ -670,6 +688,7 @@ interface Totals {
   cached_input_tokens: number;
   cache_creation_input_tokens: number;
   reasoning_output_tokens: number;
+  conversation_count: number;
   total_cost_usd: string;
 }
 
@@ -689,10 +708,13 @@ interface GroupedRow {
 }
 
 // [source, model, pricing_tier, total, input, output, cache_read, cache_write,
-// reasoning] already summed over [from, to], as returned by
-// account_model_breakdown_compact.
+// reasoning, conversations] already summed over [from, to], as returned by
+// account_model_breakdown_compact. Conversations rides at index 9 so
+// request-only rows (0 tokens, N requests) survive the fold (#990); rows from
+// a database that predates that column simply stop at index 8.
 type CompactDim = [string | null, string | null, string | null, number | string,
-  number | string, number | string, number | string, number | string, number | string];
+  number | string, number | string, number | string, number | string, number | string,
+  number | string];
 
 interface ModelBreakdownWire {
   source_names: (string | null)[];
@@ -712,6 +734,7 @@ function decodeModelBreakdownWire(data: unknown): CompactDim[] {
   return wire.dims.map((row): CompactDim => [
     wire.source_names[row[0]], wire.model_names[row[1]], wire.pricing_tiers[row[2]],
     token(row, 3), token(row, 4), token(row, 5), token(row, 6), token(row, 7), token(row, 8),
+    token(row, 9),
   ]);
 }
 
@@ -885,8 +908,9 @@ async function handleAccountRequest(req: Request): Promise<Response> {
   // The RPC bucketed each row to its local day (honoring tz / tz_offset_minutes)
   // and kept only the days in [from, to] — same inclusive semantics as the
   // `r.bucket >= from && r.bucket <= to` filter this used to do here — then
-  // summed the days away. `bucket` and `conversations` are gone because nothing
-  // below reads them.
+  // summed the days away. `bucket` is gone; conversations survives as the
+  // compact's 10th column because the totals below surface it as the request
+  // counts that keep request-only rows visible (#990).
   const filtered: GroupedRow[] = dims.map((d) => ({
     bucket: "",
     source: d[0] as string,
@@ -898,7 +922,7 @@ async function handleAccountRequest(req: Request): Promise<Response> {
     cached_input_tokens: Number(d[6]) || 0,
     cache_creation_input_tokens: Number(d[7]) || 0,
     reasoning_output_tokens: Number(d[8]) || 0,
-    conversations: 0,
+    conversations: Number(d[9]) || 0,
   }));
 
   interface ModelAgg {
@@ -921,6 +945,7 @@ async function handleAccountRequest(req: Request): Promise<Response> {
     cached_input_tokens: 0,
     cache_creation_input_tokens: 0,
     reasoning_output_tokens: 0,
+    conversation_count: 0,
     total_cost_usd: "0",
   });
 
@@ -941,6 +966,10 @@ async function handleAccountRequest(req: Request): Promise<Response> {
     sa.totals.cached_input_tokens += Number(row.cached_input_tokens) || 0;
     sa.totals.cache_creation_input_tokens += Number(row.cache_creation_input_tokens) || 0;
     sa.totals.reasoning_output_tokens += Number(row.reasoning_output_tokens) || 0;
+    // Request-only sources (#948: credit-billed transcripts that report no
+    // tokens) carry their activity solely as conversation_count — thread it
+    // through so the dashboard can surface "0 tokens / N requests" (#990).
+    sa.totals.conversation_count += Number(row.conversations) || 0;
 
     let ma = sa.models.get(mdl);
     if (!ma) {
@@ -954,6 +983,7 @@ async function handleAccountRequest(req: Request): Promise<Response> {
     ma.totals.cached_input_tokens += Number(row.cached_input_tokens) || 0;
     ma.totals.cache_creation_input_tokens += Number(row.cache_creation_input_tokens) || 0;
     ma.totals.reasoning_output_tokens += Number(row.reasoning_output_tokens) || 0;
+    ma.totals.conversation_count += Number(row.conversations) || 0;
     const unslothUnpriced = src === "unsloth" && /^(local|unpriced)\//i.test(mdl);
     const modelForPricing = unslothUnpriced
       ? "__tokentracker_unpriced_unsloth_model__"

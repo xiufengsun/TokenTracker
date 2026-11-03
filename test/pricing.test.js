@@ -1420,11 +1420,33 @@ test("index: Muse *-contributor-free SKUs are free, not unpriced (issue #744)", 
       model,
     );
   }
-  // Unsuffixed contributor ids stay unpriced until we have evidence they are $0.
-  assert.equal(
-    pricing.getModelPricingInfo("muse-spark-1.3-contributor", { source: "muse" }).status,
-    "unpriced",
-  );
+  // Unsuffixed contributor ids are PAID, not free: promoted into curated with
+  // the LiteLLM-verified $0.10/$0.20/$0.002 rates so the cloud account views
+  // price them too (issue #929).
+  const paidMuse = pricing.getModelPricingInfo("muse-spark-1.3-contributor", { source: "muse" });
+  assert.equal(paidMuse.status, "priced");
+  assert.equal(paidMuse.source, "curated:exact");
+  assert.equal(paidMuse.input, 0.1);
+  assert.equal(paidMuse.output, 0.2);
+});
+
+test("index: GPT-5.4 Pro snapshots keep the Pro rate against the curated gpt-5.4 contained match (#929)", () => {
+  // The curated gpt-5.4 promotion must not let its contained match capture
+  // provider-qualified dated Pro snapshots at the base $2.50/$15 rate; edge
+  // has always billed these at the Pro rate.
+  const qualified = pricing.getModelPricingInfo("openai/gpt-5.4-pro-2026-03-05");
+  assert.equal(qualified.status, "priced");
+  assert.equal(qualified.source, "curated:exact-dot");
+  assert.equal(qualified.input, 30);
+  assert.equal(qualified.output, 180);
+  assert.equal(qualified.cache_read, 3);
+  // Bare forms keep their pre-promotion routes with the same rates.
+  const bareDated = pricing.getModelPricingInfo("gpt-5.4-pro-2026-03-05");
+  assert.equal(bareDated.status, "priced");
+  assert.equal(bareDated.input, 30);
+  assert.equal(bareDated.output, 180);
+  assert.equal(pricing.getModelPricingInfo("gpt-5.4-pro").input, 30);
+  assert.equal(pricing.getModelPricingInfo("gpt-5.4").input, 2.5);
 });
 
 test("index: explicit curated exact still wins over -free suffix (issue #744)", () => {

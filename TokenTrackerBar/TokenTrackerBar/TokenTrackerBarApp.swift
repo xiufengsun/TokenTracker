@@ -1,4 +1,5 @@
 import SwiftUI
+import ServiceManagement
 
 @main
 struct TokenTrackerBarApp: App {
@@ -160,8 +161,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // A normal Finder/Dock launch should behave like opening an app, while
         // an SMAppService login launch should remain a quiet menu bar startup.
-        if NSAppleEventManager.shared().currentAppleEvent?
-            .attributeDescriptor(forKeyword: keyAELaunchedAsLogInItem) == nil {
+        // SMAppService spawns via launchd with no launch Apple Event at all, so
+        // treating "currentAppleEvent == nil" as a normal open was the #989 bug.
+        let launchEvent = NSAppleEventManager.shared().currentAppleEvent
+        let launchedAsLoginItem = launchEvent?
+            .attributeDescriptor(forKeyword: keyAELaunchedAsLogInItem) != nil
+        // SMAppService is macOS 13+; the app target still deploys to 12.0, so
+        // the direct call needs an availability guard (pre-13 legacy login
+        // items are still detected via the event's login-item attribute).
+        let loginItemRegistered: Bool
+        if #available(macOS 13, *) {
+            loginItemRegistered = SMAppService.mainApp.status == .enabled
+        } else {
+            loginItemRegistered = false
+        }
+        if LoginLaunchPresentationPolicy.shouldOpenDashboardOnLaunch(
+            launchAppleEventPresent: launchEvent != nil,
+            launchedAsLoginItem: launchedAsLoginItem,
+            loginItemRegistered: loginItemRegistered
+        ) {
             DashboardPresentationCoordinator.shared.showDashboard()
         }
 

@@ -46,6 +46,22 @@ const packedCostDims = [
 ];
 const totalKeys = ["total_tokens", "input_tokens", "output_tokens", "cached_input_tokens", "cache_creation_input_tokens", "reasoning_output_tokens", "conversation_count", "active_days"];
 const totalValues = ["9007199254740993", "1000000", 200000, "3000", 0, "0", 18, 4];
+// Request counts for the breakdown fixture rows (#990): a mix of zeros and
+// request-only rows so the wire's trailing-zero trim is exercised both ways.
+const conversations = [0, 7, 0, 3, 3, 0, 1, 2, 9, 0];
+const breakdownRows = costDims.map((row, index) => [...row.slice(0, 3), "1000000", ...row.slice(3), conversations[index]]);
+// Mirrors the wire's trailing-zero trim: token values stop after the last
+// JSON number other than 0 (string "0" and null survive), keeping at least
+// the first three.
+const packDims = (row) => {
+  const tokens = row.slice(3);
+  let last = 0;
+  tokens.forEach((value, index) => { if (value !== 0) last = index + 1; });
+  return [
+    names.source_names.indexOf(row[0]), names.model_names.indexOf(row[1]), names.pricing_tiers.indexOf(row[2]),
+    ...tokens.slice(0, Math.max(3, last)),
+  ];
+};
 const fixture = {
   summary: {
     old: {
@@ -56,8 +72,8 @@ const fixture = {
     wire: { ...names, cost_dims: packedCostDims, day_start: "2026-09-30", day_rollup: [[0, "9007199254740993", "11"], [1, 120, 2], [2, "340", 3], [3, 0, "0"]], range_totals: totalValues },
   },
   "model-breakdown": {
-    old: costDims.map((row) => [...row.slice(0, 3), "1000000", ...row.slice(3)]),
-    wire: { ...names, dims: packedCostDims.map((row) => [...row.slice(0, 3), "1000000", ...row.slice(3)]) },
+    old: breakdownRows,
+    wire: { ...names, dims: breakdownRows.map(packDims) },
   },
 };
 
@@ -159,9 +175,17 @@ for (const endpoint of ["summary", "model-breakdown"]) {
         const body = JSON.parse(result);
         const free = body.sources.find((source) => source.source === "lmstudio");
         assert.equal(free.totals.total_cost_usd, "0.000000");
+        assert.equal(free.totals.conversation_count, 0);
         const peak = body.sources.find((source) => source.source === "deepseek");
         assert.equal(peak.models.length, 1, "pricing tiers still fold into a single display model");
         assert.ok(Number(peak.totals.total_cost_usd) > 0);
+        // Request counts survive the tier fold and reach source + model totals
+        // so request-only rows stay visible (#990).
+        assert.equal(peak.totals.conversation_count, 6);
+        assert.equal(peak.models[0].totals.conversation_count, 6);
+        const billed = body.sources.find((source) => source.source === "workbuddy");
+        assert.equal(billed.totals.conversation_count, 1);
+        assert.equal(billed.models[0].totals.conversation_count, 1);
       }
       await edge.default(req);
       assert.equal(edge.calls.length, 1, "the existing 30s cache remains intact");
@@ -216,4 +240,22 @@ test("summary/model wire migration only adds invoker wrappers with exact compact
     assert.match(sql, new RegExp(`REVOKE EXECUTE ON FUNCTION public\\.account_${endpoint}_wire[^;]+FROM PUBLIC, anon, authenticated;`));
     assert.match(sql, new RegExp(`GRANT EXECUTE ON FUNCTION public\\.account_${endpoint}_wire[^;]+TO project_admin;`));
   }
+});
+
+test("the conversations follow-up keeps the model breakdown compact/wire contract (#990)", () => {
+  const sql = fs.readFileSync(path.join(__dirname, "..", "migrations", "20261102090000_add-conversations-to-account-model-breakdown-wire.sql"), "utf8");
+  assert.equal(sql.match(/CREATE OR REPLACE FUNCTION/g).length, 2);
+  assert.equal(sql.match(/SECURITY INVOKER/g).length, 1);
+  assert.equal((sql.match(/public\.account_usage_grouped_cached\(/gu) || []).length, 1,
+    "the compact must keep delegating to the shared cached scan exactly once");
+  assert.match(sql, /SUM\(conversations\) AS cv/u, "the compact must fold request counts");
+  assert.match(sql, /jsonb_build_array\(source, model, pricing_tier, tt, i, o, cr, cw, rs, cv\)/u);
+  assert.match(sql, /row->3, row->4, row->5, row->6, row->7, row->8, row->9/u, "the wire must pack conversations at token index 9");
+  assert.equal(sql.match(/last_value\.value <> '0'::jsonb/g).length, 1, "the trailing-zero trim must keep dropping all-zero request counts");
+  assert.match(sql, /SELECT public\.account_model_breakdown_compact\(p_user_id, p_device_id, p_from, p_to, p_tz, p_offset_min, p_range_from, p_range_to\) AS j/u);
+  assert.doesNotMatch(sql, /SECURITY DEFINER|ALTER TABLE|DROP\s|FROM public\.tokentracker_hourly/u);
+  assert.match(sql, /REVOKE ALL ON FUNCTION public\.account_model_breakdown_compact\([^)]*\) FROM PUBLIC, anon, authenticated;/u);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.account_model_breakdown_compact\([^)]*\) TO project_admin;/u);
+  assert.match(sql, /REVOKE EXECUTE ON FUNCTION public\.account_model_breakdown_wire\([^)]*\) FROM PUBLIC, anon, authenticated;/u);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.account_model_breakdown_wire\([^)]*\) TO project_admin;/u);
 });

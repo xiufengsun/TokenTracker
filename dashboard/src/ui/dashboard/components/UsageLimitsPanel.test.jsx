@@ -137,6 +137,52 @@ describe("UsageLimitsPanel", () => {
     expect(screen.getByText("98%")).toBeInTheDocument();
   });
 
+  it("renders the other region's log snapshot as an independently collapsible section", () => {
+    render(
+      <UsageLimitsPanel
+        order={["zcode"]}
+        displayMode="remaining"
+        zcode={{
+          configured: true, plan_label: "Pro", plan_kind: "coding-plan",
+          primary_window: { used_percent: 2 },
+          secondary_window: { used_percent: 30 },
+          other_region: {
+            source: "zcode-log", region: "zai", provider_key: "account:zai-start-plan",
+            plan_kind: "start-plan", plan_label: "Start",
+            log_timestamp: "2026-07-08T01:08:30.077Z",
+            buckets: [{
+              label: "GLM-5.3", plan_name: "ZCode Start Plan", period: "daily",
+              remaining_units: 2_400_000, total_units: 3_000_000,
+              window: { used_percent: 20, reset_at: "2030-10-07T16:00:00.000Z" },
+            }],
+            primary_window: { used_percent: 20, reset_at: "2030-10-07T16:00:00.000Z" },
+          },
+        }}
+      />,
+    );
+    const section = screen.getByRole("button", { name: "Z.ai · Start" });
+    expect(section).toHaveAttribute("aria-expanded", "false");
+    const snapshot = copy("limits.zcode.other_region.snapshot", { time: formatExpiry("2026-07-08T01:08:30.077Z") });
+    expect(screen.queryByText(snapshot)).not.toBeInTheDocument();
+    fireEvent.click(section);
+    expect(section).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(snapshot)).toBeInTheDocument();
+    expect(screen.getByText("80%")).toBeInTheDocument();
+  });
+
+  it("hides the other-region section when the payload has no snapshot", () => {
+    render(
+      <UsageLimitsPanel
+        order={["zcode"]}
+        zcode={{
+          configured: true, plan_label: "Pro", plan_kind: "coding-plan",
+          primary_window: { used_percent: 2 },
+        }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Z.ai · Start" })).not.toBeInTheDocument();
+  });
+
   it("shows separate usable 5h and weekly reset counts with their earliest expiries", () => {
     render(<UsageLimitsPanel order={["zcode"]} zcode={{
       configured: true, plan_label: "Pro", plan_kind: "coding-plan",
@@ -525,6 +571,95 @@ describe("UsageLimitsPanel", () => {
     render(<UsageLimitsPanel commandCode={{ configured: false }} order={["commandCode"]} />);
     expect(screen.getByText("cmd login")).toBeInTheDocument();
     expect(screen.queryByText(/launchctl/)).not.toBeInTheDocument();
+  });
+
+  it("renders the DeepSeek balance card with one row per currency and no bars", () => {
+    render(
+      <UsageLimitsPanel
+        deepseek={{
+          configured: true,
+          error: null,
+          is_available: true,
+          balances: [
+            { currency: "CNY", total: 110.02, granted: 0, topped_up: 110.02 },
+            { currency: "USD", total: 15.5, granted: 2, topped_up: 13.5 },
+          ],
+        }}
+        order={["deepseek"]}
+      />,
+    );
+
+    expect(screen.getByText("DeepSeek")).toBeInTheDocument();
+    expect(screen.getByText("Balance (CNY)")).toBeInTheDocument();
+    expect(screen.getByText("Balance (USD)")).toBeInTheDocument();
+    expect(screen.getByText("110.02")).toBeInTheDocument();
+    expect(screen.getByText("15.5")).toBeInTheDocument();
+    expect(screen.getByText("incl. grant 2")).toBeInTheDocument();
+    // A pay-as-you-go balance invents no window bar (issue 960): no progress bar
+    // may appear inside the balance card.
+    expect(document.querySelector("[data-deepseek-balance] .rounded-full")).toBeNull();
+  });
+
+  it("shows the DeepSeek unavailable notice while keeping balances visible", () => {
+    render(
+      <UsageLimitsPanel
+        deepseek={{
+          configured: true,
+          error: null,
+          is_available: false,
+          balances: [{ currency: "CNY", total: 0, granted: 0, topped_up: 0 }],
+        }}
+        order={["deepseek"]}
+      />,
+    );
+
+    expect(screen.getByText("Balance (CNY)")).toBeInTheDocument();
+    expect(screen.getByText(/unavailable/)).toBeInTheDocument();
+  });
+
+  it("shows the DeepSeek setup hint with the platform link when not connected", () => {
+    render(<UsageLimitsPanel deepseek={{ configured: false }} order={["deepseek"]} />);
+
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
+    expect(screen.getByText("Connect DeepSeek")).toBeInTheDocument();
+    expect(screen.getByText("Open platform.deepseek.com")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Paste API key")).toBeInTheDocument();
+  });
+
+  it("keeps the DeepSeek setup hint on an error row so a rejected key can be replaced", () => {
+    render(
+      <UsageLimitsPanel
+        deepseek={{ configured: true, error: "DeepSeek API key was rejected (401). Check the key in the DeepSeek platform console.", auth_error: true }}
+        order={["deepseek"]}
+      />,
+    );
+
+    expect(screen.getByText(/rejected \(401\)/)).toBeInTheDocument();
+    expect(screen.getByText("Connect DeepSeek")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Paste API key")).toBeInTheDocument();
+  });
+
+  it("explains an environment-provided DeepSeek key on an error row so the saved key can take over", () => {
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" });
+    render(
+      <UsageLimitsPanel
+        deepseek={{
+          configured: true,
+          error: "DeepSeek API key was rejected (401). Check the key in the DeepSeek platform console.",
+          auth_error: true,
+          credential_source: "env",
+        }}
+        order={["deepseek"]}
+      />,
+    );
+
+    expect(screen.getByText(/rejected \(401\)/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Using DEEPSEEK_API_KEY from the environment\./),
+    ).toBeInTheDocument();
+    expect(screen.getByText("launchctl unsetenv DEEPSEEK_API_KEY")).toBeInTheDocument();
+    // One input from the setup hint, one from the env notice.
+    expect(screen.getAllByPlaceholderText("Paste API key")).toHaveLength(2);
   });
 
   it("explains an environment-provided OpenCode Go key and lets the user save one from the notice", async () => {
@@ -969,6 +1104,41 @@ describe("UsageLimitsPanel", () => {
     expect(details.some((text) => /80[\s\S]*200[\s\S]*120/.test(text))).toBe(true);
     rerender(<UsageLimitsPanel qoder={{ ...data, tertiary_window: undefined }} order={["qoder"]} />);
     expect(screen.queryByText(copy("limits.label.qoder_addon_credits"))).not.toBeInTheDocument();
+  });
+
+  it("shows WorkBuddy-style inline credit detail on expanded Qoder and Qoder CN rows", async () => {
+    const data = {
+      configured: true,
+      primary_window: { used_percent: 25, used_credits: 25, limit_credits: 100, remaining_credits: 75 },
+      secondary_window: { used_percent: 40, used_credits: 80, limit_credits: 200, remaining_credits: 120, unit: "calls" },
+      tertiary_window: { used_percent: 36.55, used_credits: 2206.96999938, limit_credits: 6038, remaining_credits: 3831.03000062 },
+    };
+    // Expected strings go through the same copy keys and the same runtime
+    // locale formatting as the panel, so the assertions hold on any machine.
+    const fmt = (value, { useGrouping = true } = {}) => new Intl.NumberFormat(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+      useGrouping,
+    }).format(value);
+    const creditsDetail = copy("limits.codex_credits.detail", { used: fmt(25), limit: fmt(100), remaining: fmt(75) });
+    const addonDetail = copy("limits.codex_credits.detail", {
+      used: fmt(2206.96999938), limit: fmt(6038), remaining: fmt(3831.03000062),
+    });
+    const callsDetail = copy("limits.qoder_calls.detail", {
+      used: fmt(80, { useGrouping: false }), limit: fmt(200, { useGrouping: false }), remaining: fmt(120, { useGrouping: false }),
+    });
+    render(<UsageLimitsPanel qoder={data} qoderCn={data} order={["qoder", "qoderCn"]} />);
+    fireEvent.keyDown(screen.getByRole("button", { name: /^Qoder Credits/ }), { key: "Enter" });
+    // The spec pins creditPrecision: 2, so fractional add-on credits ≥ 100
+    // keep two decimals instead of the default integer rounding; calls skip
+    // digit grouping and switch to the calls wording.
+    await waitFor(() => expect(screen.getByText(creditsDetail)).toBeVisible());
+    expect(screen.getByText(addonDetail)).toBeInTheDocument();
+    expect(screen.getByText(callsDetail)).toBeInTheDocument();
+    // Only one card expands at a time: switching to Qoder CN collapses Qoder,
+    // and the CN card renders the same inline detail for its windows.
+    fireEvent.keyDown(screen.getByRole("button", { name: /^Qoder CN Credits/ }), { key: "Enter" });
+    await waitFor(() => expect(screen.getByText(creditsDetail)).toBeVisible());
   });
 
   it("drops Qoder windows with no quota instead of rendering empty bars", () => {

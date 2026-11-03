@@ -6,7 +6,6 @@ final class UpdateChecker {
 
     static let shared = UpdateChecker()
 
-    private let repo = "xiufengsun/TokenTracker"
     private let releaseURL: String = "https://github.com/xiufengsun/TokenTracker/releases/latest"
 
     /// Observable status for menu item display
@@ -83,54 +82,15 @@ final class UpdateChecker {
         }
     }
 
-    // MARK: - GitHub API (URLSession — respects system proxy)
+    // MARK: - Release Resolution (URLSession — respects system proxy)
 
-    private struct GitHubRelease: Decodable {
-        let tag_name: String
-        let name: String?
-        let body: String?
-        let html_url: String
-        let assets: [Asset]
-
-        struct Asset: Decodable {
-            let name: String
-            let browser_download_url: String
-            let size: Int
-        }
-
-        var tagVersion: String {
-            tag_name.hasPrefix("v") ? String(tag_name.dropFirst()) : tag_name
-        }
-
-        var dmgAsset: Asset? {
-            let isArm64: Bool = {
-                var sysinfo = utsname()
-                uname(&sysinfo)
-                let machine = withUnsafePointer(to: &sysinfo.machine) {
-                    $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) }
-                }
-                return machine == "arm64"
-            }()
-            let suffix = isArm64 ? "arm64.dmg" : "x64.dmg"
-            // Prefer arch-specific DMG, fall back to any .dmg
-            return assets.first { $0.name.hasSuffix(suffix) }
-                ?? assets.first { $0.name.hasSuffix(".dmg") }
-        }
-    }
+    /// HTTP resolution with rate-limit cooldown and releases-page fallback
+    /// (ports PR #784's UpdateReleaseClient to macOS, issue #945). UI-free
+    /// and unit-tested in UpdateReleaseClientTests.
+    private let releaseClient = UpdateReleaseClient()
 
     nonisolated private func fetchLatestRelease() async throws -> GitHubRelease {
-        let urlString = "https://api.github.com/repos/\(repo)/releases/latest"
-        guard let url = URL(string: urlString) else { throw UpdateError.emptyResponse }
-
-        var request = URLRequest(url: url, timeoutInterval: 15)
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw UpdateError.curlFailed((response as? HTTPURLResponse)?.statusCode ?? -1)
-        }
-        guard !data.isEmpty else { throw UpdateError.emptyResponse }
-        return try JSONDecoder().decode(GitHubRelease.self, from: data)
+        try await releaseClient.fetchLatestRelease()
     }
 
     // MARK: - Result Handling
@@ -138,6 +98,11 @@ final class UpdateChecker {
     private func handleResult(_ result: Result<GitHubRelease, Error>, silent: Bool) {
         switch result {
         case .success(let release):
+            // The API may have been throttled even though the releases-page
+            // fallback succeeded. promptUpdate/finishUpdate clear statusText,
+            // so reapply the cooldown status unless the download progress
+            // owns the channel (issue #945).
+            let rateLimited = releaseClient.isAPICoolingDown
             let current = currentVersion()
             if compareVersions(current, release.tagVersion) == .orderedAscending {
                 if silent, let dmg = release.dmgAsset {
@@ -156,19 +121,35 @@ final class UpdateChecker {
                     startDownloadAndInstall(dmg, targetVersion: release.tagVersion, interactive: false)
                 } else {
                     promptUpdate(release: release, currentVersion: current)
+                    if rateLimited {
+                        statusText = Strings.updateRateLimitedStatus
+                    }
                 }
             } else {
                 finishUpdate()
+                if rateLimited {
+                    statusText = Strings.updateRateLimitedStatus
+                }
                 if !silent {
                     showAlert(title: Strings.upToDateTitle, message: Strings.upToDateMessage(current), style: .informational)
                 }
             }
         case .failure(let error):
             finishUpdate()
+            // Rate-limit context (issue #945): the API is cooling down, so a
+            // failure here means the releases-page fallback failed too. Show
+            // that in the menu status channel instead of a bare HTTP error.
+            if releaseClient.isAPICoolingDown {
+                statusText = Strings.updateRateLimitedStatus
+            }
+            var message = error.localizedDescription
+            if let retryAt = releaseClient.apiRetryAt, retryAt > Date() {
+                message += "\n\n" + Strings.updateRateLimitedRetryAt(Self.retryTimeText(retryAt))
+            }
             if !silent {
                 showAlert(
                     title: Strings.updateCheckFailedTitle,
-                    message: "\(error.localizedDescription)\n\n\(Strings.manualCheckHint)",
+                    message: "\(message)\n\n\(Strings.manualCheckHint)",
                     style: .warning,
                     showReleasePage: true
                 )
@@ -609,15 +590,24 @@ final class UpdateChecker {
         var count = 0
     }
 
+    /// "Retry after" line for alerts, formatted in the app's resolved locale so
+    /// the date matches the surrounding alert text
+    /// (mirrors Windows' ApiRetryAtMessage).
+    private static func retryTimeText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: NativeLocalization.currentResolvedLocale)
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
     private enum UpdateError: LocalizedError {
-        case curlFailed(Int)
         case emptyResponse
         case installFailed(String)
         case noRelease
 
         var errorDescription: String? {
             switch self {
-            case .curlFailed(let code): return Strings.networkRequestFailed(code: code)
             case .emptyResponse: return Strings.emptyServerResponse
             case .installFailed(let reason): return Strings.installFailed(reason)
             case .noRelease: return Strings.noReleaseAvailable

@@ -176,6 +176,26 @@ function formatRecordOnlyWarning(count) {
   return `${count} Codex session(s) report usage only via token_usage_record; not counted yet (see #652)`;
 }
 
+// A reset sentinel is a token_count whose total drops to exact zero while the
+// previous total was positive and every component of both snapshots is zero —
+// Codex restarting a session's cumulative counters, not a real response. Both
+// the hourly ledger (rollout.js) and the session ledger mode
+// (codex-rollout-parser.js) must reject it identically, so the predicate lives
+// here as the single copy of the rule.
+function isCodexTotalOnlyResetSentinel(lastUsage, totalUsage) {
+  const componentTotal = (usage) => [
+    usage?.input_tokens,
+    usage?.cached_input_tokens,
+    usage?.cache_creation_input_tokens ?? usage?.cache_write_input_tokens,
+    usage?.output_tokens,
+    usage?.reasoning_output_tokens,
+  ].reduce((sum, value) => sum + Math.max(0, Number(value) || 0), 0);
+  return Number(lastUsage?.total_tokens || 0) > 0
+    && Number(totalUsage?.total_tokens || 0) === 0
+    && componentTotal(lastUsage) === 0
+    && componentTotal(totalUsage) === 0;
+}
+
 module.exports = {
   MAX_COMPACTION_RESPONSE_IDS,
   createCompactionResponseIds,
@@ -184,6 +204,7 @@ module.exports = {
   awaitsCompactedLine,
   createUsageRecordState,
   extractTokenUsageRecord,
+  isCodexTotalOnlyResetSentinel,
   isCodexTurnEndEvent,
   isRecordOnly,
   noteLineAfterUsageRecord,

@@ -35,6 +35,7 @@ const {
   createCompactionResponseIds,
   createUsageRecordState,
   extractTokenUsageRecord,
+  isCodexTotalOnlyResetSentinel,
   isCodexTurnEndEvent,
   isRecordOnly,
   noteLineAfterUsageRecord,
@@ -3606,6 +3607,67 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
 
   const toAppend = [];
   for (const group of groupedBuckets.values()) {
+    // A local reconstruction may opt into observed-only attribution. Preserve
+    // every model bucket, including unknown, instead of guessing from the
+    // busiest model in the same half-hour. The policy lives in cursor state
+    // so hooks, desktop refreshes, and restarted CLI processes agree.
+    if (hourlyState.modelAttributionPolicy?.[group.source] === "observed") {
+      // A group last aligned under the default policy must not keep the stale
+      // dominant attribution downstream. Mirror the default path's alignment
+      // correction — one zero row for the old model — then observed mode
+      // re-emits every bucket, unknown included, and the alignment state is
+      // dropped so the correction fires at most once per group.
+      const alignedModelBucket = group.buckets.get(DEFAULT_MODEL) || null;
+      const staleAlignedModel = (() => {
+        if (!alignedModelBucket?.alignedModel) return null;
+        const normalized = normalizeModelInput(alignedModelBucket.alignedModel);
+        return normalized && normalized !== DEFAULT_MODEL && !group.buckets.has(normalized)
+          ? normalized
+          : null;
+      })();
+      if (staleAlignedModel) {
+        const zeroTotals = initTotals();
+        toAppend.push(JSON.stringify({
+          source: group.source,
+          model: staleAlignedModel,
+          hour_start: group.hourStart,
+          input_tokens: zeroTotals.input_tokens,
+          cached_input_tokens: zeroTotals.cached_input_tokens,
+          cache_creation_input_tokens: zeroTotals.cache_creation_input_tokens,
+          output_tokens: zeroTotals.output_tokens,
+          reasoning_output_tokens: zeroTotals.reasoning_output_tokens,
+          total_tokens: zeroTotals.total_tokens,
+          billable_total_tokens: zeroTotals.billable_total_tokens,
+          total_cost_usd: zeroTotals.total_cost_usd,
+          conversation_count: zeroTotals.conversation_count,
+        }));
+      }
+      for (const bucket of group.buckets.values()) bucket.alignedModel = null;
+      for (const [model, bucket] of group.buckets.entries()) {
+        const totals = bucket.totals;
+        const usagePrecision = bucket.usage_precision || null;
+        const key = usagePrecision ? `${totalsKey(totals)}|${usagePrecision}` : totalsKey(totals);
+        if (bucket.queuedKey === key) continue;
+        toAppend.push(JSON.stringify({
+          source: group.source,
+          model,
+          hour_start: group.hourStart,
+          input_tokens: totals.input_tokens,
+          cached_input_tokens: totals.cached_input_tokens,
+          cache_creation_input_tokens: totals.cache_creation_input_tokens,
+          output_tokens: totals.output_tokens,
+          reasoning_output_tokens: totals.reasoning_output_tokens,
+          total_tokens: totals.total_tokens,
+          billable_total_tokens: totals.billable_total_tokens ?? totals.total_tokens,
+          total_cost_usd: totals.total_cost_usd || 0,
+          usage_precision: usagePrecision || undefined,
+          ...prioritySubsetOf(totals),
+          conversation_count: totals.conversation_count,
+        }));
+        bucket.queuedKey = key;
+      }
+      continue;
+    }
     const unknownBucket = group.buckets.get(DEFAULT_MODEL) || null;
     const dominantModel = pickDominantModel(group.buckets);
     let alignedModel = null;
@@ -3977,6 +4039,10 @@ function normalizeHourlyState(raw) {
   const rawBuckets = state.buckets && typeof state.buckets === "object" ? state.buckets : {};
   const buckets = {};
   const groupQueued = {};
+  const modelAttributionPolicy = Object.fromEntries(
+    Object.entries(state.modelAttributionPolicy || {})
+      .filter(([, policy]) => policy === "observed"),
+  );
 
   if (!Number.isFinite(version) || version < 2) {
     for (const [key, value] of Object.entries(rawBuckets)) {
@@ -3994,6 +4060,7 @@ function normalizeHourlyState(raw) {
       version: 3,
       buckets,
       groupQueued,
+      ...(Object.keys(modelAttributionPolicy).length > 0 ? { modelAttributionPolicy } : {}),
       updatedAt: typeof state.updatedAt === "string" ? state.updatedAt : null,
     };
   }
@@ -4013,6 +4080,7 @@ function normalizeHourlyState(raw) {
     version: 3,
     buckets,
     groupQueued: version >= 3 ? existingGroupQueued : {},
+    ...(Object.keys(modelAttributionPolicy).length > 0 ? { modelAttributionPolicy } : {}),
     updatedAt: typeof state.updatedAt === "string" ? state.updatedAt : null,
   };
 }
@@ -5244,20 +5312,6 @@ function normalizeUsage(u) {
   // normalization by isCodexTotalOnlyResetSentinel().
   out.input_tokens = Math.max(0, out.input_tokens - out.cached_input_tokens);
   return out;
-}
-
-function isCodexTotalOnlyResetSentinel(lastUsage, totalUsage) {
-  const componentTotal = (usage) => [
-    usage?.input_tokens,
-    usage?.cached_input_tokens,
-    usage?.cache_creation_input_tokens ?? usage?.cache_write_input_tokens,
-    usage?.output_tokens,
-    usage?.reasoning_output_tokens,
-  ].reduce((sum, value) => sum + Math.max(0, Number(value) || 0), 0);
-  return Number(lastUsage?.total_tokens || 0) > 0
-    && Number(totalUsage?.total_tokens || 0) === 0
-    && componentTotal(lastUsage) === 0
-    && componentTotal(totalUsage) === 0;
 }
 
 // Stable dedup key for one Claude jsonl entry. Anthropic's official protocol

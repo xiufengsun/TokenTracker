@@ -33,7 +33,16 @@ import { formatProviderDisplayName } from "../../../lib/provider-display";
 import { DateRangePopover, formatDateShort, getDateFnsLocale } from "./DateRangePopover.jsx";
 import { ProviderIcon } from "./ProviderIcon.jsx";
 import { formatUsdCurrency } from "../../../lib/format";
-import { buildAllModels, hasModelTokenSplits } from "../../../lib/model-breakdown";
+import {
+  buildAllModels,
+  hasModelTokenSplits,
+  hasModelSpeedTiers,
+  MODEL_SPEED_TIER_KEYS,
+  modelSpeedTierMultiplier,
+  modelSpeedTierStandard,
+  modelTokenSplitsTotal,
+  isUnpricedModel,
+} from "../../../lib/model-breakdown";
 import { ContextBreakdownPanel } from "./ContextBreakdownPanel.jsx";
 
 const ALL_PROVIDERS_KEY = "__all__";
@@ -124,6 +133,28 @@ function formatProviderPercent(provider) {
   const value = getProviderPercentValue(provider);
   if (value > 0 && !(value >= 0.01)) return copy("usage.overview.percent_below_threshold");
   return value.toFixed(2);
+}
+
+// A request-only provider (issue 948) has conversation activity but no token
+// totals: it stays out of the card grid and surfaces in the notice row below.
+function isRequestOnlyProvider(provider) {
+  const requests = Number(provider?.requests) || 0;
+  return requests > 0 && !(Number(provider?.usage) > 0);
+}
+
+// Zero-token (request-only) model rows show their request count where a
+// token total would sit; rows with neither keep the legacy empty cell. A
+// merged row can carry BOTH (issue 948: token usage from one tool,
+// request-only activity from another) — show both instead of hiding the
+// requests behind the token total.
+function modelTokensCellLabel(model, formatTokens) {
+  const positive = formatPositiveTokens(formatTokens, model?.usage);
+  const requests = Math.max(0, Number(model?.requests) || 0);
+  if (positive && requests > 0) {
+    return `${positive} · ${copy("usage.overview.request_count", { count: requests })}`;
+  }
+  if (positive) return positive;
+  return requests > 0 ? copy("usage.overview.request_count", { count: requests }) : null;
 }
 
 const PERIOD_COPY_KEYS = {
@@ -232,6 +263,9 @@ export function UsageOverview({
   selectedDevice = "",
   dataRevision = 0,
   onDeviceChange,
+  accountView = false,
+  accountScopeSwitchable = false,
+  onAccountScopeChange = null,
 }) {
   const tabs = normalizePeriods(periods);
   const dateLocale = getDateFnsLocale(getCopyLocale());
@@ -332,8 +366,14 @@ export function UsageOverview({
     summaryValue
   );
 
-  // FleetData is already grouped by provider.
-  const providers = fleetData.filter((f) => f.models?.length > 0);
+  // FleetData is already grouped by provider. Request-only providers
+  // (issue 948: zero tokens, activity as conversation_count) stay out of the
+  // card grid — the grid's visual language is token share — and surface in a
+  // slim notice row below it instead.
+  const providers = fleetData.filter((f) => f.models?.length > 0 && !isRequestOnlyProvider(f));
+  const requestOnlyProviders = fleetData.filter(
+    (f) => f.models?.length > 0 && isRequestOnlyProvider(f),
+  );
   // Devin contributes real token counts but its models (swe-2, swe-2-high,
   // compactor) ship without pricing data, so the dollar figure silently
   // under-reports whenever Devin is in view — surface the notice on both the
@@ -444,6 +484,57 @@ export function UsageOverview({
             })}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Data-scope control (issue 979): with cloud sync on, this card renders
+                account-scope data that can silently differ from this machine's
+                numbers, so label the scope instead of letting an unpriced cloud
+                row read as a local pricing bug. Where both scopes are live the
+                badge becomes a view-only switcher — flipping it re-renders the
+                other scope without touching the cloud-sync preference, so
+                uploads keep running while the page shows this machine only.
+                Local scope stays unlabeled when the switcher is unavailable —
+                it is the default for signed-out visitors and share views. */}
+            {accountScopeSwitchable && onAccountScopeChange ? (
+              <div
+                role="group"
+                aria-label={copy("usage.overview.scope_switch_aria")}
+                className="inline-flex shrink-0 items-center h-8 rounded-md bg-oai-gray-100 dark:bg-oai-gray-800 p-0.5"
+              >
+                <button
+                  type="button"
+                  aria-pressed={!accountView}
+                  title={copy("usage.overview.scope_local_tip")}
+                  onClick={() => onAccountScopeChange("local")}
+                  className={`inline-flex items-center h-7 px-2.5 text-xs font-medium rounded-md transition-colors duration-200 ${
+                    !accountView
+                      ? "bg-oai-white dark:bg-oai-gray-600 shadow-sm text-oai-black dark:text-oai-white"
+                      : "text-oai-gray-500 dark:text-oai-gray-400 hover:text-oai-black dark:hover:text-oai-white"
+                  }`}
+                >
+                  {copy("usage.overview.scope_local")}
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={accountView}
+                  title={copy("usage.overview.scope_account_tip")}
+                  onClick={() => onAccountScopeChange(null)}
+                  className={`inline-flex items-center h-7 px-2.5 text-xs font-medium rounded-md transition-colors duration-200 ${
+                    accountView
+                      ? "bg-oai-white dark:bg-oai-gray-600 shadow-sm text-oai-black dark:text-oai-white"
+                      : "text-oai-gray-500 dark:text-oai-gray-400 hover:text-oai-black dark:hover:text-oai-white"
+                  }`}
+                >
+                  {copy("usage.overview.scope_account")}
+                </button>
+              </div>
+            ) : null}
+            {!(accountScopeSwitchable && onAccountScopeChange) && accountView ? (
+              <span
+                title={copy("usage.overview.scope_account_tip")}
+                className="inline-flex shrink-0 items-center h-8 px-2.5 text-xs font-medium rounded-md bg-oai-gray-100 dark:bg-oai-gray-800 text-oai-gray-700 dark:text-oai-gray-300"
+              >
+                {copy("usage.overview.scope_account")}
+              </span>
+            ) : null}
             {deviceOptions.length > 1 ? (
               <Select
                 value={selectedDevice}
@@ -531,40 +622,45 @@ export function UsageOverview({
         <div className={showProviderSkeleton ? undefined : "hidden"}>
           <ProviderDistributionSkeleton />
         </div>
-        {providers.length > 0 && (
+        {/* The All card (and the All-models detail behind it) must stay reachable
+            even when no provider has tokens — a Qoder-only user would otherwise
+            lose the request-only model rows entirely (issue 948 review). */}
+        {(providers.length > 0 || requestOnlyProviders.length > 0) && (
           <div className="space-y-6">
             {/* Distribution Bar */}
-            <div
-              role="img"
-              aria-label={copy("usage.overview.distribution_aria", {
-                items: providers
-                  .map((provider) =>
-                    copy("usage.overview.distribution_item", {
-                      label: formatProviderDisplayName(provider.label),
-                      percent: formatProviderPercent(provider),
-                    }),
-                  )
-                  .join("，"),
-              })}
-              className="h-1.5 w-full bg-oai-gray-100 dark:bg-oai-gray-800 rounded-full overflow-hidden flex"
-            >
-              {providers.map((provider, idx) => {
-                const color = getProviderColor(provider.label, idx);
-                const displayLabel = formatProviderDisplayName(provider.label);
-                const percentLabel = formatProviderPercent(provider);
-                return (
-                  <motion.div
-                    key={provider.label}
-                    initial={{ width: 0 }}
-                    animate={{ width: `${getProviderPercentValue(provider)}%` }}
-                    transition={{ duration: 0.5, delay: 0.45 + idx * 0.04, ease: [0.16, 1, 0.3, 1] }}
-                    className="h-full"
-                    style={{ backgroundColor: color }}
-                    title={`${displayLabel}: ${percentLabel}%`}
-                  />
-                );
-              })}
-            </div>
+            {providers.length > 0 && (
+              <div
+                role="img"
+                aria-label={copy("usage.overview.distribution_aria", {
+                  items: providers
+                    .map((provider) =>
+                      copy("usage.overview.distribution_item", {
+                        label: formatProviderDisplayName(provider.label),
+                        percent: formatProviderPercent(provider),
+                      }),
+                    )
+                    .join("，"),
+                })}
+                className="h-1.5 w-full bg-oai-gray-100 dark:bg-oai-gray-800 rounded-full overflow-hidden flex"
+              >
+                {providers.map((provider, idx) => {
+                  const color = getProviderColor(provider.label, idx);
+                  const displayLabel = formatProviderDisplayName(provider.label);
+                  const percentLabel = formatProviderPercent(provider);
+                  return (
+                    <motion.div
+                      key={provider.label}
+                      initial={{ width: 0 }}
+                      animate={{ width: `${getProviderPercentValue(provider)}%` }}
+                      transition={{ duration: 0.5, delay: 0.45 + idx * 0.04, ease: [0.16, 1, 0.3, 1] }}
+                      className="h-full"
+                      style={{ backgroundColor: color }}
+                      title={`${displayLabel}: ${percentLabel}%`}
+                    />
+                  );
+                })}
+              </div>
+            )}
 
             {/* Provider Cards — responsive grid keeps cells equal-width so the
                 last row never stretches when the count doesn't divide evenly. */}
@@ -697,6 +793,9 @@ export function UsageOverview({
 
           </div>
         )}
+        {requestOnlyProviders.length > 0 && (
+          <RequestOnlyNotice providers={requestOnlyProviders} />
+        )}
       </div>
       </Card>
   );
@@ -745,10 +844,67 @@ function ModelTokenSplits({ tokens }) {
 }
 
 /**
- * Grid cells of one model row: name, token total, cost and share. The share
- * cell carries a rotating chevron when the row has token splits.
+ * Speed-tier sub-rows (issue 886): under an expanded model row, one line per
+ * Codex speed tier — Standard (the residual), Fast and Ultrafast — with the
+ * tier's tokens and the backend-allocated cost. Rendered only when the backend
+ * reported tier subsets; the multiplier suffix comes from the model's pricing
+ * info so the label never hardcodes 2x/6x.
  */
-function ModelRowHeader({ model, tokensLabel, costLabel, expandable, isExpanded }) {
+function speedTierRowLabel(tier, model) {
+  const base = copy(
+    tier === "priority"
+      ? "usage.overview.tier_fast"
+      : tier === "ultrafast"
+        ? "usage.overview.tier_ultrafast"
+        : "usage.overview.tier_standard",
+  );
+  const multiplier = tier === "standard" ? 0 : modelSpeedTierMultiplier(model, tier);
+  if (!(multiplier > 1)) return base;
+  const rate = Number.isInteger(multiplier) ? String(multiplier) : String(Math.round(multiplier * 100) / 100);
+  return copy("usage.overview.tier_rate_label", { label: base, rate });
+}
+
+function ModelSpeedTierRows({ model }) {
+  const { currency, rate } = useCurrency();
+  const { formatTokens, formatTokensTooltip } = useTokenFormat();
+  if (!hasModelSpeedTiers(model)) return null;
+  const rows = [
+    { key: "standard", split: modelSpeedTierStandard(model) },
+    ...MODEL_SPEED_TIER_KEYS.map((tier) => ({ key: tier, split: model?.tiers?.[tier] || null })),
+  ].filter((row) => row.split && (modelTokenSplitsTotal(row.split.tokens) > 0 || row.split.cost > 0));
+  if (!rows.length) return null;
+  return (
+    <div className="mb-1.5 flex flex-col gap-y-1" data-model-speed-tiers>
+      {rows.map((row) => {
+        const tokensTotal = modelTokenSplitsTotal(row.split.tokens);
+        return (
+          <div key={row.key} className="flex flex-wrap items-baseline gap-x-3 text-[11px] tabular-nums">
+            <span className="min-w-[8rem] text-oai-gray-500 dark:text-oai-gray-400">
+              {speedTierRowLabel(row.key, model)}
+            </span>
+            <span
+              title={formatTokensTooltip(tokensTotal)}
+              className="text-oai-gray-600 dark:text-oai-gray-300"
+            >
+              {formatTokens(tokensTotal)}
+            </span>
+            <span className="text-oai-gray-600 dark:text-oai-gray-300">
+              {formatCost(row.split.cost, currency, rate)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Grid cells of one model row: name, token total, cost and share. The share
+ * cell carries a rotating chevron when the row has token splits. A token-
+ * backed row with no computable cost shows the unpriced label instead of an
+ * empty cell, matching the cost analysis modal's wording.
+ */
+function ModelRowHeader({ model, tokensLabel, costLabel, unpricedLabel, expandable, isExpanded }) {
   const { formatTokensTooltip } = useTokenFormat();
   return (
     <>
@@ -764,8 +920,11 @@ function ModelRowHeader({ model, tokensLabel, costLabel, expandable, isExpanded 
       >
         {tokensLabel}
       </span>
-      <span className="col-start-3 row-start-1 text-right whitespace-nowrap text-sm text-oai-gray-500 dark:text-oai-gray-400 tabular-nums">
-        {costLabel}
+      <span
+        title={unpricedLabel ? copy("dashboard.cost_breakdown.unpriced") : undefined}
+        className="col-start-3 row-start-1 text-right whitespace-nowrap text-sm text-oai-gray-500 dark:text-oai-gray-400 tabular-nums"
+      >
+        {costLabel ?? unpricedLabel}
       </span>
       <span className="col-start-4 row-start-1 flex w-full items-center justify-end gap-1 whitespace-nowrap text-sm text-oai-black dark:text-oai-white tabular-nums">
         {model.share}%
@@ -791,7 +950,8 @@ function ModelRowHeader({ model, tokensLabel, costLabel, expandable, isExpanded 
 /**
  * Renders the per-model usage rows for one provider (or the all-models list).
  * Rows whose backend entry carries token-type splits become expandable; the
- * expanded state shows the five split values under the row.
+ * expanded state shows the five split values under the row, plus the
+ * Standard/Fast/Ultrafast speed-tier lines when the backend reported them.
  */
 function ModelUsageRows({ models, color }) {
   const { currency, rate } = useCurrency();
@@ -801,8 +961,15 @@ function ModelUsageRows({ models, color }) {
   return (
     <div className="space-y-3">
       {models.map((model) => {
-        const tokensLabel = formatPositiveTokens(formatTokens, model.usage);
+        const tokensLabel = modelTokensCellLabel(model, formatTokens);
         const costLabel = formatCost(model.cost, currency, rate);
+        // A blank cost cell on a token-backed row means "no published rate",
+        // not "free" — spell it out instead of leaving an empty column that
+        // reads as broken. Request-only rows (no tokens) keep the blank cell:
+        // their missing cost means "nothing booked", not "unpriced".
+        const unpricedLabel = !costLabel && Number(model.usage) > 0 && isUnpricedModel(model)
+          ? copy("dashboard.cost_breakdown.unpriced_label")
+          : null;
         const clampedShare = Math.max(0, Math.min(100, Number(model.share) || 0));
         const rowKey = model.id || model.name;
         // A row expands only when the backend supplied token-type splits;
@@ -812,7 +979,7 @@ function ModelUsageRows({ models, color }) {
         const expandable = hasModelTokenSplits(model);
         const isExpanded = expandable && expandedModel === rowKey;
         const gridClassName = MODEL_ROW_GRID;
-        const headerProps = { model, tokensLabel, costLabel, expandable, isExpanded };
+        const headerProps = { model, tokensLabel, costLabel, unpricedLabel, expandable, isExpanded };
         return (
           <div key={rowKey} data-model-rank-row>
             {expandable ? (
@@ -829,7 +996,12 @@ function ModelUsageRows({ models, color }) {
                 <ModelRowHeader {...headerProps} />
               </div>
             )}
-            {isExpanded && <ModelTokenSplits tokens={model.tokens} />}
+            {isExpanded && (
+              <>
+                <ModelTokenSplits tokens={model.tokens} />
+                <ModelSpeedTierRows model={model} />
+              </>
+            )}
             <div
               className="h-[3px] bg-oai-gray-100 dark:bg-oai-gray-800 rounded-full overflow-hidden"
               role="progressbar"
@@ -888,6 +1060,26 @@ function KiroEstimateNotice() {
         {copy("usage.overview.kiro_notice_title")}.
       </span>{" "}
       {copy("usage.overview.kiro_notice_body")}
+    </p>
+  );
+}
+
+// Request-only providers (issue 948: Qoder-style credit-billed transcripts
+// with zero tokens) render as one slim notice under the card grid — the grid
+// itself stays a pure token-share visualization. Per-model detail lives in
+// the All-models list, which already carries their request counts.
+function RequestOnlyNotice({ providers }) {
+  const items = providers
+    .map((provider) =>
+      copy("usage.overview.request_only_item", {
+        label: formatProviderDisplayName(provider.label),
+        count: Math.max(0, Number(provider.requests) || 0),
+      }),
+    )
+    .join(copy("usage.overview.request_only_separator"));
+  return (
+    <p className="mb-3 text-[10px] leading-snug text-oai-gray-400 dark:text-oai-gray-500">
+      {copy("usage.overview.request_only_note", { items })}
     </p>
   );
 }

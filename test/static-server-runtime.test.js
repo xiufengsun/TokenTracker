@@ -154,3 +154,80 @@ test("aborted requests close FileHandles opened during serveStaticFile awaits", 
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test("static compression failure falls back to the complete identity body", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tt-static-compress-fail-"));
+  const file = path.join(dir, "app.js");
+  const source = "export const value = 1;\n".repeat(200);
+  await fs.writeFile(file, source);
+  const open = fs.open;
+  fs.open = async (target, ...args) => {
+    const handle = await open(target, ...args);
+    if (target !== file) return handle;
+    const readFile = handle.readFile.bind(handle);
+    handle.readFile = async (...readArgs) => {
+      await readFile(...readArgs);
+      throw new Error("forced compression failure");
+    };
+    return handle;
+  };
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, "http://localhost");
+    const served = await serveStaticFile(dir, url.pathname, res, {
+      acceptEncoding: req.headers["accept-encoding"] || "",
+    });
+    if (!served) res.writeHead(404).end();
+  });
+  try {
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/app.js`, {
+      headers: { "accept-encoding": "gzip" },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-encoding"), null);
+    assert.equal(Number(response.headers.get("content-length")), Buffer.byteLength(source));
+    assert.equal(await response.text(), source);
+  } finally {
+    fs.open = open;
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("static compression negotiates encoding and preserves the original bytes", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tt-static-compress-"));
+  const file = path.join(dir, "app.js");
+  const source = "export default 1;\n".repeat(200);
+  await fs.writeFile(file, source);
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, "http://localhost");
+    const served = await serveStaticFile(dir, url.pathname, res, {
+      acceptEncoding: req.headers["accept-encoding"] || "",
+    });
+    if (!served) res.writeHead(404).end();
+  });
+  try {
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    for (const encoding of ["gzip", "br"]) {
+      const response = await fetch(`${base}/app.js`, { headers: { "accept-encoding": encoding } });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-encoding"), encoding);
+      assert.ok(Number(response.headers.get("content-length")) > 0);
+      assert.equal(response.headers.get("vary"), "Accept-Encoding");
+      assert.equal(await response.text(), source);
+    }
+    const identity = await fetch(`${base}/app.js`, { headers: { "accept-encoding": "gzip;q=0" } });
+    assert.equal(identity.status, 200);
+    assert.equal(identity.headers.get("content-encoding"), null);
+    assert.equal(await identity.text(), source);
+    const notAcceptable = await fetch(`${base}/app.js`, { headers: { "accept-encoding": "identity;q=0" } });
+    assert.equal(notAcceptable.status, 406);
+    assert.equal(await notAcceptable.text(), "Not Acceptable");
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

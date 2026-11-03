@@ -1,6 +1,8 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const zlib = require("node:zlib");
+const { promisify } = require("node:util");
 const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const { setImmediate: yieldToRequests } = require("node:timers/promises");
@@ -19,7 +21,9 @@ const { functionUrlFor, fetchFunctionResponse } = require("./function-url");
 const { createCloudDeviceTokenStore } = require("./cloud-device-token");
 const { parseBearerToken } = require("./bearer-token");
 const { writeJsonAtomicSync } = require("./atomic-json");
+const { negotiateEncoding } = require("./accept-encoding");
 const { createLocalUsageTransfer, MAX_BYTES: LOCAL_USAGE_MAX_BYTES } = require("./local-usage-transfer");
+const { fetchProviderServiceStatus } = require("./provider-status");
 
 const SYNC_TIMEOUT_MS = 120_000;
 // A failed account-view request should not stall every dashboard refresh
@@ -53,6 +57,132 @@ const AVATAR_PROXY_MAX_BYTES = 512 * 1024; // 512 KiB per image
 const AVATAR_PROXY_MAX_ENTRIES = 64;
 const avatarProxyCache = new Map();
 
+// The sessions endpoint serializes ~9MB of row data. Building it twice in a
+// row is pure duplicate work when the sidecar and pricing revision have not
+// changed; keep the exact JSON bytes keyed by both. A short TTL also covers
+// new source session files without requiring a sidecar rebuild; sync's
+// writeAtomic() replaces the sidecar and invalidates immediately. Force-refresh
+// requests bypass reads but still refresh the cache.
+// Keyed by sidecar signature + pricing revision + query, so one entry per
+// (include_buckets, range) variant the dashboard has open. Keep a few variants
+// but bound the total bytes: the bucket-less summary is ~2.9MB raw while the
+// full legacy variant is ~9MB.
+const SESSIONS_RESPONSE_CACHE_MAX = 8;
+const SESSIONS_RESPONSE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const SESSIONS_RESPONSE_CACHE_TTL_MS = 60 * 1000;
+const sessionsResponseCache = new Map();
+
+function sessionsResponseCacheKey({ sidecarPath, from, to, limit, includeBuckets, includeModelDetail, timeZone, offsetMinutes }) {
+  try {
+    const stat = fs.statSync(sidecarPath);
+    return [
+      sidecarPath,
+      stat.dev,
+      stat.ino,
+      stat.size,
+      stat.mtimeMs,
+      stat.ctimeMs,
+      getPricingRevision(),
+      from,
+      to,
+      limit,
+      includeBuckets ? 1 : 0,
+      includeModelDetail ? 1 : 0,
+      timeZone || "",
+      Number.isFinite(offsetMinutes) ? offsetMinutes : "",
+    ].join("\0");
+  } catch {
+    return null;
+  }
+}
+
+function sessionsResponseCacheBytes() {
+  let total = 0;
+  for (const entry of sessionsResponseCache.values()) {
+    total += entry.raw.length + (entry.gzip?.length || 0) + (entry.br?.length || 0);
+  }
+  return total;
+}
+
+function rememberSessionsResponse(key, body) {
+  const entry = { raw: body, gzip: null, br: null, expiresAt: Date.now() + SESSIONS_RESPONSE_CACHE_TTL_MS };
+  if (!key) return entry;
+  // Re-inserting moves the entry to the end, so eviction stays least-recently-used.
+  sessionsResponseCache.delete(key);
+  sessionsResponseCache.set(key, entry);
+  while (sessionsResponseCache.size > SESSIONS_RESPONSE_CACHE_MAX
+    || (sessionsResponseCache.size > 1 && sessionsResponseCacheBytes() > SESSIONS_RESPONSE_CACHE_MAX_BYTES)) {
+    sessionsResponseCache.delete(sessionsResponseCache.keys().next().value);
+  }
+  return entry;
+}
+
+function getCachedSessionsResponse(key) {
+  const entry = sessionsResponseCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    sessionsResponseCache.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+const gzipAsync = promisify(zlib.gzip);
+const brotliCompressAsync = promisify(zlib.brotliCompress);
+
+async function sendSessionsResponse(req, res, entry) {
+  const { encoding: accepted, identityAllowed } = negotiateEncoding(req.headers["accept-encoding"]);
+  const notAcceptable = () => {
+    const message = "Not Acceptable";
+    res.writeHead(406, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Length": Buffer.byteLength(message),
+      "Cache-Control": "no-store",
+      "Vary": "Accept-Encoding",
+    });
+    res.end(message);
+  };
+  if (!accepted && !identityAllowed) {
+    notAcceptable();
+    return;
+  }
+  let body = entry.raw;
+  let encoding = null;
+  if (entry.raw.length > 32 * 1024 && accepted === "br") {
+    try {
+      entry.br ||= brotliCompressAsync(entry.raw, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } });
+      body = await entry.br;
+      encoding = "br";
+    } catch (error) {
+      entry.br = null;
+      console.warn("[local-api] sessions brotli failed, serving identity:", error?.message || error);
+    }
+  } else if (entry.raw.length > 32 * 1024 && accepted === "gzip") {
+    try {
+      entry.gzip ||= gzipAsync(entry.raw);
+      body = await entry.gzip;
+      encoding = "gzip";
+    } catch (error) {
+      entry.gzip = null;
+      console.warn("[local-api] sessions gzip failed, serving identity:", error?.message || error);
+    }
+  }
+  if (!encoding && !identityAllowed) {
+    notAcceptable();
+    return;
+  }
+  const headers = {
+    "Content-Type": "application/json",
+    "Content-Length": body.length,
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Vary": "Accept-Encoding",
+  };
+  if (encoding) headers["Content-Encoding"] = encoding;
+  res.writeHead(200, headers);
+  res.end(body);
+}
+
 // ---------------------------------------------------------------------------
 // Per-model pricing — delegated to src/lib/pricing/
 //   - CURATED overrides (kiro-*, hy3-*, composer-*, kimi-for-coding, etc.)
@@ -64,6 +194,7 @@ const {
   MODEL_PRICING,
   getModelPricing,
   computeRowCost,
+  computeRowTierCosts,
   ensurePricingLoaded,
   getPricingRevision,
   getModelPricingInfo,
@@ -99,6 +230,19 @@ const CLAUDE_MEM_OBSERVER_PROJECT_KEY = deriveProjectKeyFromRef(
   CLAUDE_MEM_OBSERVER_PROJECT_REF,
 );
 const PROJECT_USAGE_MAX_ENTRIES = 10;
+
+// Speed-tier subset columns surfaced by /usage-model-breakdown (issue 886):
+// the Codex parser persists these on queue rows as annotations of the base
+// columns ("how much of this row came from Fast/Ultrafast requests"), so the
+// model breakdown can sum them per model without re-adding volume.
+const SPEED_TIER_SUBSET_PREFIXES = ["priority_", "ultrafast_"];
+const SPEED_TIER_SUBSET_TOKEN_FIELDS = [
+  "input_tokens",
+  "cached_input_tokens",
+  "cache_creation_input_tokens",
+  "output_tokens",
+  "reasoning_output_tokens",
+];
 const MAX_TIME_ZONE_CACHE_ENTRIES = 16;
 const AGGREGATION_BATCH_ROWS = 256;
 
@@ -1675,8 +1819,38 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
     return hasAllowedLoopbackOrigin(req?.headers || {});
   }
 
+  // status.deepseek.com (no public JSON API) and status.opencode.ai (official
+  // API but no CORS headers) are both unreadable from the browser, so the
+  // dashboard probes them through these same-origin relays instead. The
+  // server-side fetch/parse/cache logic lives in provider-status.js (6s
+  // timeout, 5-minute cache, last-good fallback); a failed probe surfaces as
+  // 502 and the card renders Unreachable.
+  const relayProviderStatus = (providerId, label) => async (req, res) => {
+    const method = String(req.method || "GET").toUpperCase();
+    if (method !== "GET" && method !== "HEAD") {
+      json(res, { error: "Method Not Allowed" }, 405);
+      return true;
+    }
+    try {
+      const reading = await fetchProviderServiceStatus(providerId);
+      if (!reading) {
+        json(res, { error: `${label} status unavailable` }, 502);
+        return true;
+      }
+      json(res, {
+        page: { updated_at: reading.updated_at },
+        status: { indicator: reading.indicator, description: reading.description || "" },
+      });
+    } catch (error) {
+      json(res, { error: `${label} status probe error: ${error?.message || error}` }, 502);
+    }
+    return true;
+  };
+
   return async function handleLocalApi(req, res, url) {
     const p = url.pathname;
+    if (p === "/api/deepseek-status") return relayProviderStatus("deepseek", "DeepSeek")(req, res);
+    if (p === "/api/opencode-status") return relayProviderStatus("opencode", "OpenCode")(req, res);
     if (p === "/api/local-usage") {
       if (!isAuthorizedLocalMutation(req)) { json(res, { code: "unauthorized" }, 401); return true; }
       try {
@@ -2582,7 +2756,9 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       const refresh = ["1", "true"].includes(url.searchParams.get("refresh"));
       try {
         const { buildSessionAnalytics, summarizeSessions, sessionsToCsv } = require("./session-analytics");
-        const sessions = await buildSessionAnalytics({ force: refresh });
+        // Refresh means "re-walk the session files", not "re-parse everything":
+        // recheck skips the TTL but keeps per-file stat reuse.
+        const sessions = await buildSessionAnalytics({ recheck: refresh });
         const wantsCsv = url.searchParams.get("format") === "csv";
         const includeSessions = wantsCsv || ["1", "true"].includes(url.searchParams.get("include_sessions"));
         const result = summarizeSessions(sessions, { from, to, includeSessions, ...getTimeZoneContext(url) });
@@ -2612,16 +2788,48 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       const refresh = ["1", "true"].includes(url.searchParams.get("refresh"));
       const limitParam = parseInt(url.searchParams.get("limit") || "0", 10);
       const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 2000) : 0;
+      const includeBuckets = !["0", "false"].includes(String(url.searchParams.get("include_buckets") || "").toLowerCase());
+      // The list page renders one model name plus a token/cost/performance
+      // triple per model; the remaining per-model counters (~39 of 44 fields)
+      // are not read by the dashboard, so the browser can opt out of them.
+      const includeModelDetail = !["0", "false"].includes(String(url.searchParams.get("include_model_detail") || "").toLowerCase());
       // This payload contains local paths and resumable session identifiers.
       // The server is loopback-only; additionally prevent browser/proxy caches
       // from retaining the response after the page is closed.
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("X-Content-Type-Options", "nosniff");
       try {
-        const { buildSessionAnalytics, listSessionsForBrowser } = require("./session-analytics");
-        const sessions = await buildSessionAnalytics({ force: refresh });
-        const result = listSessionsForBrowser(sessions, { from, to, limit, ...getTimeZoneContext(url) });
-        json(res, { from, to, ...result });
+        const { buildSessionAnalytics, listSessionsForBrowser, resolveSessionSidecarPath } = require("./session-analytics");
+        const timeZoneContext = getTimeZoneContext(url);
+        const cacheParams = {
+          sidecarPath: resolveSessionSidecarPath(os.homedir()),
+          from,
+          to,
+          limit,
+          includeBuckets,
+          includeModelDetail,
+          ...timeZoneContext,
+        };
+        const beforeCacheKey = sessionsResponseCacheKey(cacheParams);
+        const cacheKey = refresh ? null : beforeCacheKey;
+        const cached = cacheKey ? getCachedSessionsResponse(cacheKey) : null;
+        if (cached) {
+          await sendSessionsResponse(req, res, cached);
+          return true;
+        }
+        const sessions = await buildSessionAnalytics({ recheck: refresh });
+        const result = listSessionsForBrowser(sessions, { from, to, limit, includeBuckets, includeModelDetail, ...timeZoneContext });
+        const afterBuildCacheKey = sessionsResponseCacheKey(cacheParams);
+        const body = JSON.stringify({ from, to, ...result });
+        const afterSerializeCacheKey = sessionsResponseCacheKey(cacheParams);
+        const incomplete = Boolean(sessions.sidecarReadFailed) ||
+          (Array.isArray(sessions.incompleteDirs) && sessions.incompleteDirs.length > 0) ||
+          result.skipped_files !== 0;
+        const cacheable = Boolean(afterBuildCacheKey) &&
+          afterBuildCacheKey === afterSerializeCacheKey &&
+          !incomplete;
+        const entry = rememberSessionsResponse(cacheable ? afterBuildCacheKey : null, Buffer.from(body));
+        await sendSessionsResponse(req, res, entry);
       } catch (error) {
         // Node fs errors embed the absolute path ("EACCES ... open '/Users/…'").
         // Keep that out of the HTTP body and log it locally instead.
@@ -2718,7 +2926,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         const src = row.source || "unknown";
         const mdl = row.model || "unknown";
         if (!bySource.has(src))
-          bySource.set(src, { source: src, source_scope: getSourceScope(src), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_cost_usd: "0" }, models: new Map() });
+          bySource.set(src, { source: src, source_scope: getSourceScope(src), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0, total_cost_usd: "0" }, models: new Map() });
         const sa = bySource.get(src);
         sa.totals.total_tokens += row.total_tokens || 0;
         sa.totals.billable_total_tokens += row.billable_total_tokens ?? row.total_tokens ?? 0;
@@ -2727,8 +2935,12 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         sa.totals.cached_input_tokens += row.cached_input_tokens || 0;
         sa.totals.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
         sa.totals.reasoning_output_tokens += row.reasoning_output_tokens || 0;
+        // Request-only sources (#948: credit-billed transcripts that report no
+        // tokens) carry their activity solely as conversation_count — thread it
+        // through so the dashboard can surface "0 tokens / N requests".
+        sa.totals.conversation_count += row.conversation_count || 0;
         if (!sa.models.has(mdl))
-          sa.models.set(mdl, { model: mdl, model_id: mdl, pricing: getModelPricingInfo(mdl, { source: src }), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_cost_usd: "0" } });
+          sa.models.set(mdl, { model: mdl, model_id: mdl, pricing: getModelPricingInfo(mdl, { source: src }), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0, total_cost_usd: "0" } });
         const ma = sa.models.get(mdl);
         const reportedCost = ["grok", "cline"].includes(src) && Number(row.total_cost_usd) > 0;
         const costSource = reportedCost ? "provider_reported" : "model_pricing";
@@ -2740,6 +2952,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         ma.totals.cached_input_tokens += row.cached_input_tokens || 0;
         ma.totals.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
         ma.totals.reasoning_output_tokens += row.reasoning_output_tokens || 0;
+        ma.totals.conversation_count += row.conversation_count || 0;
         // Price each row, exactly as aggregateByDay does for the hero (#653).
         // computeRowCost is not linear for models with a Fast tier or
         // long-context rates: priority_* / long_context_* mark a subset of the
@@ -2747,6 +2960,18 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         // row is intact. Summing the base columns first and pricing once silently
         // dropped every premium — same tokens, fewer dollars than the hero.
         ma.totals.total_cost_usd = Number(ma.totals.total_cost_usd || 0) + computeRowCost(row);
+        // Surface the Fast/Ultrafast split (issue 886): per-tier cost allocation
+        // plus the observed subset token columns. Tier costs and the implicit
+        // standard tier (total minus both) always add up to total_cost_usd.
+        const tierCosts = computeRowTierCosts(row);
+        ma.totals.priority_cost_usd = Number(ma.totals.priority_cost_usd || 0) + tierCosts.priority;
+        ma.totals.ultrafast_cost_usd = Number(ma.totals.ultrafast_cost_usd || 0) + tierCosts.ultrafast;
+        for (const prefix of SPEED_TIER_SUBSET_PREFIXES) {
+          for (const field of SPEED_TIER_SUBSET_TOKEN_FIELDS) {
+            const key = `${prefix}${field}`;
+            ma.totals[key] = (ma.totals[key] || 0) + (Number(row[key]) || 0);
+          }
+        }
       }
       if (pricingRevision !== getPricingRevision()) return handleLocalApi(req, res, url);
 
@@ -2754,7 +2979,12 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         s.models = Array.from(s.models.values())
           .map((m) => ({
             ...m,
-            totals: { ...m.totals, total_cost_usd: Number(m.totals.total_cost_usd || 0).toFixed(6) },
+            totals: {
+              ...m.totals,
+              total_cost_usd: Number(m.totals.total_cost_usd || 0).toFixed(6),
+              priority_cost_usd: Number(m.totals.priority_cost_usd || 0).toFixed(6),
+              ultrafast_cost_usd: Number(m.totals.ultrafast_cost_usd || 0).toFixed(6),
+            },
           }))
           .sort((a, b) => b.totals.total_tokens - a.totals.total_tokens);
         const sourceCost = s.models.reduce((sum, m) => sum + Number(m.totals.total_cost_usd), 0);
@@ -3672,7 +3902,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
 
     // --- usage-limits ---
     if (p === "/functions/tokentracker-usage-limits") {
-      const { getUsageLimits, resetUsageLimitsCache } = require("./usage-limits");
+      const { getUsageLimits, resetUsageLimitsCache, normalizeHiddenProviders } = require("./usage-limits");
       try {
         // Devin quota is opt-in (Settings > Usage & Limits > Providers). An
         // explicit devin=1 without local authentication is rejected before any
@@ -3683,7 +3913,14 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         const localAuthorized = isAuthorizedLocalMutation(req);
         const devinParam = url.searchParams.get("devin");
         const devinEnabled = devinParam === "1" || devinParam === "true";
-        if (devinEnabled && !localAuthorized) {
+        // Provider visibility gate (#956): hidden=<csv> names provider rows to
+        // skip entirely — no upstream call, no credential read. Like devin=1,
+        // an explicit list is honored only together with the loopback auth
+        // header (letting an unauthenticated caller scope the fetch would let
+        // it pick exactly which credentials to leave alone). Unknown ids are
+        // dropped by the normalizer, so the gate only ever narrows.
+        const hiddenProviders = normalizeHiddenProviders(url.searchParams.get("hidden"));
+        if ((devinEnabled || hiddenProviders) && !localAuthorized) {
           json(res, { error: "Unauthorized" }, 401);
           return true;
         }
@@ -3701,6 +3938,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           // cooldown) — an explicit user refresh should hit upstream.
           forceRefresh,
           devinEnabled,
+          hiddenProviders,
         });
         json(res, data);
       } catch (e) {

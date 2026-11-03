@@ -30,7 +30,7 @@ const path = require("node:path");
 const readline = require("node:readline");
 const { listClaudeProjectFiles, listRolloutFilesDeep, claudeMessageDedupKey, normalizeClaudeUsage, readZcodeDbMessages, coerceEpochMs, resolveZcodeInstallPaths, normalizeOpencodeModelFields, normalizeOpencodeTokens, deriveOpencodeMessageFingerprint, resolveDshHomes } = require("./rollout");
 const { parseCodexRolloutFile } = require("./codex-rollout-parser");
-const { computeRowCost, getModelPricingInfo } = require("./pricing");
+const { computeRowCost, getModelPricingInfo, getPricingRevision } = require("./pricing");
 const { normalizePerformance, mergePerformance, createClaudePerformanceCollector, createCodexPerformanceCollector, createZcodePerformanceCollector } = require("./session-performance");
 const { readSqliteJsonRows, readSqliteJsonRowsAsync } = require("./sqlite-reader");
 const { resolveZcodeNativeDbPath, resolveInstallPaths } = require("./install-resolver");
@@ -92,7 +92,11 @@ const {
 // v26 retains Codex Ultrafast (service_tier ultrafast) subset columns so
 // date-filtered session views and cached sidecars keep the 6x premium.
 // v27 adds oh-my-pi (omp) sessions from ~/.omp/agent/sessions/**/*.jsonl.
-const SIDECAR_VERSION = 27;
+// v28 records per-minute usage buckets for Claude and Grok, so date ranges
+// recompute in-range tokens/cost instead of falling back to lifetime totals.
+const SIDECAR_VERSION = 28;
+// Invalidate only Codex token summaries; other sources keep their cached rows.
+const CODEX_USAGE_VERSION = 1;
 const EDIT_TOOLS = new Set([
   "apply_patch",
   "edit",
@@ -556,6 +560,7 @@ async function scanClaudeSession(filePath) {
   const seenMessages = new Set();
   const performanceCollector = createClaudePerformanceCollector();
   const modelUsageByModel = new Map();
+  const usageBuckets = new Map();
   const editTurnsByModel = new Map();
   const bounds = emptyBounds();
   // The basename keeps grouping stable for files that never write a sessionId
@@ -650,6 +655,16 @@ async function scanClaudeSession(filePath) {
           addTotals(modelUsage, usage);
           modelUsage.usage_events += 1;
           modelUsageByModel.set(model, modelUsage);
+          const usageMs = Date.parse(obj.timestamp || obj.message.timestamp || "");
+          if (Number.isFinite(usageMs)) {
+            const timestamp = new Date(Math.floor(usageMs / 60_000) * 60_000).toISOString();
+            const bucketKey = `${timestamp}\u0000${model}`;
+            const bucket = usageBuckets.get(bucketKey) || { timestamp, model: model || "unknown", ...emptyTotals(), usage_events: 0 };
+            addTotals(bucket, usage);
+            mergeUsageMetadata(bucket, usage);
+            bucket.usage_events = finite(bucket.usage_events) + 1;
+            usageBuckets.set(bucketKey, bucket);
+          }
         }
         const content = Array.isArray(obj.message.content) ? obj.message.content : [];
         for (const block of content) {
@@ -694,6 +709,7 @@ async function scanClaudeSession(filePath) {
       edit_turns: finite(editTurnsByModel.get(row.model)),
       performance: performance.byModel.get(row.model) || normalizePerformance(),
     })),
+    usage_buckets: [...usageBuckets.values()],
     performance: performance.performance,
     ...bounds,
     turns,
@@ -803,6 +819,7 @@ async function scanCodexSession(filePath) {
     seenTokenEvents: new Set(),
     collectBreakdowns: false,
     collectModelUsage: true,
+    ledgerUsage: true,
     onObject(obj, model) {
       signalCollector.consume(obj, model);
       performanceCollector.consume(obj, model);
@@ -1013,6 +1030,7 @@ async function scanGrokSession(filePath) {
   const summary = readJsonFileSync(grokSummaryPathFor(filePath)) || {};
   const signals = readJsonFileSync(grokSignalsPathFor(filePath)) || {};
   const tokens = emptyTotals();
+  const usageBuckets = new Map();
   const bounds = emptyBounds();
   const dirName = path.basename(path.dirname(filePath));
   let observedSessionId = typeof summary?.info?.id === "string" && summary.info.id
@@ -1122,6 +1140,20 @@ async function scanGrokSession(filePath) {
             (providerCostUsd + normalizedUsage.total_cost_usd) * USD_TICKS_PER_USD,
           ) / USD_TICKS_PER_USD;
         }
+        const usageMs = Date.parse(grokTimestampIso(obj));
+        if (Number.isFinite(usageMs) && normalizedUsage.total_tokens > 0) {
+          const timestamp = new Date(Math.floor(usageMs / 60_000) * 60_000).toISOString();
+          const bucketModel = pickGrokModel(usage, model) || model || "unknown";
+          const bucketKey = `${timestamp}\u0000${bucketModel}`;
+          const bucket = usageBuckets.get(bucketKey) || { timestamp, model: bucketModel, ...emptyTotals(), usage_events: 0, provider_cost_usd: 0 };
+          addTotals(bucket, normalizedUsage);
+          mergeUsageMetadata(bucket, normalizedUsage);
+          bucket.usage_events = finite(bucket.usage_events) + 1;
+          if (normalizedUsage.total_cost_usd != null) {
+            bucket.provider_cost_usd = finite(bucket.provider_cost_usd) + Number(normalizedUsage.total_cost_usd);
+          }
+          usageBuckets.set(bucketKey, bucket);
+        }
       }
       const candidate = pickGrokModel(usage, model);
       if (candidate && candidate !== "unknown") model = candidate;
@@ -1169,6 +1201,7 @@ async function scanGrokSession(filePath) {
     subagent_calls: subagentCalls,
     subagent_types: Object.fromEntries([...subagentTypes.entries()].sort()),
     tokens,
+    usage_buckets: [...usageBuckets.values()],
     usage_events: usageEvents,
     usage_precision: usageIsIncomplete ? "reported_incomplete" : (usageEvents > 0 ? "reported" : "unavailable"),
     usage_is_incomplete: usageIsIncomplete,
@@ -2136,7 +2169,10 @@ function filesSignature(files) {
   for (const filePath of files) {
     try {
       const stat = fs.statSync(filePath);
-      hash.update(`${filePath}\0${stat.size}\0${stat.mtimeMs}\n`);
+      // Keep this in sync with sessionFileStatKey(): a size+mtime-only hash
+      // misses rewrites that preserve both (backup restore, mtime-preserving
+      // editors, atomic replace with identical size), while ctime changes.
+      hash.update(`${filePath}\0${stat.size}\0${stat.mtimeMs}\0${stat.ctimeMs}\n`);
     } catch { /* vanished during discovery */ }
   }
   return hash.digest("hex");
@@ -2235,13 +2271,49 @@ function analyticsEntryStatKey(source, filePath) {
   return sessionStat;
 }
 
+// The sidecar is a local, append-only JSONL snapshot that can be several MB.
+// Re-reading and reparsing it on every cache-hit request showed up as ~150ms on
+// a real 7.5MB sidecar. Cache the parsed+repriced rows by file identity and
+// pricing revision; writeAtomic() replaces the file (new mtime/ctime), so a
+// sync invalidates this naturally.
+const SIDECAR_READ_CACHE_MAX = 4;
+const sidecarReadCache = new Map();
+
 function readSidecar(sidecarPath) {
+  let fd;
   try {
-    return fs.readFileSync(sidecarPath, "utf8")
+    // Open once and use that descriptor for both stat and read, so a file
+    // replacement between the two operations cannot mix identities.
+    fd = fs.openSync(sidecarPath, "r");
+    const stat = fs.fstatSync(fd);
+    const cacheKey = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}:${getPricingRevision()}`;
+    const cached = sidecarReadCache.get(sidecarPath);
+    if (cached?.key === cacheKey) return cached.rows.map((row) => ({ ...row }));
+    const rows = fs.readFileSync(fd, "utf8")
       .split("\n")
       .filter(Boolean)
       .map((line) => repriceSessionRecord(JSON.parse(line)));
-  } catch { return []; }
+    sidecarReadCache.set(sidecarPath, { key: cacheKey, rows });
+    if (sidecarReadCache.size > SIDECAR_READ_CACHE_MAX) {
+      const oldest = sidecarReadCache.keys().next().value;
+      sidecarReadCache.delete(oldest);
+    }
+    return rows;
+  } catch {
+    const rows = [];
+    Object.defineProperty(rows, "sidecarReadFailed", { value: true, enumerable: false });
+    return rows;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+function readSidecarWithMeta(sidecarPath, meta) {
+  const rows = readSidecar(sidecarPath);
+  if (Number.isFinite(meta?.skipped_files)) {
+    Object.defineProperty(rows, "skippedFiles", { value: meta.skipped_files, enumerable: false });
+  }
+  return rows;
 }
 
 async function writeAtomic(filePath, content) {
@@ -2251,7 +2323,11 @@ async function writeAtomic(filePath, content) {
   await fsp.rename(temp, filePath);
 }
 
-async function buildSessionAnalyticsInternal({ home = os.homedir(), force = false, cacheTtlMs = 5 * 60_000 } = {}) {
+// `force` rescans every session file. `recheck` (a user-triggered refresh)
+// only ignores the TTL: it still reuses every file whose stat key is unchanged
+// and rescans the rest, so Refresh costs one directory walk plus the delta
+// instead of a full re-parse of all transcripts.
+async function buildSessionAnalyticsInternal({ home = os.homedir(), force = false, recheck = false, cacheTtlMs = 5 * 60_000 } = {}) {
   const sidecarPath = resolveSessionSidecarPath(home);
   const metaPath = `${sidecarPath}.meta.json`;
   // A lock/permission failure need not alter the database's stat signature.
@@ -2273,11 +2349,14 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       previousMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
       const checkedAt = Date.parse(previousMeta.checked_at || previousMeta.generated_at || "");
       if (
-        !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta.version === SIDECAR_VERSION &&
+        // `recheck` deliberately skips the TTL so Refresh always re-walks the
+        // directories; the per-file stat reuse below still avoids re-parsing.
+        !recheck &&
+        !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION &&
         Number.isFinite(checkedAt) &&
         Date.now() - checkedAt < Math.max(0, Number(cacheTtlMs) || 0)
       ) {
-        return readSidecar(sidecarPath);
+        return readSidecarWithMeta(sidecarPath, previousMeta);
       }
     } catch { /* first run */ }
   }
@@ -2290,7 +2369,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   if (incompleteDirs.length > 0) {
     warnIncompleteDiscovery(incompleteDirs);
     if (!force && previousMeta?.version === SIDECAR_VERSION) {
-      const cached = readSidecar(sidecarPath);
+      const cached = readSidecarWithMeta(sidecarPath, previousMeta);
       Object.defineProperty(cached, "incompleteDirs", { value: incompleteDirs, enumerable: false });
       return cached;
     }
@@ -2314,9 +2393,21 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     // db + its WAL sidecars: the trio is one logical file for change detection.
     ...[...(discovered.zcode || []), ...(discovered.opencode || [])].flatMap((dbPath) => [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]),
   ]);
-  if (!force && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.signature === signature) {
-    await writeAtomic(metaPath, `${JSON.stringify({ ...previousMeta, checked_at: new Date().toISOString() })}\n`);
-    return readSidecar(sidecarPath);
+  // The signature covers every discovered file's stat key, so an identical
+  // signature proves the cached rows are current — refresh included. The one
+  // exception: an explicit refresh re-parses after a previous run skipped a
+  // transcript, so a transient read/parse failure can recover without waiting
+  // for the file itself to change.
+  const retrySkippedOnRecheck = recheck && Number(previousMeta?.skipped_files) > 0;
+  if (!force && !retrySkippedOnRecheck && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.signature === signature) {
+    const cached = readSidecarWithMeta(sidecarPath, previousMeta);
+    // A missing/corrupt sidecar reads as an empty list. The source signature
+    // can still match, so only an explicit refresh used to notice the loss;
+    // rebuild instead of returning an empty cache.
+    if (!cached.sidecarReadFailed) {
+      await writeAtomic(metaPath, `${JSON.stringify({ ...previousMeta, checked_at: new Date().toISOString() })}\n`);
+      return cached;
+    }
   }
 
   const previousRows = !force && previousMeta?.version === SIDECAR_VERSION
@@ -2344,6 +2435,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   // vanished mid-scan). Swallowing these silently made sessions disappear with
   // no signal at all; count them so the API can say so.
   let skippedFiles = 0;
+  let incompleteCodexUsage = false;
   let incompleteZcodeScan = false;
   let incompleteOpencodeScan = false;
   let incompleteKimiScan = false;
@@ -2354,6 +2446,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     const statKey = analyticsEntryStatKey(entry.source, entry.filePath);
     if (!statKey) {
       skippedFiles += 1;
+      if (entry.source === "codex") incompleteCodexUsage = true;
       if (entry.source === "zcode") incompleteZcodeScan = true;
       if (entry.source === "opencode") incompleteOpencodeScan = true;
       if (entry.source === "kimi") incompleteKimiScan = true;
@@ -2362,7 +2455,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       continue;
     }
     let rows = null;
-    if (!force && !(entry.source === "zcode" && retryZcodeScan) && !(entry.source === "opencode" && retryOpencodeScan) && !(entry.source === "kimi" && retryKimiScan) && !(entry.source === "omp" && retryOmpScan) && !(entry.source === "dsh" && retryDshScan) && previousFiles[cacheKey]?.stat_key === statKey) {
+    if (!force && !(entry.source === "codex" && previousMeta?.codex_usage_version !== CODEX_USAGE_VERSION) && !(entry.source === "zcode" && retryZcodeScan) && !(entry.source === "opencode" && retryOpencodeScan) && !(entry.source === "kimi" && retryKimiScan) && !(entry.source === "omp" && retryOmpScan) && !(entry.source === "dsh" && retryDshScan) && previousFiles[cacheKey]?.stat_key === statKey) {
       if (entry.source === "zcode" || entry.source === "opencode" || entry.source === "kimi" || entry.source === "omp" || entry.source === "dsh") {
         // One db scans to many cached rows; recover them all from the previous
         // pass. An empty recovery means the sidecar lost its rows — rescan.
@@ -2392,6 +2485,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
         // One active/partial session must not poison the sidecar, but do not
         // pretend it never existed either.
         skippedFiles += 1;
+        if (entry.source === "codex") incompleteCodexUsage = true;
         if (entry.source === "zcode") incompleteZcodeScan = true;
         if (entry.source === "opencode") incompleteOpencodeScan = true;
         if (entry.source === "kimi") incompleteKimiScan = true;
@@ -2455,9 +2549,11 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     const generatedAt = new Date().toISOString();
     await writeAtomic(metaPath, `${JSON.stringify({
       version: SIDECAR_VERSION,
+      codex_usage_version: incompleteCodexUsage ? 0 : CODEX_USAGE_VERSION,
       signature,
       generated_at: generatedAt,
       checked_at: generatedAt,
+      skipped_files: skippedFiles,
       files: nextFiles,
     })}\n`);
     await fsp.rm(incompleteZcodePath, { force: true });
@@ -2483,17 +2579,22 @@ function buildSessionAnalytics(options = {}) {
   const normalizedOptions = options && typeof options === "object" ? options : {};
   const home = path.resolve(String(normalizedOptions.home || os.homedir()));
   const force = Boolean(normalizedOptions.force);
+  const recheck = Boolean(normalizedOptions.recheck);
   const existing = sessionAnalyticsBuilds.get(home);
   // Joining an in-flight build is only correct when that build is at least as
   // thorough as what this caller asked for. A refresh that landed while a plain
   // build was running used to be handed the un-refreshed result: the spinner
   // stopped and nothing had actually been re-scanned. Chain instead of joining
   // — never run two scans at once, they race the atomic sidecar write.
-  if (existing && (!force || existing.force)) return existing.promise;
+  if (existing && (!force && !recheck || existing.force || (recheck && existing.recheck))) return existing.promise;
 
-  const run = () => buildSessionAnalyticsInternal({ ...normalizedOptions, home, force });
+  const run = () => buildSessionAnalyticsInternal({ ...normalizedOptions, home, force, recheck });
   const promise = existing ? existing.promise.then(run, run) : run();
-  const entry = { promise, force: force || Boolean(existing?.force) };
+  const entry = {
+    promise,
+    force: force || Boolean(existing?.force),
+    recheck: recheck || Boolean(existing?.recheck),
+  };
   sessionAnalyticsBuilds.set(home, entry);
   const clear = () => {
     if (sessionAnalyticsBuilds.get(home) === entry) sessionAnalyticsBuilds.delete(home);
@@ -2524,7 +2625,9 @@ function withinDayRange(row, from, to, context) {
   const startDay = sessionUsageDay(row?.started_at || row?.ended_at || "", context);
   const endDay = sessionUsageDay(row?.ended_at || row?.started_at || "", context);
   if (from && (!endDay || endDay < from)) return false;
-  if (to && (!startDay || startDay > to)) return false;
+  // A row whose only timestamp is unreadable keeps the old client's tolerant
+  // behavior: it is dropped only when its known end day precedes the window.
+  if (to && startDay && startDay > to) return false;
   return true;
 }
 
@@ -2536,16 +2639,39 @@ function scopeSessionUsage(row, from, to, context) {
   });
   const tokens = emptyTotals();
   const byModel = new Map();
+  // Grok reports its own cost per turn; keep the in-range subset so a single
+  // day of a multi-day session does not inherit the lifetime total.
+  let bucketProviderCost = 0;
+  let bucketProviderCostEvents = 0;
   for (const bucket of buckets) {
+    if (Number.isFinite(Number(bucket.provider_cost_usd))) {
+      bucketProviderCost += Number(bucket.provider_cost_usd);
+      bucketProviderCostEvents += 1;
+    }
     addTotals(tokens, bucket);
-    const model = byModel.get(bucket.model) || { model: bucket.model, ...emptyTotals(), usage_events: 0 };
+    const previousModelUsage = Array.isArray(row.model_usage)
+      ? row.model_usage.find((usage) => usage.model === bucket.model)
+      : null;
+    // A record with no per-model breakdown reports exactly one model: its own
+    // label (that is what toSessionBrowserRow emits unscoped). Attribute its
+    // buckets to that label so the range view and the lifetime facets agree on
+    // a model name the filter can actually match.
+    const modelName = previousModelUsage ? previousModelUsage.model : (row.model || bucket.model);
+    const model = byModel.get(modelName) || {
+      ...(previousModelUsage || {}),
+      model: modelName,
+      ...Object.fromEntries(MODEL_USAGE_SUM_FIELDS.filter((field) => field !== "edit_turns").map((field) => [field, 0])),
+      usage_events: 0,
+    };
     addTotals(model, bucket);
     mergeUsageMetadata(model, bucket);
     if (!bucket.usage_events) model.usage_events += 1;
-    byModel.set(bucket.model, model);
+    byModel.set(modelName, model);
   }
+  const providerScoped = row.cost_source === "provider_reported" && bucketProviderCostEvents > 0;
   return repriceSessionRecord({ ...row, tokens, total_tokens: tokens.total_tokens,
     model_usage: [...byModel.values()], usage_buckets: buckets, cost_usd: 0,
+    ...(providerScoped ? { provider_cost_usd: bucketProviderCost } : {}),
     lifetime_total_tokens: row.total_tokens, lifetime_cost_usd: row.cost_usd });
 }
 
@@ -2754,7 +2880,21 @@ function resumeCommandFor(source, sessionId) {
   return null;
 }
 
-function toSessionBrowserRow(row) {
+// The list page reads a model name plus a token/cost/performance triple per
+// model row; the other counters in the dense 44-field model_usage row are not
+// read by the dashboard at all. Keeping this projection here (rather than
+// deleting fields at the HTTP layer) guarantees the shape stays declared by
+// dashboard/src/lib/sessions-api.ts.
+const BROWSER_MODEL_USAGE_FIELDS = ["model", "total_tokens", "cost_usd", "performance", "pricing"];
+
+function projectModelUsageForBrowser(rows, includeModelDetail) {
+  if (includeModelDetail) return rows;
+  return rows.map((row) => Object.fromEntries(
+    BROWSER_MODEL_USAGE_FIELDS.filter((field) => row[field] !== undefined).map((field) => [field, row[field]]),
+  ));
+}
+
+function toSessionBrowserRow(row, { includeBuckets = true, includeModelDetail = true } = {}) {
   const tokens = row.tokens && typeof row.tokens === "object" ? row.tokens : {};
   return {
     session_hash: row.session_hash,
@@ -2780,8 +2920,8 @@ function toSessionBrowserRow(row) {
     // browser can show where a session ran and compose a resume command.
     project_ref: row.project_ref || null,
     model: row.model,
-    model_usage: modelUsageForAggregation(row),
-    ...(Array.isArray(row.usage_buckets) ? { usage_buckets: row.usage_buckets } : {}),
+    model_usage: projectModelUsageForBrowser(modelUsageForAggregation(row), includeModelDetail),
+    ...(includeBuckets && Array.isArray(row.usage_buckets) ? { usage_buckets: row.usage_buckets } : {}),
     performance: normalizePerformance(row.performance),
     started_at: row.started_at || null,
     ended_at: row.ended_at || null,
@@ -3041,19 +3181,49 @@ function annotateThreadUsage(rows) {
   return rows;
 }
 
+// Distinct projects and models for the dashboard filter menus. Compute this
+// before applying the date window so a project/model with no rows in the
+// current range remains selectable (and can therefore be cleared again).
+function buildSessionBrowserFacets(rows) {
+  const projects = new Set();
+  const models = new Set();
+  for (const row of rows || []) {
+    if (row.project_key) projects.add(row.project_key);
+    // Mirror what toSessionBrowserRow() emits for an unscoped request:
+    // normalizeModelUsageRows() over the stored rows, else the row's own label.
+    // Bucket-only models are deliberately excluded — an unscoped row reports
+    // them as its label, so offering the bucket model would let the user filter
+    // out the very row that introduced the option.
+    const usageRows = normalizeModelUsageRows(row.model_usage);
+    if (usageRows.length === 0) {
+      if (typeof row.model === "string" && row.model) models.add(row.model);
+      continue;
+    }
+    for (const usage of usageRows) {
+      if (usage && typeof usage.model === "string" && usage.model) models.add(usage.model);
+    }
+  }
+  return {
+    projects: [...projects].sort((a, b) => String(a).localeCompare(String(b))),
+    models: [...models].sort((a, b) => String(a).localeCompare(String(b))),
+  };
+}
+
 // Local-only session list for the dashboard session browser. Unlike
 // summarizeSessions (cloud/CSV safe), this retains session_id + project_ref so
 // the UI can offer one-click resume. Callers must only expose it over the
 // local API.
-function listSessionsForBrowser(sessions, { from = "", to = "", limit = 0, timeZone, offsetMinutes } = {}) {
+function listSessionsForBrowser(sessions, { from = "", to = "", limit = 0, includeBuckets = true, includeModelDetail = true, timeZone, offsetMinutes } = {}) {
   const context = { timeZone, offsetMinutes };
-  const filtered = annotateThreadUsage(mergeSessionFragments(sessions)
-    // Only sessions that actually spent tokens are worth listing. This drops
-    // two kinds of noise: non-session logs under ~/.claude/projects
-    // (skill-injections.jsonl, journal.jsonl, …), and sessions abandoned before
-    // the model replied. Both render as "unknown · 0 tokens · $0.00" rows with
-    // no model, no cost and nothing to analyze.
-    .filter((row) => finite(row.total_tokens) > 0)
+  // Only sessions that actually spent tokens are worth listing. This drops
+  // two kinds of noise: non-session logs under ~/.claude/projects
+  // (skill-injections.jsonl, journal.jsonl, …), and sessions abandoned before
+  // the model replied. Both render as "unknown · 0 tokens · $0.00" rows with
+  // no model, no cost and nothing to analyze.
+  const merged = mergeSessionFragments(sessions)
+    .filter((row) => finite(row.total_tokens) > 0);
+  const facets = buildSessionBrowserFacets(merged);
+  const filtered = annotateThreadUsage(merged
     .filter((row) => withinDayRange(row, from, to, context))
     .map((row) => scopeSessionUsage(row, from, to, context))
     .filter((row) => !Array.isArray(row.usage_buckets) || finite(row.total_tokens) > 0));
@@ -3063,9 +3233,11 @@ function listSessionsForBrowser(sessions, { from = "", to = "", limit = 0, timeZ
   return {
     available: filtered.length > 0,
     session_count: filtered.length,
+    lifetime_session_count: merged.length,
     returned_count: limited.length,
     skipped_files: finite(sessions?.skippedFiles),
-    sessions: limited.map(toSessionBrowserRow),
+    facets,
+    sessions: limited.map((row) => toSessionBrowserRow(row, { includeBuckets, includeModelDetail })),
     provenance: {
       source: "local-session-log",
       confidence: "observed",

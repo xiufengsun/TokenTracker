@@ -4,7 +4,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { Bell, BellOff, CalendarClock, RefreshCw, Settings as SettingsIcon } from "lucide-react";
 import { Popover } from "@base-ui/react/popover";
 import { useUsageLimits } from "../hooks/use-usage-limits";
-import { useLimitsDisplayPrefs } from "../hooks/use-limits-display-prefs.js";
+import { hiddenProviderIds, useLimitsDisplayPrefs } from "../hooks/use-limits-display-prefs.js";
 import { copy, getCopyLocale } from "../lib/copy";
 import { LimitsPageSkeleton } from "../components/LimitsPageSkeleton.jsx";
 import { UsageLimitsPanel } from "../ui/dashboard/components/UsageLimitsPanel.jsx";
@@ -113,12 +113,26 @@ function NotificationBlockedBubble() {
 
 export function LimitsPage() {
   const preloadedUsageLimits = readUsageLimitsPreloadState();
+  const prefs = useLimitsDisplayPrefs();
+  // Effective fetch gate (issue 956): providers hidden in prefs, minus the ones a
+  // hand-entered subscription keeps on screen — the panel renders those rows
+  // regardless of visibility, so their data must keep flowing. The exception
+  // only holds while subscription display is on: with it off the panel omits
+  // those rows entirely, so their providers must stay gated. Null ref =
+  // initial subscription load still pending, so gate on prefs alone.
+  const subscriptionProviderIdsRef = React.useRef(null);
+  const getHiddenProviders = React.useCallback(() => {
+    const hidden = hiddenProviderIds();
+    if (!prefs.showSubscriptions) return hidden;
+    const backed = subscriptionProviderIdsRef.current;
+    if (!backed || backed.size === 0) return hidden;
+    return hidden.filter((id) => !backed.has(id));
+  }, [prefs.showSubscriptions]);
   const { data: usageLimits, error, isLoading, refresh } = useUsageLimits(
     preloadedUsageLimits
-      ? { initialRefresh: true, initialState: preloadedUsageLimits, publishToPreloadCache: true }
-      : { initialRefresh: true, publishToPreloadCache: true },
+      ? { initialRefresh: true, initialState: preloadedUsageLimits, publishToPreloadCache: true, getHiddenProviders }
+      : { initialRefresh: true, publishToPreloadCache: true, getHiddenProviders },
   );
-  const prefs = useLimitsDisplayPrefs();
   const alerts = useLimitAlertPrefs();
   const [subscriptions, setSubscriptions] = React.useState([]);
   const [subscriptionsError, setSubscriptionsError] = React.useState(false);
@@ -161,13 +175,40 @@ export function LimitsPage() {
       if (requestId !== subscriptionRefreshRef.current) return;
       setSubscriptions(rows);
       setSubscriptionsError(false);
+      // Track which providers a subscription keeps on screen (the fetch-gate
+      // exception set above). When the set changes the effective gate —
+      // including on the first load, where the mount fetch ran without
+      // subscription knowledge — re-read limits so a newly backed hidden row
+      // gets data instead of "not connected". With subscription display off
+      // the gate ignores subscriptions entirely, so no re-read is owed.
+      const providerIds = new Set(rows.map((row) => row?.provider).filter(Boolean));
+      const previous = subscriptionProviderIdsRef.current;
+      const prefsHidden = hiddenProviderIds();
+      const changed = previous === null
+        ? prefs.showSubscriptions && [...providerIds].some((id) => prefsHidden.includes(id))
+        : prefs.showSubscriptions
+          && (previous.size !== providerIds.size
+            || [...providerIds].some((id) => !previous.has(id)));
+      subscriptionProviderIdsRef.current = providerIds;
+      if (changed) void refresh();
     } catch (_e) {
       if (requestId !== subscriptionRefreshRef.current) return;
       // Keep the rows already on screen: wiping them would make a transient
       // fetch failure look like the subscriptions were deleted.
       setSubscriptionsError(true);
     }
-  }, []);
+  }, [prefs.showSubscriptions, refresh]);
+
+  // Toggling subscription display flips whether hidden providers with a
+  // hand-entered subscription stay in the fetch gate — re-read under the new
+  // effective gate.
+  const previousShowSubscriptions = React.useRef(prefs.showSubscriptions);
+  React.useEffect(() => {
+    if (previousShowSubscriptions.current === prefs.showSubscriptions) return;
+    previousShowSubscriptions.current = prefs.showSubscriptions;
+    if (!IS_LOCAL_HOST && !isMockEnabled()) return;
+    void refresh();
+  }, [prefs.showSubscriptions, refresh]);
 
   React.useEffect(() => {
     void refreshSubscriptions();
@@ -318,6 +359,7 @@ export function LimitsPage() {
                 devin={usageLimits?.devin}
                 workbuddy={usageLimits?.workbuddy}
                 workbuddyAi={usageLimits?.workbuddyAi}
+                deepseek={usageLimits?.deepseek}
                 order={prefs.order}
                 visibility={prefs.visibility}
                 displayMode={prefs.displayMode}

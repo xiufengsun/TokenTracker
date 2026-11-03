@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-28T23:10:54.027Z",
+  "generatedAt": "2026-11-01T05:13:47.070Z",
   "root": "dashboard/src",
   "rules": {
     "colors": "hex/rgb(a) literals",
@@ -7,7 +7,7 @@
   },
   "totals": {
     "colors": 404,
-    "rawText": 163
+    "rawText": 166
   },
   "files": {
     "dashboard/src/components/InsforgeUserHeaderControls.jsx": {
@@ -433,9 +433,11 @@
     },
     "dashboard/src/ui/dashboard/components/UsageOverview.jsx": {
       "colors": 13,
-      "rawText": 2,
+      "rawText": 5,
       "rawTextTokens": [
         "0 && (",
+        "0) && (",
+        "0)); if (!rows.length) return null; return (",
         "1 ? ("
       ]
     },

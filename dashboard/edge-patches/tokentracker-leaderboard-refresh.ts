@@ -146,6 +146,10 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "claude-opus-5-fast": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
   "claude-opus-4-6": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
   "claude-opus-4-5-20250414": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+  // Bare undated alias (LiteLLM key "claude-opus-4-5", standard Opus tier).
+  // Promoted from LiteLLM-only coverage so cloud account views price the
+  // bare id exactly like local (#929).
+  "claude-opus-4-5": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
   "claude-sonnet-5": { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
   "claude-opus-5-5": { input: 4, output: 20, cache_read: 0.2, cache_write: 5 },
   "claude-sonnet-5-5": { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
@@ -179,6 +183,10 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "gpt-5.2-codex-high": { input: 1.75, output: 14, cache_read: 0.175 },
   "gpt-5.3-codex": { input: 1.75, output: 14, cache_read: 0.175 },
   "gpt-5.3-codex-high": { input: 1.75, output: 14, cache_read: 0.175 },
+  // Codex spark capacity tier — not a separate LiteLLM key; local
+  // (reverse-substring) and the gpt-5.3 matcher below both bill the base
+  // gpt-5.3-codex rate. Exact entry pins that on the cloud side too (#929).
+  "gpt-5.3-codex-spark": { input: 1.75, output: 14, cache_read: 0.175 },
   "gpt-5.4": { input: 2.5, output: 15, cache_read: 0.25 },
   "gpt-5.4-mini": { input: 0.75, output: 4.5, cache_read: 0.075 },
   // gpt-5.4-pro per developers.openai.com/api/docs/pricing; cache_read 3
@@ -210,6 +218,11 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   // https://developers.openai.com/api/docs/models/gpt-6.1-terra
   // Cache write uses 30-minute retention ($1.25). Fast is 2x; Ultrafast not published.
   "gpt-6.1-terra": { input: 1, output: 5, cache_read: 0.05, cache_write: 1.25 },
+  // GPT-6 Luna lightweight tier, Standard USD/MTok (LiteLLM entry sourced
+  // from developers.openai.com/api/docs/pricing, cached 2026-10-31):
+  // $0.10/$0.50, cache_read $0.01, cache_write $0.125. Distinct from
+  // gpt-5.6-luna. Promoted from LiteLLM-only coverage (#929).
+  "gpt-6-luna": { input: 0.1, output: 0.5, cache_read: 0.01, cache_write: 0.125 },
   "gpt-5-mini": { input: 0.25, output: 2, cache_read: 0.025 },
   "o3": { input: 2, output: 8, cache_read: 0.5 },
   // ── Google Gemini ──
@@ -326,6 +339,11 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "mimo-v2-pro-free": { input: 0, output: 0, cache_read: 0 },
   "muse-spark-1.2-contributor-free": { input: 0, output: 0, cache_read: 0, cache_write: 0 },
   "muse-spark-1.3-contributor-free": { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+  // Paid Muse contributor SKUs — LiteLLM provider-qualified entries agree on
+  // $0.10/$0.20 per MTok, $0.002 cache read (meta and opencode_go). Promoted
+  // from LiteLLM prefix-strip coverage so cloud account views price them (#929).
+  "muse-spark-1.2-contributor": { input: 0.1, output: 0.2, cache_read: 0.002 },
+  "muse-spark-1.3-contributor": { input: 0.1, output: 0.2, cache_read: 0.002 },
   "minimax-m2.1-free": { input: 0, output: 0, cache_read: 0 },
   "MiniMax-M2.1": { input: 0.5, output: 3, cache_read: 0.05 },
   // ── Xiaomi MiMo (mirrored from src/lib/pricing/seed-snapshot.json LiteLLM

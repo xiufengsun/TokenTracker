@@ -5,26 +5,43 @@ import { LIMIT_ALERTS_PREF_KEY } from "./use-limit-alert-prefs";
 import { sendPredictiveLimitAlerts } from "../lib/limit-alerts.js";
 import { useLatestRequestGuard } from "./use-latest-request-guard";
 import {
+  hiddenProviderIds,
   isDevinProviderSelected,
   isLimitsPrefsStorageKey,
   LIMITS_PREFS_CHANGED_EVENT,
 } from "./use-limits-display-prefs.js";
 
 /**
- * Devin rows must never outlive the user's provider selection: when the
- * switch is off the server is not asked, and any retained/preloaded payload
- * that still carries Devin data is rewritten to the not-configured shape.
+ * Hidden provider rows must never outlive the user's provider selection
+ * (issue 956): when a switch is off the server is not asked for that provider, and
+ * any retained/preloaded payload that still carries its data is rewritten to
+ * the not-configured shape — the same sentinel an opted-out Devin row uses.
  */
-function withoutUnselectedDevin(
+function withoutHiddenProviders(
   value: UsageLimitsData | null,
-  devinSelected: boolean,
+  hiddenProviders: readonly string[],
 ): UsageLimitsData | null {
-  if (!value || devinSelected) return value;
-  if (!value.devin) return value;
-  // Preserve identity only for the exact empty sentinel, never a disabled
-  // payload that still carries quota windows or provider metadata.
-  if (value.devin.configured === false && Object.keys(value.devin).length === 1) return value;
-  return { ...value, devin: { configured: false } };
+  if (!value || hiddenProviders.length === 0) return value;
+  const hidden = new Set(hiddenProviders);
+  let changed = false;
+  const next = { ...(value as unknown as Record<string, unknown>) };
+  for (const key of Object.keys(next)) {
+    if (key === "fetched_at" || !hidden.has(key)) continue;
+    const row = next[key];
+    // Preserve identity only for the exact empty sentinel, never a disabled
+    // payload that still carries quota windows or provider metadata.
+    if (
+      row
+      && typeof row === "object"
+      && (row as { configured?: unknown }).configured === false
+      && Object.keys(row).length === 1
+    ) {
+      continue;
+    }
+    next[key] = { configured: false };
+    changed = true;
+  }
+  return changed ? (next as unknown as UsageLimitsData) : value;
 }
 
 type CodexLimitWindow = {
@@ -125,6 +142,16 @@ interface UsageLimitsData {
     stale?: boolean;
     cached_at?: string | null;
   };
+  // Pay-as-you-go balance card (issue 960): no quota windows, one row per currency.
+  deepseek?: {
+    configured: boolean;
+    error?: string | null;
+    is_available?: boolean;
+    balances?: ReadonlyArray<{ currency: string; total: number; granted: number; topped_up: number }>;
+    credential_source?: string | null;
+    stale?: boolean;
+    cached_at?: string | null;
+  };
 }
 
 interface UsageLimitsInitialState {
@@ -137,6 +164,14 @@ interface UseUsageLimitsOptions {
   initialRefresh?: boolean;
   initialState?: UsageLimitsInitialState | null;
   publishToPreloadCache?: boolean;
+  /**
+   * Overrides the prefs-derived hidden set with the effective one (issue 956).
+   * LimitsPage subtracts subscription-backed providers — a hidden row a
+   * hand-entered subscription keeps on screen must stay in the fetch so the
+   * row never degrades to "not connected". Consulted at request time; the
+   * hook still tracks the prefs-derived set itself so a toggle refetches.
+   */
+  getHiddenProviders?: () => readonly string[];
 }
 
 export function useUsageLimits(options?: UseUsageLimitsOptions) {
@@ -146,11 +181,31 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
   // Kept in state so a toggle invalidates in-flight work via the
   // latest-request guard below and re-renders with the new selection.
   const [devinSelected, setDevinSelected] = useState(isDevinProviderSelected);
+  const [hiddenProviders, setHiddenProviders] = useState<readonly string[]>(hiddenProviderIds);
+  // Latest getter by ref: the request path always consults the caller's
+  // current view of the effective hidden set without re-subscribing effects.
+  const getHiddenRef = useRef(options?.getHiddenProviders);
+  getHiddenRef.current = options?.getHiddenProviders;
+  const currentHidden = useCallback(
+    (): readonly string[] => getHiddenRef.current?.() ?? hiddenProviders,
+    [hiddenProviders],
+  );
+  // The set used to strip retained/preloaded payloads: the effective hidden
+  // set PLUS Devin whenever its opt-in is off — the flag gates the request,
+  // but a payload fetched before the toggle must still lose its Devin rows
+  // immediately (same contract as the pre-gating withoutUnselectedDevin).
+  const applyHidden = useCallback(
+    (): readonly string[] => {
+      const effective = currentHidden();
+      return devinSelected ? effective : ["devin", ...effective];
+    },
+    [currentHidden, devinSelected],
+  );
   const [data, setData] = useState<UsageLimitsData | null>(() => (
     hasInitialState
-      ? withoutUnselectedDevin(
+      ? withoutHiddenProviders(
           options?.initialState?.data ?? null,
-          isDevinProviderSelected(),
+          applyHidden(),
         )
       : null
   ));
@@ -164,17 +219,22 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
   // user clicks Refresh while the dashboard's preload request is still
   // resolving). Keep only the newest response. Without this guard a slower
   // cache response can overwrite fresh limits fetched by the manual request.
-  // The selection is a guard dependency: flipping the Devin switch
-  // invalidates every request issued under the previous selection, so a late
-  // response fetched while it was enabled can never republish Devin rows.
-  const beginRequest = useLatestRequestGuard([devinSelected, localEnabled]);
+  // The selection is a guard dependency: flipping the Devin switch or any
+  // visibility toggle invalidates every request issued under the previous
+  // selection, so a late response fetched while it was enabled can never
+  // republish rows the user has since hidden.
+  const hiddenKey = hiddenProviders.join(",");
+  const beginRequest = useLatestRequestGuard([devinSelected, hiddenKey, localEnabled]);
 
   // Re-read the saved selection when limits preferences change. Same-window
   // toggles and native-mirror writes arrive via LIMITS_PREFS_CHANGED_EVENT;
   // cross-tab changes arrive via the storage event.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const syncSelection = () => setDevinSelected(isDevinProviderSelected());
+    const syncSelection = () => {
+      setDevinSelected(isDevinProviderSelected());
+      setHiddenProviders(hiddenProviderIds());
+    };
     const onStorage = (event: StorageEvent) => {
       if (isLimitsPrefsStorageKey(event.key)) syncSelection();
     };
@@ -199,11 +259,11 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
     (value: UsageLimitsData | null, source: "page-load" | "manual-refresh") => {
       if (!localEnabled || !publishToPreloadCache || !value || typeof value !== "object") return;
       publishUsageLimitsPreloadState(
-        withoutUnselectedDevin(value, isDevinProviderSelected()),
+        withoutHiddenProviders(value, applyHidden()),
         { source },
       );
     },
-    [localEnabled, publishToPreloadCache],
+    [currentHidden, localEnabled, publishToPreloadCache],
   );
 
   // Forced manual refresh. Resolves with the payload that was applied (the
@@ -218,10 +278,11 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
       const res = await getUsageLimits({
         refresh: true,
         devinEnabled: isDevinProviderSelected(),
+        hiddenProviders: currentHidden(),
       });
       if (!isCurrent()) return null;
       const nextData = res && typeof res === "object" ? res as UsageLimitsData : null;
-      const next = withoutUnselectedDevin(nextData, isDevinProviderSelected());
+      const next = withoutHiddenProviders(nextData, applyHidden());
       setData(next);
       setError(null);
       setIsLoading(false);
@@ -233,7 +294,7 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
       setIsLoading(false);
       return null;
     }
-  }, [beginRequest, localEnabled, publishSuccessfulState]);
+  }, [applyHidden, beginRequest, currentHidden, localEnabled, publishSuccessfulState]);
 
   const refreshFromServerCache = useCallback(async () => {
     if (!localEnabled) return;
@@ -244,10 +305,11 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
       // is what tripped Claude's OAuth usage endpoint rate limit).
       const res = await getUsageLimits({
         devinEnabled: isDevinProviderSelected(),
+        hiddenProviders: currentHidden(),
       });
       if (!isCurrent()) return;
       const nextData = res && typeof res === "object" ? res as UsageLimitsData : null;
-      setData(withoutUnselectedDevin(nextData, isDevinProviderSelected()));
+      setData(withoutHiddenProviders(nextData, applyHidden()));
       setError(null);
       setIsLoading(false);
       publishSuccessfulState(nextData, "page-load");
@@ -256,7 +318,7 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
       setError((err as Error)?.message || String(err));
       setIsLoading(false);
     }
-  }, [beginRequest, localEnabled, publishSuccessfulState]);
+  }, [applyHidden, beginRequest, currentHidden, localEnabled, publishSuccessfulState]);
 
   // Auto-refresh when the dashboard regains focus / becomes visible again —
   // same throttled pattern as use-usage-data.ts, so a left-open Limits page
@@ -280,19 +342,19 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
     };
   }, [localEnabled, refreshFromServerCache]);
 
-  // A selection change invalidates in-flight work via the guard dependency,
-  // drops retained Devin rows immediately when the provider was turned off,
-  // and re-reads the server cache under the new selection.
-  const previousDevinSelected = useRef(devinSelected);
+  // A selection change (Devin opt-in or any visibility toggle) invalidates
+  // in-flight work via the guard dependency, drops retained rows for newly
+  // hidden providers immediately, and re-reads the server cache under the new
+  // selection.
+  const previousSelectionKey = useRef(`${isDevinProviderSelected()}|${hiddenProviderIds().join(",")}`);
   useEffect(() => {
-    if (previousDevinSelected.current === devinSelected) return;
-    previousDevinSelected.current = devinSelected;
+    const selectionKey = `${devinSelected}|${hiddenProviders.join(",")}`;
+    if (previousSelectionKey.current === selectionKey) return;
+    previousSelectionKey.current = selectionKey;
     if (!localEnabled) return;
-    if (!devinSelected) {
-      setData((current) => withoutUnselectedDevin(current, false));
-    }
+    setData((current) => withoutHiddenProviders(current, applyHidden()));
     void refreshFromServerCache();
-  }, [devinSelected, localEnabled, refreshFromServerCache]);
+  }, [applyHidden, devinSelected, hiddenProviders, localEnabled, refreshFromServerCache]);
 
   useEffect(() => {
     if (!localEnabled) {
@@ -310,10 +372,11 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
         // Claude's OAuth usage endpoint rate limit. Only the manual refresh() forces upstream.
         const res = await getUsageLimits({
           devinEnabled: isDevinProviderSelected(),
+          hiddenProviders: currentHidden(),
         });
         if (!isCurrent()) return;
         const nextData = res && typeof res === "object" ? res as UsageLimitsData : null;
-        setData(withoutUnselectedDevin(nextData, isDevinProviderSelected()));
+        setData(withoutHiddenProviders(nextData, applyHidden()));
         setError(null);
         publishSuccessfulState(nextData, "page-load");
       } catch (err) {

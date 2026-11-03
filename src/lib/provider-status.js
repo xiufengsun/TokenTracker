@@ -9,6 +9,9 @@
 // Statuspage.io contract (`/api/v2/status.json`):
 //   { "page": { "updated_at": ISO }, "status": { "indicator": "none|minor|major|critical", "description": "..." } }
 
+const { parseDeepSeekStatusPage } = require("./deepseek-status");
+const { parseOpenCodeStatusPayload } = require("./opencode-status");
+
 const STATUS_PROBE_TIMEOUT_MS = 6_000;
 // Status pages change on incident timescales; 5 minutes keeps the limits
 // poll (2-min TTL upstream) from hammering statuspage.io every cycle.
@@ -22,6 +25,20 @@ const STATUS_PAGE_SPECS = {
     // status.anthropic.com 302-redirects here; use the canonical host directly.
     apiUrl: "https://status.claude.com/api/v2/status.json",
     pageUrl: "https://status.claude.com",
+  },
+  deepseek: {
+    // Flashcat-hosted Next.js page: no public JSON API and no CORS. Relayed
+    // server-side here; `format` switches the fetch to HTML + RSC parsing.
+    apiUrl: "https://status.deepseek.com/",
+    pageUrl: "https://status.deepseek.com",
+    format: "deepseek-rsc",
+  },
+  opencode: {
+    // Official status feed (custom JSON schema) served without CORS headers.
+    // Relayed server-side; `format` selects the payload parser below.
+    apiUrl: "https://status.opencode.ai/api/status",
+    pageUrl: "https://status.opencode.ai",
+    format: "opencode-json",
   },
 };
 
@@ -70,11 +87,19 @@ async function fetchProviderServiceStatus(providerId, { fetchImpl = fetch, nowMs
     try {
       const res = await fetchImpl(spec.apiUrl, {
         method: "GET",
-        headers: { Accept: "application/json" },
+        headers: { Accept: spec.format === "deepseek-rsc" ? "text/html" : "application/json" },
         signal: controller.signal,
       });
       if (res.ok) {
-        data = normalizeStatusPayload(await res.json(), spec, nowMs);
+        let payload;
+        if (spec.format === "deepseek-rsc") {
+          payload = parseDeepSeekStatusPage(await res.text());
+        } else if (spec.format === "opencode-json") {
+          payload = parseOpenCodeStatusPayload(await res.json());
+        } else {
+          payload = await res.json();
+        }
+        data = normalizeStatusPayload(payload, spec, nowMs);
       }
     } finally {
       clearTimeout(timer);

@@ -64,3 +64,15 @@ it("keeps an exact total when the server sends no pricing metadata", () => {
   expect(screen.queryByText(/≥/)).not.toBeInTheDocument();
   expect(screen.queryByText("Unpriced")).not.toBeInTheDocument();
 });
+
+it("keeps request-only (zero-token) providers out of the dollar ranking", () => {
+  render(<CostAnalysisModal isOpen onClose={() => {}} fleetData={[{
+    label: "QODER", usd: 0, usage: 0,
+    models: [{ name: "qfmodel", usage: 0, cost: 0 }],
+  }, {
+    label: "GROK", usd: 2, usage: 900,
+    models: [{ name: "grok-code", usage: 900, cost: 2 }],
+  }]} />);
+  expect(screen.getByText("GROK")).toBeTruthy();
+  expect(screen.queryByText("QODER")).toBeNull();
+});
