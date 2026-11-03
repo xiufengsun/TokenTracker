@@ -107,6 +107,10 @@ async function cmdServe(argv) {
       process.stdout.write("Sync done.\n");
     } catch (e) {
       process.stdout.write(`Sync warning: ${e?.message || e}\n`);
+    } finally {
+      if (typeof global.gc === "function") {
+        try { global.gc(); } catch {}
+      }
     }
   }
 
@@ -350,6 +354,14 @@ function startNativeBackgroundSync({
       ...process.env,
       TOKENTRACKER_WSL_MODE: "native-only",
     };
+    if (typeof backgroundEnv.NODE_OPTIONS === "string") {
+      const stripped = backgroundEnv.NODE_OPTIONS.replace(/--max-old-space-size=\d+\s*/g, "").trim();
+      if (stripped) {
+        backgroundEnv.NODE_OPTIONS = stripped;
+      } else {
+        delete backgroundEnv.NODE_OPTIONS;
+      }
+    }
     const pending = Promise.resolve()
       .then(() => sync(["--auto", "--background", "--all-local-sources"], { env: backgroundEnv }))
       .catch((error) => {
@@ -357,6 +369,9 @@ function startNativeBackgroundSync({
       })
       .finally(() => {
         if (inFlight === pending) inFlight = null;
+        if (typeof global.gc === "function") {
+          try { global.gc(); } catch {}
+        }
       });
     inFlight = pending;
     return pending;

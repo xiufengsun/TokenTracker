@@ -3815,6 +3815,18 @@ async function cmdSync(argv, context = {}) {
       );
     }
 
+    // Safe log compaction when queue files exceed redundancy thresholds.
+    // When cloud sync is active, queue.jsonl only compacts once pendingBytes
+    // have drained, preserving the unuploaded backlog budget for the upload window.
+    try {
+      if (!canUpload() || pendingBytes <= 0) {
+        compactQueueFile(queuePath, false, queueStatePath);
+      }
+      if (projectQueuePath) {
+        compactQueueFile(projectQueuePath, true, null);
+      }
+    } catch (_e) {}
+
     // Anonymous daily heartbeat (shared 24h throttle with serve — see
     // src/lib/telemetry.js). Awaited because hook-spawned sync processes exit
     // right after this function returns, which would kill an in-flight
@@ -3937,7 +3949,102 @@ function recordCodexColdScanAudit(
   cursors.codexColdScanAudit = next;
 }
 
+function compactQueueFile(filePath, isProjectQueue = false, queueStatePath = null) {
+  if (!filePath) return false;
+  let raw;
+  try {
+    raw = fssync.readFileSync(filePath, "utf8");
+  } catch (_e) {
+    return false;
+  }
+  if (!raw || !raw.trim()) return false;
+
+  const originalSize = Buffer.byteLength(raw, "utf8");
+  let state = null;
+  if (queueStatePath) {
+    try {
+      const parsed = JSON.parse(fssync.readFileSync(queueStatePath, "utf8"));
+      if (!parsed || typeof parsed !== "object") return false;
+      state = parsed;
+    } catch (err) {
+      if (!err || err.code !== "ENOENT") return false;
+    }
+    if (state && Number.isFinite(state.offset) && state.offset > 0 && state.offset < originalSize) {
+      return false;
+    }
+  }
+
+  const lines = raw.split("\n");
+  let lineCount = 0;
+  const latestByKey = new Map();
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    lineCount++;
+    try {
+      const row = JSON.parse(trimmed);
+      let key;
+      if (isProjectQueue) {
+        key = `${row.project_key || ""}|${row.source || ""}|${row.hour_start || ""}`;
+      } else if (row.kind === "account_session_state") {
+        const ssSource = typeof row.source === "string" ? row.source.trim().toLowerCase() : "";
+        const ssId = typeof row.session_id === "string" ? row.session_id.trim() : "";
+        key = `account_session_state|${ssSource}|${ssId}`;
+        const verifiedMs = sessionSnapshotMs(row);
+        const prior = latestByKey.get(key);
+        if (!prior || (verifiedMs !== null && (prior.verifiedMs === null || verifiedMs > prior.verifiedMs))) {
+          latestByKey.set(key, { line: trimmed, order: i, verifiedMs });
+        }
+        continue;
+      } else if (row.kind === "account_sync_watermark") {
+        key = `account_sync_watermark|${row.source || ""}`;
+      } else {
+        key = `${row.source || ""}|${row.model || ""}|${row.hour_start || ""}`;
+      }
+      latestByKey.set(key, { line: trimmed, order: i });
+    } catch (_e) {
+      latestByKey.set(`raw_unparseable_${i}`, { line: trimmed, order: i });
+    }
+  }
+
+  const uniqueCount = latestByKey.size;
+  const shouldCompact =
+    lineCount > uniqueCount &&
+    (lineCount > 5000 || (lineCount > 100 && lineCount > 2 * uniqueCount));
+  if (!shouldCompact) return false;
+
+  const compacted = Array.from(latestByKey.values())
+    .sort((a, b) => a.order - b.order)
+    .map((item) => item.line)
+    .join("\n") + "\n";
+
+  const tmpPath = `${filePath}.tmp.${process.pid}`;
+  try {
+    fssync.writeFileSync(tmpPath, compacted, "utf8");
+    fssync.renameSync(tmpPath, filePath);
+
+    if (queueStatePath && state && Number.isFinite(state.offset) && state.offset >= originalSize) {
+      try {
+        state.offset = Buffer.byteLength(compacted, "utf8");
+        state.updatedAt = new Date().toISOString();
+        const stateTmpPath = `${queueStatePath}.tmp.${process.pid}`;
+        fssync.writeFileSync(stateTmpPath, JSON.stringify(state, null, 2) + "\n", "utf8");
+        fssync.renameSync(stateTmpPath, queueStatePath);
+      } catch (_e) {}
+    }
+    return true;
+  } catch (_err) {
+    try {
+      fssync.unlinkSync(tmpPath);
+    } catch {}
+    return false;
+  }
+}
+
 module.exports = {
+  compactQueueFile,
   formatSyncUploadSummaryLine,
   cmdSync,
   acquireSyncLock,

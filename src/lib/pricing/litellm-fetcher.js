@@ -42,7 +42,12 @@ async function loadSeedSnapshot() {
   // sync avoids a race with caller's synchronous lookup if seed must answer
   // immediately.
   try {
-    return readJsonSync(SEED_SNAPSHOT_PATH);
+    const data = readJsonSync(SEED_SNAPSHOT_PATH);
+    try {
+      const resolved = require.resolve(SEED_SNAPSHOT_PATH);
+      if (require.cache[resolved]) delete require.cache[resolved];
+    } catch {}
+    return data;
   } catch (e) {
     // Tolerate missing seed in dev environments where the build script
     // hasn't run yet. Empty data = LiteLLM lookup miss = falls back to
