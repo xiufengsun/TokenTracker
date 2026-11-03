@@ -643,5 +643,16 @@
   "cloud.free.device_scope": "현재 기기의 사용량만 집계",
   "cloud.plan.includes_local": "무료 로컬 기능 모두 포함",
   "cloud.plan.device_sync": "기기 수 제한 없이 사용량 통합·동기화",
-  "cloud.plan.device_fair_use": "일상적인 개인 사용은 기기 수 제한이나 기기별 추가 요금이 없습니다. 대량 또는 비정상적인 기기 연결에는 동기화 보호가 적용될 수 있습니다."
+  "cloud.plan.device_fair_use": "일상적인 개인 사용은 기기 수 제한이나 기기별 추가 요금이 없습니다. 대량 또는 비정상적인 기기 연결에는 동기화 보호가 적용될 수 있습니다.",
+  "heatmap.view.claude": "Claude",
+  "heatmap.view.codex": "Codex",
+  "heatmap.resets.claude.tab_title": "Claude Code 사용 한도 초기화",
+  "heatmap.resets.codex.tab_title": "Codex 사용 한도 초기화",
+  "heatmap.resets.type.regular": "자동 초기화",
+  "heatmap.resets.type.banked": "보관된 초기화",
+  "heatmap.resets.legend.none": "초기화 없음",
+  "heatmap.resets.tooltip.none": "이 날 발표된 초기화가 없습니다.",
+  "heatmap.resets.loading": "초기화 기록을 불러오는 중…",
+  "heatmap.resets.error": "초기화 기록을 불러올 수 없습니다.",
+  "heatmap.resets.source": "출처: claude-resets.com"
 }

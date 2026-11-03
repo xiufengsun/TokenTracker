@@ -236,6 +236,17 @@ heatmap.unit.tokens,ui,ActivityHeatmap,ActivityHeatmap,unit_tokens,"tokens",,act
 heatmap.iso.aria,ui,ActivityHeatmap,ActivityHeatmap3D,iso_aria,"3D isometric activity heatmap",,active
 heatmap.view.2d,ui,ActivityHeatmap,ActivityHeatmap,view_2d,"2D",,active
 heatmap.view.3d,ui,ActivityHeatmap,ActivityHeatmap,view_3d,"3D",,active
+heatmap.view.claude,ui,ActivityHeatmap,ActivityHeatmap,view_claude,"Claude",,active
+heatmap.view.codex,ui,ActivityHeatmap,ActivityHeatmap,view_codex,"Codex",,active
+heatmap.resets.claude.tab_title,ui,ActivityHeatmap,ActivityHeatmap,resets_claude_tab_title,"Claude Code usage-limit resets",,active
+heatmap.resets.codex.tab_title,ui,ActivityHeatmap,ActivityHeatmap,resets_codex_tab_title,"Codex usage-limit resets",,active
+heatmap.resets.type.regular,ui,ActivityHeatmap,ActivityHeatmap,resets_type_regular,"Automatic reset",,active
+heatmap.resets.type.banked,ui,ActivityHeatmap,ActivityHeatmap,resets_type_banked,"Banked reset",,active
+heatmap.resets.legend.none,ui,ActivityHeatmap,ActivityHeatmap,resets_legend_none,"No reset",,active
+heatmap.resets.tooltip.none,ui,ActivityHeatmap,ActivityHeatmap,resets_tooltip_none,"No reset announced this day.",,active
+heatmap.resets.loading,ui,ActivityHeatmap,ActivityHeatmap,resets_loading,"Loading reset history…",,active
+heatmap.resets.error,ui,ActivityHeatmap,ActivityHeatmap,resets_error,"Couldn't load reset history.",,active
+heatmap.resets.source,ui,ActivityHeatmap,ActivityHeatmap,resets_source,"Source: claude-resets.com",,active
 heatmap.month.jan,ui,ActivityHeatmap,ActivityHeatmap,month_label,"Jan",,active
 heatmap.month.feb,ui,ActivityHeatmap,ActivityHeatmap,month_label,"Feb",,active
 heatmap.month.mar,ui,ActivityHeatmap,ActivityHeatmap,month_label,"Mar",,active

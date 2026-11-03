@@ -1148,6 +1148,7 @@ export function DashboardPage({
       heatmap={heatmap}
       timeZoneLabel={timeZoneLabel}
       timeZoneShortLabel={timeZoneShortLabel}
+      timeZone={timeZone}
       hideLegend={screenshotMode}
       defaultToLatestMonth={screenshotMode}
     />

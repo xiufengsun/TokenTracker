@@ -8,6 +8,9 @@ import { useTokenFormat } from "../../../hooks/useTokenFormat.js";
 import { formatUsdCurrency } from "../../../lib/format";
 import { TOKEN_FORMAT_MODES } from "../../../lib/token-format.js";
 import { ActivityHeatmap3D, PALETTES, getAITooltipMessage } from "./ActivityHeatmap3D";
+import { useProviderResets } from "../../../hooks/use-provider-resets.js";
+import { groupResetsByDay } from "../../../lib/provider-resets.js";
+import { ResetLegend, ResetTooltipBody, resetCellClassName } from "./ResetHeatmapParts.jsx";
 import { Maximize2, RotateCcw, X, Flame, Terminal, TrendingUp, Info, Play, Pause } from "lucide-react";
 
 const CELL_SIZE = 12;
@@ -21,6 +24,13 @@ const HEATMAP_COLORS_LIGHT = [
   "#34d399", // level 3
   "#10b981", // level 4
 ];
+
+// Extra tabs that colour the grid by provider-wide usage-limit resets.
+const RESET_VIEWS = [
+  { id: "claude", label: () => copy("heatmap.view.claude"), title: () => copy("heatmap.resets.claude.tab_title") },
+  { id: "codex", label: () => copy("heatmap.view.codex"), title: () => copy("heatmap.resets.codex.tab_title") },
+];
+const HEATMAP_VIEWS = ["2d", "3d", ...RESET_VIEWS.map((v) => v.id)];
 
 const HEATMAP_COLORS_DARK = [
   "#121212", // level 0 - inactive, ultra-dark neutral for OLED-black integration
@@ -82,6 +92,8 @@ export function ActivityHeatmap({
   heatmap,
   timeZoneLabel,
   timeZoneShortLabel,
+  // IANA zone of the day buckets; reset timestamps are bucketed the same way.
+  timeZone,
   hideLegend = false,
   // When `true`, the heatmap renders bare: no outer card chrome (rounded
   // border + bg + padding), no inner title row (heading + 2D/3D toggle +
@@ -252,7 +264,7 @@ export function ActivityHeatmap({
     if (embedded) return "2d";
     try {
       const stored = window.localStorage?.getItem("tt:heatmap-view");
-      return stored === "3d" ? "3d" : "2d";
+      return HEATMAP_VIEWS.includes(stored) ? stored : "2d";
     } catch {
       return "2d";
     }
@@ -264,16 +276,24 @@ export function ActivityHeatmap({
     try { window.localStorage?.setItem("tt:heatmap-view", view); } catch { /* ignore */ }
   }, [view, embedded]);
 
+  const isResetView = RESET_VIEWS.some((v) => v.id === view);
+  const showGrid = view === "2d" || isResetView;
+  const resets = useProviderResets({ enabled: isResetView });
+  const resetsByDay = useMemo(
+    () => (isResetView ? groupResetsByDay(resets.data?.[view], { timeZone }) : null),
+    [isResetView, resets.data, view, timeZone],
+  );
+
   useEffect(() => {
     // Re-run on `view` too: the 2D grid is conditionally rendered, so when the
     // user starts in 3D the scroll container isn't mounted. Switching to 2D
     // mounts it fresh at scrollLeft=0 (oldest months) — without `view` in the
     // deps this effect wouldn't fire again and the grid would default to ~12
     // months ago instead of the current month (rightmost).
-    if (view !== "2d") return;
+    if (!showGrid) return;
     const el = scrollRef.current;
     if (el) el.scrollLeft = el.scrollWidth;
-  }, [heatmap?.weeks, view]);
+  }, [heatmap?.weeks, showGrid]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -474,6 +494,23 @@ export function ActivityHeatmap({
             >
               {copy("heatmap.view.3d")}
             </button>
+            {RESET_VIEWS.map(({ id, label, title }) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={view === id}
+                onClick={() => setView(id)}
+                title={title()}
+                className={
+                  view === id
+                    ? "px-2 py-0.5 rounded bg-oai-gray-100 text-oai-black dark:bg-oai-gray-800 dark:text-oai-white font-medium"
+                    : "px-2 py-0.5 rounded text-oai-gray-500 dark:text-oai-gray-400 hover:text-oai-gray-700 dark:hover:text-oai-gray-200"
+                }
+              >
+                {label()}
+              </button>
+            ))}
           </div>
 
 
@@ -502,7 +539,7 @@ export function ActivityHeatmap({
 
 
       {/* Heatmap — scroll to latest (rightmost) on mount */}
-      {view === "2d" && (
+      {showGrid && (
       <div
         ref={scrollRef}
         className={`overflow-x-auto overflow-y-hidden heatmap-scroll-thin${embedded ? "" : " pb-1"}`}
@@ -558,14 +595,16 @@ export function ActivityHeatmap({
                   if (!cell) return null;
                   const key = cell.day || `e-${wi}-${di}`;
                   const level = Number(cell.level) || 0;
-                  const color = heatmapColors[level] || heatmapColors[0];
+                  const resetClass = isResetView ? resetCellClassName(resetsByDay?.get(cell.day)) : null;
+                  const color = isResetView ? heatmapColors[0] : heatmapColors[level] || heatmapColors[0];
                   return (
                     <span
                       key={key}
+                      data-day={cell.day || undefined}
                       onMouseEnter={(e) => handleCellMouseEnter(e, cell)}
                       onMouseLeave={handleCellMouseLeave}
-                      className="rounded-[2px] transition-transform hover:scale-125 hover:z-10 cursor-pointer"
-                      style={{ width: cellSize, height: cellSize, background: color }}
+                      className={`rounded-[2px] transition-transform hover:scale-125 hover:z-10 cursor-pointer${resetClass ? ` ${resetClass}` : ""}`}
+                      style={{ width: cellSize, height: cellSize, ...(resetClass ? null : { background: color }) }}
                     />
                   );
                 })
@@ -577,7 +616,14 @@ export function ActivityHeatmap({
       )}
 
       {/* Legend */}
-      {!hideLegend && (
+      {!hideLegend && isResetView && (
+        <ResetLegend
+          emptyColor={heatmapColors[0]}
+          loading={resets.loading}
+          error={resets.error}
+        />
+      )}
+      {!hideLegend && !isResetView && (
         <div className="flex items-center justify-center gap-2 mt-3">
           <span className="text-[10px] text-oai-gray-400 dark:text-oai-gray-400">{copy("heatmap.legend.less")}</span>
           <div className="flex gap-0.5">
@@ -884,6 +930,9 @@ export function ActivityHeatmap({
               transform: `translateX(calc(-50% + ${tooltipPos.shiftX}px))`,
             }}
           >
+            {isResetView ? (
+              <ResetTooltipBody day={hoveredCell.day} bucket={resetsByDay?.get(hoveredCell.day)} />
+            ) : (<>
             {/* 顶栏 */}
             <div className="flex items-center justify-between border-b border-oai-gray-100 dark:border-oai-gray-800/80 pb-1.5">
               <span className="text-[11px] font-semibold text-oai-gray-500 dark:text-oai-gray-400">
@@ -973,6 +1022,7 @@ export function ActivityHeatmap({
                 </p>
               )}
             </div>
+            </>)}
           </div>
           
           {/* 小尾巴（默认朝下指向单元格；翻转时朝上） */}

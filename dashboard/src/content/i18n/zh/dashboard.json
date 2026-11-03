@@ -1041,5 +1041,16 @@
   "cloud.plan.device_fair_use": "日常个人使用不限设备数量，不按设备收费；大量或异常设备接入可能触发同步保护。",
   "leaderboard.profile_modal.window.lifetime": "总额为全历史；活跃天数、日均及用量分布为 {{from}} 至 {{to}}。",
   "leaderboard.profile_modal.window.period": "统计范围为 {{from}} 至 {{to}}。",
-  "leaderboard.profile_modal.window.average": "该窗口花费除以 {{days}} 个日历日，包含无使用量的日期。"
+  "leaderboard.profile_modal.window.average": "该窗口花费除以 {{days}} 个日历日，包含无使用量的日期。",
+  "heatmap.view.claude": "Claude",
+  "heatmap.view.codex": "Codex",
+  "heatmap.resets.claude.tab_title": "Claude Code 用量限额重置",
+  "heatmap.resets.codex.tab_title": "Codex 用量限额重置",
+  "heatmap.resets.type.regular": "自动重置",
+  "heatmap.resets.type.banked": "存储重置",
+  "heatmap.resets.legend.none": "无重置",
+  "heatmap.resets.tooltip.none": "当天没有公布重置。",
+  "heatmap.resets.loading": "正在加载重置记录…",
+  "heatmap.resets.error": "无法加载重置记录。",
+  "heatmap.resets.source": "来源：claude-resets.com"
 }
