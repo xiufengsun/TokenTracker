@@ -688,6 +688,7 @@ interface Totals {
   cached_input_tokens: number;
   cache_creation_input_tokens: number;
   reasoning_output_tokens: number;
+  conversation_count: number;
   total_cost_usd: string;
 }
 
@@ -707,10 +708,13 @@ interface GroupedRow {
 }
 
 // [source, model, pricing_tier, total, input, output, cache_read, cache_write,
-// reasoning] already summed over [from, to], as returned by
-// account_model_breakdown_compact.
+// reasoning, conversations] already summed over [from, to], as returned by
+// account_model_breakdown_compact. Conversations rides at index 9 so
+// request-only rows (0 tokens, N requests) survive the fold (#990); rows from
+// a database that predates that column simply stop at index 8.
 type CompactDim = [string | null, string | null, string | null, number | string,
-  number | string, number | string, number | string, number | string, number | string];
+  number | string, number | string, number | string, number | string, number | string,
+  number | string];
 
 interface ModelBreakdownWire {
   source_names: (string | null)[];
@@ -730,6 +734,7 @@ function decodeModelBreakdownWire(data: unknown): CompactDim[] {
   return wire.dims.map((row): CompactDim => [
     wire.source_names[row[0]], wire.model_names[row[1]], wire.pricing_tiers[row[2]],
     token(row, 3), token(row, 4), token(row, 5), token(row, 6), token(row, 7), token(row, 8),
+    token(row, 9),
   ]);
 }
 
@@ -903,8 +908,9 @@ async function handleAccountRequest(req: Request): Promise<Response> {
   // The RPC bucketed each row to its local day (honoring tz / tz_offset_minutes)
   // and kept only the days in [from, to] — same inclusive semantics as the
   // `r.bucket >= from && r.bucket <= to` filter this used to do here — then
-  // summed the days away. `bucket` and `conversations` are gone because nothing
-  // below reads them.
+  // summed the days away. `bucket` is gone; conversations survives as the
+  // compact's 10th column because the totals below surface it as the request
+  // counts that keep request-only rows visible (#990).
   const filtered: GroupedRow[] = dims.map((d) => ({
     bucket: "",
     source: d[0] as string,
@@ -916,7 +922,7 @@ async function handleAccountRequest(req: Request): Promise<Response> {
     cached_input_tokens: Number(d[6]) || 0,
     cache_creation_input_tokens: Number(d[7]) || 0,
     reasoning_output_tokens: Number(d[8]) || 0,
-    conversations: 0,
+    conversations: Number(d[9]) || 0,
   }));
 
   interface ModelAgg {
@@ -939,6 +945,7 @@ async function handleAccountRequest(req: Request): Promise<Response> {
     cached_input_tokens: 0,
     cache_creation_input_tokens: 0,
     reasoning_output_tokens: 0,
+    conversation_count: 0,
     total_cost_usd: "0",
   });
 
@@ -959,6 +966,10 @@ async function handleAccountRequest(req: Request): Promise<Response> {
     sa.totals.cached_input_tokens += Number(row.cached_input_tokens) || 0;
     sa.totals.cache_creation_input_tokens += Number(row.cache_creation_input_tokens) || 0;
     sa.totals.reasoning_output_tokens += Number(row.reasoning_output_tokens) || 0;
+    // Request-only sources (#948: credit-billed transcripts that report no
+    // tokens) carry their activity solely as conversation_count — thread it
+    // through so the dashboard can surface "0 tokens / N requests" (#990).
+    sa.totals.conversation_count += Number(row.conversations) || 0;
 
     let ma = sa.models.get(mdl);
     if (!ma) {
@@ -972,6 +983,7 @@ async function handleAccountRequest(req: Request): Promise<Response> {
     ma.totals.cached_input_tokens += Number(row.cached_input_tokens) || 0;
     ma.totals.cache_creation_input_tokens += Number(row.cache_creation_input_tokens) || 0;
     ma.totals.reasoning_output_tokens += Number(row.reasoning_output_tokens) || 0;
+    ma.totals.conversation_count += Number(row.conversations) || 0;
     const unslothUnpriced = src === "unsloth" && /^(local|unpriced)\//i.test(mdl);
     const modelForPricing = unslothUnpriced
       ? "__tokentracker_unpriced_unsloth_model__"
