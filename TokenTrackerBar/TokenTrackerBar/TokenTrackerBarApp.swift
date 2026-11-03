@@ -166,7 +166,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let launchEvent = NSAppleEventManager.shared().currentAppleEvent
         let launchedAsLoginItem = launchEvent?
             .attributeDescriptor(forKeyword: keyAELaunchedAsLogInItem) != nil
-        let loginItemRegistered = SMAppService.mainApp.status == .enabled
+        // SMAppService is macOS 13+; the app target still deploys to 12.0, so
+        // the direct call needs an availability guard (pre-13 legacy login
+        // items are still detected via the event's login-item attribute).
+        let loginItemRegistered: Bool
+        if #available(macOS 13, *) {
+            loginItemRegistered = SMAppService.mainApp.status == .enabled
+        } else {
+            loginItemRegistered = false
+        }
         if LoginLaunchPresentationPolicy.shouldOpenDashboardOnLaunch(
             launchAppleEventPresent: launchEvent != nil,
             launchedAsLoginItem: launchedAsLoginItem,
