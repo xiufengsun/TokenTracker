@@ -15,6 +15,14 @@ updates:
       # Major bumps are reviewed manually — keep update PRs low-noise.
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # Payment SDK, exact-pinned at 0.25.0 across the whole build chain: the
+      # self-host build asserts node_modules/lockfile hold exactly 0.25.0, the
+      # esbuild resolvers match the `npm:@waffo/pancake-ts@0.25.0` specifier,
+      # and the source import itself carries the pin. SDK acceptance was
+      # recorded against 0.25.0, so a bump deterministically fails the
+      # self-host fixture suite. Upgrade manually, with re-acceptance —
+      # never in a routine dependency sweep.
+      - dependency-name: "@waffo/pancake-ts"
     commit-message:
       prefix: chore
 
