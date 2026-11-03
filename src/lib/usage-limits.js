@@ -31,6 +31,7 @@ const {
 const { fetchGrokLimits, grokTokenSubject, loadGrokAuthEntry } = require("./grok-limits");
 const {
   createLimitsCache,
+  parseTimeMs,
   withLimitsCacheFallback,
 } = require("./limits-cache");
 const { fetchZcodeLimits } = require("./zcode-limits");
@@ -2581,47 +2582,23 @@ async function detectAntigravityProcess({
   return { configured: false };
 }
 
-function resolveAntigravityLimitsCachePath({ home } = {}) {
-  return path.join(home || os.homedir(), ".tokentracker", "tracker", ANTIGRAVITY_LIMITS_CACHE_FILE);
-}
-
-function parseTimeMs(value) {
-  if (typeof value !== "string" || !value) return null;
-  const ts = Date.parse(value);
-  return Number.isFinite(ts) && ts > 0 ? ts : null;
-}
-
-function isCacheWindowUsable(window, { cachedAtMs, nowMs } = {}) {
-  if (!window || typeof window !== "object") return false;
-  const resetAtMs = parseTimeMs(window.reset_at);
-  if (resetAtMs !== null) return resetAtMs > nowMs;
-  return Number.isFinite(cachedAtMs)
-    && nowMs - cachedAtMs <= ANTIGRAVITY_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS;
-}
+// Last-good cache for the Antigravity quota summary. Windows without a reset
+// stamp are bounded by the 12h unknown-reset TTL instead of living as long as
+// the snapshot; the read is gated off entirely by the disable flag.
+const antigravityLimitsCache = createLimitsCache({
+  file: ANTIGRAVITY_LIMITS_CACHE_FILE,
+  key: "antigravity",
+  maxAgeMs: ANTIGRAVITY_LIMITS_CACHE_MAX_AGE_MS,
+  unknownResetTtlMs: ANTIGRAVITY_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS,
+  fields: { account_email: "string", account_plan: "string" },
+  windowKeys: ["primary_window", "secondary_window", "tertiary_window", "quaternary_window"],
+  cachedFlag: true,
+  // The cached annotation is this provider's own marker — no stale flag.
+  stale: null,
+});
 
 function hasAntigravityWindow(limits) {
   return Boolean(limits?.primary_window || limits?.secondary_window || limits?.tertiary_window || limits?.quaternary_window);
-}
-
-function normalizeAntigravityCachedLimits(raw, { nowMs = Date.now() } = {}) {
-  const cachedAtMs = parseTimeMs(raw?.cached_at);
-  if (!Number.isFinite(cachedAtMs)) return null;
-  if (cachedAtMs > nowMs + 60_000) return null;
-  if (nowMs - cachedAtMs > ANTIGRAVITY_LIMITS_CACHE_MAX_AGE_MS) return null;
-
-  const cached = {
-    configured: true,
-    error: null,
-    account_email: typeof raw?.account_email === "string" ? raw.account_email : null,
-    account_plan: typeof raw?.account_plan === "string" ? raw.account_plan : null,
-    primary_window: isCacheWindowUsable(raw?.primary_window, { cachedAtMs, nowMs }) ? raw.primary_window : null,
-    secondary_window: isCacheWindowUsable(raw?.secondary_window, { cachedAtMs, nowMs }) ? raw.secondary_window : null,
-    tertiary_window: isCacheWindowUsable(raw?.tertiary_window, { cachedAtMs, nowMs }) ? raw.tertiary_window : null,
-    quaternary_window: isCacheWindowUsable(raw?.quaternary_window, { cachedAtMs, nowMs }) ? raw.quaternary_window : null,
-    cached: true,
-    cached_at: raw.cached_at,
-  };
-  return hasAntigravityWindow(cached) ? cached : null;
 }
 
 function isAntigravityQuotaDisabled() {
@@ -2630,35 +2607,11 @@ function isAntigravityQuotaDisabled() {
 
 function readAntigravityLimitsCache({ home, nowMs = Date.now() } = {}) {
   if (isAntigravityQuotaDisabled()) return null;
-  const cachePath = resolveAntigravityLimitsCachePath({ home });
-  try {
-    const parsed = JSON.parse(fs.readFileSync(cachePath, "utf8"));
-    return normalizeAntigravityCachedLimits(parsed?.antigravity, { nowMs });
-  } catch (_error) {
-    return null;
-  }
+  return antigravityLimitsCache.read({ home, nowMs });
 }
 
 function writeAntigravityLimitsCache(limits, { home, nowMs = Date.now() } = {}) {
-  if (!limits?.configured || limits.error || !hasAntigravityWindow(limits)) return;
-  const cachePath = resolveAntigravityLimitsCachePath({ home });
-  const payload = {
-    antigravity: {
-      account_email: limits.account_email || null,
-      account_plan: limits.account_plan || null,
-      primary_window: limits.primary_window || null,
-      secondary_window: limits.secondary_window || null,
-      tertiary_window: limits.tertiary_window || null,
-      quaternary_window: limits.quaternary_window || null,
-      cached_at: new Date(nowMs).toISOString(),
-    },
-  };
-  try {
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const tmpPath = `${cachePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(tmpPath, cachePath);
-  } catch (_error) {}
+  antigravityLimitsCache.write(limits, { home, nowMs });
 }
 
 function resolveClaudeLimitsCachePath({ home } = {}) {
@@ -2860,177 +2813,73 @@ function writeClaudeLimitsCache(limits, { home, nowMs = Date.now() } = {}) {
   } catch (_error) {}
 }
 
-function resolveCodexLimitsCachePath({ home } = {}) {
-  return path.join(home || os.homedir(), ".tokentracker", "tracker", CODEX_LIMITS_CACHE_FILE);
-}
+// Codex windows carry `reset_at` as unix seconds (not an ISO string). A window
+// whose reset has already passed is stale data, not a usable fallback, so drop
+// it; windows without a reset stamp are kept — the cached_at max-age gate
+// already bounds them.
+const codexLimitsCache = createLimitsCache({
+  file: CODEX_LIMITS_CACHE_FILE,
+  key: "codex",
+  maxAgeMs: CODEX_LIMITS_CACHE_MAX_AGE_MS,
+  fields: {
+    plan_type: "string",
+    reset_credits: { write: (record) => record?.reset_credits || null, read: (raw) => raw?.reset_credits ?? null },
+  },
+  windowKeys: ["primary_window", "secondary_window", "credit_window", "spark_primary_window", "spark_secondary_window"],
+  resetTimeMode: "unix-seconds",
+});
 
-// Codex windows carry `reset_at` as unix seconds (not an ISO string). A window whose reset has
-// already passed is stale data, not a usable fallback, so drop it. Windows without a reset stamp
-// are kept — the overall cached_at max-age gate already bounds them.
-function isCodexCacheWindowUsable(window, { nowMs } = {}) {
-  if (!window || typeof window !== "object") return false;
-  const resetAt = Number(window.reset_at);
-  if (!Number.isFinite(resetAt) || resetAt <= 0) return true;
-  return resetAt * 1000 > nowMs;
-}
-
-function hasCodexWindow(limits) {
-  return Boolean(
-    limits?.primary_window
-    || limits?.secondary_window
-    || limits?.credit_window
-    || limits?.spark_primary_window
-    || limits?.spark_secondary_window,
-  );
-}
-
-function normalizeCodexCachedLimits(
-  raw,
-  { nowMs = Date.now(), maxAgeMs = CODEX_LIMITS_CACHE_MAX_AGE_MS } = {},
-) {
-  const cachedAtMs = parseTimeMs(raw?.cached_at);
-  if (!Number.isFinite(cachedAtMs)) return null;
-  if (cachedAtMs > nowMs + 60_000) return null;
-  if (nowMs - cachedAtMs > maxAgeMs) return null;
-
-  const cached = {
-    configured: true,
-    error: null,
-    plan_type: typeof raw?.plan_type === "string" ? raw.plan_type : null,
-    primary_window: isCodexCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
-    secondary_window: isCodexCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
-    credit_window: isCodexCacheWindowUsable(raw?.credit_window, { nowMs }) ? raw.credit_window : null,
-    spark_primary_window: isCodexCacheWindowUsable(raw?.spark_primary_window, { nowMs }) ? raw.spark_primary_window : null,
-    spark_secondary_window: isCodexCacheWindowUsable(raw?.spark_secondary_window, { nowMs }) ? raw.spark_secondary_window : null,
-    reset_credits: raw?.reset_credits ?? null,
-    stale: true,
-    cached_at: raw.cached_at,
-  };
-  return hasCodexWindow(cached) ? cached : null;
-}
-
-function readCodexLimitsCache({ home, nowMs = Date.now(), maxAgeMs = CODEX_LIMITS_CACHE_MAX_AGE_MS } = {}) {
-  const cachePath = resolveCodexLimitsCachePath({ home });
-  try {
-    const parsed = JSON.parse(fs.readFileSync(cachePath, "utf8"));
-    return normalizeCodexCachedLimits(parsed?.codex, { nowMs, maxAgeMs });
-  } catch (_error) {
-    return null;
-  }
+function readCodexLimitsCache({ home, nowMs = Date.now(), maxAgeMs } = {}) {
+  return codexLimitsCache.read({ home, nowMs, maxAgeMs });
 }
 
 function writeCodexLimitsCache(limits, { home, nowMs = Date.now() } = {}) {
-  if (!limits?.configured || limits.error || !hasCodexWindow(limits)) return;
-  const cachePath = resolveCodexLimitsCachePath({ home });
-  const payload = {
-    codex: {
-      plan_type: limits.plan_type || null,
-      primary_window: limits.primary_window || null,
-      secondary_window: limits.secondary_window || null,
-      credit_window: limits.credit_window || null,
-      spark_primary_window: limits.spark_primary_window || null,
-      spark_secondary_window: limits.spark_secondary_window || null,
-      reset_credits: limits.reset_credits || null,
-      cached_at: new Date(nowMs).toISOString(),
-    },
-  };
-  try {
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const tmpPath = `${cachePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(tmpPath, cachePath);
-  } catch (_error) {}
+  codexLimitsCache.write(limits, { home, nowMs });
 }
 
+const opencodeGoLimitsCache = createLimitsCache({
+  file: OPENCODE_GO_LIMITS_CACHE_FILE,
+  key: "opencodeGo",
+  // The max-age is source-dependent: local estimates are heuristic readings,
+  // not provider truth, so they expire within the hour.
+  maxAgeMs: (raw) => (raw?.source === "local-estimate"
+    ? OPENCODE_GO_LOCAL_ESTIMATE_CACHE_MAX_AGE_MS
+    : OPENCODE_GO_LIMITS_CACHE_MAX_AGE_MS),
+  fields: {
+    source: {
+      write: (record) => record?.source || "api",
+      read: (raw) => (typeof raw?.source === "string" ? raw.source : "api"),
+    },
+    credential_source: {
+      write: (record) => (record?.credential_source === "env" || record?.credential_source === "stored"
+        ? record.credential_source
+        : null),
+      read: (raw) => (raw?.credential_source === "env" || raw?.credential_source === "stored"
+        ? raw.credential_source
+        : null),
+    },
+    subscription_status: "string",
+    plan_label: "string",
+  },
+  windowKeys: ["primary_window", "secondary_window", "tertiary_window"],
+});
+
 function resolveOpencodeGoLimitsCachePath({ trackerDir, home } = {}) {
-  const dir =
-    typeof trackerDir === "string" && trackerDir.trim()
-      ? trackerDir.trim()
-      : path.join(home || os.homedir(), ".tokentracker", "tracker");
-  return path.join(dir, OPENCODE_GO_LIMITS_CACHE_FILE);
+  return opencodeGoLimitsCache.path({ trackerDir, home });
 }
 
 function hasOpencodeGoWindow(limits) {
   return Boolean(limits?.primary_window || limits?.secondary_window || limits?.tertiary_window);
 }
 
-function isOpencodeGoCacheWindowUsable(window, { nowMs } = {}) {
-  if (!window || typeof window !== "object") return false;
-  const resetAtMs = parseTimeMs(window.reset_at);
-  if (resetAtMs === null) return true;
-  return resetAtMs > nowMs;
-}
-
-function normalizeOpencodeGoCachedLimits(
-  raw,
-  { nowMs = Date.now(), maxAgeMs } = {},
-) {
-  const effectiveMaxAge = Number.isFinite(maxAgeMs)
-    ? maxAgeMs
-    : raw?.source === "local-estimate"
-      ? OPENCODE_GO_LOCAL_ESTIMATE_CACHE_MAX_AGE_MS
-      : OPENCODE_GO_LIMITS_CACHE_MAX_AGE_MS;
-  const cachedAtMs = parseTimeMs(raw?.cached_at);
-  if (!Number.isFinite(cachedAtMs)) return null;
-  if (cachedAtMs > nowMs + 60_000) return null;
-  if (nowMs - cachedAtMs > effectiveMaxAge) return null;
-
-  const credentialSource =
-    raw?.credential_source === "env" || raw?.credential_source === "stored"
-      ? raw.credential_source
-      : null;
-  const cached = {
-    configured: true,
-    error: null,
-    source: typeof raw?.source === "string" ? raw.source : "api",
-    credential_source: credentialSource,
-    subscription_status: typeof raw?.subscription_status === "string" ? raw.subscription_status : null,
-    plan_label: typeof raw?.plan_label === "string" ? raw.plan_label : null,
-    primary_window: isOpencodeGoCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
-    secondary_window: isOpencodeGoCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
-    tertiary_window: isOpencodeGoCacheWindowUsable(raw?.tertiary_window, { nowMs }) ? raw.tertiary_window : null,
-    stale: true,
-    cached_at: raw.cached_at,
-  };
-  return hasOpencodeGoWindow(cached) ? cached : null;
-}
-
 function readOpencodeGoLimitsCache({ trackerDir, home, nowMs = Date.now() } = {}) {
-  const cachePath = resolveOpencodeGoLimitsCachePath({ trackerDir, home });
-  try {
-    const parsed = JSON.parse(fs.readFileSync(cachePath, "utf8"));
-    return normalizeOpencodeGoCachedLimits(parsed?.opencodeGo, { nowMs });
-  } catch (_error) {
-    return null;
-  }
+  return opencodeGoLimitsCache.read({ trackerDir, home, nowMs });
 }
 
 function writeOpencodeGoLimitsCache(limits, { trackerDir, home, nowMs = Date.now() } = {}) {
-  if (!limits?.configured || limits.error || !hasOpencodeGoWindow(limits)) return;
-  const cachePath = resolveOpencodeGoLimitsCachePath({ trackerDir, home });
-  const credentialSource =
-    limits.credential_source === "env" || limits.credential_source === "stored"
-      ? limits.credential_source
-      : null;
-  const payload = {
-    opencodeGo: {
-      source: limits.source || "api",
-      credential_source: credentialSource,
-      subscription_status: limits.subscription_status || null,
-      plan_label: limits.plan_label || null,
-      primary_window: limits.primary_window || null,
-      secondary_window: limits.secondary_window || null,
-      tertiary_window: limits.tertiary_window || null,
-      cached_at: new Date(nowMs).toISOString(),
-    },
-  };
-  try {
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const tmpPath = `${cachePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(tmpPath, cachePath);
-  } catch (_error) {}
+  opencodeGoLimitsCache.write(limits, { trackerDir, home, nowMs });
 }
+
 
 // The signed-in Cursor account partitions the cache (zcode login-identity precedent):
 // the id is the non-secret normalized subject Cursor itself puts in the session cookie.
