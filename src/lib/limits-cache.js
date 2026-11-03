@@ -416,8 +416,11 @@ async function withLimitsCacheFallback(slot, {
 
   // The slot's error object loses the fetcher's identity field when the outer
   // timeout race wins (the common failure mode this cache exists for), so the
-  // read identity is re-derived here on the failure-only path.
-  const readOptions = beforeRead ? beforeRead(slot) : {};
+  // read identity is re-derived here on the failure-only path. beforeRead may
+  // be async — copilot re-derives its identity through the keychain and must
+  // sample the wall clock only after that lookup (a slow poll can straddle a
+  // reset), so its hook returns { identity, nowMs } in one awaited step.
+  const readOptions = beforeRead ? await beforeRead(slot) : {};
   if (readOptions === null) return stripInternalMarkers(slot, markers);
   const cached = cache.read({
     home,

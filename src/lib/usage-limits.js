@@ -1813,83 +1813,18 @@ function readKiroCreditsSummary({ home = os.homedir() } = {}) {
 // Kiro limits disk cache — last good windows parsed from the kiro-cli panel.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function resolveKiroLimitsCachePath({ home } = {}) {
-  return path.join(home || os.homedir(), ".tokentracker", "tracker", KIRO_LIMITS_CACHE_FILE);
-}
+// kiro-cli's quota windows ride on the profile the CLI is signed into; the
+// profileArn partitions the cache. Windows carry `reset_at` as an ISO string.
+const kiroLimitsCache = createLimitsCache({
+  file: KIRO_LIMITS_CACHE_FILE,
+  key: "kiro",
+  maxAgeMs: KIRO_LIMITS_CACHE_MAX_AGE_MS,
+  fields: { plan_name: "string" },
+  windowKeys: ["primary_window", "secondary_window"],
+  identityField: "identity",
+  identityRequired: true,
+});
 
-function hasKiroWindow(limits) {
-  return Boolean(limits?.primary_window || limits?.secondary_window);
-}
-
-// Kiro windows carry `reset_at` as an ISO string (the plan's monthly reset date,
-// the bonus credits' own expiry). A window whose reset has already passed is
-// stale data, not a usable fallback, so drop it. Windows without a reset stamp
-// are kept — the overall cached_at max-age gate already bounds them.
-function isKiroCacheWindowUsable(window, { nowMs } = {}) {
-  if (!window || typeof window !== "object") return false;
-  const resetAtMs = parseTimeMs(window.reset_at);
-  if (resetAtMs === null) return true;
-  return resetAtMs > nowMs;
-}
-
-function normalizeKiroCachedLimits(
-  raw,
-  { nowMs = Date.now(), maxAgeMs = KIRO_LIMITS_CACHE_MAX_AGE_MS } = {},
-) {
-  const cachedAtMs = parseTimeMs(raw?.cached_at);
-  if (!Number.isFinite(cachedAtMs)) return null;
-  if (cachedAtMs > nowMs + 60_000) return null;
-  if (nowMs - cachedAtMs > maxAgeMs) return null;
-
-  const cached = {
-    configured: true,
-    error: null,
-    plan_name: typeof raw?.plan_name === "string" ? raw.plan_name : null,
-    primary_window: isKiroCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
-    secondary_window: isKiroCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
-    stale: true,
-    cached_at: raw.cached_at,
-  };
-  return hasKiroWindow(cached) ? cached : null;
-}
-
-// The signed-in Kiro account partitions the cache (zcode / Cursor login-identity
-// precedent): the id is the CodeWhisperer profile ARN kiro-cli itself persists
-// next to its tokens. Reads require the stored identity to match the current
-// one, and a write without an identity is refused — after an account switch the
-// previous account's windows must never resurface as another login's fallback.
-function readKiroLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
-  if (!identity) return null;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(resolveKiroLimitsCachePath({ home }), "utf8"));
-    const entry = parsed?.kiro;
-    if (entry?.identity !== identity) return null;
-    return normalizeKiroCachedLimits(entry, { nowMs });
-  } catch (_error) {
-    return null;
-  }
-}
-
-function writeKiroLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
-  if (!identity) return;
-  if (!limits?.configured || limits.error || !hasKiroWindow(limits)) return;
-  const cachePath = resolveKiroLimitsCachePath({ home });
-  const payload = {
-    kiro: {
-      identity,
-      plan_name: limits.plan_name || null,
-      primary_window: limits.primary_window || null,
-      secondary_window: limits.secondary_window || null,
-      cached_at: new Date(nowMs).toISOString(),
-    },
-  };
-  try {
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const tmpPath = `${cachePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(tmpPath, cachePath);
-  } catch (_error) {}
-}
 
 function resolveKiroAuthIdentity({ home } = {}) {
   try {
@@ -3127,106 +3062,6 @@ function resolveCursorCacheIdentity({ home, env, trackerDir } = {}) {
   }
 }
 
-function resolveGeminiLimitsCachePath({ home } = {}) {
-  return path.join(home || os.homedir(), ".tokentracker", "tracker", GEMINI_LIMITS_CACHE_FILE);
-}
-
-function hasGeminiWindow(limits) {
-  return Boolean(
-    limits?.primary_window
-    || limits?.secondary_window
-    || limits?.tertiary_window,
-  );
-}
-
-// Gemini windows carry `reset_at` as an ISO string (the Code Assist bucket's own
-// resetTime — daily for free-tier quotas). A window whose reset has already passed
-// is stale data, not a usable fallback, so drop it. Windows without a reset stamp
-// are kept — the overall cached_at max-age gate already bounds them.
-function isGeminiCacheWindowUsable(window, { nowMs } = {}) {
-  if (!window || typeof window !== "object") return false;
-  const resetAtMs = parseTimeMs(window.reset_at);
-  if (resetAtMs === null) return true;
-  return resetAtMs > nowMs;
-}
-
-function normalizeGeminiCachedLimits(
-  raw,
-  { nowMs = Date.now(), maxAgeMs = GEMINI_LIMITS_CACHE_MAX_AGE_MS } = {},
-) {
-  const cachedAtMs = parseTimeMs(raw?.cached_at);
-  if (!Number.isFinite(cachedAtMs)) return null;
-  if (cachedAtMs > nowMs + 60_000) return null;
-  if (nowMs - cachedAtMs > maxAgeMs) return null;
-
-  const cached = {
-    configured: true,
-    error: null,
-    account_email: typeof raw?.account_email === "string" ? raw.account_email : null,
-    account_plan: typeof raw?.account_plan === "string" ? raw.account_plan : null,
-    primary_window: isGeminiCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
-    secondary_window: isGeminiCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
-    tertiary_window: isGeminiCacheWindowUsable(raw?.tertiary_window, { nowMs }) ? raw.tertiary_window : null,
-    stale: true,
-    cached_at: raw.cached_at,
-  };
-  return hasGeminiWindow(cached) ? cached : null;
-}
-
-// The signed-in Google account partitions the cache (zcode login-identity
-// precedent): the email decoded from the local id_token JWT is non-secret and is
-// the same id the payload already surfaces as account_email. GEMINI_HOME can aim
-// the credential lookup at a different installation, but the cache stays keyed by
-// account — a read requires the stored identity to match the account the current
-// credentials resolve to, and a write without an identity is refused: an
-// unreadable login must never pin another account's bars in place.
-function readGeminiLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
-  if (!identity) return null;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(resolveGeminiLimitsCachePath({ home }), "utf8"));
-    const entry = parsed?.gemini;
-    if (entry?.identity !== identity) return null;
-    return normalizeGeminiCachedLimits(entry, { nowMs });
-  } catch (_error) {
-    return null;
-  }
-}
-
-function writeGeminiLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
-  if (!identity) return;
-  if (!limits?.configured || limits.error || !hasGeminiWindow(limits)) return;
-  const cachePath = resolveGeminiLimitsCachePath({ home });
-  const payload = {
-    gemini: {
-      identity,
-      account_email: limits.account_email || null,
-      account_plan: limits.account_plan || null,
-      primary_window: limits.primary_window || null,
-      secondary_window: limits.secondary_window || null,
-      tertiary_window: limits.tertiary_window || null,
-      cached_at: new Date(nowMs).toISOString(),
-    },
-  };
-  try {
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const tmpPath = `${cachePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(tmpPath, cachePath);
-  } catch (_error) {}
-}
-
-// Failure-only identity re-derivation for the cache fallback: when the provider
-// slot's result was produced by the outer timeout race, the fetcher's own
-// identity field is lost, so decode the (still-local) id_token once to learn
-// who we are serving for.
-function resolveGeminiCacheIdentity({ home, env } = {}) {
-  try {
-    return decodeJwtPayload(loadGeminiCredentials({ home, env })?.id_token)?.email || null;
-  } catch (_error) {
-    return null;
-  }
-}
-
 // The active Kimi profile partitions the cache (ark profile_identity precedent):
 // mainland and global logins — and any KIMI_HOME override — resolve to different
 // endpoint-scoped credential slots, and one slot must never serve another's
@@ -3263,78 +3098,6 @@ const kimiLimitsCache = createLimitsCache({
   identityRequired: true,
 });
 
-function resolveGrokLimitsCachePath({ home } = {}) {
-  return path.join(home || os.homedir(), ".tokentracker", "tracker", GROK_LIMITS_CACHE_FILE);
-}
-
-function hasGrokWindow(limits) {
-  return Boolean(limits?.primary_window || limits?.secondary_window);
-}
-
-// Grok windows carry `reset_at` as an ISO string — the billing-period end shared
-// by the pool, on-demand, and per-product windows. A window whose reset has
-// already passed is stale data, not a usable fallback, so drop it. Windows
-// without a reset stamp are kept — the overall cached_at max-age gate already
-// bounds them (mirrors Cursor).
-function isGrokCacheWindowUsable(window, { nowMs } = {}) {
-  if (!window || typeof window !== "object") return false;
-  const resetAtMs = parseTimeMs(window.reset_at);
-  if (resetAtMs === null) return true;
-  return resetAtMs > nowMs;
-}
-
-function resolveCopilotLimitsCachePath({ home } = {}) {
-  return path.join(home || os.homedir(), ".tokentracker", "tracker", COPILOT_LIMITS_CACHE_FILE);
-}
-
-function hasCopilotWindow(limits) {
-  return Boolean(limits?.primary_window || limits?.secondary_window);
-}
-
-// Copilot windows carry `reset_at` as an ISO string built from the monthly
-// quota_reset_date. A window whose reset has already passed is stale data, not a
-// usable fallback, so drop it. Windows without a reset stamp are kept — the overall
-// cached_at max-age gate already bounds them.
-function isCopilotCacheWindowUsable(window, { nowMs } = {}) {
-  if (!window || typeof window !== "object") return false;
-  const resetAtMs = parseTimeMs(window.reset_at);
-  if (resetAtMs === null) return true;
-  return resetAtMs > nowMs;
-}
-
-function normalizeGrokCachedLimits(
-  raw,
-  { nowMs = Date.now(), maxAgeMs = GROK_LIMITS_CACHE_MAX_AGE_MS } = {},
-) {
-  const cachedAtMs = parseTimeMs(raw?.cached_at);
-  if (!Number.isFinite(cachedAtMs)) return null;
-  if (cachedAtMs > nowMs + 60_000) return null;
-  if (nowMs - cachedAtMs > maxAgeMs) return null;
-
-  const cached = {
-    configured: true,
-    error: null,
-    plan_label: typeof raw?.plan_label === "string" ? raw.plan_label : null,
-    period_type: typeof raw?.period_type === "string" ? raw.period_type : null,
-    monthly_credits_limit: raw?.monthly_credits_limit ?? null,
-    monthly_credits_used: raw?.monthly_credits_used ?? null,
-    credit_usage_percent: raw?.credit_usage_percent ?? null,
-    on_demand_cap: raw?.on_demand_cap ?? null,
-    on_demand_used: raw?.on_demand_used ?? null,
-    billing_period_start: typeof raw?.billing_period_start === "string" ? raw.billing_period_start : null,
-    primary_window: isGrokCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
-    secondary_window: isGrokCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
-    // Per-product shares of the pool, not independent windows — each is gated
-    // by the same reset stamp as the pool window it attributes.
-    products: Array.isArray(raw?.products)
-      ? raw.products.filter((entry) => isGrokCacheWindowUsable(entry?.window, { nowMs }))
-      : [],
-    stale: true,
-    cached_at: raw.cached_at,
-  };
-  return hasGrokWindow(cached) ? cached : null;
-}
-
 // The signed-in Grok account partitions the cache (zcode login-identity precedent):
 // the id is the non-secret OIDC `sub` claim inside the access token — the
 // credential itself never enters the id (no token fingerprint fallback: CodeQL
@@ -3344,106 +3107,34 @@ function normalizeGrokCachedLimits(
 // (fail-closed) — an unattributable login must never pin another account's bars,
 // which a scope-key fallback cannot guarantee because `issuer::client_id` stays
 // constant across account switches.
-function readGrokLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
-  if (!identity) return null;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(resolveGrokLimitsCachePath({ home }), "utf8"));
-    const entry = parsed?.grok;
-    if (entry?.identity !== identity) return null;
-    return normalizeGrokCachedLimits(entry, { nowMs });
-  } catch (_error) {
-    return null;
-  }
-}
-
-function normalizeCopilotCachedLimits(
-  raw,
-  { nowMs = Date.now(), maxAgeMs = COPILOT_LIMITS_CACHE_MAX_AGE_MS } = {},
-) {
-  const cachedAtMs = parseTimeMs(raw?.cached_at);
-  if (!Number.isFinite(cachedAtMs)) return null;
-  if (cachedAtMs > nowMs + 60_000) return null;
-  if (nowMs - cachedAtMs > maxAgeMs) return null;
-
-  const cached = {
-    configured: true,
-    error: null,
-    plan_name: typeof raw?.plan_name === "string" ? raw.plan_name : null,
-    primary_window: isCopilotCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
-    secondary_window: isCopilotCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
-    stale: true,
-    cached_at: raw.cached_at,
-  };
-  return hasCopilotWindow(cached) ? cached : null;
-}
-
-// The signed-in GitHub account partitions the cache (zcode login-identity precedent):
-// the id is the non-secret GitHub login stored alongside the OAuth token (the
-// plaintext files' `user` field, or the auth.db row's `user_login`). A single home
-// resolves one active token, so one stamped entry suffices; a read requires the stored
-// identity to match the current one, and a write without an identity is refused — an
-// unreadable login must never pin another account's bars in place.
-function readCopilotLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
-  if (!identity) return null;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(resolveCopilotLimitsCachePath({ home }), "utf8"));
-    const entry = parsed?.copilot;
-    if (entry?.identity !== identity) return null;
-    return normalizeCopilotCachedLimits(entry, { nowMs });
-  } catch (_error) {
-    return null;
-  }
-}
-
-function writeGrokLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
-  if (!identity) return;
-  if (!limits?.configured || limits.error || !hasGrokWindow(limits)) return;
-  const cachePath = resolveGrokLimitsCachePath({ home });
-  const payload = {
-    grok: {
-      identity,
-      plan_label: limits.plan_label || null,
-      period_type: limits.period_type || null,
-      monthly_credits_limit: limits.monthly_credits_limit ?? null,
-      monthly_credits_used: limits.monthly_credits_used ?? null,
-      credit_usage_percent: limits.credit_usage_percent ?? null,
-      on_demand_cap: limits.on_demand_cap ?? null,
-      on_demand_used: limits.on_demand_used ?? null,
-      billing_period_start: limits.billing_period_start || null,
-      primary_window: limits.primary_window || null,
-      secondary_window: limits.secondary_window || null,
-      products: Array.isArray(limits.products) ? limits.products : [],
-      cached_at: new Date(nowMs).toISOString(),
+const grokLimitsCache = createLimitsCache({
+  file: GROK_LIMITS_CACHE_FILE,
+  key: "grok",
+  maxAgeMs: GROK_LIMITS_CACHE_MAX_AGE_MS,
+  fields: {
+    plan_label: "string",
+    period_type: "string",
+    monthly_credits_limit: "raw",
+    monthly_credits_used: "raw",
+    credit_usage_percent: "raw",
+    on_demand_cap: "raw",
+    on_demand_used: "raw",
+    billing_period_start: "string",
+    // Per-product shares of the pool, not independent windows — each is
+    // gated by the same reset stamp as the pool window it attributes.
+    products: {
+      write: (record) => (Array.isArray(record?.products) ? record.products : []),
+      read: (raw, ctx) => (Array.isArray(raw?.products)
+        ? raw.products.filter((entry) => ctx.isWindowUsable(entry?.window, { nowMs: ctx.nowMs }))
+        : []),
     },
-  };
-  try {
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const tmpPath = `${cachePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(tmpPath, cachePath);
-  } catch (_error) {}
-}
-
-function writeCopilotLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
-  if (!identity) return;
-  if (!limits?.configured || limits.error || !hasCopilotWindow(limits)) return;
-  const cachePath = resolveCopilotLimitsCachePath({ home });
-  const payload = {
-    copilot: {
-      identity,
-      plan_name: limits.plan_name || null,
-      primary_window: limits.primary_window || null,
-      secondary_window: limits.secondary_window || null,
-      cached_at: new Date(nowMs).toISOString(),
-    },
-  };
-  try {
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const tmpPath = `${cachePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(tmpPath, cachePath);
-  } catch (_error) {}
-}
+  },
+  // Windows carry `reset_at` as an ISO string — the billing-period end shared
+  // by the pool, on-demand, and per-product windows.
+  windowKeys: ["primary_window", "secondary_window"],
+  identityField: "identity",
+  identityRequired: true,
+});
 
 // Failure-only identity re-derivation for the cache fallback: when the provider
 // slot's result was produced by the outer timeout race, the fetcher's own
@@ -3463,6 +3154,24 @@ function resolveGrokCacheIdentity({ home, env } = {}) {
 // the identity always belongs to the account the token resolution would pick. Async
 // like the fetcher's own resolution so a failed poll never blocks the embedded
 // server's event loop on SQLite / Keychain.
+// The signed-in GitHub account partitions the cache (zcode login-identity precedent):
+// the id is the non-secret GitHub login stored alongside the OAuth token (the
+// plaintext files' `user` field, or the auth.db row's `user_login`). A single home
+// resolves one active token, so one stamped entry suffices; a read requires the stored
+// identity to match the current one, and a write without an identity is refused — an
+// unreadable login must never pin another account's bars in place.
+const copilotLimitsCache = createLimitsCache({
+  file: COPILOT_LIMITS_CACHE_FILE,
+  key: "copilot",
+  maxAgeMs: COPILOT_LIMITS_CACHE_MAX_AGE_MS,
+  fields: { plan_name: "string" },
+  // Windows carry `reset_at` as an ISO string built from the monthly
+  // quota_reset_date.
+  windowKeys: ["primary_window", "secondary_window"],
+  identityField: "identity",
+  identityRequired: true,
+});
+
 async function resolveCopilotCacheIdentity({
   home = os.homedir(),
   platform = process.platform,
@@ -3472,6 +3181,37 @@ async function resolveCopilotCacheIdentity({
   try {
     const resolved = await readCopilotAuthAsync({ home, platform, securityRunner, sqliteReader });
     return resolved?.identity || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// The signed-in Google account partitions the cache (zcode login-identity
+// precedent): the email decoded from the local id_token JWT is non-secret and is
+// the same id the payload already surfaces as account_email. GEMINI_HOME can aim
+// the credential lookup at a different installation, but the cache stays keyed by
+// account — a read requires the stored identity to match the account the current
+// credentials resolve to, and a write without an identity is refused: an
+// unreadable login must never pin another account's bars in place.
+const geminiLimitsCache = createLimitsCache({
+  file: GEMINI_LIMITS_CACHE_FILE,
+  key: "gemini",
+  maxAgeMs: GEMINI_LIMITS_CACHE_MAX_AGE_MS,
+  fields: { account_email: "string", account_plan: "string" },
+  // Windows carry `reset_at` as an ISO string (the Code Assist bucket's own
+  // resetTime — daily for free-tier quotas).
+  windowKeys: ["primary_window", "secondary_window", "tertiary_window"],
+  identityField: "identity",
+  identityRequired: true,
+});
+
+// Failure-only identity re-derivation for the cache fallback: when the provider
+// slot's result was produced by the outer timeout race, the fetcher's own
+// identity field is lost, so decode the (still-local) id_token once to learn
+// who we are serving for.
+function resolveGeminiCacheIdentity({ home, env } = {}) {
+  try {
+    return decodeJwtPayload(loadGeminiCredentials({ home, env })?.id_token)?.email || null;
   } catch (_error) {
     return null;
   }
@@ -5527,43 +5267,26 @@ async function fetchUsageLimitsUncached({
   // (GROK_AUTH_REQUIRED / GROK_REAUTH_REQUIRED — "run `grok login`") is
   // actionable and must not be hidden behind stale cache, so it passes
   // through untouched.
-  let grokWithCache;
-  if (!grok || grok.configured === false) {
-    grokWithCache = grok;
-  } else if (grok.auth_error === true) {
-    grokWithCache = grok;
-  } else if (!grok.error && hasGrokWindow(grok)) {
-    grokWithCache = {
-      ...grok,
-      stale: false,
-      cached_at: new Date(nowMs).toISOString(),
-    };
+  const grokWithCache = await withLimitsCacheFallback(grok, {
+    cache: grokLimitsCache,
+    nowMs,
+    home,
+    env,
+    isCurrentGeneration: () => cacheGeneration === usageLimitsCacheGeneration,
     // Write only under the identity the fetch itself carried: re-reading
     // auth.json here could attribute a finished fetch's windows to an account
     // that logged in while the request was in flight (opaque → JWT switch).
     // No fetch-side identity (opaque token) → refuse the write (fail-closed).
-    if (cacheGeneration === usageLimitsCacheGeneration && typeof grok.cache_identity === "string") {
-      writeGrokLimitsCache(grokWithCache, {
-        home,
-        nowMs,
-        identity: grok.cache_identity,
-      });
-    }
-  } else {
-    // The slot's error object loses the fetcher's identity field when the outer
-    // timeout race wins (the common failure mode this cache exists for), so
-    // re-derive it from auth.json on this failure-only path.
-    const identity = typeof grok.cache_identity === "string"
+    resolveWriteIdentity: (slot) => typeof slot.cache_identity === "string"
+      ? slot.cache_identity
+      : null,
+    // Re-derive from auth.json: the timeout race strips the fetcher's own
+    // identity field.
+    resolveReadIdentity: () => typeof grok.cache_identity === "string"
       ? grok.cache_identity
-      : resolveGrokCacheIdentity({ home, env });
-    const cached = readGrokLimitsCache({ home, nowMs, identity });
-    grokWithCache = cached || grok;
-  }
-  // cache_identity / auth_error are internal cache-plumbing markers, not payload.
-  if (grokWithCache && ("cache_identity" in grokWithCache || "auth_error" in grokWithCache)) {
-    const { cache_identity: _identity, auth_error: _authError, ...grokPayload } = grokWithCache;
-    grokWithCache = grokPayload;
-  }
+      : resolveGrokCacheIdentity({ home, env }),
+    passthrough: (slot) => slot.auth_error === true,
+  });
 
   const cursorLimits = cursorSandDuplicatesGrokPool(cursorWithCache, grokWithCache)
     ? { ...cursorWithCache, quaternary_window: null }
@@ -5575,38 +5298,32 @@ async function fetchUsageLimitsUncached({
   // passes through untouched. The otel probe fields ride along on every slot
   // result, so a cached overlay spreads the live object first and lets the cached
   // entry win only the limit fields.
-  let copilotWithCache;
-  if (!copilot || copilot.configured === false) {
-    copilotWithCache = copilot;
-  } else if (copilot.auth_error === true) {
-    copilotWithCache = copilot;
-  } else if (!copilot.error && hasCopilotWindow(copilot)) {
-    copilotWithCache = {
-      ...copilot,
-      stale: false,
-      cached_at: new Date(nowMs).toISOString(),
-    };
-    // Only the login captured with the request can own its windows. An
-    // unknown login must never be promoted to a newly signed-in account.
-    const identity = copilot.cache_identity;
-    if (typeof identity === "string" && identity
-      && identity === await resolveCopilotCacheIdentity({ home, platform, securityRunner })
-      && cacheGeneration === usageLimitsCacheGeneration) {
-      writeCopilotLimitsCache(copilotWithCache, { home, nowMs, identity });
-    }
-  } else {
-    // Re-read the current login even when the failed request carries an identity:
-    // the account may have changed while the request was in flight.
-    const identity = await resolveCopilotCacheIdentity({ home, platform, securityRunner });
-    // Sample after the async auth lookup too: a slow poll can straddle a reset.
-    const cached = readCopilotLimitsCache({ home, nowMs: Date.now(), identity });
-    copilotWithCache = cached ? { ...copilot, ...cached } : copilot;
-  }
-  // cache_identity / auth_error are internal cache-plumbing markers, not payload.
-  if (copilotWithCache && ("cache_identity" in copilotWithCache || "auth_error" in copilotWithCache)) {
-    const { cache_identity: _identity, auth_error: _authError, ...copilotPayload } = copilotWithCache;
-    copilotWithCache = copilotPayload;
-  }
+  const copilotWithCache = await withLimitsCacheFallback(copilot, {
+    cache: copilotLimitsCache,
+    nowMs,
+    home,
+    env,
+    isCurrentGeneration: () => cacheGeneration === usageLimitsCacheGeneration,
+    // Only the login captured with the request can own its windows: an
+    // unknown login must never be promoted to a newly signed-in account, and
+    // a fresh read of the auth store must still agree — a login that switched
+    // while the request was in flight refuses the write.
+    resolveWriteIdentity: async (slot) => {
+      const identity = typeof slot.cache_identity === "string" ? slot.cache_identity : null;
+      if (!identity) return null;
+      const current = await resolveCopilotCacheIdentity({ home, platform, securityRunner });
+      return identity === current ? identity : null;
+    },
+    beforeRead: async () => {
+      // Re-read the current login even when the failed request carries an
+      // identity: the account may have changed while the request was in flight.
+      const identity = await resolveCopilotCacheIdentity({ home, platform, securityRunner });
+      // Sample after the async auth lookup too: a slow poll can straddle a reset.
+      return { identity, nowMs: Date.now() };
+    },
+    passthrough: (slot) => slot.auth_error === true,
+    merge: "overlay",
+  });
 
   // Kimi: persist last successful windows so a transient timeout/5xx on the
   // api.kimi.com / api.kimi.ai coding routes serves stale bars instead of a
@@ -5632,62 +5349,6 @@ async function fetchUsageLimitsUncached({
     markers: ["cache_identity", "auth_error", "config_error"],
   });
 
-  // Gemini: persist last successful windows so a transient timeout/5xx on the
-  // cloudcode-pa.googleapis.com routes serves stale bars instead of a flashing
-  // "fetch failed" (mirrors Cursor / Codex / OpenCode Go). Auth errors (a dead
-  // OAuth session, or the unsupported api-key / vertex-ai auth modes) are
-  // actionable and must not be hidden behind stale cache, so they pass through
-  // untouched.
-  let geminiWithCache;
-  if (!gemini || gemini.configured === false) {
-    geminiWithCache = gemini;
-  } else if (gemini.auth_error === true) {
-    geminiWithCache = gemini;
-  } else if (!gemini.error && hasGeminiWindow(gemini)) {
-    geminiWithCache = {
-      ...gemini,
-      stale: false,
-      cached_at: new Date(nowMs).toISOString(),
-    };
-    if (cacheGeneration === usageLimitsCacheGeneration) {
-      // A slow in-flight fetch must not clobber the on-disk entry of an
-      // account that has since been switched away: only write when the
-      // snapshot's identity still matches the current credentials.
-      const currentIdentity = resolveGeminiCacheIdentity({ home, env });
-      const snapshotIdentity = typeof gemini.cache_identity === "string"
-        ? gemini.cache_identity
-        : currentIdentity;
-      if (snapshotIdentity && snapshotIdentity === currentIdentity) {
-        writeGeminiLimitsCache(geminiWithCache, {
-          home,
-          nowMs,
-          identity: snapshotIdentity,
-        });
-      }
-    }
-  } else {
-    // The slot's error object loses the fetcher's identity field when the outer
-    // timeout race wins (the common failure mode this cache exists for). Always
-    // re-derive from the CURRENT local credentials — the request may have
-    // started under an account that has since been switched away, in which
-    // case the read's identity gate refuses the old entry. Revalidate the auth
-    // mode too: a mid-flight switch to api-key/vertex-ai never reached the
-    // punch-through branch above, but stale OAuth bars would still mislead.
-    const selectedType = loadGeminiSettings({ home, env })?.security?.auth?.selectedType ?? null;
-    if (selectedType === "api-key" || selectedType === "vertex-ai") {
-      geminiWithCache = gemini;
-    } else {
-      const identity = resolveGeminiCacheIdentity({ home, env });
-      const cached = readGeminiLimitsCache({ home, nowMs, identity });
-      geminiWithCache = cached || gemini;
-    }
-  }
-  // cache_identity / auth_error are internal cache-plumbing markers, not payload.
-  if (geminiWithCache && ("cache_identity" in geminiWithCache || "auth_error" in geminiWithCache)) {
-    const { cache_identity: _identity, auth_error: _authError, ...geminiPayload } = geminiWithCache;
-    geminiWithCache = geminiPayload;
-  }
-
   // Kiro: the slot runs the local kiro-cli (its own 2s/20s command budgets,
   // never rejects), so the failure modes are CLI timeouts, unparseable panels
   // and backend hiccups — persist the last successful windows and serve them
@@ -5700,28 +5361,22 @@ async function fetchUsageLimitsUncached({
   // account switch mid-flight refuses the write instead of stamping the
   // previous account's panel under the new login.
   const kiroAuthBlocked = isKiroAuthError(kiro?.error);
-  let kiroWithCache;
-  if (!kiro || kiro.configured === false || kiroAuthBlocked) {
-    kiroWithCache = kiro;
-  } else if (!kiro.error && hasKiroWindow(kiro)) {
-    kiroWithCache = {
-      ...kiro,
-      stale: false,
-      cached_at: new Date(nowMs).toISOString(),
-    };
-    if (cacheGeneration === usageLimitsCacheGeneration) {
-      const identity = typeof kiro.cache_identity === "string"
-        ? kiro.cache_identity
+  const kiroWithCache = await withLimitsCacheFallback(kiro, {
+    cache: kiroLimitsCache,
+    nowMs,
+    home,
+    env,
+    isCurrentGeneration: () => cacheGeneration === usageLimitsCacheGeneration,
+    resolveWriteIdentity: (slot) => {
+      const identity = typeof slot.cache_identity === "string"
+        ? slot.cache_identity
         : resolveKiroAuthIdentity({ home });
-      if (identity && identity === resolveKiroAuthIdentity({ home })) {
-        writeKiroLimitsCache(kiroWithCache, { home, nowMs, identity });
-      }
-    }
-  } else if (!kiro.error) {
-    kiroWithCache = kiro;
-  } else {
-    const cached = readKiroLimitsCache({
-      home,
+      return identity && identity === resolveKiroAuthIdentity({ home })
+        ? identity
+        : null;
+    },
+    passthrough: (slot) => kiroAuthBlocked || !slot.error,
+    beforeRead: () => ({
       // Gate against the wall clock, not the aggregate's entry stamp: a slow
       // failed CLI read can straddle a reset, and an expired window must not
       // pass the reset gate on a timestamp from before the read started.
@@ -5729,16 +5384,50 @@ async function fetchUsageLimitsUncached({
       // The current login, never the fetch-time capture — a switch that
       // happened mid-flight must not match the previous account's entry.
       identity: resolveKiroAuthIdentity({ home }),
-    });
+    }),
     // The failed slot already carries the credits-sidecar fields the fetcher
     // merged in; the cached windows overlay on top of them.
-    kiroWithCache = cached ? { ...kiro, ...cached } : kiro;
-  }
-  // cache_identity is internal cache plumbing, not payload.
-  if (kiroWithCache && "cache_identity" in kiroWithCache) {
-    const { cache_identity: _identity, ...kiroPayload } = kiroWithCache;
-    kiroWithCache = kiroPayload;
-  }
+    merge: "overlay",
+    markers: ["cache_identity"],
+  });
+
+  // Gemini: persist last successful windows so a transient timeout/5xx on the
+  // cloudcode-pa.googleapis.com routes serves stale bars instead of a flashing
+  // "fetch failed" (mirrors Cursor / Codex / OpenCode Go). Auth errors (a dead
+  // OAuth session, or the unsupported api-key / vertex-ai auth modes) are
+  // actionable and must not be hidden behind stale cache, so they pass through
+  // untouched.
+  const geminiWithCache = await withLimitsCacheFallback(gemini, {
+    cache: geminiLimitsCache,
+    nowMs,
+    home,
+    env,
+    isCurrentGeneration: () => cacheGeneration === usageLimitsCacheGeneration,
+    // A slow in-flight fetch must not clobber the on-disk entry of an
+    // account that has since been switched away: only write when the
+    // snapshot's identity still matches the current credentials.
+    resolveWriteIdentity: (slot) => {
+      const currentIdentity = resolveGeminiCacheIdentity({ home, env });
+      const snapshotIdentity = typeof slot.cache_identity === "string"
+        ? slot.cache_identity
+        : currentIdentity;
+      return snapshotIdentity && snapshotIdentity === currentIdentity
+        ? snapshotIdentity
+        : null;
+    },
+    passthrough: (slot) => slot.auth_error === true,
+    beforeRead: () => {
+      // Always re-derive from the CURRENT local credentials — the request may
+      // have started under an account that has since been switched away, in
+      // which case the read's identity gate refuses the old entry. Revalidate
+      // the auth mode too: a mid-flight switch to api-key/vertex-ai never
+      // reached the punch-through branch above, but stale OAuth bars would
+      // still mislead.
+      const selectedType = loadGeminiSettings({ home, env })?.security?.auth?.selectedType ?? null;
+      if (selectedType === "api-key" || selectedType === "vertex-ai") return null;
+      return { identity: resolveGeminiCacheIdentity({ home, env }) };
+    },
+  });
 
   const data = {
     fetched_at: new Date(nowMs).toISOString(),
