@@ -3,6 +3,7 @@ import { fetchProviderResets } from "../lib/provider-resets.js";
 
 // Resets are announced a few times a month; half-hourly is plenty.
 const CACHE_TTL_MS = 30 * 60 * 1000;
+const REQUEST_TIMEOUT_MS = 15_000;
 
 let cache = null; // { data, fetchedAtMs }
 let inflight = null;
@@ -10,7 +11,7 @@ let inflight = null;
 function loadResets() {
   if (cache && Date.now() - cache.fetchedAtMs < CACHE_TTL_MS) return Promise.resolve(cache.data);
   if (!inflight) {
-    inflight = fetchProviderResets()
+    inflight = fetchProviderResets({ signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
       .then((data) => {
         cache = { data, fetchedAtMs: Date.now() };
         return data;

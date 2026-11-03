@@ -66,6 +66,7 @@ describe("ActivityHeatmap reset tabs", () => {
       "https://claude-resets.com",
     );
     expect(window.localStorage.getItem("tt:heatmap-view")).toBe("codex");
+    expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
   });
 
   it("shows Claude's automatic resets and the event in the tooltip", async () => {
@@ -77,6 +78,19 @@ describe("ActivityHeatmap reset tabs", () => {
       fireEvent.mouseEnter(cell("2026-10-20"));
     });
     expect(screen.getByText("Claude reset note")).toBeTruthy();
+  });
+
+  it("lets keyboard users focus a reset day to read its details", async () => {
+    renderHeatmap();
+    fireEvent.click(screen.getByRole("tab", { name: copy("heatmap.view.codex") }));
+    await waitFor(() => expect(cell("2026-11-01").getAttribute("tabindex")).toBe("0"));
+    expect(cell("2026-11-02").hasAttribute("tabindex")).toBe(false);
+    await act(async () => {
+      fireEvent.focus(cell("2026-11-01"));
+    });
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip.textContent).toContain("Banked 1/2");
+    expect(cell("2026-11-01").getAttribute("aria-describedby")).toBe(tooltip.id);
   });
 
   it("keeps the grid and reports an error when the tracker is unreachable", async () => {

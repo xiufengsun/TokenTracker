@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useEffect, useState } from "react";
+import React, { useId, useMemo, useRef, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { buildActivityHeatmap } from "../../../lib/activity-heatmap";
 import { copy } from "../../../lib/copy";
@@ -112,6 +112,7 @@ export function ActivityHeatmap({
   
   // 2D 精致 Hover 状态
   const [hoveredCell, setHoveredCell] = useState(null);
+  const tooltipId = useId();
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0, shiftX: 0, flipY: false });
   const hideTimeoutRef = useRef(null);
 
@@ -603,7 +604,15 @@ export function ActivityHeatmap({
                       data-day={cell.day || undefined}
                       onMouseEnter={(e) => handleCellMouseEnter(e, cell)}
                       onMouseLeave={handleCellMouseLeave}
-                      className={`rounded-[2px] transition-transform hover:scale-125 hover:z-10 cursor-pointer${resetClass ? ` ${resetClass}` : ""}`}
+                      {...(resetClass
+                        ? {
+                            tabIndex: 0,
+                            onFocus: (e) => handleCellMouseEnter(e, cell),
+                            onBlur: handleCellMouseLeave,
+                            "aria-describedby": hoveredCell?.day === cell.day ? tooltipId : undefined,
+                          }
+                        : null)}
+                      className={`rounded-[2px] transition-transform hover:scale-125 hover:z-10 cursor-pointer${resetClass ? ` ${resetClass} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-gray-400 focus-visible:scale-125 focus-visible:z-10` : ""}`}
                       style={{ width: cellSize, height: cellSize, ...(resetClass ? null : { background: color }) }}
                     />
                   );
@@ -925,6 +934,8 @@ export function ActivityHeatmap({
         >
           {/* Tooltip 玻璃外框（悬浮定位，默认底边固定在单元格上方；顶部空间不足时翻转到下方） */}
           <div
+            id={tooltipId}
+            role="tooltip"
             className={`absolute left-0 ${tooltipPos.flipY ? "top-[10px]" : "bottom-[10px]"} backdrop-blur-md bg-white/95 dark:bg-oai-gray-900/95 border border-oai-gray-200/50 dark:border-oai-gray-800/50 shadow-xl rounded-xl p-3.5 max-w-[280px] min-w-[200px] flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-100`}
             style={{
               transform: `translateX(calc(-50% + ${tooltipPos.shiftX}px))`,
