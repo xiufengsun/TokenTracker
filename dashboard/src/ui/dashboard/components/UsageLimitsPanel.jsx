@@ -416,13 +416,13 @@ function ToolGroup({ name, providerId, children, expandable = false, expanded = 
       {providerKey ? (
         <ProviderIcon provider={providerKey} size={22} className={LIMITS_PROVIDER_ICON_CLASS} />
       ) : null}
-      <span className="text-base font-semibold text-oai-black dark:text-oai-white">{name}</span>
+      <span className="text-sm font-medium text-oai-black dark:text-oai-white">{name}</span>
       {rightAdornment ? <span className="shrink-0">{rightAdornment}</span> : null}
       {badge}
     </div>
   );
   const cardClass = "rounded-xl border border-oai-gray-200 bg-white dark:border-oai-gray-800 dark:bg-oai-gray-900";
-  const headerClass = "flex w-full items-center justify-between gap-3 border-b border-oai-gray-200 px-4 py-4 text-left dark:border-oai-gray-800 sm:px-5";
+  const headerClass = "flex w-full items-center justify-between gap-3 border-b border-oai-gray-200 px-4 py-3 text-left dark:border-oai-gray-800 sm:px-5";
   const body = <div className="flex flex-col gap-2 px-4 py-4 sm:px-5">{children}</div>;
 
   if (!expandable) {
