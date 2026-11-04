@@ -132,7 +132,13 @@ test("limits expose a custom backend without OAuth and do not request Anthropic 
   t.after(resetUsageLimitsCache);
   const result = await getUsageLimits({ home: f.home, platform: "linux", providerTimeoutMs: 50,
     securityRunner: () => ({ status: 1, stdout: "" }), commandRunner: () => ({ status: 1, stdout: "" }),
-    fetchImpl: async (url) => { assert.ok(!String(url).includes("api.anthropic.com")); throw new Error("offline"); },
+    fetchImpl: async (url) => {
+      const href = typeof url === "string" ? url : String(url?.url ?? url);
+      let host = "";
+      try { host = new URL(href).hostname; } catch { host = ""; }
+      assert.notEqual(host, "api.anthropic.com");
+      throw new Error("offline");
+    },
   });
   assert.equal(result.claude.configured, true);
   assert.equal(result.claude.limits_status, "not_applicable");
