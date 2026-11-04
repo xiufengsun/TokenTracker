@@ -208,6 +208,12 @@ const KIRO_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // non-secret resource id — alongside its tokens in this file. It is the cache
 // partition key, never the token itself.
 const KIRO_AUTH_TOKEN_FILE = "kiro-auth-token.json";
+// api.github.com is the most stable of the network providers, but a timeout or 5xx
+// still blanks the Copilot card until the next poll. Persist the last successful
+// windows so a blip serves stale bars instead (mirrors Claude / Codex / OpenCode Go /
+// Cursor).
+const COPILOT_LIMITS_CACHE_FILE = "copilot-usage-limits-cache.json";
+const COPILOT_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // A 429 from the usage endpoint carries a long `retry-after` (often 20+ minutes). Persist
 // the cooldown so every surface — this process, the menu bar app's embedded server, a later
 // restart — stops calling until it expires. Hammering during the cooldown just renews the
@@ -1912,7 +1918,10 @@ const COPILOT_AUTH_DB_SQL =
   "SELECT user_login, auth_authority, scopes, token_schema_version, hex(token_ciphertext) AS token_hex, "
   + "last_used_at, updated_at FROM oauth_tokens ORDER BY last_used_at DESC, updated_at DESC";
 
-function readPlaintextCopilotOauthToken({ home }) {
+// Returns { token, user } for the first usable entry — `user` is the non-secret
+// GitHub login stored alongside the OAuth token by the editors that write these
+// files (absent on hand-rolled setups), or null when a token carries no login.
+function readPlaintextCopilotAuth({ home }) {
   const candidates = [
     path.join(home, ".config", "github-copilot", "apps.json"),
     path.join(home, ".config", "github-copilot", "hosts.json"),
@@ -1935,12 +1944,19 @@ function readPlaintextCopilotOauthToken({ home }) {
       if (!value || typeof value !== "object") continue;
       const token = typeof value.oauth_token === "string" ? value.oauth_token : "";
       if (!token) continue;
+      const user = typeof value.user === "string" && value.user.trim()
+        ? value.user.trim()
+        : null;
       const host = String(key).split(":")[0];
-      if (host === "github.com") return token;
-      if (!fallback) fallback = token;
+      if (host === "github.com") return { token, user };
+      if (!fallback) fallback = { token, user };
     }
   }
   return fallback;
+}
+
+function readPlaintextCopilotOauthToken({ home }) {
+  return readPlaintextCopilotAuth({ home })?.token || null;
 }
 
 function readMacosKeychainGenericPassword({ service, account, securityRunner } = {}) {
@@ -2083,6 +2099,14 @@ function readCopilotAuthDbRows({ home, sqliteReader, asyncReader = false } = {})
   return reader(dbPath, COPILOT_AUTH_DB_SQL, { label: "GitHub Copilot" });
 }
 
+// The non-secret GitHub login of the row the token came from — used as the
+// cache-partition identity for the Copilot limits fallback.
+function copilotRowLogin(row) {
+  return typeof row?.user_login === "string" && row.user_login.trim()
+    ? row.user_login.trim()
+    : null;
+}
+
 function resolveCopilotAuthDbTokenFromRows(rows, {
   platform = process.platform,
   securityRunner,
@@ -2098,7 +2122,7 @@ function resolveCopilotAuthDbTokenFromRows(rows, {
     const schemaVersion = parseCopilotAuthDbSchemaVersion(row?.token_schema_version);
     if (schemaVersion === 0) {
       const plaintextToken = decodeCopilotSchemaV0Token(row);
-      if (plaintextToken) return plaintextToken;
+      if (plaintextToken) return { token: plaintextToken, login: copilotRowLogin(row) };
       continue;
     }
 
@@ -2117,7 +2141,7 @@ function resolveCopilotAuthDbTokenFromRows(rows, {
     }
     if (!keyBase64) continue;
     const token = decryptCopilotAuthDbToken(keyBase64, ciphertextHex);
-    if (token) return token;
+    if (token) return { token, login: copilotRowLogin(row) };
   }
   return null;
 }
@@ -2135,7 +2159,7 @@ async function resolveCopilotAuthDbTokenFromRowsAsync(rows, {
     const schemaVersion = parseCopilotAuthDbSchemaVersion(row?.token_schema_version);
     if (schemaVersion === 0) {
       const plaintextToken = decodeCopilotSchemaV0Token(row);
-      if (plaintextToken) return plaintextToken;
+      if (plaintextToken) return { token: plaintextToken, login: copilotRowLogin(row) };
       continue;
     }
 
@@ -2151,7 +2175,7 @@ async function resolveCopilotAuthDbTokenFromRowsAsync(rows, {
     }
     if (!keyBase64) continue;
     const token = decryptCopilotAuthDbToken(keyBase64, ciphertextHex);
-    if (token) return token;
+    if (token) return { token, login: copilotRowLogin(row) };
   }
   return null;
 }
@@ -2163,7 +2187,7 @@ function readCopilotAuthDbToken({ home, platform = process.platform, securityRun
   } catch (_e) {
     return null;
   }
-  return resolveCopilotAuthDbTokenFromRows(rows, { platform, securityRunner });
+  return resolveCopilotAuthDbTokenFromRows(rows, { platform, securityRunner })?.token || null;
 }
 
 async function readCopilotAuthDbTokenAsync({ home, platform = process.platform, securityRunner, sqliteReader } = {}) {
@@ -2173,7 +2197,50 @@ async function readCopilotAuthDbTokenAsync({ home, platform = process.platform, 
   } catch (_e) {
     return null;
   }
-  return resolveCopilotAuthDbTokenFromRowsAsync(rows, { platform, securityRunner });
+  const resolved = await resolveCopilotAuthDbTokenFromRowsAsync(rows, { platform, securityRunner });
+  return resolved?.token || null;
+}
+
+// Token + cache-partition identity in one resolution: the identity is the
+// non-secret GitHub login of whichever auth source produced the token
+// (the plaintext files' `user` field, or the auth.db row's `user_login`).
+// A token without a readable login yields identity null — the cache write
+// side refuses null identities.
+function readCopilotAuth({
+  home = os.homedir(),
+  platform = process.platform,
+  securityRunner,
+  sqliteReader,
+} = {}) {
+  const plaintext = readPlaintextCopilotAuth({ home });
+  if (plaintext?.token) return { token: plaintext.token, identity: plaintext.user };
+  // No plaintext token found — recover the live one from the encrypted auth.db.
+  let rows;
+  try {
+    rows = readCopilotAuthDbRows({ home, sqliteReader });
+  } catch (_e) {
+    return null;
+  }
+  const resolved = resolveCopilotAuthDbTokenFromRows(rows, { platform, securityRunner });
+  return resolved ? { token: resolved.token, identity: resolved.login } : null;
+}
+
+async function readCopilotAuthAsync({
+  home = os.homedir(),
+  platform = process.platform,
+  securityRunner,
+  sqliteReader,
+} = {}) {
+  const plaintext = readPlaintextCopilotAuth({ home });
+  if (plaintext?.token) return { token: plaintext.token, identity: plaintext.user };
+  let rows;
+  try {
+    rows = await readCopilotAuthDbRows({ home, sqliteReader, asyncReader: true });
+  } catch (_e) {
+    return null;
+  }
+  const resolved = await resolveCopilotAuthDbTokenFromRowsAsync(rows, { platform, securityRunner });
+  return resolved ? { token: resolved.token, identity: resolved.login } : null;
 }
 
 function readCopilotOauthToken({
@@ -2182,10 +2249,7 @@ function readCopilotOauthToken({
   securityRunner,
   sqliteReader,
 } = {}) {
-  const plaintext = readPlaintextCopilotOauthToken({ home });
-  if (plaintext) return plaintext;
-  // No plaintext token found — recover the live one from the encrypted auth.db.
-  return readCopilotAuthDbToken({ home, platform, securityRunner, sqliteReader });
+  return readCopilotAuth({ home, platform, securityRunner, sqliteReader })?.token || null;
 }
 
 async function readCopilotOauthTokenAsync({
@@ -2194,9 +2258,7 @@ async function readCopilotOauthTokenAsync({
   securityRunner,
   sqliteReader,
 } = {}) {
-  const plaintext = readPlaintextCopilotOauthToken({ home });
-  if (plaintext) return plaintext;
-  return readCopilotAuthDbTokenAsync({ home, platform, securityRunner, sqliteReader });
+  return (await readCopilotAuthAsync({ home, platform, securityRunner, sqliteReader }))?.token || null;
 }
 
 function copilotRequestHeaders(token) {
@@ -2281,12 +2343,13 @@ async function fetchCopilotLimits({
   sqliteReader,
 } = {}) {
   const otel = describeCopilotOtelStatus({ home, env });
-  const token = await readCopilotOauthTokenAsync({
+  const auth = await readCopilotAuthAsync({
     home: home || (env.HOME || os.homedir()),
     platform,
     securityRunner,
     sqliteReader,
   });
+  const token = auth?.token || null;
   if (!token) return { configured: false, ...otel };
 
   try {
@@ -2295,7 +2358,9 @@ async function fetchCopilotLimits({
       headers: copilotRequestHeaders(token),
     });
     if (res.status === 401 || res.status === 403) {
-      throw new Error("GitHub Copilot token rejected. Re-authenticate via GitHub Copilot CLI/extension.");
+      const authError = new Error("GitHub Copilot token rejected. Re-authenticate via GitHub Copilot CLI/extension.");
+      authError.code = "AUTH_EXPIRED";
+      throw authError;
     }
     if (!res.ok) {
       throw new Error(`GitHub Copilot API error: HTTP ${res.status}`);
@@ -2310,7 +2375,16 @@ async function fetchCopilotLimits({
     const chatWindow = buildCopilotWindow(snapshots.chat, resetIso);
 
     if (!premiumWindow && !chatWindow) {
-      return { configured: true, error: null, plan_name: planName, primary_window: null, secondary_window: null, ...otel };
+      return {
+        configured: true,
+        error: null,
+        plan_name: planName,
+        primary_window: null,
+        secondary_window: null,
+        // Internal cache-partition key (stripped before the payload is served).
+        cache_identity: auth.identity,
+        ...otel,
+      };
     }
 
     return {
@@ -2319,10 +2393,21 @@ async function fetchCopilotLimits({
       plan_name: planName,
       primary_window: premiumWindow,
       secondary_window: chatWindow,
+      // Internal cache-partition key (stripped before the payload is served).
+      cache_identity: auth.identity,
       ...otel,
     };
   } catch (error) {
-    return { configured: true, error: error?.message || "Unknown error", ...otel };
+    return {
+      configured: true,
+      error: error?.message || "Unknown error",
+      // A token-rejection error is actionable (re-authenticate) and must not be hidden
+      // behind the stale disk-cache fallback (opencode-go auth_error precedent).
+      // Internal marker — stripped before the payload is served.
+      ...(error?.code === "AUTH_EXPIRED" ? { auth_error: true } : {}),
+      cache_identity: auth.identity,
+      ...otel,
+    };
   }
 }
 
@@ -3316,6 +3401,25 @@ function isGrokCacheWindowUsable(window, { nowMs } = {}) {
   return resetAtMs > nowMs;
 }
 
+function resolveCopilotLimitsCachePath({ home } = {}) {
+  return path.join(home || os.homedir(), ".tokentracker", "tracker", COPILOT_LIMITS_CACHE_FILE);
+}
+
+function hasCopilotWindow(limits) {
+  return Boolean(limits?.primary_window || limits?.secondary_window);
+}
+
+// Copilot windows carry `reset_at` as an ISO string built from the monthly
+// quota_reset_date. A window whose reset has already passed is stale data, not a
+// usable fallback, so drop it. Windows without a reset stamp are kept — the overall
+// cached_at max-age gate already bounds them.
+function isCopilotCacheWindowUsable(window, { nowMs } = {}) {
+  if (!window || typeof window !== "object") return false;
+  const resetAtMs = parseTimeMs(window.reset_at);
+  if (resetAtMs === null) return true;
+  return resetAtMs > nowMs;
+}
+
 function normalizeGrokCachedLimits(
   raw,
   { nowMs = Date.now(), maxAgeMs = GROK_LIMITS_CACHE_MAX_AGE_MS } = {},
@@ -3370,6 +3474,45 @@ function readGrokLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
   }
 }
 
+function normalizeCopilotCachedLimits(
+  raw,
+  { nowMs = Date.now(), maxAgeMs = COPILOT_LIMITS_CACHE_MAX_AGE_MS } = {},
+) {
+  const cachedAtMs = parseTimeMs(raw?.cached_at);
+  if (!Number.isFinite(cachedAtMs)) return null;
+  if (cachedAtMs > nowMs + 60_000) return null;
+  if (nowMs - cachedAtMs > maxAgeMs) return null;
+
+  const cached = {
+    configured: true,
+    error: null,
+    plan_name: typeof raw?.plan_name === "string" ? raw.plan_name : null,
+    primary_window: isCopilotCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
+    secondary_window: isCopilotCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
+    stale: true,
+    cached_at: raw.cached_at,
+  };
+  return hasCopilotWindow(cached) ? cached : null;
+}
+
+// The signed-in GitHub account partitions the cache (zcode login-identity precedent):
+// the id is the non-secret GitHub login stored alongside the OAuth token (the
+// plaintext files' `user` field, or the auth.db row's `user_login`). A single home
+// resolves one active token, so one stamped entry suffices; a read requires the stored
+// identity to match the current one, and a write without an identity is refused — an
+// unreadable login must never pin another account's bars in place.
+function readCopilotLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(resolveCopilotLimitsCachePath({ home }), "utf8"));
+    const entry = parsed?.copilot;
+    if (entry?.identity !== identity) return null;
+    return normalizeCopilotCachedLimits(entry, { nowMs });
+  } catch (_error) {
+    return null;
+  }
+}
+
 function writeGrokLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
   if (!identity) return;
   if (!limits?.configured || limits.error || !hasGrokWindow(limits)) return;
@@ -3399,6 +3542,27 @@ function writeGrokLimitsCache(limits, { home, nowMs = Date.now(), identity } = {
   } catch (_error) {}
 }
 
+function writeCopilotLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return;
+  if (!limits?.configured || limits.error || !hasCopilotWindow(limits)) return;
+  const cachePath = resolveCopilotLimitsCachePath({ home });
+  const payload = {
+    copilot: {
+      identity,
+      plan_name: limits.plan_name || null,
+      primary_window: limits.primary_window || null,
+      secondary_window: limits.secondary_window || null,
+      cached_at: new Date(nowMs).toISOString(),
+    },
+  };
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    const tmpPath = `${cachePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmpPath, cachePath);
+  } catch (_error) {}
+}
+
 // Failure-only identity re-derivation for the cache fallback: when the provider
 // slot's result was produced by the outer timeout race, the fetcher's own
 // identity field is lost, so read auth.json once to learn who we are serving for.
@@ -3406,6 +3570,26 @@ function writeGrokLimitsCache(limits, { home, nowMs = Date.now(), identity } = {
 function resolveGrokCacheIdentity({ home, env } = {}) {
   try {
     return grokTokenSubject(loadGrokAuthEntry({ home, env })?.entry?.key);
+  } catch (_error) {
+    return null;
+  }
+}
+
+// Failure-only identity re-derivation for the cache fallback: when the provider slot's
+// result was produced by the outer timeout race, the fetcher's identity field is lost,
+// so re-resolve the (still-local) auth store — mirroring the token-source priority so
+// the identity always belongs to the account the token resolution would pick. Async
+// like the fetcher's own resolution so a failed poll never blocks the embedded
+// server's event loop on SQLite / Keychain.
+async function resolveCopilotCacheIdentity({
+  home = os.homedir(),
+  platform = process.platform,
+  securityRunner,
+  sqliteReader,
+} = {}) {
+  try {
+    const resolved = await readCopilotAuthAsync({ home, platform, securityRunner, sqliteReader });
+    return resolved?.identity || null;
   } catch (_error) {
     return null;
   }
@@ -5367,6 +5551,45 @@ async function fetchUsageLimitsUncached({
     ? { ...cursorWithCache, quaternary_window: null }
     : cursorWithCache;
 
+  // Copilot: same fallback contract as Cursor for the api.github.com route — a
+  // transient timeout/5xx serves stale bars instead of a flashing "fetch failed",
+  // while a token-rejection error (401/403 — "re-authenticate") is actionable and
+  // passes through untouched. The otel probe fields ride along on every slot
+  // result, so a cached overlay spreads the live object first and lets the cached
+  // entry win only the limit fields.
+  let copilotWithCache;
+  if (!copilot || copilot.configured === false) {
+    copilotWithCache = copilot;
+  } else if (copilot.auth_error === true) {
+    copilotWithCache = copilot;
+  } else if (!copilot.error && hasCopilotWindow(copilot)) {
+    copilotWithCache = {
+      ...copilot,
+      stale: false,
+      cached_at: new Date(nowMs).toISOString(),
+    };
+    // Only the login captured with the request can own its windows. An
+    // unknown login must never be promoted to a newly signed-in account.
+    const identity = copilot.cache_identity;
+    if (typeof identity === "string" && identity
+      && identity === await resolveCopilotCacheIdentity({ home, platform, securityRunner })
+      && cacheGeneration === usageLimitsCacheGeneration) {
+      writeCopilotLimitsCache(copilotWithCache, { home, nowMs, identity });
+    }
+  } else {
+    // Re-read the current login even when the failed request carries an identity:
+    // the account may have changed while the request was in flight.
+    const identity = await resolveCopilotCacheIdentity({ home, platform, securityRunner });
+    // Sample after the async auth lookup too: a slow poll can straddle a reset.
+    const cached = readCopilotLimitsCache({ home, nowMs: Date.now(), identity });
+    copilotWithCache = cached ? { ...copilot, ...cached } : copilot;
+  }
+  // cache_identity / auth_error are internal cache-plumbing markers, not payload.
+  if (copilotWithCache && ("cache_identity" in copilotWithCache || "auth_error" in copilotWithCache)) {
+    const { cache_identity: _identity, auth_error: _authError, ...copilotPayload } = copilotWithCache;
+    copilotWithCache = copilotPayload;
+  }
+
   // Kimi: persist last successful windows so a transient timeout/5xx on the
   // api.kimi.com / api.kimi.ai coding routes serves stale bars instead of a
   // flashing "fetch failed" (mirrors Cursor / Codex / OpenCode Go). Re-login
@@ -5536,7 +5759,7 @@ async function fetchUsageLimitsUncached({
     gemini: withPlanLabel(geminiWithCache, geminiWithCache.account_plan, "Gemini"),
     kiro: withPlanLabel(kiroWithCache, kiroWithCache.plan_name, "Kiro"),
     antigravity: withPlanLabel(antigravity, antigravity.account_plan, "Antigravity"),
-    copilot: withPlanLabel(copilot, copilot.plan_name, "Copilot"),
+    copilot: withPlanLabel(copilotWithCache, copilotWithCache.plan_name, "Copilot"),
     // grok-limits already maps subscriptionTier to xAI's own product names
     // ("SuperGrok Heavy", "X Premium+", "API Key"). The shared normalization
     // would Title-Case them into "Supergrok Heavy" / "Api Key" and drop "Free"
@@ -5678,6 +5901,8 @@ module.exports = {
   detectAntigravityProcess,
   fetchAntigravityLimits,
   fetchCopilotLimits,
+  readCopilotAuth,
+  readCopilotAuthAsync,
   readCopilotOauthToken,
   readCopilotOauthTokenAsync,
   readCopilotAuthDbToken,
