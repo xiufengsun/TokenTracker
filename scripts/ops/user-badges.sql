@@ -587,6 +587,21 @@ GRANT EXECUTE ON FUNCTION public.user_badges_compact(uuid[]) TO project_admin;
 GRANT EXECUTE ON FUNCTION public.user_badges_full(uuid, boolean) TO project_admin;
 
 -- ── 5. Schedule (run once via CLI after applying the above) ──────────────────
+-- Production note (2026-11-04, issues #925 / #987):
+--   The historical pg_cron job `tokentracker-user-badges-refresh` stalled at
+--   2026-10-17T00:32Z while InsForge HTTP leaderboard schedules kept running.
+--   Unrestricted SQL / cron.job access is disabled on the hosted project, so
+--   the durable path is now the edge function
+--   `tokentracker-user-badges-refresh` (dashboard/edge-patches/...) invoked by
+--   an InsForge HTTP schedule on the same cadence:
+--     cron: 32 */6 * * *
+--     POST https://<app>.us-east.insforge.app/functions/tokentracker-user-badges-refresh
+--     headers: Content-Type, apikey, x-refresh-secret=$LEADERBOARD_REFRESH_SECRET
+--   Deploy: insforge functions deploy tokentracker-user-badges-refresh \
+--             --file dashboard/edge-patches/tokentracker-user-badges-refresh.ts
+--   One-shot catch-up after deploy: insforge functions invoke ... (privileged).
+--   Legacy pg_cron snippet kept below for self-host / unrestricted SQL shops.
+
 -- Check existing ticks first: SELECT jobname, schedule FROM cron.job;
 -- Align ~15 min after the leaderboard refresh so every published rank is
 -- observed at least once (podium sampling).
