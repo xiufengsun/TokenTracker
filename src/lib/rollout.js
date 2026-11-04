@@ -7107,12 +7107,20 @@ async function parseQoderNewIncremental({
   // row would count the same spend twice.
   const creditByKey = new Map();
   const fileCount = files.length;
+  // A file that cannot be read proves nothing about its spend; it must not be
+  // booked as zero, so the sidecar keeps the last total the install proved.
+  let creditReadFailures = 0;
   for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
     const filePath = files[fileIdx];
     let raw;
     try {
       raw = await fs.readFile(filePath, "utf8");
-    } catch (_e) {
+    } catch (error) {
+      // A file the listing named but that no longer exists is evidence the
+      // transcript is gone, so it contributes zero. Any other read failure
+      // (permissions, an unmounted volume) says nothing about its spend, and
+      // treating it as zero would understate the install's credits.
+      if (error?.code !== "ENOENT") creditReadFailures += 1;
       continue;
     }
     // Separator-agnostic: WSL installs are walked over \\wsl$ UNC paths where
@@ -7154,13 +7162,6 @@ async function parseQoderNewIncremental({
       if (!bucketStart) continue;
       const messageKey = qoderNewMessageKey(record, filePath, lineIdx);
       if (!messageKey) continue;
-      if (nominalCredits > 0) {
-        creditByKey.set(messageKey, {
-          credits: nominalCredits,
-          timestampMs,
-          sessionId: normalizeMessageKeyPart(record?.sessionId || record?.session_id) || filePath,
-        });
-      }
       const model = qoderNewModelFromRecord(record);
       const totals = base ? {
         input_tokens: base.input_tokens,
@@ -7220,6 +7221,16 @@ async function parseQoderNewIncremental({
         filePath,
         isMainSession,
       });
+      // Keyed after the precedence check so the credit map always holds the
+      // same record currentByKey booked; keyed like it, so a turn mirrored
+      // into a subagent transcript is counted once.
+      if (nominalCredits > 0) {
+        creditByKey.set(messageKey, {
+          credits: nominalCredits,
+          timestampMs,
+          sessionId: normalizeMessageKeyPart(record?.sessionId || record?.session_id) || filePath,
+        });
+      }
     }
     if (cb && (fileIdx % 50 === 0 || fileIdx === files.length - 1)) {
       cb({
@@ -7331,6 +7342,7 @@ async function parseQoderNewIncremental({
     installKey: creditsInstallKey,
     creditByKey,
     fileCount,
+    readFailures: creditReadFailures,
   });
   return { messagesProcessed, eventsAggregated, bucketsQueued, projectBucketsQueued };
 }
@@ -7344,10 +7356,14 @@ async function writeQoderCreditsSidecar({
   queuePath,
   sourceKey,
   installKey,
-  creditByKey,
-  fileCount,
+  creditByKey = new Map(),
+  fileCount = 0,
+  readFailures = 0,
 } = {}) {
-  if (!queuePath || !(fileCount > 0)) return;
+  // A scan that found no transcript is an answer — the install stopped
+  // spending — while a scan that could not read a file is not, so a partial
+  // read leaves the previous total in place instead of understating spend.
+  if (!queuePath || readFailures > 0) return;
   const entries = creditByKey instanceof Map ? [...creditByKey.values()] : [];
   let totalCredits = 0;
   let latestMs = 0;
@@ -9298,7 +9314,9 @@ async function writeCreditsSidecar({
   fileCount,
   latestAt,
 } = {}) {
-  if (!queuePath || !sidecarFile || !(fileCount > 0)) return;
+  // Whether a zero-file scan is worth publishing is each provider's call, so
+  // the shared writer only refuses a destination it cannot resolve.
+  if (!queuePath || !sidecarFile) return;
   const sidecarPath = path.join(path.dirname(queuePath), sidecarFile);
   try {
     let installs = {};
@@ -9373,6 +9391,7 @@ async function writeKiroCliCreditsSidecar({
   fileCount,
   latestAt,
 } = {}) {
+  if (!(fileCount > 0)) return;
   await writeCreditsSidecar({
     queuePath,
     sidecarFile: KIRO_CLI_CREDITS_SIDECAR,
@@ -26266,6 +26285,7 @@ module.exports = {
   resolveQoderCnProjectsDir,
   listQoderNewSessionFiles,
   parseQoderNewIncremental,
+  writeQoderCreditsSidecar,
   resolveKiroBasePath,
   resolveKiroDbPath,
   resolveKiroJsonlPath,
