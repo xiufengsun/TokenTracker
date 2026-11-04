@@ -31,7 +31,7 @@ const { fetchGrokLimits, grokTokenSubject, loadGrokAuthEntry } = require("./grok
 const { fetchZcodeLimits } = require("./zcode-limits");
 const { fetchOpencodeGoLimits } = require("./opencode-go-limits");
 const { fetchCommandcodeLimits } = require("./commandcode-limits");
-const { fetchDevinLimits } = require("./devin-limits");
+const { fetchDevinLimits, resolveDevinCacheIdentity } = require("./devin-limits");
 const { fetchQoderLimits, fetchQoderCnLimits } = require("./qoder-limits");
 const { fetchArkCodingPlanLimits } = require("./ark-coding-plan-limits");
 const { fetchArkAgentPlanLimits } = require("./ark-agent-plan-limits");
@@ -3642,26 +3642,26 @@ function normalizeDevinCachedLimits(
   return hasDevinWindow(cached) ? cached : null;
 }
 
-// Devin has no locally readable, non-secret identity to partition by: the CLI
-// stores only the session token (hashing it for a label is out — the CodeQL
-// js/insufficient-password-hash precedent), and the provider deliberately
-// never reads the identity-bearing GetUserStatus RPC. The credentials file's
-// single token slot makes the cache single-tenant, mirroring OpenCode Go: one
-// entry, overwritten by the next successful fetch, bounded by the gates above.
-function readDevinLimitsCache({ home, nowMs = Date.now() } = {}) {
+// Match the current credential-file revision, including on timeout fallback.
+// Legacy unpartitioned entries are deliberately ignored.
+function readDevinLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return null;
   try {
     const parsed = JSON.parse(fs.readFileSync(resolveDevinLimitsCachePath({ home }), "utf8"));
-    return normalizeDevinCachedLimits(parsed?.devin, { nowMs });
+    if (parsed?.devin?.identity !== identity) return null;
+    return normalizeDevinCachedLimits(parsed.devin, { nowMs });
   } catch (_error) {
     return null;
   }
 }
 
-function writeDevinLimitsCache(limits, { home, nowMs = Date.now() } = {}) {
+function writeDevinLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return;
   if (!limits?.configured || limits.error || !hasDevinWindow(limits)) return;
   const cachePath = resolveDevinLimitsCachePath({ home });
   const payload = {
     devin: {
+      identity,
       plan_label: limits.plan_label || null,
       primary_window: limits.primary_window || null,
       secondary_window: limits.secondary_window || null,
@@ -5581,21 +5581,34 @@ async function fetchUsageLimitsUncached({
     && devinObj.auth_action_required !== "reauth"
     && !devinCredentialsInvalid
   ) {
-    if (!devinObj.error && hasDevinWindow(devinObj)) {
-      if (cacheGeneration === usageLimitsCacheGeneration) {
-        writeDevinLimitsCache(devinObj, { home, nowMs });
-      }
-    } else if (!devinObj.error) {
-      if (cacheGeneration === usageLimitsCacheGeneration) {
-        clearDevinLimitsCache({ home });
+    const currentIdentity = resolveDevinCacheIdentity({ home, env });
+    if (!devinObj.error) {
+      // A response belongs to the credentials read before its request. Never
+      // write or clear a new login's cache after an in-flight replacement.
+      if (cacheGeneration === usageLimitsCacheGeneration
+        && currentIdentity && devinObj.cache_identity === currentIdentity) {
+        if (hasDevinWindow(devinObj)) {
+          writeDevinLimitsCache(devinObj, { home, nowMs, identity: currentIdentity });
+        } else {
+          clearDevinLimitsCache({ home });
+        }
       }
     } else if (isDevinTransientFetchError(devinRaw?.reason)) {
       // The fallback lands after the whole provider round: sample the clock
       // here (tests keep their injected clock) so a window that rolled over
       // while the poll was waiting is dropped instead of served.
-      const cached = readDevinLimitsCache({ home, nowMs: injectedNowMs ?? Date.now() });
+      const cached = readDevinLimitsCache({
+        home,
+        nowMs: injectedNowMs ?? Date.now(),
+        identity: currentIdentity,
+      });
       if (cached) devinObj = cached;
     }
+  }
+
+  if (devinObj && "cache_identity" in devinObj) {
+    const { cache_identity: _identity, ...devinPayload } = devinObj;
+    devinObj = devinPayload;
   }
 
   // Cursor: persist last successful windows so a transient timeout/5xx on the

@@ -11,6 +11,8 @@ const {
   resetUsageLimitsCache,
 } = require("./helpers/usage-limits");
 
+const { resolveDevinCacheIdentity } = require("../src/lib/devin-limits");
+
 const TEST_TOKEN = "devin-test-session-token";
 
 function jsonResponse(status, body) {
@@ -65,7 +67,7 @@ function cachePath(home) {
 
 function seedDevinCache(home, entry) {
   fs.mkdirSync(path.dirname(cachePath(home)), { recursive: true });
-  fs.writeFileSync(cachePath(home), JSON.stringify({ devin: entry }));
+  fs.writeFileSync(cachePath(home), JSON.stringify({ devin: { identity: resolveDevinCacheIdentity({ home, env: {} }), ...entry } }));
 }
 
 // Live Devin fetch, other providers silent.
@@ -108,12 +110,14 @@ describe("Devin limits disk-cache fallback", () => {
       assert.equal(live.devin.secondary_window.used_percent, 70);
       assert.equal(live.devin.provenance.source, "provider-api");
 
-      // Pin the on-disk schema: windows and label only — no timestamps or
-      // credentials material beyond the fetch outcome.
+      // The identity describes the credential file, never its secret contents.
       const disk = JSON.parse(fs.readFileSync(cachePath(home), "utf8"));
       assert.deepEqual(Object.keys(disk.devin).sort(), [
-        "cached_at", "plan_label", "primary_window", "secondary_window",
+        "cached_at", "identity", "plan_label", "primary_window", "secondary_window",
       ]);
+      assert.equal(typeof disk.devin.identity, "string");
+      assert.equal(JSON.stringify(disk).includes(TEST_TOKEN), false);
+      assert.equal("cache_identity" in live.devin, false);
       assert.equal(disk.devin.plan_label, "Pro");
       assert.equal(disk.devin.primary_window.used_percent, 42);
 
@@ -129,6 +133,8 @@ describe("Devin limits disk-cache fallback", () => {
       assert.equal(stale.devin.secondary_window.used_percent, 70);
       assert.equal(stale.devin.cached_at, live.devin.cached_at, "stale read must preserve the original cached_at");
       assert.equal(stale.devin.provenance.source, "disk-cache");
+      assert.equal("cache_identity" in stale.devin, false);
+      assert.equal("identity" in stale.devin, false);
     } finally {
       resetUsageLimitsCache();
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -285,6 +291,152 @@ describe("Devin limits disk-cache fallback", () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  for (const timing of ["before", "during"]) {
+    for (const failure of ["HTTP 503", "timeout"]) {
+      it(`refuses another credential's cache after replacement ${timing} a ${failure}`, async () => {
+        const { tmp, home, credentialsPath } = makeDevinHome();
+        try {
+          await getUsageLimits(baseOptions(home, {
+            fetchImpl: devinFetchImpl(() => jsonResponse(200, planStatusBody())),
+          }));
+          resetUsageLimitsCache();
+          const replaceCredentials = () => {
+            const original = fs.statSync(credentialsPath);
+            // Same-length in-place replacement, even with the mtime restored.
+            fs.writeFileSync(credentialsPath, `windsurf_api_key = "${TEST_TOKEN.replace("test", "next")}"\n`);
+            fs.utimesSync(credentialsPath, original.atime, original.mtime);
+          };
+          if (timing === "before") replaceCredentials();
+          const result = await getUsageLimits(baseOptions(home, {
+            providerTimeoutMs: failure === "timeout" ? 50 : 2000,
+            fetchImpl: devinFetchImpl(() => {
+              if (timing === "during") replaceCredentials();
+              return failure === "timeout" ? new Promise(() => {}) : jsonResponse(503, {});
+            }),
+          }));
+          assert.ok(result.devin.error);
+          assert.notEqual(result.devin.stale, true);
+          assert.equal(result.devin.primary_window, undefined);
+        } finally {
+          resetUsageLimitsCache();
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+
+  it("does not attribute a successful in-flight response to replacement credentials", async () => {
+    const { tmp, home, credentialsPath } = makeDevinHome();
+    try {
+      await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => {
+          const replacement = `${credentialsPath}.new`;
+          fs.writeFileSync(replacement, 'windsurf_api_key = "another-account"\n');
+          fs.renameSync(replacement, credentialsPath);
+          return jsonResponse(200, planStatusBody());
+        }),
+      }));
+      assert.equal(fs.existsSync(cachePath(home)), false);
+      resetUsageLimitsCache();
+      const result = await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(503, {})),
+      }));
+      assert.ok(result.devin.error);
+      assert.notEqual(result.devin.stale, true);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses legacy unpartitioned cache entries", async () => {
+    const { tmp, home } = makeDevinHome();
+    try {
+      seedDevinCache(home, {
+        identity: undefined,
+        primary_window: { used_percent: 42, reset_at: new Date(Date.now() + 86_400_000).toISOString() },
+        cached_at: new Date(Date.now() - 60_000).toISOString(),
+      });
+      const result = await getUsageLimits(baseOptions(home, {
+        fetchImpl: devinFetchImpl(() => jsonResponse(503, {})),
+      }));
+      assert.ok(result.devin.error);
+      assert.notEqual(result.devin.stale, true);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  for (const change of ["remove", "corrupt", "xdg"]) {
+    it(`refuses cache after a mid-request credential change: ${change}`, async () => {
+      const { tmp, home, credentialsPath } = makeDevinHome();
+      const options = baseOptions(home);
+      try {
+        await getUsageLimits({
+          ...options,
+          fetchImpl: devinFetchImpl(() => jsonResponse(200, planStatusBody())),
+        });
+        resetUsageLimitsCache();
+        const result = await getUsageLimits({
+          ...options,
+          fetchImpl: devinFetchImpl(() => {
+            if (change === "remove") fs.rmSync(credentialsPath);
+            if (change === "corrupt") fs.writeFileSync(credentialsPath, "no sign-in token");
+            if (change === "xdg") {
+              options.env.XDG_DATA_HOME = path.join(tmp, "xdg");
+              const replacement = path.join(options.env.XDG_DATA_HOME, "devin", "credentials.toml");
+              fs.mkdirSync(path.dirname(replacement), { recursive: true });
+              fs.writeFileSync(replacement, 'windsurf_api_key = "another-account"\n');
+            }
+            return jsonResponse(503, {});
+          }),
+        });
+        assert.ok(result.devin.error);
+        assert.notEqual(result.devin.stale, true);
+        assert.equal(result.devin.primary_window, undefined);
+      } finally {
+        resetUsageLimitsCache();
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const survivingWindow of [false, true]) {
+    it(`checks resets after the failed request (${survivingWindow ? "partial" : "full"} rollover)`, async (t) => {
+      const { tmp, home } = makeDevinHome();
+      const startedAt = Date.now();
+      t.mock.method(Date, "now", () => startedAt);
+      try {
+        seedDevinCache(home, {
+          primary_window: { used_percent: 42, reset_at: new Date(startedAt + 1000).toISOString() },
+          secondary_window: survivingWindow
+            ? { used_percent: 70, reset_at: new Date(startedAt + 86_400_000).toISOString() }
+            : null,
+          cached_at: new Date(startedAt - 60_000).toISOString(),
+        });
+        const result = await getUsageLimits(baseOptions(home, {
+          fetchImpl: devinFetchImpl(() => {
+            t.mock.method(Date, "now", () => startedAt + 2000);
+            return jsonResponse(503, {});
+          }),
+        }));
+        if (survivingWindow) {
+          assert.equal(result.devin.error, null);
+          assert.equal(result.devin.stale, true);
+          assert.equal(result.devin.primary_window, null);
+          assert.equal(result.devin.secondary_window.used_percent, 70);
+        } else {
+          assert.ok(result.devin.error);
+          assert.notEqual(result.devin.stale, true);
+        }
+      } finally {
+        resetUsageLimitsCache();
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+  }
 
   it("drops a cached window whose reset_at has already passed", async () => {
     const { tmp, home } = makeDevinHome();

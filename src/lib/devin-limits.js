@@ -55,7 +55,17 @@ function parseDevinCredentialsToml(raw) {
   return fields;
 }
 
-// Returns { apiKey } or null when no sign-in exists (no home, or the file is
+// A credential-file revision, not a token fingerprint or account claim. Both
+// in-place edits (ctime/mtime) and atomic replacements (device/inode) invalidate
+// old windows, including across restarts. Never persist the token or its hash.
+function devinCredentialIdentity(filePath, stat) {
+  return JSON.stringify([
+    path.resolve(filePath),
+    ...[stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String),
+  ]);
+}
+
+// Returns { apiKey, cacheIdentity } or null when no sign-in exists (no home, or the file is
 // absent — ENOENT only). Any other read failure or a mangled file throws an
 // owned, actionable error with no path or filesystem details, so a broken
 // sign-in can never masquerade as "not configured".
@@ -73,13 +83,25 @@ function readDevinCredentials({ home, env = process.env } = {}) {
     ? path.join(dir, "devin", "credentials.toml")
     : path.join(dir, ".local", "share", "devin", "credentials.toml");
   let raw;
+  let descriptor;
+  let cacheIdentity = null;
   try {
-    raw = fs.readFileSync(base, "utf8");
+    // Read the token and revision from the same opened file, so an atomic
+    // replacement cannot stamp the old token with the new file's revision.
+    descriptor = fs.openSync(base, "r");
+    const before = fs.fstatSync(descriptor, { bigint: true });
+    if (!before.isFile()) throw new Error("Not a credentials file");
+    raw = fs.readFileSync(descriptor, "utf8");
+    const after = fs.fstatSync(descriptor, { bigint: true });
+    const identity = devinCredentialIdentity(base, before);
+    if (identity === devinCredentialIdentity(base, after)) cacheIdentity = identity;
   } catch (error) {
     if (error && error.code === "ENOENT") return null;
     throw credentialsError(
       "Could not read the Devin CLI credentials file — check its permissions or run `devin auth login` to sign in again.",
     );
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
   const fields = parseDevinCredentialsToml(raw);
   const apiKey = isNonEmptyString(fields.windsurf_api_key)
@@ -98,7 +120,16 @@ function readDevinCredentials({ home, env = process.env } = {}) {
       "Devin credentials point at a custom api_server_url, which this quota provider does not support.",
     );
   }
-  return { apiKey };
+  return { apiKey, cacheIdentity };
+}
+
+function resolveDevinCacheIdentity(options) {
+  try {
+    return readDevinCredentials(options)?.cacheIdentity || null;
+  } catch {
+    // Unreadable, missing or invalid current credentials must fail closed.
+    return null;
+  }
 }
 
 function malformed(field) {
@@ -257,7 +288,9 @@ async function fetchDevinLimits({ home, env = process.env, enabled = false, fetc
     plan_label: windows.plan_label,
     primary_window: windows.primary_window,
     secondary_window: windows.secondary_window,
+    // Internal: the aggregate strips this before returning its payload.
+    cache_identity: credentials.cacheIdentity,
   };
 }
 
-module.exports = { fetchDevinLimits };
+module.exports = { fetchDevinLimits, resolveDevinCacheIdentity };
