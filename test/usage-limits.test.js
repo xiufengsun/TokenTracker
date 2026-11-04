@@ -6075,6 +6075,34 @@ describe("getUsageLimits qoder local credits", () => {
     }
   });
 
+  it("keeps transcript credits when the Qoder quota request times out", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-qoder-timeout-"));
+    try {
+      withTrackerDir(tmp, "qoder-credits.json", sidecarPayload());
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "darwin",
+        providerTimeoutMs: 30,
+        env: { QODER_COOKIE: "qoder_session=stub" },
+        commandRunner() { return { status: 1, stdout: "" }; },
+        // Never settles, so the outer provider timeout rejects the request and
+        // the quota read arrives as an error rather than a resolved value.
+        fetchImpl() { return new Promise(() => {}); },
+      });
+      assert.match(result.qoder.error, /Qoder usage request timed out/);
+      assert.equal(
+        result.qoder.tracked_credits,
+        8360.73,
+        "a timed-out quota read still has first-party local spend to show",
+      );
+      assert.equal(result.qoder.tracked_credit_records, 51304);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("stays unconfigured when no sidecar was ever written", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-qoder-nosidecar-"));

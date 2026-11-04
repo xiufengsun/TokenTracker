@@ -4668,10 +4668,10 @@ async function fetchUsageLimitsUncached({
       }),
       "Qoder",
       providerTimeoutMs,
-    ).then((value) => withQoderTrackedCredits(value, {
+    ).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })).then((value) => withQoderTrackedCredits(value, {
       home,
       sidecarFile: QODER_CREDITS_SIDECAR_FILE,
-    })).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
+    })),
     hiddenSet.has("qoderCn") ? hiddenSentinel : withProviderTimeout(
       fetchQoderCnLimits({
         home,
@@ -4681,10 +4681,10 @@ async function fetchUsageLimitsUncached({
       }),
       "Qoder CN",
       providerTimeoutMs,
-    ).then((value) => withQoderTrackedCredits(value, {
+    ).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })).then((value) => withQoderTrackedCredits(value, {
       home,
       sidecarFile: QODER_CN_CREDITS_SIDECAR_FILE,
-    })).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
+    })),
     // Ark Coding Plan / Agent Plan (火山方舟): two parallel subscription
     // products sharing the same arkcli binary. No token-consumption source —
     // consumption for the compatible CLIs is already counted from their
