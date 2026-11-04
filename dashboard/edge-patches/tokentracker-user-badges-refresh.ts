@@ -4,7 +4,7 @@
  * Why this exists (issues #925 / #987):
  *   Badge metrics are computed by pure-SQL `public.user_badges_refresh()`
  *   (see scripts/ops/user-badges.sql). Historically that ran on pg_cron
- *   (`tokentracker-user-badges-refresh`, `32 */6 * * *`). Around
+ *   (`tokentracker-user-badges-refresh`, six-hourly at minute 32 (cron minute 32, every 6 hours)). Around
  * 2026-10-17T00:32Z that job stopped advancing while InsForge HTTP
  *   leaderboard schedules kept working — every public profile's badges
  *   share that single frozen `updated_at`.
