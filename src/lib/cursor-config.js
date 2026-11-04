@@ -500,7 +500,21 @@ function parseCursorCsv(csvText) {
       cost: toFloat(fields[costIdx]),
     };
 
-    if (record.totalTokens <= 0 && record.inputTokens <= 0 && record.outputTokens <= 0) continue;
+    // Token presence is judged on the component columns (not the Total
+    // column) so a cache-read-only row survives even when Cursor's Total
+    // disagrees — the isAllZeroUsage gate downstream counts these same
+    // component fields. Request-only rows (e.g. bot/automation calls that
+    // consumed no tokens, issue #998) are real usage events: they are kept
+    // when the row carries a model identity, so parseCursorApiIncremental
+    // can import them as 0-token/1-request records pairing with the #997
+    // cloud-side request retention. Rows with no tokens and no model are
+    // degenerate placeholders and stay dropped.
+    const hasTokens =
+      record.inputTokens > 0 ||
+      record.cacheWriteTokens > 0 ||
+      record.cacheReadTokens > 0 ||
+      record.outputTokens > 0;
+    if (!hasTokens && !String(record.model || "").trim()) continue;
 
     records.push(record);
   }

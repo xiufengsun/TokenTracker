@@ -7743,7 +7743,12 @@ async function parseCursorApiIncremental({
 
     const { normalizeCursorUsage } = require("./cursor-config");
     const delta = normalizeCursorUsage(record);
-    if (isAllZeroUsage(delta)) continue;
+    // isAllZeroUsage reads only the token fields, so a request-only row (0
+    // tokens across every column — e.g. bot/automation requests, issue #998)
+    // must not be dropped here: it is kept as a 1-request record pairing
+    // with the #997 cloud-side request retention. Rows that are all-zero
+    // AND carry no model identity are degenerate and stay skipped.
+    if (isAllZeroUsage(delta) && !String(record.model || "").trim()) continue;
 
     delta.conversation_count = 1;
 
