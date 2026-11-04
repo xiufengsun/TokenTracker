@@ -10,9 +10,9 @@ that the vendor has cleared it.
 Reports have flagged `~\.tokentracker\tracker\app\bin\tracker.js` as
 `PDM:Trojan.Win32.Generic`. When the quarantined bytes match a published
 release asset (including Windows CRLF line endings), treat the report as a
-**suspected** false positive and keep the vendor ticket open until Kaspersky
-(or equivalent) accepts a false-positive submission or signing coverage
-removes the behavioral hit.
+**suspected** false positive. Matching bytes establish release identity, not
+why a behavioral PDM alert fired. Keep the vendor ticket open pending
+Kaspersky’s adjudication of the detection.
 
 What TokenTracker maintainers can do:
 
@@ -21,16 +21,20 @@ What TokenTracker maintainers can do:
   version, detection name, and SHA-256 of the quarantined file.
 - Do not close #720 solely because a hash matches an official build.
 
-What users can try while the vendor review is pending (if local policy allows):
+While vendor review is pending:
 
 1. Confirm the quarantined path is under `~\.tokentracker\` (or the portable
    install directory) and compare its hash to the GitHub release asset for
    that version.
-2. Restore the file from quarantine or reinstall from the official GitHub
-   release — not from third-party mirrors.
-3. Add a temporary exclusion for that path only if your security policy
-   permits it; this is a workaround, not vendor clearance.
-4. Prefer the signed installer when available.
+2. Share the detection details and matching hash with Kaspersky or your
+   security administrator. A matching hash alone is not a recommendation to
+   restore the file or bypass the detection.
+3. Follow their guidance on whether to restore, reinstall, or use a narrowly
+   scoped temporary exclusion. These workarounds may not prevent another PDM
+   alert and do not establish vendor clearance. If reinstalling, use the
+   official GitHub release rather than a third-party mirror.
+4. Check signing information when available, but do not treat a signature as
+   a guarantee against behavioral detections or a reason to close #720.
 
 A matching hash supports the suspected-false-positive hypothesis; it does not
 substitute for vendor adjudication.
