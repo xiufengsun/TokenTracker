@@ -486,6 +486,31 @@ describe("UsageLimitsPanel", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps the Qoder credits line when the quota request errors", () => {
+    render(
+      <UsageLimitsPanel
+        qoder={{
+          configured: true,
+          error: "Qoder usage request timed out.",
+          tracked_credits: 8360.73125242593,
+          tracked_credit_records: 51304,
+          tracked_credit_sessions: 96,
+        }}
+        order={["qoder"]}
+      />,
+    );
+
+    expect(screen.getByText(/Qoder usage request timed out/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        copy("limits.label.kiro_tracked_credits", {
+          credits: "8,360.73",
+          count: 51304,
+        }),
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("renders OpenCode Go 5h / Weekly / Monthly windows", () => {
     const { rerender } = render(
       <UsageLimitsPanel

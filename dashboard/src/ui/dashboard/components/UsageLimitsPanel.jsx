@@ -1110,8 +1110,8 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
       id,
       <>
         <StatusLine tone="error">{data.error}</StatusLine>
-        {id === "kiro"
-          ? renderProviderExtra(PROVIDER_LIMIT_SPECS.kiro.extra, data)
+        {id === "kiro" || id === "qoder" || id === "qoderCn"
+          ? renderProviderExtra(PROVIDER_LIMIT_SPECS[id].extra, data)
           : null}
         {id === "deepseek" ? <SetupHint title={copy("limits.deepseek.setupHint.title")}><DeepseekSetupHint onSaved={onKeySaved} /></SetupHint> : null}
         {id === "deepseek" ? <EnvCredentialNotice providerId={id} data={data} onSaved={onKeySaved} /> : null}
