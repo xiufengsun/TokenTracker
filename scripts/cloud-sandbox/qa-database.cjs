@@ -17,7 +17,7 @@ const ARCHIVE_TABLES = ["tokentracker_usage_dirty_days", "tokentracker_usage_arc
 const SOURCE_FUNCTIONS = [
   "leaderboard_pricing_tier", "tokentracker_upsert_account_session_states", "refresh_tokentracker_device_identity",
   "account_usage_grouped", "account_usage_grouped_v2", "account_usage_grouped_cached",
-  "leaderboard_hourly_dedup_v2", "leaderboard_rollup_daily_replace_v2", "leaderboard_rollup_daily_advance_v2",
+  "leaderboard_hourly_dedup_v2", "leaderboard_rollup_daily_replace_v2", "leaderboard_rollup_next_day_v2", "leaderboard_rollup_daily_advance_v2",
   "leaderboard_rollup_total_v2_after_insert", "leaderboard_rollup_total_v2_after_delete", "leaderboard_rollup_total_v2_after_update",
   "account_summary_compact", "account_daily_compact", "account_heatmap_compact", "account_model_breakdown_compact",
   "account_summary_wire", "account_daily_wire", "account_heatmap_wire", "account_model_breakdown_wire",
