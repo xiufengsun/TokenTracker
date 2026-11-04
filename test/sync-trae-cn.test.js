@@ -457,8 +457,15 @@ test("persistent 401 preserves prior TRAE CN usage across repeated syncs and giv
     const queueBefore = readQueueRows(home);
     const stateBefore = readCursors(home).traeCn;
     let output = "";
-    t.mock.method(process.stderr, "write", (chunk) => { output += chunk; return true; });
-    t.mock.method(process.stdout, "write", () => true);
+    const writeErr = process.stderr.write.bind(process.stderr);
+    const writeOut = process.stdout.write.bind(process.stdout);
+    t.mock.method(process.stderr, "write", (chunk, ...args) => {
+      if (typeof chunk !== "string") return writeErr(chunk, ...args);
+      output += chunk;
+      return true;
+    });
+    t.mock.method(process.stdout, "write", (chunk, ...args) =>
+      typeof chunk === "string" ? true : writeOut(chunk, ...args));
     let calls = 0;
     const opts = {
       traeCnNowMs: NOW_MS,
