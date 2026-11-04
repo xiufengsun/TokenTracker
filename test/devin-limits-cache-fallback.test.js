@@ -302,10 +302,16 @@ describe("Devin limits disk-cache fallback", () => {
           }));
           resetUsageLimitsCache();
           const replaceCredentials = () => {
-            const original = fs.statSync(credentialsPath);
-            // Same-length in-place replacement, even with the mtime restored.
-            fs.writeFileSync(credentialsPath, `windsurf_api_key = "${TEST_TOKEN.replace("test", "next")}"\n`);
-            fs.utimesSync(credentialsPath, original.atime, original.mtime);
+            // Keep the stat, same-length edit and timestamp restoration on
+            // one opened file, even if the path is concurrently replaced.
+            const descriptor = fs.openSync(credentialsPath, "r+");
+            try {
+              const original = fs.fstatSync(descriptor);
+              fs.writeFileSync(descriptor, `windsurf_api_key = "${TEST_TOKEN.replace("test", "next")}"\n`);
+              fs.futimesSync(descriptor, original.atime, original.mtime);
+            } finally {
+              fs.closeSync(descriptor);
+            }
           };
           if (timing === "before") replaceCredentials();
           const result = await getUsageLimits(baseOptions(home, {

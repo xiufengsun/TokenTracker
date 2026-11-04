@@ -16,6 +16,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { parse: parseToml } = require("smol-toml");
 
 const DEVIN_PLAN_STATUS_URL =
   "https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetPlanStatus";
@@ -35,24 +36,6 @@ function credentialsError(message) {
   const error = new Error(message);
   error.code = "CREDENTIALS_INVALID";
   return error;
-}
-
-// Minimal root-level TOML reader for the CLI-written credentials file: bare
-// `key = value` lines before the first `[section]`, nothing else.
-function parseDevinCredentialsToml(raw) {
-  const fields = {};
-  for (const line of String(raw).split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    if (trimmed.startsWith("[")) break;
-    const match = /^([A-Za-z0-9_]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s#]+))\s*(?:#.*)?$/.exec(
-      trimmed,
-    );
-    if (!match) continue;
-    const [, key, doubleQuoted, singleQuoted, bare] = match;
-    fields[key] = doubleQuoted ?? singleQuoted ?? bare ?? "";
-  }
-  return fields;
 }
 
 // A credential-file revision, not a token fingerprint or account claim. Both
@@ -103,7 +86,17 @@ function readDevinCredentials({ home, env = process.env } = {}) {
   } finally {
     if (descriptor !== undefined) fs.closeSync(descriptor);
   }
-  const fields = parseDevinCredentialsToml(raw);
+  // Decode the credential document, then select only the root-level auth
+  // fields, like the other providers' structured credential readers.
+  let fields;
+  try {
+    fields = parseToml(raw);
+  } catch {
+    // Parser errors may quote credentials; expose only an owned message.
+    throw credentialsError(
+      "Could not parse the Devin CLI credentials file — run `devin auth login` to sign in again.",
+    );
+  }
   const apiKey = isNonEmptyString(fields.windsurf_api_key)
     ? fields.windsurf_api_key.trim()
     : null;
