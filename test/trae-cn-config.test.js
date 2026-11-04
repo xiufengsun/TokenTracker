@@ -151,17 +151,21 @@ test("resolveTraeCnStoragePath returns null when no CN client is installed", () 
   assert.equal(resolveTraeCnStoragePath({ platform: "linux", home: parent, env: {} }), null);
 });
 
-test("resolveTraeCnStoragePath finds the classic client through a junction", { skip: process.platform !== "win32" }, () => {
+test("resolveTraeCnStoragePath finds and reads the classic client through a junction", (t) => {
   const parent = makeTraeCnHome();
   const realHome = makeTraeCnHome();
-  writeStorage(realHome);
-  // mklink /D relocation is the community-standard way to move Trae CN off
-  // C:; statSync follows the junction, so discovery needs no special casing.
+  t.after(() => {
+    fs.rmSync(parent, { recursive: true, force: true });
+    fs.rmSync(realHome, { recursive: true, force: true });
+  });
+  writeStorage(realHome, { token: "junction-jwt-canary" });
+  // Windows creates a real junction; POSIX exercises equivalent symlink IO.
   fs.symlinkSync(realHome, path.join(parent, "Trae CN"), "junction");
   assert.equal(
     resolveTraeCnStoragePath({ platform: "win32", home: "C:\\u", env: { APPDATA: parent } }),
     path.join(parent, "Trae CN", "User", "globalStorage", "storage.json"),
   );
+  assert.equal(readTraeCnAuthFromStorage({ platform: "win32", home: parent, env: { APPDATA: parent } }).token, "junction-jwt-canary");
 });
 
 test("resolveTraeCnStoragePath hands a non-file storage.json to the reader (fail-closed)", () => {
