@@ -168,7 +168,7 @@ export function SessionDetailModal({ session, subagents = [], onClose }) {
           <section aria-label={copy("sessions.detail.consumption")}>
             <dl className="grid grid-cols-2 overflow-hidden rounded-lg border border-oai-gray-200 dark:border-oai-gray-800">
               <Kpi label={copy("sessions.col.tokens")}>{formatCompactNumber(ownTokens + subagentTokens)}</Kpi>
-              <Kpi label={copy("sessions.col.cost")} className="border-l">{combinedPartial ? "≥" : ""}{formatCost(ownCost + subagentCost)}</Kpi>
+              <Kpi label={copy("sessions.col.cost")} className="border-l">{combinedPartial && ownCost + subagentCost === 0 ? copy("dashboard.cost_breakdown.unpriced_label") : <>{combinedPartial ? "≥" : ""}{formatCost(ownCost + subagentCost)}</>}</Kpi>
               <Kpi label={copy("sessions.summary.speed")} className="border-t" title={hasSpeed ? copy("sessions.performance.samples", { count: performance.estimated_request_count }) : copy("sessions.detail.no_speed")}>
                 {hasSpeed ? <SessionPerformance performance={performance} /> : "—"}
               </Kpi>
@@ -186,7 +186,7 @@ export function SessionDetailModal({ session, subagents = [], onClose }) {
                   <div key={row.label} className="grid grid-cols-[minmax(0,1fr)_80px_88px] items-baseline gap-3 text-sm">
                     <dt className="text-oai-gray-600 dark:text-oai-gray-300">{row.label}</dt>
                     <dd className="text-right tabular-nums">{formatCompactNumber(row.tokens)}</dd>
-                    <dd className="text-right tabular-nums">{row.partial ? "≥" : ""}{formatCost(row.cost)}</dd>
+                    <dd className="text-right tabular-nums">{row.partial && row.cost === 0 ? copy("dashboard.cost_breakdown.unpriced_label") : <>{row.partial ? "≥" : ""}{formatCost(row.cost)}</>}</dd>
                   </div>
                 ))}
               </dl>

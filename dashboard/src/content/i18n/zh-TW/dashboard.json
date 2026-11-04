@@ -1,4 +1,5 @@
 {
+  "limits.claude.custom_backend": "自訂後端 — Anthropic 額度不適用",
   "cloud.membership.tools_title": "工具與帳單",
   "trend.monitor.pin_hint": "點擊柱子固定並捲動查看詳情",
   "usage.overview.all_tools": "全部",

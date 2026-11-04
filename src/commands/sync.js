@@ -4630,6 +4630,12 @@ async function readQueueBatch(queuePath, startOffset, maxBuckets) {
       // rows whose input_tokens still include cached tokens (6-7x inflated) —
       // while the local dashboard showed corrected numbers.
       bucket = require("../lib/local-api").normalizeQueueRow(bucket);
+      // Backend origins are local provenance; the current cloud accounting
+      // schema has no backend dimension. Do not disclose gateway hosts there.
+      if (bucket.backend_usage) {
+        bucket = { ...bucket };
+        delete bucket.backend_usage;
+      }
       bucketMap.set(`${source}|${model}|${hourStart}`, bucket);
       linesRead += 1;
       if (linesRead >= maxBuckets) break;

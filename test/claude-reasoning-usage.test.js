@@ -42,9 +42,11 @@ test("Claude reasoning details survive incremental parsing without double billin
     assert.equal(row.output_tokens, 518 - reasoning);
     assert.equal(row.total_tokens, 1058);
     assert.equal(row.input_tokens + row.cached_input_tokens + row.cache_creation_input_tokens + row.output_tokens + row.reasoning_output_tokens, row.total_tokens);
-    const beforeCost = computeRowCost({ ...row, output_tokens: 518, reasoning_output_tokens: 0 });
+    assert.equal(computeRowCost(row), 0); // No backend observations: unknown pricing.
+    const priced = { ...row, backend_usage: undefined };
+    const beforeCost = computeRowCost({ ...priced, output_tokens: 518, reasoning_output_tokens: 0 });
     assert.ok(beforeCost > 0);
-    assert.ok(Math.abs(computeRowCost(row) - beforeCost) < 1e-12);
+    assert.ok(Math.abs(computeRowCost(priced) - beforeCost) < 1e-12);
     await parseClaudeIncremental(options);
     assert.equal(fs.readFileSync(queuePath, "utf8"), saved);
   }

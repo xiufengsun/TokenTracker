@@ -1,3 +1,4 @@
+const { hasUnknownBackendCost } = require("./claude-backend");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -2942,6 +2943,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         if (!sa.models.has(mdl))
           sa.models.set(mdl, { model: mdl, model_id: mdl, pricing: getModelPricingInfo(mdl, { source: src }), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0, total_cost_usd: "0" } });
         const ma = sa.models.get(mdl);
+        if (hasUnknownBackendCost(row)) ma.pricing = getModelPricingInfo(mdl, row);
         const reportedCost = ["grok", "cline"].includes(src) && Number(row.total_cost_usd) > 0;
         const costSource = reportedCost ? "provider_reported" : "model_pricing";
         ma.cost_source = ma.cost_source && ma.cost_source !== costSource ? "mixed" : costSource;

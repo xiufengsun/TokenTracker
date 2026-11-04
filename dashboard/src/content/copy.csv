@@ -2170,3 +2170,4 @@ settings.local_data.local_history_only,dashboard,DashboardPage,LocalDataSection,
 leaderboard.profile_modal.window.lifetime,dashboard,LeaderboardProfileModal,StatCards,lifetime,"Totals: all time. Active days, daily average and breakdowns: {{from}} to {{to}}.",,active
 leaderboard.profile_modal.window.period,dashboard,LeaderboardProfileModal,StatCards,period,Stats: {{from}} to {{to}}.,,active
 leaderboard.profile_modal.window.average,dashboard,LeaderboardProfileModal,StatCards,average,"Window cost divided by {{days}} calendar days, including days without usage.",,active
+limits.claude.custom_backend,ui,LimitsPage,UsageLimitsPanel,status,Custom backend — Anthropic limits not applicable,,active

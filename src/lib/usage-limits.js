@@ -1,3 +1,4 @@
+const { readCustomBackend } = require("./claude-backend");
 const cp = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -56,7 +57,8 @@ const execFileAsync = promisify(cp.execFile);
 // is never served (or joined onto) a response fetched while it was on, an aggregate
 // fetched while Antigravity was enabled is never served after the opt-out is set,
 // and a response fetched for a visibility selection is never served to one made
-// under a different one. Key = `${devin}-${antigravity}[-<hidden ids>]`.
+// under a different one. Custom Claude origins also partition cached/in-flight
+// responses so switching endpoints cannot resurrect Anthropic quota bars.
 const USAGE_LIMITS_BASE_SELECTION_KEYS = ["off-on", "off-off", "on-on", "on-off"];
 const cacheBySelection = {};
 for (const key of USAGE_LIMITS_BASE_SELECTION_KEYS) cacheBySelection[key] = { data: null, expiresAtMs: 0 };
@@ -5036,7 +5038,14 @@ function cacheExpiresAtMs(data, fetchedAtMs) {
 
 /** Return cached quota or share one in-flight fetch for the requested provider selection. */
 async function getUsageLimits(options = {}) {
-  const selection = usageLimitsSelectionKey(options);
+  // Resolve current routing before any aggregate cache or in-flight selection.
+  // Keep this snapshot for the fetch so a settings change during an await cannot
+  // publish one backend's response into another backend's cache partition.
+  const claudeBackend = normalizeHiddenProviders(options.hiddenProviders)?.includes("claude")
+    ? null
+    : readCustomBackend({ home: options.home || os.homedir(), env: options.env });
+  const customOrigin = claudeBackend?.backend === "custom" ? claudeBackend.backend_origin : null;
+  const selection = usageLimitsSelectionKey(options) + (customOrigin ? `-claude:${customOrigin}` : "");
   const cache = cacheBySelection[selection];
   const nowMs = Date.now();
   // Unseen selections (a hidden set never requested before this process's
@@ -5050,6 +5059,7 @@ async function getUsageLimits(options = {}) {
   const cacheGeneration = usageLimitsCacheGeneration;
   const promise = fetchUsageLimitsUncached({
     ...options,
+    claudeBackend,
     selectionKey: selection,
     cacheGeneration,
   }).finally(() => {
@@ -5082,6 +5092,7 @@ async function fetchUsageLimitsUncached({
   // "fetch every configured provider" (the legacy behavior clients that don't
   // send the parameter keep getting).
   hiddenProviders = null,
+  claudeBackend = null,
   // Generation captured by getUsageLimits before the fetch began. A provider
   // key save bumps it, and this fetch must then stop at returning its own
   // result: publishing it would restore pre-save data for every later caller.
@@ -5099,16 +5110,17 @@ async function fetchUsageLimitsUncached({
   const injectedNowMs = Number.isFinite(nowMs) ? nowMs : undefined;
   nowMs = injectedNowMs ?? Date.now();
   const hiddenSet = new Set(normalizeHiddenProviders(hiddenProviders) || []);
+  const customClaudeBackend = !hiddenSet.has("claude") && claudeBackend?.backend === "custom";
 
   // A hidden provider must not have its local credentials read at all (#956):
   // these upfront token/subscription probes are the first file and keychain
   // touches of the Claude/Codex chains, so they are gated here and every
   // downstream step keys off the resulting null token.
   const [claudeOauth, claudeSubscription, codexAuth] = await Promise.all([
-    hiddenSet.has("claude")
+    hiddenSet.has("claude") || customClaudeBackend
       ? Promise.resolve(null)
       : Promise.resolve().then(() => readClaudeCodeOauthToken({ platform, securityRunner, home, nowMs })),
-    hiddenSet.has("claude")
+    hiddenSet.has("claude") || customClaudeBackend
       ? Promise.resolve(null)
       : Promise.resolve().then(() => detectClaudeCodeSubscriptionDetails({ platform, securityRunner, home })),
     hiddenSet.has("codex")
@@ -5341,7 +5353,9 @@ async function fetchUsageLimitsUncached({
   ]);
 
   let claude;
-  if (!claudeToken) {
+  if (customClaudeBackend) {
+    claude = { configured: true, ...claudeBackend, limits_status: "not_applicable", cost_status: "unknown", error: null };
+  } else if (!claudeToken) {
     // Claude Code blanks `accessToken`/`refreshToken` in place when its login expires
     // (macOS Keychain item and .credentials.json alike) instead of removing the entry,
     // so "no token" is ambiguous: never signed in, or signed in and expired. An entry
@@ -5417,7 +5431,7 @@ async function fetchUsageLimitsUncached({
   // waiting out the poll interval. Re-read here (not the pre-fetch value) so a
   // cool-down just armed by this cycle's 429 is included; a successful read above
   // cleared the file, so this is null in the happy path.
-  if (claude.configured) {
+  if (claude.configured && claude.limits_status !== "not_applicable") {
     const claudeCooldownMs = readClaudeRateLimitRetryAtMs({
       home,
       nowMs,
@@ -5897,7 +5911,7 @@ async function fetchUsageLimitsUncached({
 
   const data = {
     fetched_at: new Date(nowMs).toISOString(),
-    claude: withPlanLabel(claude, claudePlanType, "Claude"),
+    claude: claude.limits_status === "not_applicable" ? claude : withPlanLabel(claude, claudePlanType, "Claude"),
     codex: withPlanLabel(codex, codex.plan_type, "Codex"),
     cursor: withPlanLabel(cursorLimits, cursorLimits.membership_type, "Cursor"),
     // Kimi's subType (TYPE_PURCHASE/TYPE_EVENT) is the credit *source*, not a plan
@@ -5946,6 +5960,9 @@ async function fetchUsageLimitsUncached({
     // Devin) is metadata-free by contract — it was never fetched, so it must
     // not be aged into a "disk-cache"/stale provenance.
     if (provider.configured === false && Object.keys(provider).length === 1) continue;
+    // A custom-backend state is local routing information, not an official
+    // provider API reading with a capture time or quota freshness.
+    if (provider.limits_status === "not_applicable") continue;
     const capturedAt = provider.cached_at || data.fetched_at;
     const ageMs = Math.max(0, nowMs - Date.parse(capturedAt || ""));
     const stale = provider.stale === true || (Number.isFinite(ageMs) && ageMs > 10 * 60 * 1000);

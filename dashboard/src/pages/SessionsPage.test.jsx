@@ -193,6 +193,14 @@ const makeThreadSession = (overrides) => ({
 });
 
 describe("SessionsPage", () => {
+  it("shows unknown-only Claude session cost as Unpriced instead of free", async () => {
+    getSessions.mockResolvedValue({ ...response, session_count: 1, returned_count: 1,
+      sessions: [{ ...response.sessions[0], cost_usd: 0, cost_is_partial: true }] });
+    render(<SessionsPage />);
+    expect((await screen.findAllByText("Unpriced")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("≥$0.00")).not.toBeInTheDocument();
+  });
+
   it("shows a structural skeleton while the initial sessions request is pending", () => {
     getSessions.mockReturnValue(new Promise(() => {}));
     render(<SessionsPage />);

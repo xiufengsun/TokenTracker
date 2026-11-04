@@ -1,3 +1,4 @@
+const { preserveLegacyClaudeGroups, preserveLegacyClaudePrefix, createBackendResolver, mergeBackendUsage, claudeLines } = require("./claude-backend");
 const { claudeUserIdentity, collectClaudeForkAliases } = require("./claude-user-identity");
 const fs = require("node:fs/promises");
 const fssync = require("node:fs");
@@ -1085,6 +1086,9 @@ async function parseClaudeIncremental({
   const prevHashes = Array.isArray(cursors.claudeHashes) ? cursors.claudeHashes : [];
   const seenMessageHashes = new Set(prevHashes);
   const defaultSource = normalizeSourceInput(source) || "claude";
+  preserveLegacyClaudeGroups(files.filter((entry) =>
+    (typeof entry === "string" ? defaultSource : normalizeSourceInput(entry?.source) || defaultSource) === "claude"
+  ).map((entry) => typeof entry === "string" ? entry : entry?.path), path.dirname(queuePath));
   // Resolve all changed-file lineage before counting: fork files may sort first.
   const forkTimes = new Map();
   const forkAliases = await collectClaudeForkAliases(files, cursors,
@@ -1154,6 +1158,7 @@ async function parseClaudeIncremental({
     const truncated = sameInode && prevOffset > st.size;
     const startOffset = sameInode && !truncated ? prevOffset : 0;
 
+    if (fileSource === "claude") preserveLegacyClaudePrefix(filePath, path.dirname(queuePath), startOffset);
     let fileId = null;
     if (seenFileIds) {
       const cachedFileId =
@@ -1288,6 +1293,7 @@ async function parseClaudeIncremental({
       projectKey,
       seenMessageHashes,
       forkAliases,
+      backendResolver: fileSource === "claude" ? createBackendResolver(filePath, path.dirname(queuePath)) : null,
     });
 
     cursors.files[key] = {
@@ -3135,6 +3141,7 @@ async function parseClaudeFile({
   projectKey,
   seenMessageHashes,
   forkAliases,
+  backendResolver,
 }) {
   const st = fileStat || (await fs.stat(filePath).catch(() => null));
   if (!st || !st.isFile()) return { endOffset: startOffset, eventsAggregated: 0 };
@@ -3142,15 +3149,14 @@ async function parseClaudeFile({
   const endOffset = st.size;
   if (startOffset >= endOffset) return { endOffset, eventsAggregated: 0 };
 
-  const stream = fssync.createReadStream(filePath, { encoding: "utf8", start: startOffset });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-
   let eventsAggregated = 0;
   // Separator-agnostic: WSL installs are scanned over \\wsl$ UNC paths where
   // path.join produces backslashes, and a forward-slash-only check would
   // misclassify subagent transcripts as main sessions (#307).
   const isMainSession = !/[\\/]subagents[\\/]/.test(filePath);
-  for await (const line of rl) {
+  let byteOffset = startOffset;
+  for await (const { line, start: lineStart, end } of claudeLines(filePath, startOffset, endOffset)) {
+    byteOffset = end;
     if (!line) continue;
 
     // Count user-typed messages as conversations (main sessions only).
@@ -3212,6 +3218,8 @@ async function parseClaudeFile({
 
     if (dedupHash) seenMessageHashes.add(dedupHash);
     delta.conversation_count = 0;
+    const backend = backendResolver?.(obj, lineStart, byteOffset);
+    if (backend) delta.backend_usage = [{ ...delta, ...backend }];
 
     const bucketStart = toUtcHalfHourStart(tokenTimestamp);
     if (!bucketStart) continue;
@@ -3233,9 +3241,7 @@ async function parseClaudeFile({
     eventsAggregated += 1;
   }
 
-  rl.close();
-  stream.close?.();
-  return { endOffset, eventsAggregated };
+  return { endOffset: byteOffset, eventsAggregated };
 }
 
 async function parseGeminiFile({
@@ -3697,6 +3703,7 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
           total_cost_usd: totals.total_cost_usd || 0,
           usage_precision: usagePrecision || undefined,
           ...prioritySubsetOf(totals),
+          ...(totals.backend_usage ? { backend_usage: totals.backend_usage } : {}),
           conversation_count: totals.conversation_count,
         }));
         bucket.queuedKey = key;
@@ -3784,6 +3791,7 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
             total_cost_usd: totals.total_cost_usd || 0,
             usage_precision: usagePrecision || undefined,
             ...prioritySubsetOf(totals),
+            ...(totals.backend_usage ? { backend_usage: totals.backend_usage } : {}),
             conversation_count: totals.conversation_count,
           }),
         );
@@ -3865,6 +3873,7 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
         total_cost_usd: unknownBucket.totals.total_cost_usd || 0,
         usage_precision: usagePrecision || undefined,
         ...prioritySubsetOf(unknownBucket.totals),
+        ...(unknownBucket.totals.backend_usage ? { backend_usage: unknownBucket.totals.backend_usage } : {}),
         conversation_count: unknownBucket.totals.conversation_count,
       }),
     );
@@ -3914,6 +3923,7 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
           billable_total_tokens: group.totals.billable_total_tokens ?? group.totals.total_tokens,
           total_cost_usd: group.totals.total_cost_usd || 0,
           ...prioritySubsetOf(group.totals),
+          ...(group.totals.backend_usage ? { backend_usage: group.totals.backend_usage } : {}),
           conversation_count: group.totals.conversation_count,
         }),
       );
@@ -3961,6 +3971,7 @@ async function enqueueTouchedProjectBuckets({
         project_ref: projectRef,
         project_key: projectKey,
         source: bucket.source,
+        ...(totals.backend_usage ? { backend_usage: totals.backend_usage } : {}),
         hour_start: bucket.hour_start,
         input_tokens: totals.input_tokens,
         cached_input_tokens: totals.cached_input_tokens,
@@ -4572,6 +4583,7 @@ function prioritySubsetOf(totals) {
 }
 
 function addTotals(target, delta) {
+  mergeBackendUsage(target, delta);
   for (const [field] of SPEED_TIER_SUBSET_FIELDS) {
     const value = Number(delta?.[field]) || 0;
     if (value > 0) target[field] = (Number(target[field]) || 0) + value;

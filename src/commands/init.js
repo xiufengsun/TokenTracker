@@ -1453,6 +1453,7 @@ function normalizePlatform(value) {
 }
 
 function buildNotifyHandler({ trackerDir, packageName }) {
+  const { backendFromUrl, captureClaudeBackend, hashClaudeRange } = require("../lib/claude-backend");
   // Keep this file dependency-free: Node built-ins only.
   // It must never block Codex; it spawns sync in the background and exits 0.
   const queueSignalPath = path.join(trackerDir, "notify.signal");
@@ -1525,6 +1526,14 @@ if (debugEnabled) {
     }
   } catch (_) {}
 }
+
+// Capture before the throttle and before spawning sync. Never persist stdin.
+if (source === 'claude') {
+  try { captureClaudeBackend(trackerDir, JSON.parse(fs.readFileSync(0, 'utf8'))); } catch (_) {}
+}
+${backendFromUrl.toString()}
+${hashClaudeRange.toString()}
+${captureClaudeBackend.toString()}
 
 // Throttle spawn: at most once per 20 seconds.
 try {

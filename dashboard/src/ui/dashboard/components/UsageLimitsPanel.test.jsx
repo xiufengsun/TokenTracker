@@ -53,6 +53,16 @@ afterEach(() => {
 });
 
 describe("UsageLimitsPanel", () => {
+  it.each([
+    [EN_LOCALE, "Custom backend — Anthropic limits not applicable"],
+    [ZH_CN_LOCALE, "自定义后端 — Anthropic 限额不适用"],
+  ])("shows custom Claude limits explicitly in %s", async (locale, message) => {
+    setCopyLocale(locale);
+    render(<UsageLimitsPanel order={["claude"]} claude={{ configured: true, backend: "custom", limits_status: "not_applicable" }} />);
+    await waitFor(() => expect(screen.getByText(message)).toBeVisible());
+    expect(screen.queryByText("0%")).not.toBeInTheDocument();
+  });
+
   afterEach(() => {
     setCopyLocale(EN_LOCALE);
   });

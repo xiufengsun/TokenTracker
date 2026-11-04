@@ -1,4 +1,5 @@
 {
+  "limits.claude.custom_backend": "自定义后端 — Anthropic 限额不适用",
   "cloud.membership.tools_title": "工具与账单",
   "trend.monitor.pin_hint": "点击柱子固定并滚动查看详情",
   "usage.overview.all_tools": "全部",
