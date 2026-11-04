@@ -65,18 +65,23 @@ Qoder 2026-08 起（app 0.1.2+）不再写 `SharedClientCache/local.db`，会话
 
 `parseQoderNewIncremental` 因此只把这类行计为活动（`conversation_count`），不伪造 token，也不计算
 成本；credit 汇总写入队列旁边的 `~/.tokentracker/tracker/qoder-credits.json`（CN 为
-`qoder-cn-credits.json`，权限 `0600`）。sidecar 形状与 Kiro 共用同一份写入器：每个安装目录一条
-`installs` 记录，顶层给出合计，30 天未更新的安装会被剔除。
+`qoder-cn-credits.json`；POSIX 下属主可读写 `0600`，Windows 上 POSIX 权限位不起作用，访问由 NTFS ACL
+决定）。sidecar 形状与 Kiro 共用同一份写入器：每个安装目录一条
+`installs` 记录（Windows 上该键按大小写归一，避免同一目录被记成两个安装），顶层给出合计，30 天未更新的安装会被剔除。
 
 - `usage-limits` 用 `readQoderCreditsSummary()` 读回，并通过 `withQoderTrackedCredits()` 合并到
   `qoder` / `qoderCn` 面板数据；用量面板以「Local usage: N credits · M turns」一行展示。
 - 0.4.x 桌面环境拿不到 `SharedClientCache/.info.json`，限额链路会返回 `configured:false`。此时只要
   sidecar 存在（说明本地确实解析过会话），面板仍显示本地消耗，而不是“未连接”。
 - 不存在官方的 credit→token 或 credit→USD 汇率，所以这个数字始终以 credit 为单位呈现，任何换算都会是猜测。
-- 隐私边界不变：sidecar 只含数量与时间，不含提示词或回复内容。
+- 归零只在“目录还在、里面没有 transcript”时发生：那说明安装仍在、消耗停了。若目录本身不存在，或某个
+  文件读失败（权限、未挂载的卷），这次扫描不构成证据，保留上一次的值，宁可滞后也不虚报成 0。
+- 隐私边界：sidecar 只含数量与时间，不含提示词或回复内容；但 `installs` 的键是安装目录的绝对路径
+  （如 `/Users/<name>/.qoder/projects`），分享该文件前请先去掉这个键。
 
-回归测试：`node --test test/qoder-new-parser.test.js`（去重、幂等、多安装、CN 独立文件、删除会话后归零）
-与 `node --test test/usage-limits.test.js`（`getUsageLimits` 在限额不可用时仍上报本地 credit）。
+回归测试：`node --test test/qoder-new-parser.test.js`（去重、幂等、多安装、CN 独立文件、读取失败不压低总数）、
+`node --test test/sync-qoder-credits.test.js`（清空目录归零、目录缺失保留原值）与
+`node --test test/usage-limits.test.js`（`getUsageLimits` 在限额超时或不可用时仍上报本地 credit）。
 
 ## 验证证据
 
