@@ -45,6 +45,7 @@ const {
   resolveQoderCnProjectsDir,
   listQoderNewSessionFiles,
   parseQoderNewIncremental,
+  writeQoderCreditsSidecar,
   resolveKiroDbPath,
   resolveKiroJsonlPath,
   resolveKiroBasePath,
@@ -542,6 +543,14 @@ async function clearSyncSkip(trackerDir) {
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
+}
+
+// A Qoder install is identified by its projects dir. Case-fold it on Windows,
+// exactly as the international/CN divergence guard does, so one directory can
+// never be written into the credits sidecar twice under two spellings.
+function qoderInstallKey(projectsDir) {
+  const normalized = path.normalize(projectsDir);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 async function cmdSync(argv, context = {}) {
@@ -1551,13 +1560,23 @@ async function cmdSync(argv, context = {}) {
             onProgress: makeProviderProgress("Qoder (new)"),
             sourceKey: "qoder",
             cursorKey: "qoderNew",
-            creditsInstallKey: projectsDir,
+            creditsInstallKey: qoderInstallKey(projectsDir),
           });
           qoderResult = {
             recordsProcessed: qoderResult.recordsProcessed + (parsed.messagesProcessed || 0),
             eventsAggregated: qoderResult.eventsAggregated + (parsed.eventsAggregated || 0),
             bucketsQueued: qoderResult.bucketsQueued + (parsed.bucketsQueued || 0),
           };
+        } else if (fssync.existsSync(projectsDir)) {
+          // The dir exists but holds no transcript: the install is still here
+          // and stopped spending, so publish zero instead of letting the last
+          // total keep showing. A missing dir is not this case — that install
+          // may simply be offline, and its proven total must survive.
+          await writeQoderCreditsSidecar({
+            queuePath,
+            sourceKey: "qoder",
+            installKey: qoderInstallKey(projectsDir),
+          });
         }
       } catch (err) {
         warnProviderParseFailure("Qoder (new)", err, opts);
@@ -1624,11 +1643,7 @@ async function cmdSync(argv, context = {}) {
       try {
         const cnProjectsDir = resolveQoderCnProjectsDir({ home, env: process.env });
         const intlProjectsDir = resolveQoderProjectsDir({ home, env: process.env });
-        const projectsDirKey = (p) => {
-          const normalized = path.normalize(p);
-          return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-        };
-        if (projectsDirKey(cnProjectsDir) !== projectsDirKey(intlProjectsDir)) {
+        if (qoderInstallKey(cnProjectsDir) !== qoderInstallKey(intlProjectsDir)) {
           const sessionFiles = await listQoderNewSessionFiles(cnProjectsDir);
           if (sessionFiles.length > 0) {
             if (progress?.enabled) {
@@ -1642,13 +1657,19 @@ async function cmdSync(argv, context = {}) {
               onProgress: makeProviderProgress("Qoder CN (new)"),
               sourceKey: "qoder-cn",
               cursorKey: "qoderCnNew",
-              creditsInstallKey: cnProjectsDir,
+              creditsInstallKey: qoderInstallKey(cnProjectsDir),
             });
             qoderCnResult = {
               recordsProcessed: qoderCnResult.recordsProcessed + (parsed.messagesProcessed || 0),
               eventsAggregated: qoderCnResult.eventsAggregated + (parsed.eventsAggregated || 0),
               bucketsQueued: qoderCnResult.bucketsQueued + (parsed.bucketsQueued || 0),
             };
+          } else if (fssync.existsSync(cnProjectsDir)) {
+            await writeQoderCreditsSidecar({
+              queuePath,
+              sourceKey: "qoder-cn",
+              installKey: qoderInstallKey(cnProjectsDir),
+            });
           }
         }
       } catch (err) {
