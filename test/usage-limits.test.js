@@ -6045,6 +6045,37 @@ describe("getUsageLimits qoder local credits", () => {
     return trackerDir;
   };
 
+  // A Qoder Desktop account-usage summary line, which the quota reader picks up
+  // from the app's own log and labels `local-log`.
+  const writeQoderUsageLog = (tmp, observedAt = new Date().toISOString()) => {
+    const logDir = path.join(
+      tmp,
+      "Library",
+      "Application Support",
+      "com.qoder.app.stable",
+      "logs",
+      "sess-1",
+    );
+    fs.mkdirSync(logDir, { recursive: true });
+    const summary = {
+      operation: "account.getQuotaUsage",
+      displayMode: "qoder",
+      hasQoderUsage: true,
+      qoderUsage: {
+        userType: "personal_standard",
+        usageType: "credits",
+        expiresAt: 253_402_214_400_000,
+        totalUsagePercentage: 20,
+        isQuotaExceeded: false,
+        userQuota: { total: 100, used: 20, remaining: 80, percentage: 20, unit: "credits" },
+      },
+    };
+    fs.writeFileSync(
+      path.join(logDir, "main.log"),
+      `[${observedAt}] [INFO] [main] [Auth] [AccountUsage] usage summary ${JSON.stringify(summary)}\n`,
+    );
+  };
+
   it("surfaces transcript credits when the quota session is gone", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-qoder-credits-"));
@@ -6064,6 +6095,10 @@ describe("getUsageLimits qoder local credits", () => {
       assert.equal(result.qoder.tracked_credits, 8360.73);
       assert.equal(result.qoder.tracked_credit_records, 51304);
       assert.equal(result.qoder.tracked_credit_sessions, 96);
+      // The credits were read from the local transcripts, so the row must not
+      // inherit the "provider-api" default the quota reader never produced.
+      assert.equal(result.qoder.provenance.source, "local-transcript");
+      assert.equal(result.qoder.provenance.confidence, "observed");
       assert.equal(
         result.qoderCn.tracked_credits,
         undefined,
@@ -6097,6 +6132,35 @@ describe("getUsageLimits qoder local credits", () => {
         "a timed-out quota read still has first-party local spend to show",
       );
       assert.equal(result.qoder.tracked_credit_records, 51304);
+      assert.equal(result.qoder.provenance.source, "local-transcript");
+      assert.equal(result.qoder.provenance.confidence, "observed");
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the quota reader's own source when it reports one", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-qoder-log-"));
+    try {
+      withTrackerDir(tmp, "qoder-credits.json", sidecarPayload());
+      writeQoderUsageLog(tmp);
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "darwin",
+        providerTimeoutMs: 1000,
+        commandRunner() { return { status: 1, stdout: "" }; },
+        fetchImpl() { return new Promise(() => {}); },
+      });
+      assert.equal(result.qoder.source, "local-log");
+      assert.equal(result.qoder.tracked_credits, 8360.73);
+      assert.equal(
+        result.qoder.provenance.source,
+        "local-log",
+        "a merged credit count must not overwrite the quota row's own provenance",
+      );
+      assert.equal(result.qoder.provenance.confidence, "observed");
     } finally {
       resetUsageLimitsCache();
       fs.rmSync(tmp, { recursive: true, force: true });

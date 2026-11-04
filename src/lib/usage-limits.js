@@ -1741,13 +1741,22 @@ function readQoderCreditsSummary({
 function withQoderTrackedCredits(value, { home = os.homedir(), sidecarFile } = {}) {
   const tracked = readQoderCreditsSummary({ home, sidecarFile });
   if (!tracked) return value;
-  if (!value || typeof value !== "object") {
-    return { configured: true, error: null, ...tracked };
+  const base = value && typeof value === "object" ? value : null;
+  const merged = base
+    ? { ...base, ...tracked }
+    : { configured: true, error: null, ...tracked };
+  if (merged.configured === false && !merged.error) {
+    merged.configured = true;
+    merged.error = null;
   }
-  if (value.configured === false && !value.error) {
-    return { ...value, configured: true, error: null, ...tracked };
+  // The credit figure comes from the local transcripts, not from the quota
+  // endpoint, so a row the quota read could not describe must not fall through
+  // to the "provider-api" default — that would present observed local spend as
+  // an official API report. A source the quota reader did produce is kept.
+  if (typeof merged.source !== "string" || !merged.source) {
+    merged.source = "local-transcript";
   }
-  return { ...value, ...tracked };
+  return merged;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
