@@ -584,8 +584,7 @@ class DashboardViewModel: ObservableObject {
         )
         guard !affectedSummaries.isEmpty else { return }
 
-        let hasWidgets = await WidgetSnapshotWriter.hasConfiguredWidgets()
-        if isPopoverVisible || hasWidgets {
+        if isPopoverVisible {
             await loadAll()
         } else {
             needsFullRefreshOnPopoverOpen = true

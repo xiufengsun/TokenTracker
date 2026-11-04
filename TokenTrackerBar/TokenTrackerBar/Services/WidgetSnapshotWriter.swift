@@ -33,18 +33,15 @@ enum WidgetSnapshotWriter {
         let usageLimits: UsageLimitsResponse?
     }
 
-    /// Preserve the widget freshness contract for users who placed a TokenTracker widget
-    /// or whose snapshot container is active.
+    /// Preserve the pre-existing five-minute widget freshness contract only
+    /// for users who actually placed a TokenTracker widget. Everyone else can
+    /// stay on the lightweight hidden refresh path.
     static func hasConfiguredWidgets() async -> Bool {
-        let hasSnapshotOnDisk = WidgetSnapshotStore.fallbackSnapshotURL().map {
-            FileManager.default.fileExists(atPath: $0.path)
-        } ?? false
-
-        return await withCheckedContinuation { continuation in
+        await withCheckedContinuation { continuation in
             WidgetCenter.shared.getCurrentConfigurations { result in
                 switch result {
                 case .success(let configurations):
-                    continuation.resume(returning: !configurations.isEmpty || hasSnapshotOnDisk)
+                    continuation.resume(returning: !configurations.isEmpty)
                 case .failure:
                     // Fail toward freshness: a transient WidgetKit query error
                     // must not leave an existing widget stale indefinitely.

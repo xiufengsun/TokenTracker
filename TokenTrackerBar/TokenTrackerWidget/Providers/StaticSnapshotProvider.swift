@@ -24,7 +24,7 @@ struct StaticSnapshotProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<StaticEntry>) -> Void) {
         let snap = WidgetSnapshotStore.read() ?? .empty
         let entry = StaticEntry(date: Date(), snapshot: snap)
-        let next = Date().addingTimeInterval(60)
+        let next = Date().addingTimeInterval(15 * 60)
         completion(Timeline(entries: [entry], policy: .after(next)))
     }
 }
