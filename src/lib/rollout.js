@@ -7242,6 +7242,10 @@ async function parseQoderNewIncremental({
           timestampMs,
           sessionId: normalizeMessageKeyPart(record?.sessionId || record?.session_id) || filePath,
         });
+      } else {
+        // This row now owns the key, and it says the turn spent nothing — the
+        // earlier value belonged to the record it replaced and must not survive.
+        creditByKey.delete(messageKey);
       }
     }
     if (cb && (fileIdx % 50 === 0 || fileIdx === files.length - 1)) {

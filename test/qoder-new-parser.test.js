@@ -1165,6 +1165,34 @@ test("credits use the record that wins the message key, not the last row read", 
   );
 });
 
+test("a zero-credit rewrite of a message clears the credit it replaced", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  const file = path.join(tmp, "proj", "sess-1.jsonl");
+  writeJsonl(file, [
+    qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "dup", sessionId: "sess-1" }),
+    qRec(
+      { credits: 0, billable: true, input_tokens: 0, output_tokens: 0 },
+      { id: "dup", ts: "2026-09-10T08:01:00.000Z", sessionId: "sess-1" },
+    ),
+  ]);
+  const cursors = {};
+  await parseQoderNewIncremental({
+    sessionFiles: [file], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  const sidecar = readSidecar(queuePath);
+  assert.equal(
+    sidecar.record_count,
+    0,
+    "the winning record carries no credits, so the turn must not be reported",
+  );
+  assert.equal(sidecar.total_credits, 0);
+});
+
 test("an unreadable transcript leaves the previous credit total alone", async (t) => {
   const tmp = tempDir();
   const { queuePath } = tempQueue();
