@@ -4859,7 +4859,7 @@ test("parseRolloutIncremental persists selected-model state and bills an observe
   }
 });
 
-test("parseRolloutIncremental backfills unknown into dominant known model", async () => {
+test("parseRolloutIncremental every-code backfills unknown into dominant known model", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-rollout-"));
   try {
     const rolloutPath = path.join(tmp, "rollout-test.jsonl");
@@ -4922,7 +4922,7 @@ test("parseRolloutIncremental backfills unknown into dominant known model", asyn
 
     await fs.writeFile(rolloutPath, lines.join("\n") + "\n", "utf8");
 
-    const res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath });
+    const res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath, source: "every-code" });
     assert.equal(res.bucketsQueued, 2);
 
     const queued = await readJsonLines(queuePath);
@@ -4941,7 +4941,7 @@ test("parseRolloutIncremental backfills unknown into dominant known model", asyn
   }
 });
 
-test("parseRolloutIncremental chooses dominant model deterministically on tie", async () => {
+test("parseRolloutIncremental every-code chooses dominant model deterministically on tie", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-rollout-"));
   try {
     const rolloutPath = path.join(tmp, "rollout-test.jsonl");
@@ -4998,7 +4998,7 @@ test("parseRolloutIncremental chooses dominant model deterministically on tie", 
 
     await fs.writeFile(rolloutPath, lines.join("\n") + "\n", "utf8");
 
-    const res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath });
+    const res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath, source: "every-code" });
     assert.equal(res.bucketsQueued, 2);
 
     const queued = await readJsonLines(queuePath);
@@ -5257,7 +5257,7 @@ test("parseRolloutIncremental retracts prior every-code alignment when target ch
   }
 });
 
-test("parseRolloutIncremental retracts unknown when known model appears later", async () => {
+test("parseRolloutIncremental every-code retracts unknown when known model appears later", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-rollout-"));
   try {
     const rolloutPath = path.join(tmp, "rollout-test.jsonl");
@@ -5295,7 +5295,7 @@ test("parseRolloutIncremental retracts unknown when known model appears later", 
     ];
     await fs.writeFile(rolloutPath, lines.join("\n") + "\n", "utf8");
 
-    let res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath });
+    let res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath, source: "every-code" });
     assert.equal(res.bucketsQueued, 1);
 
     let queued = await readJsonLines(queuePath);
@@ -5309,7 +5309,7 @@ test("parseRolloutIncremental retracts unknown when known model appears later", 
     ];
     await fs.appendFile(rolloutPath, append.join("\n") + "\n", "utf8");
 
-    res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath });
+    res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath, source: "every-code" });
     assert.equal(res.bucketsQueued, 2);
 
     queued = await readJsonLines(queuePath);

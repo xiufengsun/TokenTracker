@@ -51,14 +51,14 @@ test("observed attribution retains unknown across model switches, restart, and i
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
-test("existing attribution policy is unchanged when observed mode is not enabled", async () => {
+test("Codex defaults to observed attribution without an opt-in", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tt-default-attribution-"));
   try {
     const file = path.join(dir, "rollout-2026-07-01T00-00-00-22222222-2222-4222-8222-222222222222.jsonl");
     const queuePath = path.join(dir, "queue.jsonl");
     await fs.writeFile(file, [event(1, 10, 10), context("model-a"), event(2, 20, 30)].map(line).join(""));
     await parseRolloutIncremental({ rolloutFiles: [file], cursors: {}, queuePath });
-    assert.deepEqual(await rows(queuePath), { "model-a": 30 });
+    assert.deepEqual(await rows(queuePath), { "model-a": 20, unknown: 10 });
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
@@ -70,7 +70,7 @@ test("switching a previously aligned group to observed retracts the stale domina
     await fs.writeFile(file, [event(1, 10, 10), context("model-b"), event(2, 20, 30)].map(line).join(""));
     const cursors = { hourly: { version: 3, buckets: {}, groupQueued: {} } };
     await parseRolloutIncremental({ rolloutFiles: [file], cursors, queuePath });
-    assert.deepEqual(await rows(queuePath), { "model-b": 30 });
+    assert.deepEqual(await rows(queuePath), { "model-b": 20, unknown: 10 });
     // Simulate the alignment state a default-policy group can persist (every-code
     // aligns its unknown bucket to the nearest codex dominant): the unknown tokens
     // were emitted under model-a, which has no bucket of its own in this group.
