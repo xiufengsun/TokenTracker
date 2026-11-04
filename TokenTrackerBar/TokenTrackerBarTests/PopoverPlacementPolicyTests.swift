@@ -90,4 +90,47 @@ final class PopoverPlacementPolicyTests: XCTestCase {
             )
         )
     }
+
+
+    // MARK: - Anchor lifecycle (issue #866)
+
+    func testAnchorWindowIsNeverReused() {
+        XCTAssertFalse(PopoverPlacementPolicy.shouldReuseAnchorWindow())
+    }
+
+    func testSameScreenClickPositionsOnStatusItemButton() {
+        let screen = ObjectIdentifier(NSObject())
+        XCTAssertTrue(
+            PopoverPlacementPolicy.shouldPositionOnStatusItemButton(
+                buttonScreenID: screen,
+                clickScreenID: screen
+            )
+        )
+    }
+
+    func testCrossDisplayClickUsesEphemeralAnchor() {
+        let a = ObjectIdentifier(NSObject())
+        let b = ObjectIdentifier(NSObject())
+        XCTAssertFalse(
+            PopoverPlacementPolicy.shouldPositionOnStatusItemButton(
+                buttonScreenID: a,
+                clickScreenID: b
+            )
+        )
+    }
+
+    func testMissingScreenInfoFallsBackToStatusItemButton() {
+        XCTAssertTrue(
+            PopoverPlacementPolicy.shouldPositionOnStatusItemButton(
+                buttonScreenID: nil,
+                clickScreenID: ObjectIdentifier(NSObject())
+            )
+        )
+        XCTAssertTrue(
+            PopoverPlacementPolicy.shouldPositionOnStatusItemButton(
+                buttonScreenID: ObjectIdentifier(NSObject()),
+                clickScreenID: nil
+            )
+        )
+    }
 }
