@@ -73,10 +73,17 @@ struct DynamicIslandView: View {
     private var island: some View {
         let geo = state.geometry
         let expanded = state.isExpanded
+        // Collapsed + hardware notch: no soft shoulder flare. The native notch
+        // already provides the silhouette; extra horizontal padding would push
+        // the black pill into the menu bar (issue #896).
+        let shoulderRadius: CGFloat = {
+            if expanded { return 8 }
+            if geo.hasNotch { return 0 }
+            return min(6, geo.collapsedHeight / 4)
+        }()
         let islandWidth = expanded
             ? max(DynamicIslandGeometry.expandedWidth, geo.collapsedWidth)
             : geo.collapsedWidth
-        let shoulderRadius = expanded ? CGFloat(8) : min(6, geo.collapsedHeight / 4)
         let renderedWidth = islandWidth + shoulderRadius * 2
         let revealWidth = DynamicIslandVisibilityPolicy.revealWidth(
             progress: state.visibilityProgress,
@@ -174,7 +181,7 @@ struct DynamicIslandView: View {
             }
             .frame(width: geo.wingWidth)
             Spacer()
-                .frame(width: geo.centerGapWidth)
+                .frame(width: geo.collapsedCenterHole)
             buildWingView(for: metrics.right, suppressValue: compactModeEnabled)
                 .frame(width: geo.wingWidth)
         }

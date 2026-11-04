@@ -61,7 +61,22 @@ struct DynamicIslandGeometry: Equatable {
     /// Floor so a tiny value (e.g. "0") still reads as an island wing.
     static let minWingWidth: CGFloat = 44
 
-    var collapsedWidth: CGFloat { centerGapWidth + wingWidth * 2 }
+    var collapsedWidth: CGFloat {
+        DynamicIslandLayoutPolicy.collapsedWidth(
+            centerGapWidth: centerGapWidth,
+            wingWidth: wingWidth,
+            hasNotch: hasNotch
+        )
+    }
+
+    /// Spacer between the two collapsed metric wings.
+    var collapsedCenterHole: CGFloat {
+        DynamicIslandLayoutPolicy.collapsedCenterHole(
+            centerGapWidth: centerGapWidth,
+            wingWidth: wingWidth,
+            hasNotch: hasNotch
+        )
+    }
 
     static let expandedWidth = DynamicIslandLayoutPolicy.expandedWidth
     /// Extra space around the island shape so the drop shadow isn't clipped
@@ -467,11 +482,16 @@ final class DynamicIslandController: NSObject {
     private func geometry(for screen: NSScreen) -> DynamicIslandGeometry {
         // Carry the current content-measured wing width across screen changes;
         // the view re-measures and corrects it if the labels differ.
-        let wingWidth = max(DynamicIslandGeometry.minWingWidth, state.geometry.wingWidth)
+        let priorWing = state.geometry.wingWidth
         let inset = screen.safeAreaInsets.top
         guard inset > 0 else {
             var geo = DynamicIslandGeometry.simulated
-            geo.wingWidth = wingWidth
+            geo.wingWidth = DynamicIslandLayoutPolicy.clampedWingWidth(
+                measured: priorWing,
+                centerGapWidth: geo.centerGapWidth,
+                hasNotch: false,
+                minWingWidth: DynamicIslandGeometry.minWingWidth
+            )
             geo.islandCenterX = screen.frame.midX
             return geo
         }
@@ -480,10 +500,21 @@ final class DynamicIslandController: NSObject {
         let notchWidth = screen.frame.width - leftWidth - rightWidth
         guard notchWidth > 0, notchWidth < screen.frame.width / 2 else {
             var geo = DynamicIslandGeometry.simulated
-            geo.wingWidth = wingWidth
+            geo.wingWidth = DynamicIslandLayoutPolicy.clampedWingWidth(
+                measured: priorWing,
+                centerGapWidth: geo.centerGapWidth,
+                hasNotch: false,
+                minWingWidth: DynamicIslandGeometry.minWingWidth
+            )
             geo.islandCenterX = screen.frame.midX
             return geo
         }
+        let wingWidth = DynamicIslandLayoutPolicy.clampedWingWidth(
+            measured: priorWing,
+            centerGapWidth: notchWidth,
+            hasNotch: true,
+            minWingWidth: DynamicIslandGeometry.minWingWidth
+        )
         return DynamicIslandGeometry(
             centerGapWidth: notchWidth,
             collapsedHeight: inset,
@@ -498,8 +529,14 @@ final class DynamicIslandController: NSObject {
     /// The view measured its wing labels; adopt the tight width so the
     /// collapsed hit-test pill stays snug around the text.
     private func applyWingWidth(_ width: CGFloat) {
-        let clamped = max(DynamicIslandGeometry.minWingWidth, width)
-        guard abs(clamped - state.geometry.wingWidth) > 0.5 else { return }
+        let geo = state.geometry
+        let clamped = DynamicIslandLayoutPolicy.clampedWingWidth(
+            measured: width,
+            centerGapWidth: geo.centerGapWidth,
+            hasNotch: geo.hasNotch,
+            minWingWidth: DynamicIslandGeometry.minWingWidth
+        )
+        guard abs(clamped - geo.wingWidth) > 0.5 else { return }
         state.geometry.wingWidth = clamped
         panel?.updateHitRegion()
     }

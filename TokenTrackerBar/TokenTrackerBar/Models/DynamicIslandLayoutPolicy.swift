@@ -6,6 +6,58 @@ import Foundation
 /// Keeping the screen-height math outside AppKit makes the low-resolution and
 /// Dock-reserved cases deterministic and unit-testable.
 enum DynamicIslandLayoutPolicy {
+    /// Smallest center cutout kept free when metric wings are laid out
+    /// *inside* the hardware notch (camera / sensor area).
+    static let minimumNotchCenterHole: CGFloat = 24
+
+    /// Max width of each collapsed wing when the black pill must stay inside
+    /// the hardware notch and not cover native menu-bar items (issue #896).
+    static func maxWingWidthInsideNotch(
+        notchWidth: CGFloat,
+        centerHole: CGFloat = minimumNotchCenterHole
+    ) -> CGFloat {
+        max(0, (notchWidth - max(0, centerHole)) / 2)
+    }
+
+    /// Collapsed black-pill width. On a notched screen the wings live inside
+    /// the notch, so the pill equals the notch width. On a simulated island
+    /// the wings still flank a small filler gap.
+    static func collapsedWidth(
+        centerGapWidth: CGFloat,
+        wingWidth: CGFloat,
+        hasNotch: Bool
+    ) -> CGFloat {
+        if hasNotch { return max(0, centerGapWidth) }
+        return max(0, centerGapWidth) + max(0, wingWidth) * 2
+    }
+
+    /// Width of the Spacer between the two metric wings.
+    static func collapsedCenterHole(
+        centerGapWidth: CGFloat,
+        wingWidth: CGFloat,
+        hasNotch: Bool
+    ) -> CGFloat {
+        if hasNotch {
+            return max(0, centerGapWidth - max(0, wingWidth) * 2)
+        }
+        return max(0, centerGapWidth)
+    }
+
+    /// Clamp a content-measured wing width so a notched collapsed pill cannot
+    /// spill into the menu bar. Simulated islands keep the previous floor.
+    static func clampedWingWidth(
+        measured: CGFloat,
+        centerGapWidth: CGFloat,
+        hasNotch: Bool,
+        minWingWidth: CGFloat
+    ) -> CGFloat {
+        let measuredWidth = max(0, measured)
+        if hasNotch {
+            return min(measuredWidth, maxWingWidthInsideNotch(notchWidth: centerGapWidth))
+        }
+        return max(minWingWidth, measuredWidth)
+    }
+
     static let expandedWidth: CGFloat = 480
     static let shadowBleed: CGFloat = 28
     static let maximumIslandHeight: CGFloat = 800
