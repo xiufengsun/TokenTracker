@@ -243,6 +243,31 @@ describe("Copilot limits disk-cache fallback", () => {
     }
   }
 
+  for (const initialLogin of [LOGIN, ""]) {
+    it(`does not cache a successful response after switching from ${initialLogin || "unknown"} to another login`, async () => {
+      const home = buildCopilotHome({ user: initialLogin });
+      try {
+        const live = await getUsageLimits(baseOptions(home, {
+          fetchImpl: copilotFetchImpl({ user: () => {
+            writeCopilotAccount(home, "another-login");
+            return okResponse(copilotUserBody());
+          } }),
+        }));
+        assert.equal(live.copilot.error, null);
+        assert.equal(fs.existsSync(cachePath(home)), false);
+        resetUsageLimitsCache();
+        const failed = await getUsageLimits(baseOptions(home, {
+          fetchImpl: copilotFetchImpl({ user: () => errorResponse(500) }),
+        }));
+        assert.ok(failed.copilot.error);
+        assert.notEqual(failed.copilot.stale, true);
+      } finally {
+        resetUsageLimitsCache();
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+  }
+
   for (const survivingWindow of [false, true]) {
     it(`checks resets after the failed request (${survivingWindow ? "partial" : "full"} rollover)`, async (t) => {
       const home = buildCopilotHome();

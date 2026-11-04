@@ -5568,14 +5568,13 @@ async function fetchUsageLimitsUncached({
       stale: false,
       cached_at: new Date(nowMs).toISOString(),
     };
-    if (cacheGeneration === usageLimitsCacheGeneration) {
-      writeCopilotLimitsCache(copilotWithCache, {
-        home,
-        nowMs,
-        identity: typeof copilot.cache_identity === "string"
-          ? copilot.cache_identity
-          : await resolveCopilotCacheIdentity({ home, platform, securityRunner }),
-      });
+    // Only the login captured with the request can own its windows. An
+    // unknown login must never be promoted to a newly signed-in account.
+    const identity = copilot.cache_identity;
+    if (typeof identity === "string" && identity
+      && identity === await resolveCopilotCacheIdentity({ home, platform, securityRunner })
+      && cacheGeneration === usageLimitsCacheGeneration) {
+      writeCopilotLimitsCache(copilotWithCache, { home, nowMs, identity });
     }
   } else {
     // Re-read the current login even when the failed request carries an identity:
