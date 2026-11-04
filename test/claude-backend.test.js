@@ -106,6 +106,8 @@ test("legacy cursor stamps and contents stay bound when the pathname is replaced
   const open = fs.openSync;
   const read = fs.readFileSync;
   let metadataFd;
+  let readTarget;
+  let replacementError;
   let replaced = false;
   t.mock.method(fs, "openSync", (file, ...args) => {
     const fd = open(file, ...args);
@@ -114,14 +116,28 @@ test("legacy cursor stamps and contents stay bound when the pathname is replaced
   });
   t.mock.method(fs, "readFileSync", (file, ...args) => {
     if (!replaced && (file === metadata || file === metadataFd)) {
-      fs.renameSync(replacement, metadata);
-      replaced = true;
+      readTarget = file;
+      try {
+        // Windows cannot rename over an open destination. Move the opened
+        // revision aside first, then install the replacement at its old path.
+        // Both renames still happen before the descriptor's contents are read.
+        fs.renameSync(metadata, metadata + ".old");
+        fs.renameSync(replacement, metadata);
+        replaced = true;
+      } catch (error) {
+        replacementError = error;
+        throw error;
+      }
     }
     return read(file, ...args);
   });
-  assert.equal(preserveLegacyClaudePrefix(f.file, f.trackerDir).offset, stats[0].size,
-    "use the contents of the opened revision, not its replacement");
+  const boundary = preserveLegacyClaudePrefix(f.file, f.trackerDir);
+  // The legacy fallback catches I/O errors; expose fixture failures directly.
+  assert.ifError(replacementError);
   assert.equal(replaced, true);
+  assert.equal(readTarget, metadataFd, "read the opened descriptor, not the pathname");
+  assert.equal(boundary.offset, stats[0].size,
+    "use the contents of the opened revision, not its replacement");
   assert.equal(preserveLegacyClaudePrefix(second, f.trackerDir).offset, 0,
     "the next open must invalidate the old cached revision");
 });
