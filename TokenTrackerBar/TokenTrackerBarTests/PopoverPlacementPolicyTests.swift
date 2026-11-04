@@ -99,7 +99,9 @@ final class PopoverPlacementPolicyTests: XCTestCase {
     }
 
     func testSameScreenClickPositionsOnStatusItemButton() {
-        let screen = ObjectIdentifier(NSObject())
+        let screenObject = NSObject()
+        defer { withExtendedLifetime(screenObject) {} }
+        let screen = ObjectIdentifier(screenObject)
         XCTAssertTrue(
             PopoverPlacementPolicy.shouldPositionOnStatusItemButton(
                 buttonScreenID: screen,
@@ -109,8 +111,13 @@ final class PopoverPlacementPolicyTests: XCTestCase {
     }
 
     func testCrossDisplayClickUsesEphemeralAnchor() {
-        let a = ObjectIdentifier(NSObject())
-        let b = ObjectIdentifier(NSObject())
+        let buttonScreen = NSObject()
+        let clickScreen = NSObject()
+        // ObjectIdentifier does not retain its object; keep both alive to prevent address reuse.
+        defer { withExtendedLifetime((buttonScreen, clickScreen)) {} }
+        let a = ObjectIdentifier(buttonScreen)
+        let b = ObjectIdentifier(clickScreen)
+        XCTAssertNotEqual(a, b)
         XCTAssertFalse(
             PopoverPlacementPolicy.shouldPositionOnStatusItemButton(
                 buttonScreenID: a,
@@ -120,15 +127,18 @@ final class PopoverPlacementPolicyTests: XCTestCase {
     }
 
     func testMissingScreenInfoFallsBackToStatusItemButton() {
+        let screenObject = NSObject()
+        defer { withExtendedLifetime(screenObject) {} }
+        let screen = ObjectIdentifier(screenObject)
         XCTAssertTrue(
             PopoverPlacementPolicy.shouldPositionOnStatusItemButton(
                 buttonScreenID: nil,
-                clickScreenID: ObjectIdentifier(NSObject())
+                clickScreenID: screen
             )
         )
         XCTAssertTrue(
             PopoverPlacementPolicy.shouldPositionOnStatusItemButton(
-                buttonScreenID: ObjectIdentifier(NSObject()),
+                buttonScreenID: screen,
                 clickScreenID: nil
             )
         )
