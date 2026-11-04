@@ -131,8 +131,13 @@ test("menu-bar popover restores Tahoe glass via deferred activation with a reali
   );
   assert.match(
     handlePopoverDidClose,
-    /removeChildWindow\(popoverWindow\)/,
-    "Popover close must detach the reused popover window from the anchor or the next show inherits a stale child relationship.",
+    /discardPopoverAnchorWindow\(\)/,
+    "Popover close must discard the ephemeral anchor entirely so the next show cannot inherit a Space-sticky window (#866).",
+  );
+  assert.match(
+    source,
+    /private\s+func\s+discardPopoverAnchorWindow\(\)\s*\{[\s\S]*?removeChildWindow\(popoverWindow\)[\s\S]*?popoverAnchorWindow\s*=\s*nil/,
+    "discardPopoverAnchorWindow must detach any popover child, hide the anchor, and clear the sticky reference (#866).",
   );
   assert.match(
     source,
@@ -171,7 +176,7 @@ test("menu-bar popover restores Tahoe glass via deferred activation with a reali
   );
 });
 
-test("menu-bar popover is anchored to an app-owned positioning window", () => {
+test("menu-bar popover prefers the status-item button and uses a fresh ephemeral anchor otherwise", () => {
   const source = readStatusBarController();
   const didCloseStart = source.indexOf("forName: NSPopover.didCloseNotification");
   const didCloseEnd = source.indexOf("// MARK: - Click Handling");
@@ -194,13 +199,23 @@ test("menu-bar popover is anchored to an app-owned positioning window", () => {
   );
   assert.match(
     source,
-    /guard\s+let\s+anchorView\s*=\s*positionPopoverAnchorWindow\(under:\s*button\)[\s\S]*popover\.show\(relativeTo:\s*anchorView\.bounds,\s*of:\s*anchorView,\s*preferredEdge:\s*\.minY\)/,
-    "The popover should show relative to the app-owned anchor view, not the system status button window.",
+    /shouldPositionPopoverOnStatusItemButton\(button\)[\s\S]*discardPopoverAnchorWindow\(\)[\s\S]*positioning\s*=\s*\(button,\s*button\.bounds\)[\s\S]*positionPopoverAnchorWindow\(under:\s*button\)[\s\S]*popover\.show\(relativeTo:\s*positioning\.rect,\s*of:\s*positioning\.view,\s*preferredEdge:\s*\.minY\)/,
+    "Same-screen clicks position on the status-item button; cross-display clicks still use a fresh ephemeral anchor (#866/#481).",
   );
   assert.match(
     source,
-    /private\s+func\s+closePopoverIfShown\(\)\s*\{[\s\S]*if\s+popover\.isShown\s*\{[\s\S]*popover\.performClose\(nil\)[\s\S]*\}\s*popoverAnchorWindow\?\.orderOut\(nil\)/,
-    "Closing the popover path should also hide the app-owned anchor window.",
+    /PopoverPlacementPolicy\.shouldPositionOnStatusItemButton/,
+    "StatusBarController must consult PopoverPlacementPolicy for the same-screen button path (#866).",
+  );
+  assert.match(
+    source,
+    /private\s+func\s+positionPopoverAnchorWindow[\s\S]*discardPopoverAnchorWindow\(\)[\s\S]*makePopoverAnchorWindow\(\)/,
+    "Ephemeral anchors must never be reused across shows (#866).",
+  );
+  assert.match(
+    source,
+    /private\s+func\s+closePopoverIfShown\(\)\s*\{[\s\S]*if\s+popover\.isShown\s*\{[\s\S]*popover\.performClose\(nil\)[\s\S]*\}\s*discardPopoverAnchorWindow\(\)/,
+    "Closing the popover path must discard the ephemeral anchor window (#866).",
   );
   assert.match(
     source,

@@ -90,4 +90,57 @@ final class PopoverPlacementPolicyTests: XCTestCase {
             )
         )
     }
+
+
+    // MARK: - Anchor lifecycle (issue #866)
+
+    func testAnchorWindowIsNeverReused() {
+        XCTAssertFalse(PopoverPlacementPolicy.shouldReuseAnchorWindow())
+    }
+
+    func testSameScreenClickPositionsOnStatusItemButton() {
+        let screenObject = NSObject()
+        defer { withExtendedLifetime(screenObject) {} }
+        let screen = ObjectIdentifier(screenObject)
+        XCTAssertTrue(
+            PopoverPlacementPolicy.shouldPositionOnStatusItemButton(
+                buttonScreenID: screen,
+                clickScreenID: screen
+            )
+        )
+    }
+
+    func testCrossDisplayClickUsesEphemeralAnchor() {
+        let buttonScreen = NSObject()
+        let clickScreen = NSObject()
+        // ObjectIdentifier does not retain its object; keep both alive to prevent address reuse.
+        defer { withExtendedLifetime((buttonScreen, clickScreen)) {} }
+        let a = ObjectIdentifier(buttonScreen)
+        let b = ObjectIdentifier(clickScreen)
+        XCTAssertNotEqual(a, b)
+        XCTAssertFalse(
+            PopoverPlacementPolicy.shouldPositionOnStatusItemButton(
+                buttonScreenID: a,
+                clickScreenID: b
+            )
+        )
+    }
+
+    func testMissingScreenInfoFallsBackToStatusItemButton() {
+        let screenObject = NSObject()
+        defer { withExtendedLifetime(screenObject) {} }
+        let screen = ObjectIdentifier(screenObject)
+        XCTAssertTrue(
+            PopoverPlacementPolicy.shouldPositionOnStatusItemButton(
+                buttonScreenID: nil,
+                clickScreenID: screen
+            )
+        )
+        XCTAssertTrue(
+            PopoverPlacementPolicy.shouldPositionOnStatusItemButton(
+                buttonScreenID: screen,
+                clickScreenID: nil
+            )
+        )
+    }
 }

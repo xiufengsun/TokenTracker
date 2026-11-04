@@ -151,7 +151,7 @@ final class StatusBarController: NSObject {
         if popover.isShown {
             popover.performClose(nil)
         }
-        popoverAnchorWindow?.orderOut(nil)
+        discardPopoverAnchorWindow()
     }
 
     /// React to setting changes pushed by the dashboard SettingsPage via NativeBridge.
@@ -811,14 +811,10 @@ final class StatusBarController: NSObject {
             NSEvent.removeMonitor(popoverDismissMonitor)
             self.popoverDismissMonitor = nil
         }
-        // Detach the reused popover window from the anchor before hiding the
-        // anchor, or the next show inherits a stale child relationship.
-        if let popoverWindow = popover.contentViewController?.view.window,
-           popoverWindow.parent === popoverAnchorWindow {
-            popoverAnchorWindow?.removeChildWindow(popoverWindow)
-        }
+        // Drop the ephemeral anchor entirely so the next show cannot inherit
+        // a Space-sticky window from a prior `.regular` session (#866).
+        discardPopoverAnchorWindow()
         viewModel.setPopoverVisible(false)
-        popoverAnchorWindow?.orderOut(nil)
         updateStatsDisplay()
     }
 
@@ -849,7 +845,18 @@ final class StatusBarController: NSObject {
             return
         }
 
-        guard let anchorView = positionPopoverAnchorWindow(under: button) else { return }
+        // Prefer the status-item button as the positioning view on its own
+        // screen so the popover follows the revealed full-screen menu bar
+        // without a sticky app-owned anchor (#866). Cross-display clicks still
+        // get a *fresh* ephemeral anchor under the cursor (#481).
+        let positioning: (view: NSView, rect: NSRect)
+        if shouldPositionPopoverOnStatusItemButton(button) {
+            discardPopoverAnchorWindow()
+            positioning = (button, button.bounds)
+        } else {
+            guard let anchorView = positionPopoverAnchorWindow(under: button) else { return }
+            positioning = (anchorView, anchorView.bounds)
+        }
         // The window's Space assignment happens inside popover.show(). The
         // reused _NSPopoverWindow keeps the desktop it was first ordered in on,
         // and on macOS 26 the post-show insert below is applied too late — the
@@ -859,7 +866,7 @@ final class StatusBarController: NSObject {
         if let reusedWindow = popover.contentViewController?.view.window {
             reusedWindow.collectionBehavior.insert([.canJoinAllSpaces, .fullScreenAuxiliary])
         }
-        popover.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .minY)
+        popover.show(relativeTo: positioning.rect, of: positioning.view, preferredEdge: .minY)
         popoverShownAt = ProcessInfo.processInfo.systemUptime
         viewModel.setPopoverVisible(true)
 
@@ -981,7 +988,10 @@ final class StatusBarController: NSObject {
     // key-capable visible window already lives on the anchor's screen and Space —
     // otherwise keep Tahoe's subdued glass and the guaranteed correct placement.
     private func canActivateForPopoverGlass() -> Bool {
-        guard let anchorScreen = popoverAnchorWindow?.screen else { return false }
+        // Custom anchor when present; otherwise the status-item button window
+        // (direct-button positioning path for issue #866).
+        guard let anchorScreen = popoverAnchorWindow?.screen
+            ?? statusItem.button?.window?.screen else { return false }
         let popoverWindow = popover.contentViewController?.view.window
         for window in NSApp.windows {
             guard window.isVisible,
@@ -1004,12 +1014,20 @@ final class StatusBarController: NSObject {
     // the panel off-screen when the icon sits near a screen edge.
     private func realignPopoverWithAnchorIfDisplaced() {
         guard popover.isShown,
-              let popoverWindow = popover.contentViewController?.view.window,
-              let anchorWindow = popoverAnchorWindow else { return }
+              let popoverWindow = popover.contentViewController?.view.window else { return }
+        // Prefer the ephemeral anchor; fall back to the status-item button
+        // window used by the direct-button positioning path (#866).
+        let anchorWindow = popoverAnchorWindow ?? statusItem.button?.window
+        guard let anchorWindow else { return }
         guard let screen = anchorWindow.screen
             ?? NSScreen.screens.first(where: { $0.frame.intersects(anchorWindow.frame) })
             ?? NSScreen.main else { return }
-        let anchor = anchorWindow.frame
+        let anchor = popoverAnchorWindow?.frame ?? {
+            guard let button = statusItem.button,
+                  let buttonWindow = button.window else { return anchorWindow.frame }
+            let rectInWindow = button.convert(button.bounds, to: nil)
+            return buttonWindow.convertToScreen(rectInWindow)
+        }()
         var frame = popoverWindow.frame
         let displaced = popoverWindow.screen !== anchorWindow.screen
             || PopoverPlacementPolicy.isDisplaced(
@@ -1073,11 +1091,41 @@ final class StatusBarController: NSObject {
             width: anchorSize.width,
             height: anchorSize.height
         )
-        let window = popoverAnchorWindow ?? makePopoverAnchorWindow()
+        // Never reuse an anchor window: one first ordered while the app was
+        // `.regular` stays pinned to that desktop Space after returning to
+        // `.accessory`, and then cannot join another app's full-screen Space
+        // for the rest of the process (#866).
+        discardPopoverAnchorWindow()
+        let window = makePopoverAnchorWindow()
         popoverAnchorWindow = window
         window.setFrame(anchorFrame, display: false)
         window.orderFrontRegardless()
         return window.contentView
+    }
+
+    /// True when the click landed on the status item's own screen — show the
+    /// popover relative to the button itself (issue #866).
+    private func shouldPositionPopoverOnStatusItemButton(_ button: NSStatusBarButton) -> Bool {
+        let buttonScreenID = button.window?.screen.map { ObjectIdentifier($0) }
+        let mouse = NSEvent.mouseLocation
+        let clickScreenID = NSScreen.screens
+            .first(where: { NSMouseInRect(mouse, $0.frame, false) })
+            .map { ObjectIdentifier($0) }
+        return PopoverPlacementPolicy.shouldPositionOnStatusItemButton(
+            buttonScreenID: buttonScreenID,
+            clickScreenID: clickScreenID
+        )
+    }
+
+    /// Detach any popover child, hide, and drop the sticky anchor reference.
+    private func discardPopoverAnchorWindow() {
+        guard let anchor = popoverAnchorWindow else { return }
+        if let popoverWindow = popover.contentViewController?.view.window,
+           popoverWindow.parent === anchor {
+            anchor.removeChildWindow(popoverWindow)
+        }
+        anchor.orderOut(nil)
+        popoverAnchorWindow = nil
     }
 
     // MARK: - Right-Click Menu
