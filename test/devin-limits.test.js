@@ -257,6 +257,53 @@ describe("credential discovery", () => {
     );
     assert.equal(calls, 0);
   });
+
+  it("decodes TOML strings and selects only the root-level sign-in token", async () => {
+    const result = await signedInLimits({
+      toml: `"windsurf_api_key" = "devin-test-session-\\u0074oken"
+api_server_url = 'https://server.codeium.com/'
+unrelated_secret = "must-stay-local"
+[other_account]
+windsurf_api_key = "another-account"
+api_server_url = "https://evil.example.invalid"
+`,
+      fetchImpl: async (url, options) => {
+        assert.equal(url, EXPECTED_URL);
+        assert.equal(options.headers["x-auth-token"], TEST_TOKEN);
+        assert.equal(options.body, "{}");
+        assert.equal(options.redirect, "error");
+        assert.ok(!JSON.stringify(options).includes("must-stay-local"));
+        assert.ok(!JSON.stringify(options).includes("another-account"));
+        return jsonResponse(200, planStatusBody());
+      },
+    });
+    assert.equal(result.configured, true);
+  });
+
+  for (const toml of [
+    `windsurf_api_key = "${TEST_TOKEN}"\ninvalid = "unterminated`,
+    `windsurf_api_key = "${TEST_TOKEN}"\nwindsurf_api_key = "another-account"`,
+    `[other_account]\nwindsurf_api_key = "${TEST_TOKEN}"`,
+    "windsurf_api_key = 123",
+  ]) {
+    it("rejects malformed or missing root credentials before fetching without leaking content", async () => {
+      let calls = 0;
+      await assert.rejects(signedInLimits({
+        toml,
+        fetchImpl: async () => {
+          calls += 1;
+          return jsonResponse(200, planStatusBody());
+        },
+      }), (error) => {
+        assert.equal(error.code, "CREDENTIALS_INVALID");
+        assert.match(error.message, /devin auth login/);
+        assert.ok(!error.message.includes(TEST_TOKEN));
+        assert.ok(!error.message.includes("unterminated"));
+        return true;
+      });
+      assert.equal(calls, 0);
+    });
+  }
 });
 
 describe("response normalization", () => {

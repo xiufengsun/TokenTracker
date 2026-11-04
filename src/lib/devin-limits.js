@@ -16,6 +16,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { parse: parseToml } = require("smol-toml");
 
 const DEVIN_PLAN_STATUS_URL =
   "https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetPlanStatus";
@@ -28,25 +29,26 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-// Minimal root-level TOML reader for the CLI-written credentials file: bare
-// `key = value` lines before the first `[section]`, nothing else.
-function parseDevinCredentialsToml(raw) {
-  const fields = {};
-  for (const line of String(raw).split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    if (trimmed.startsWith("[")) break;
-    const match = /^([A-Za-z0-9_]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s#]+))\s*(?:#.*)?$/.exec(
-      trimmed,
-    );
-    if (!match) continue;
-    const [, key, doubleQuoted, singleQuoted, bare] = match;
-    fields[key] = doubleQuoted ?? singleQuoted ?? bare ?? "";
-  }
-  return fields;
+// Local sign-in problems are persistent configuration errors, not transient
+// fetch failures: the aggregator's disk-cache fallback must never mask them,
+// so they carry a distinctive code the assembly can gate on.
+function credentialsError(message) {
+  const error = new Error(message);
+  error.code = "CREDENTIALS_INVALID";
+  return error;
 }
 
-// Returns { apiKey } or null when no sign-in exists (no home, or the file is
+// A credential-file revision, not a token fingerprint or account claim. Both
+// in-place edits (ctime/mtime) and atomic replacements (device/inode) invalidate
+// old windows, including across restarts. Never persist the token or its hash.
+function devinCredentialIdentity(filePath, stat) {
+  return JSON.stringify([
+    path.resolve(filePath),
+    ...[stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String),
+  ]);
+}
+
+// Returns { apiKey, cacheIdentity } or null when no sign-in exists (no home, or the file is
 // absent — ENOENT only). Any other read failure or a mangled file throws an
 // owned, actionable error with no path or filesystem details, so a broken
 // sign-in can never masquerade as "not configured".
@@ -64,20 +66,42 @@ function readDevinCredentials({ home, env = process.env } = {}) {
     ? path.join(dir, "devin", "credentials.toml")
     : path.join(dir, ".local", "share", "devin", "credentials.toml");
   let raw;
+  let descriptor;
+  let cacheIdentity = null;
   try {
-    raw = fs.readFileSync(base, "utf8");
+    // Read the token and revision from the same opened file, so an atomic
+    // replacement cannot stamp the old token with the new file's revision.
+    descriptor = fs.openSync(base, "r");
+    const before = fs.fstatSync(descriptor, { bigint: true });
+    if (!before.isFile()) throw new Error("Not a credentials file");
+    raw = fs.readFileSync(descriptor, "utf8");
+    const after = fs.fstatSync(descriptor, { bigint: true });
+    const identity = devinCredentialIdentity(base, before);
+    if (identity === devinCredentialIdentity(base, after)) cacheIdentity = identity;
   } catch (error) {
     if (error && error.code === "ENOENT") return null;
-    throw new Error(
+    throw credentialsError(
       "Could not read the Devin CLI credentials file — check its permissions or run `devin auth login` to sign in again.",
     );
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
-  const fields = parseDevinCredentialsToml(raw);
+  // Decode the credential document, then select only the root-level auth
+  // fields, like the other providers' structured credential readers.
+  let fields;
+  try {
+    fields = parseToml(raw);
+  } catch {
+    // Parser errors may quote credentials; expose only an owned message.
+    throw credentialsError(
+      "Could not parse the Devin CLI credentials file — run `devin auth login` to sign in again.",
+    );
+  }
   const apiKey = isNonEmptyString(fields.windsurf_api_key)
     ? fields.windsurf_api_key.trim()
     : null;
   if (!apiKey) {
-    throw new Error(
+    throw credentialsError(
       "Devin credentials file has no sign-in token — run `devin auth login`.",
     );
   }
@@ -85,11 +109,20 @@ function readDevinCredentials({ home, env = process.env } = {}) {
     ? fields.api_server_url.trim().replace(/\/+$/, "")
     : null;
   if (apiServerUrl && apiServerUrl !== DEVIN_API_ORIGIN) {
-    throw new Error(
+    throw credentialsError(
       "Devin credentials point at a custom api_server_url, which this quota provider does not support.",
     );
   }
-  return { apiKey };
+  return { apiKey, cacheIdentity };
+}
+
+function resolveDevinCacheIdentity(options) {
+  try {
+    return readDevinCredentials(options)?.cacheIdentity || null;
+  } catch {
+    // Unreadable, missing or invalid current credentials must fail closed.
+    return null;
+  }
 }
 
 function malformed(field) {
@@ -226,9 +259,14 @@ async function fetchDevinLimits({ home, env = process.env, enabled = false, fetc
     throw error;
   }
   if (!response?.ok) {
-    throw new Error(
+    const error = new Error(
       `Devin quota request was rejected (HTTP ${response?.status ?? "?"}).`,
     );
+    // The aggregate's disk-cache fallback only covers transient failures:
+    // carrying the status lets it tell a 429/5xx blip from an ambiguous or
+    // persistent rejection like HTTP 400 (docs/devin-limits.md).
+    if (typeof response?.status === "number") error.statusCode = response.status;
+    throw error;
   }
   let body;
   try {
@@ -243,7 +281,9 @@ async function fetchDevinLimits({ home, env = process.env, enabled = false, fetc
     plan_label: windows.plan_label,
     primary_window: windows.primary_window,
     secondary_window: windows.secondary_window,
+    // Internal: the aggregate strips this before returning its payload.
+    cache_identity: credentials.cacheIdentity,
   };
 }
 
-module.exports = { fetchDevinLimits };
+module.exports = { fetchDevinLimits, resolveDevinCacheIdentity };
