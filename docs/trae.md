@@ -2,6 +2,8 @@
 
 The `trae` source reads local usage from international TRAE and TRAE SOLO.
 It is separate from `trae-cn` and makes no vendor API calls.
+For CN discovery, relocation, and local-database limitations, see
+[TRAE CN troubleshooting](trae-cn.md).
 
 ## Setup
 
