@@ -180,6 +180,12 @@ const OPENCODE_GO_LOCAL_ESTIMATE_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
 // (mirrors Claude / Codex / OpenCode Go).
 const CURSOR_LIMITS_CACHE_FILE = "cursor-usage-limits-cache.json";
 const CURSOR_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// Gemini's Code Assist quota RPCs (cloudcode-pa.googleapis.com) are routinely
+// degraded on GFW-affected routes; a timeout or 5xx previously blanked the card
+// until the next poll. Persist the last successful windows so a blip serves
+// stale bars instead (mirrors Cursor / Codex / OpenCode Go).
+const GEMINI_LIMITS_CACHE_FILE = "gemini-usage-limits-cache.json";
+const GEMINI_LIMITS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // The Kimi coding API (api.kimi.com / api.kimi.ai) is another proxied route where
 // a timeout or 5xx previously blanked the card until the next poll. Persist the
 // last successful windows so a blip serves stale bars instead
@@ -1246,6 +1252,12 @@ async function extractGeminiOauthClientCredentials({ commandRunner, home } = {})
   return { ...GEMINI_CLI_FALLBACK_OAUTH_CLIENT };
 }
 
+// Shared by the refresh-401 path, the missing-credentials path, and the quota
+// endpoint's 401: all three mean the Google OAuth session is gone. Re-login is
+// actionable, so none of them may be hidden behind the stale disk-cache
+// fallback (opencode-go auth_error precedent).
+const GEMINI_NOT_LOGGED_IN_MESSAGE = "Not logged in to Gemini. Run 'gemini' in Terminal to authenticate.";
+
 async function refreshGeminiAccessToken({
   refreshToken,
   home,
@@ -1271,7 +1283,14 @@ async function refreshGeminiAccessToken({
     body,
   });
   if (!res.ok) {
-    throw new Error("Not logged in to Gemini. Run 'gemini' in Terminal to authenticate.");
+    const error = new Error(GEMINI_NOT_LOGGED_IN_MESSAGE);
+    // Confirmed credential failures only (invalid_grant = 400, invalid_client
+    // = 401/403): a transient 429/5xx from the token endpoint must stay
+    // cache-eligible so the stale fallback can still serve bars.
+    if (res.status === 400 || res.status === 401 || res.status === 403) {
+      error.code = "AUTH_EXPIRED";
+    }
+    throw error;
   }
 
   const json = await res.json();
@@ -1412,17 +1431,37 @@ async function fetchGeminiLimits({ home, env, fetchImpl = fetch, commandRunner }
   if (!settings && !credentials) {
     return { configured: false };
   }
+  // An unsupported auth mode is a stable, actionable configuration state: the
+  // quota RPC can never succeed here and stale OAuth-era bars would be
+  // misleading, so it punches through the cache like an auth error.
   if (selectedType === "api-key") {
-    return { configured: true, error: "Gemini API key auth not supported. Use Google account (OAuth) instead." };
+    return {
+      configured: true,
+      error: "Gemini API key auth not supported. Use Google account (OAuth) instead.",
+      auth_error: true,
+    };
   }
   if (selectedType === "vertex-ai") {
-    return { configured: true, error: "Gemini Vertex AI auth not supported. Use Google account (OAuth) instead." };
+    return {
+      configured: true,
+      error: "Gemini Vertex AI auth not supported. Use Google account (OAuth) instead.",
+      auth_error: true,
+    };
   }
 
   const creds = credentials;
   if (!creds?.access_token) {
-    return { configured: true, error: "Not logged in to Gemini. Run 'gemini' in Terminal to authenticate." };
+    return {
+      configured: true,
+      error: GEMINI_NOT_LOGGED_IN_MESSAGE,
+      auth_error: true,
+    };
   }
+
+  // The Google account email from the local id_token JWT partitions the disk
+  // cache (zcode login-identity precedent). Decoded before the network work —
+  // it cannot throw — so the failure path below still knows who we serve for.
+  const claims = decodeJwtPayload(creds.id_token);
 
   try {
     let accessToken = creds.access_token;
@@ -1437,7 +1476,6 @@ async function fetchGeminiLimits({ home, env, fetchImpl = fetch, commandRunner }
       });
     }
 
-    const claims = decodeJwtPayload(creds.id_token);
     const codeAssist = await loadGeminiCodeAssistStatus(accessToken, { fetchImpl });
     const res = await fetchImpl("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota", {
       method: "POST",
@@ -1448,7 +1486,18 @@ async function fetchGeminiLimits({ home, env, fetchImpl = fetch, commandRunner }
       body: JSON.stringify(codeAssist.projectId ? { project: codeAssist.projectId } : {}),
     });
     if (res.status === 401) {
-      throw new Error("Not logged in to Gemini. Run 'gemini' in Terminal to authenticate.");
+      const error = new Error(GEMINI_NOT_LOGGED_IN_MESSAGE);
+      error.code = "AUTH_EXPIRED";
+      throw error;
+    }
+    if (res.status === 403) {
+      // PERMISSION_DENIED (seen for Enterprise accounts, gemini-cli#25512):
+      // re-login cannot fix it, but stale bars for a project the account can
+      // no longer see would mislead — punch through like an auth error while
+      // keeping the displayed message unchanged.
+      const error = new Error(`Gemini API error: HTTP ${res.status}`);
+      error.code = "AUTH_EXPIRED";
+      throw error;
     }
     if (!res.ok) {
       throw new Error(`Gemini API error: HTTP ${res.status}`);
@@ -1462,11 +1511,19 @@ async function fetchGeminiLimits({ home, env, fetchImpl = fetch, commandRunner }
         email: claims?.email || null,
         tier: codeAssist.tier,
       }),
+      // Internal cache-partition key (stripped before the payload is served):
+      // the same non-secret id the payload already surfaces as account_email.
+      cache_identity: claims?.email || null,
     };
   } catch (error) {
     return {
       configured: true,
       error: error?.message || "Unknown error",
+      // A session-expiry error is actionable (re-login) and must not be hidden
+      // behind the stale disk-cache fallback. Internal marker — stripped
+      // before the payload is served.
+      ...(error?.code === "AUTH_EXPIRED" ? { auth_error: true } : {}),
+      cache_identity: claims?.email || null,
     };
   }
 }
@@ -2907,6 +2964,106 @@ function writeCursorLimitsCache(limits, { home, nowMs = Date.now(), identity } =
 function resolveCursorCacheIdentity({ home, env } = {}) {
   try {
     return extractCursorAuth({ home, env })?.userId || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function resolveGeminiLimitsCachePath({ home } = {}) {
+  return path.join(home || os.homedir(), ".tokentracker", "tracker", GEMINI_LIMITS_CACHE_FILE);
+}
+
+function hasGeminiWindow(limits) {
+  return Boolean(
+    limits?.primary_window
+    || limits?.secondary_window
+    || limits?.tertiary_window,
+  );
+}
+
+// Gemini windows carry `reset_at` as an ISO string (the Code Assist bucket's own
+// resetTime — daily for free-tier quotas). A window whose reset has already passed
+// is stale data, not a usable fallback, so drop it. Windows without a reset stamp
+// are kept — the overall cached_at max-age gate already bounds them.
+function isGeminiCacheWindowUsable(window, { nowMs } = {}) {
+  if (!window || typeof window !== "object") return false;
+  const resetAtMs = parseTimeMs(window.reset_at);
+  if (resetAtMs === null) return true;
+  return resetAtMs > nowMs;
+}
+
+function normalizeGeminiCachedLimits(
+  raw,
+  { nowMs = Date.now(), maxAgeMs = GEMINI_LIMITS_CACHE_MAX_AGE_MS } = {},
+) {
+  const cachedAtMs = parseTimeMs(raw?.cached_at);
+  if (!Number.isFinite(cachedAtMs)) return null;
+  if (cachedAtMs > nowMs + 60_000) return null;
+  if (nowMs - cachedAtMs > maxAgeMs) return null;
+
+  const cached = {
+    configured: true,
+    error: null,
+    account_email: typeof raw?.account_email === "string" ? raw.account_email : null,
+    account_plan: typeof raw?.account_plan === "string" ? raw.account_plan : null,
+    primary_window: isGeminiCacheWindowUsable(raw?.primary_window, { nowMs }) ? raw.primary_window : null,
+    secondary_window: isGeminiCacheWindowUsable(raw?.secondary_window, { nowMs }) ? raw.secondary_window : null,
+    tertiary_window: isGeminiCacheWindowUsable(raw?.tertiary_window, { nowMs }) ? raw.tertiary_window : null,
+    stale: true,
+    cached_at: raw.cached_at,
+  };
+  return hasGeminiWindow(cached) ? cached : null;
+}
+
+// The signed-in Google account partitions the cache (zcode login-identity
+// precedent): the email decoded from the local id_token JWT is non-secret and is
+// the same id the payload already surfaces as account_email. GEMINI_HOME can aim
+// the credential lookup at a different installation, but the cache stays keyed by
+// account — a read requires the stored identity to match the account the current
+// credentials resolve to, and a write without an identity is refused: an
+// unreadable login must never pin another account's bars in place.
+function readGeminiLimitsCache({ home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(resolveGeminiLimitsCachePath({ home }), "utf8"));
+    const entry = parsed?.gemini;
+    if (entry?.identity !== identity) return null;
+    return normalizeGeminiCachedLimits(entry, { nowMs });
+  } catch (_error) {
+    return null;
+  }
+}
+
+function writeGeminiLimitsCache(limits, { home, nowMs = Date.now(), identity } = {}) {
+  if (!identity) return;
+  if (!limits?.configured || limits.error || !hasGeminiWindow(limits)) return;
+  const cachePath = resolveGeminiLimitsCachePath({ home });
+  const payload = {
+    gemini: {
+      identity,
+      account_email: limits.account_email || null,
+      account_plan: limits.account_plan || null,
+      primary_window: limits.primary_window || null,
+      secondary_window: limits.secondary_window || null,
+      tertiary_window: limits.tertiary_window || null,
+      cached_at: new Date(nowMs).toISOString(),
+    },
+  };
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    const tmpPath = `${cachePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmpPath, cachePath);
+  } catch (_error) {}
+}
+
+// Failure-only identity re-derivation for the cache fallback: when the provider
+// slot's result was produced by the outer timeout race, the fetcher's own
+// identity field is lost, so decode the (still-local) id_token once to learn
+// who we are serving for.
+function resolveGeminiCacheIdentity({ home, env } = {}) {
+  try {
+    return decodeJwtPayload(loadGeminiCredentials({ home, env })?.id_token)?.email || null;
   } catch (_error) {
     return null;
   }
@@ -5135,6 +5292,62 @@ async function fetchUsageLimitsUncached({
     kimiWithCache = kimiPayload;
   }
 
+  // Gemini: persist last successful windows so a transient timeout/5xx on the
+  // cloudcode-pa.googleapis.com routes serves stale bars instead of a flashing
+  // "fetch failed" (mirrors Cursor / Codex / OpenCode Go). Auth errors (a dead
+  // OAuth session, or the unsupported api-key / vertex-ai auth modes) are
+  // actionable and must not be hidden behind stale cache, so they pass through
+  // untouched.
+  let geminiWithCache;
+  if (!gemini || gemini.configured === false) {
+    geminiWithCache = gemini;
+  } else if (gemini.auth_error === true) {
+    geminiWithCache = gemini;
+  } else if (!gemini.error && hasGeminiWindow(gemini)) {
+    geminiWithCache = {
+      ...gemini,
+      stale: false,
+      cached_at: new Date(nowMs).toISOString(),
+    };
+    if (cacheGeneration === usageLimitsCacheGeneration) {
+      // A slow in-flight fetch must not clobber the on-disk entry of an
+      // account that has since been switched away: only write when the
+      // snapshot's identity still matches the current credentials.
+      const currentIdentity = resolveGeminiCacheIdentity({ home, env });
+      const snapshotIdentity = typeof gemini.cache_identity === "string"
+        ? gemini.cache_identity
+        : currentIdentity;
+      if (snapshotIdentity && snapshotIdentity === currentIdentity) {
+        writeGeminiLimitsCache(geminiWithCache, {
+          home,
+          nowMs,
+          identity: snapshotIdentity,
+        });
+      }
+    }
+  } else {
+    // The slot's error object loses the fetcher's identity field when the outer
+    // timeout race wins (the common failure mode this cache exists for). Always
+    // re-derive from the CURRENT local credentials — the request may have
+    // started under an account that has since been switched away, in which
+    // case the read's identity gate refuses the old entry. Revalidate the auth
+    // mode too: a mid-flight switch to api-key/vertex-ai never reached the
+    // punch-through branch above, but stale OAuth bars would still mislead.
+    const selectedType = loadGeminiSettings({ home, env })?.security?.auth?.selectedType ?? null;
+    if (selectedType === "api-key" || selectedType === "vertex-ai") {
+      geminiWithCache = gemini;
+    } else {
+      const identity = resolveGeminiCacheIdentity({ home, env });
+      const cached = readGeminiLimitsCache({ home, nowMs, identity });
+      geminiWithCache = cached || gemini;
+    }
+  }
+  // cache_identity / auth_error are internal cache-plumbing markers, not payload.
+  if (geminiWithCache && ("cache_identity" in geminiWithCache || "auth_error" in geminiWithCache)) {
+    const { cache_identity: _identity, auth_error: _authError, ...geminiPayload } = geminiWithCache;
+    geminiWithCache = geminiPayload;
+  }
+
   const data = {
     fetched_at: new Date(nowMs).toISOString(),
     claude: withPlanLabel(claude, claudePlanType, "Claude"),
@@ -5145,7 +5358,7 @@ async function fetchUsageLimitsUncached({
     // authoritative human-readable plan mapping. Both rendered as garbage like
     // "Kimi Type_event" (issue #130), so show the bare brand instead.
     kimi: withPlanLabel(kimiWithCache, null, "Kimi"),
-    gemini: withPlanLabel(gemini, gemini.account_plan, "Gemini"),
+    gemini: withPlanLabel(geminiWithCache, geminiWithCache.account_plan, "Gemini"),
     kiro: withPlanLabel(kiro, kiro.plan_name, "Kiro"),
     antigravity: withPlanLabel(antigravity, antigravity.account_plan, "Antigravity"),
     copilot: withPlanLabel(copilot, copilot.plan_name, "Copilot"),
