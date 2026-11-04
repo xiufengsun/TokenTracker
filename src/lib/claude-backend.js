@@ -68,7 +68,83 @@ function readLines(file) {
   }); } catch { return []; }
 }
 
-function createBackendResolver(filePath, trackerDir) {
+// Parse shared upgrade metadata once per file revision, rather than once per
+// transcript in a large installation. Failed reads are retried on the next call.
+const legacyMetadataCache = new Map();
+function readLegacyMetadata(file) {
+  const stat = fs.statSync(file);
+  const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+  const cached = legacyMetadataCache.get(file);
+  if (cached?.stamp === stamp) return cached.value;
+  const value = JSON.parse(fs.readFileSync(file, "utf8"));
+  legacyMetadataCache.set(file, { stamp, value });
+  if (legacyMetadataCache.size > 8) legacyMetadataCache.delete(legacyMetadataCache.keys().next().value);
+  return value;
+}
+
+// Sync receives flat paths while session metadata keys ordered cross-root groups.
+// Try the scanner's root order and its reverse, accepting ONLY an exact stored
+// hash. Equal basenames alone never establish shared history.
+function preserveLegacyClaudeGroups(files, trackerDir) {
+  let meta;
+  try { meta = readLegacyMetadata(path.join(trackerDir, "session.queue.jsonl.meta.json")); } catch { return; }
+  const groups = new Map();
+  for (const file of files) {
+    if (typeof file !== "string" || !file) continue;
+    const id = path.basename(file).match(/^([0-9a-f-]{36})\.jsonl$/i)?.[1];
+    if (!id) continue;
+    const group = groups.get(id) || [];
+    if (!group.includes(file)) group.push(file);
+    groups.set(id, group);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    for (const ordered of [group, [...group].reverse()]) {
+      const key = crypto.createHash("sha256").update(`claude\0${ordered.map((file) => path.resolve(file)).join("\0")}`).digest("hex").slice(0, 24);
+      const stats = meta.files?.[key]?.stat_key?.split("|");
+      if (!stats || stats.length !== ordered.length) continue;
+      ordered.forEach((file, index) => {
+        try { preserveLegacyClaudePrefix(file, trackerDir, Number(stats[index].split(":")[0])); }
+        catch (error) {
+          // Discovery can race a removed/unreadable mirror. Let the parser's
+          // normal per-file handling continue with the surviving paths.
+          if (!["ENOENT", "EACCES", "EPERM", "ESTALE"].includes(error.code)) throw error;
+        }
+      });
+      break;
+    }
+  }
+}
+
+// Preserve the already-accounted prefix when upgrading. The boundary is frozen
+// before either scanner advances its cache; existing per-record decisions still
+// win. Store only byte counts, file identity and a digest, never transcript text.
+function preserveLegacyClaudePrefix(filePath, trackerDir, offset = 0) {
+  const key = crypto.createHash("sha256").update(path.resolve(filePath)).digest("hex");
+  const dir = path.join(trackerDir, "claude-backends");
+  const boundaryPath = path.join(dir, key + ".legacy.json");
+  try { return JSON.parse(fs.readFileSync(boundaryPath, "utf8")); } catch { /* first scan */ }
+  const stat = fs.statSync(filePath);
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > stat.size) offset = 0;
+  try {
+    const cursor = readLegacyMetadata(path.join(trackerDir, "cursors.json"))?.files?.[filePath];
+    if (cursor?.inode === stat.ino && cursor.offset <= stat.size) offset = Math.max(offset, cursor.offset || 0);
+  } catch { /* no previously ingested queue */ }
+  try {
+    const cacheKey = crypto.createHash("sha256").update(`claude\0${path.resolve(filePath)}`).digest("hex").slice(0, 24);
+    const meta = readLegacyMetadata(path.join(trackerDir, "session.queue.jsonl.meta.json"));
+    const size = Number(meta.files?.[cacheKey]?.stat_key?.split(":")[0]);
+    if (size <= stat.size) offset = Math.max(offset, size || 0);
+  } catch { /* no previously ingested session */ }
+  offset = Math.min(Math.max(0, offset), stat.size);
+  const boundary = { inode: stat.ino, offset, hash: hashClaudeRange(filePath, 0, offset) };
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try { fs.writeFileSync(boundaryPath, JSON.stringify(boundary), { mode: 0o600, flag: "wx" }); }
+  catch (error) { if (error.code !== "EEXIST") throw error; }
+  return JSON.parse(fs.readFileSync(boundaryPath, "utf8"));
+}
+
+function createBackendResolver(filePath, trackerDir, { legacyOffset = 0 } = {}) {
   const key = crypto.createHash("sha256").update(path.resolve(filePath)).digest("hex");
   const dir = path.join(trackerDir, "claude-backends");
   const ledger = path.join(dir, key + ".usage.jsonl");
@@ -98,6 +174,9 @@ function createBackendResolver(filePath, trackerDir) {
   const observations = readLines(path.join(dir, key + ".jsonl"));
   const fileStat = fs.statSync(filePath);
   const inode = fileStat.ino;
+  const legacy = preserveLegacyClaudePrefix(filePath, trackerDir, legacyOffset);
+  const legacyEnd = legacy.inode === inode && legacy.offset <= fileStat.size
+    && hashClaudeRange(filePath, 0, legacy.offset) === legacy.hash ? legacy.offset : 0;
   const intervals = [];
   let previous = null;
   for (const current of observations) {
@@ -140,18 +219,18 @@ function createBackendResolver(filePath, trackerDir) {
       obj.sessionId, obj.uuid, obj.requestId, obj.message?.id, obj.timestamp, start, end,
     ])).digest("hex");
     const saved = decisions.get(id);
-    if (saved) return backendFromUrl(saved.backend_origin);
+    if (saved) return saved.legacy ? null : backendFromUrl(saved.backend_origin);
     const session = typeof obj.sessionId === "string"
       ? crypto.createHash("sha256").update(obj.sessionId).digest("hex") : null;
     const matches = intervals.filter((i) => i.session === session && start >= i.start && end <= i.end && validInterval(i));
-    const identity = matches.length === 1 ? backendFromUrl(matches[0].backend_origin) : { backend: "unknown" };
+    const identity = end <= legacyEnd ? { legacy: true } : matches.length === 1 ? backendFromUrl(matches[0].backend_origin) : { backend: "unknown" };
     // First ingestion wins, including unknown. Late hooks cannot relabel usage.
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     fs.appendFileSync(ledger, JSON.stringify({ id, ...identity }) + "\n", { mode: 0o600 });
     // Sync and session analytics can run concurrently. O_APPEND orders these
     // small records; read that order so the first durable decision always wins.
     refreshDecisions();
-    return backendFromUrl(decisions.get(id)?.backend_origin);
+    return decisions.get(id)?.legacy ? null : backendFromUrl(decisions.get(id)?.backend_origin);
   };
 }
 
@@ -204,4 +283,4 @@ function readCustomBackend({ home, env = process.env }) {
   } catch { return { backend: "unknown" }; }
 }
 
-module.exports = { hashClaudeRange, claudeLines, backendFromUrl, captureClaudeBackend, createBackendResolver, mergeBackendUsage, hasUnknownBackendCost, readCustomBackend, TOKEN_FIELDS };
+module.exports = { preserveLegacyClaudeGroups, preserveLegacyClaudePrefix, hashClaudeRange, claudeLines, backendFromUrl, captureClaudeBackend, createBackendResolver, mergeBackendUsage, hasUnknownBackendCost, readCustomBackend, TOKEN_FIELDS };

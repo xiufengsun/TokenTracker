@@ -226,3 +226,129 @@ test("rewritten transcripts cannot inherit a stale observation range", async (t)
   await f.sync();
   assert.equal(f.rows().at(-1).backend_usage[0].backend, "unknown");
 });
+
+for (const force of [false, true]) {
+  test(`upgrade preserves historical session cost with mixed new usage (force=${force})`, async (t) => {
+    const { buildSessionAnalytics, resolveSessionSidecarPath } = require("../src/lib/session-analytics");
+    const crypto = require("node:crypto");
+    const f = fixture(t);
+    const dir = path.join(f.home, ".claude", "projects", "repo");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, "s1.jsonl");
+    f.turn(); fs.renameSync(f.file, file);
+    // Pre-milestone scanner output and metadata schema: no backend subsets or ledger.
+    const old = await scanClaudeSession(file);
+    const cacheKey = crypto.createHash("sha256").update(`claude\0${path.resolve(file)}`).digest("hex").slice(0, 24);
+    old._cache_key = cacheKey;
+    const stat = fs.statSync(file);
+    const sidecar = resolveSessionSidecarPath(f.home);
+    fs.writeFileSync(sidecar, JSON.stringify(old) + "\n");
+    fs.writeFileSync(sidecar + ".meta.json", JSON.stringify({ version: old.version,
+      files: { [cacheKey]: { stat_key: `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}` } } }));
+    fs.appendFileSync(file, JSON.stringify({ type: "ai-title", aiTitle: "Metadata update" }) + "\n");
+    const [renamed] = await buildSessionAnalytics({ home: f.home, recheck: true, force });
+    assert.equal(renamed.cost_usd, old.cost_usd);
+    assert.equal(renamed.total_tokens, old.total_tokens);
+    assert.equal(renamed.title, "Metadata update");
+    assert.equal(renamed.model_usage[0].backend_usage, undefined);
+    const hook = (event) => captureClaudeBackend(f.trackerDir, { hook_event_name: event, session_id: "s1", transcript_path: file }, { ANTHROPIC_BASE_URL: B });
+    hook("SessionStart");
+    f.turn(); fs.appendFileSync(file, fs.readFileSync(f.file)); hook("Stop");
+    for (const options of [{ recheck: true }, { force: true }, { recheck: true }]) {
+      const [mixed] = await buildSessionAnalytics({ home: f.home, ...options });
+      assert.equal(mixed.total_tokens, 220);
+      assert.equal(mixed.cost_usd, old.cost_usd);
+      assert.equal(mixed.cost_is_partial, true);
+      assert.equal(mixed.model_usage[0].backend_usage[0].backend, "custom");
+      assert.equal(mixed.model_usage[0].backend_usage[0].total_tokens, 110);
+    }
+  });
+}
+
+test("session scan preserves queue-only historical prefix before and after sync", async (t) => {
+  const f = fixture(t);
+  f.turn();
+  // Pre-milestone cursor schema, without an existing session sidecar.
+  const st = fs.statSync(f.file);
+  fs.writeFileSync(path.join(f.trackerDir, "cursors.json"), JSON.stringify({ files: { [f.file]: { inode: st.ino, offset: st.size } } }));
+  const old = await scanClaudeSession(f.file);
+  const upgraded = await scanClaudeSession(f.file, { trackerDir: f.trackerDir });
+  assert.equal(upgraded.cost_usd, old.cost_usd);
+  f.hook("SessionStart", B); f.turn(); f.hook("Stop", B);
+  await f.sync();
+  const mixed = await scanClaudeSession(f.file, { trackerDir: f.trackerDir });
+  assert.equal(mixed.cost_usd, old.cost_usd);
+  assert.equal(mixed.total_tokens, 220);
+  assert.equal(mixed.model_usage[0].backend_usage[0].total_tokens, 110);
+  assert.equal(computeRowCost(f.rows().at(-1)), old.cost_usd);
+});
+
+for (const cacheMode of ["live", "disk", "memory"]) {
+  test(`custom endpoint overrides OAuth and ${cacheMode} Anthropic limits`, async (t) => {
+    const f = fixture(t);
+    const claudeDir = path.join(f.home, ".claude");
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(path.join(claudeDir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "test-oauth" } }));
+    resetUsageLimitsCache(); t.after(resetUsageLimitsCache);
+    let anthropicRequests = 0;
+    const options = { home: f.home, env: {}, platform: "linux", providerTimeoutMs: 50,
+      securityRunner: () => ({ status: 1, stdout: "" }), commandRunner: () => ({ status: 1, stdout: "" }),
+      fetchImpl: async (url) => {
+        if (new URL(url).hostname === "api.anthropic.com") {
+          anthropicRequests++;
+          return { ok: true, status: 200, json: async () => ({ five_hour: { utilization: 25 }, seven_day: { utilization: 50 } }) };
+        }
+        throw new Error("offline");
+      } };
+    if (cacheMode !== "live") {
+      const initial = await getUsageLimits(options);
+      assert.equal(initial.claude.five_hour.utilization, 25);
+      assert.equal(anthropicRequests, 1);
+      if (cacheMode === "disk") resetUsageLimitsCache();
+    }
+    fs.writeFileSync(path.join(claudeDir, "settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: B } }));
+    const before = anthropicRequests;
+    const custom = await getUsageLimits(options);
+    assert.equal(anthropicRequests, before);
+    assert.equal(custom.claude.limits_status, "not_applicable");
+    assert.equal(custom.claude.backend_origin, originB);
+    assert.equal(custom.claude.five_hour, undefined);
+    assert.equal(custom.claude.service_status, undefined);
+  });
+}
+
+for (const missingMirror of [false, true]) {
+test(`sync-first upgrade preserves exact matched cross-root history (missing=${missingMirror})`, async (t) => {
+  const f = fixture(t);
+  const crypto = require("node:crypto");
+  f.turn();
+  const paths = ["native", "wsl"].map((root) => {
+    const dir = path.join(f.home, root);
+    fs.mkdirSync(dir);
+    const file = path.join(dir, "01234567-1234-1234-1234-012345678901.jsonl");
+    fs.copyFileSync(f.file, file);
+    return file;
+  });
+  const old = await scanClaudeSession(paths);
+  const key = crypto.createHash("sha256").update(`claude\0${paths.join("\0")}`).digest("hex").slice(0, 24);
+  const stats = paths.map((file) => { const st = fs.statSync(file); return `${st.size}:${st.mtimeMs}:${st.ctimeMs}`; });
+  fs.writeFileSync(path.join(f.trackerDir, "session.queue.jsonl.meta.json"), JSON.stringify({ files: { [key]: { stat_key: stats.join("|") } } }));
+  if (missingMirror) fs.unlinkSync(paths[0]);
+  await parseClaudeIncremental({ projectFiles: [...paths].reverse().concat([{}, null, undefined]), queuePath: f.queuePath, cursors: {} });
+  const rescanned = await scanClaudeSession(paths, { trackerDir: f.trackerDir });
+  assert.equal(rescanned.total_tokens, old.total_tokens);
+  assert.equal(rescanned.cost_usd, old.cost_usd);
+  assert.equal(rescanned.model_usage[0].backend_usage, undefined);
+});
+
+}
+
+test("truncated old session boundary does not exempt replacement usage", async (t) => {
+  const f = fixture(t);
+  f.turn();
+  const { createBackendResolver } = require("../src/lib/claude-backend");
+  createBackendResolver(f.file, f.trackerDir, { legacyOffset: fs.statSync(f.file).size + 1000 });
+  const row = await scanClaudeSession(f.file, { trackerDir: f.trackerDir });
+  assert.equal(row.model_usage[0].backend_usage[0].backend, "unknown");
+  assert.equal(row.cost_usd, 0);
+});

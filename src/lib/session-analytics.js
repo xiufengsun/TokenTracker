@@ -551,7 +551,7 @@ function isRecoverableSessionReadError(error) {
   return ["ENOENT", "EACCES", "EPERM", "EISDIR", "EIO", "ESTALE"].includes(error?.code);
 }
 
-async function scanClaudeSession(filePath, { trackerDir } = {}) {
+async function scanClaudeSession(filePath, { trackerDir, legacyOffsets = {} } = {}) {
   // Native and WSL mounts can disappear independently after discovery. Keep
   // the surviving mirror instead of dropping the whole logical session.
   const filePaths = readableSessionPaths(filePath);
@@ -603,7 +603,7 @@ async function scanClaudeSession(filePath, { trackerDir } = {}) {
   for (const currentFilePath of filePaths) {
     const currentRecordHashes = new Set();
     try {
-      const backend = trackerDir ? createBackendResolver(currentFilePath, trackerDir) : null;
+      const backend = trackerDir ? createBackendResolver(currentFilePath, trackerDir, { legacyOffset: legacyOffsets[currentFilePath] || 0 }) : null;
       for await (const { line, start, end } of claudeLines(currentFilePath)) {
         if (filePaths.length > 1) {
           const recordHash = crypto.createHash("sha256").update(line).digest("base64url");
@@ -651,7 +651,8 @@ async function scanClaudeSession(filePath, { trackerDir } = {}) {
         if (candidateModel) model = candidateModel;
         currentTurnModel = model;
         const usage = normalizeClaudeUsage(obj.message.usage);
-        if (backend && usage.total_tokens > 0) usage.backend_usage = [{ ...usage, ...backend(obj, start, end) }];
+        const identity = backend && usage.total_tokens > 0 ? backend(obj, start, end) : null;
+        if (identity) usage.backend_usage = [{ ...usage, ...identity }];
         addTotals(tokens, usage);
         if (usage.total_tokens > 0) {
           const modelUsage = modelUsageByModel.get(model) || { model, ...emptyTotals(), usage_events: 0 };
@@ -2346,6 +2347,8 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   const retryOmpScan = fs.existsSync(incompleteOmpPath);
   const incompleteDshPath = `${metaPath}.dsh-incomplete`;
   const retryDshScan = fs.existsSync(incompleteDshPath);
+  let provenanceMeta = null;
+  try { provenanceMeta = JSON.parse(fs.readFileSync(metaPath, "utf8")); } catch { /* first scan */ }
   let previousMeta = null;
   if (!force) {
     try {
@@ -2471,7 +2474,12 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     }
     if (!rows) {
       try {
-        const scanned = await entry.scan(entry.filePath, { trackerDir: path.dirname(sidecarPath) });
+        const legacyOffsets = {};
+        if (entry.source === "claude") {
+          const sizes = provenanceMeta?.files?.[cacheKey]?.stat_key?.split("|") || [];
+          entry.filePath.forEach((file, index) => { legacyOffsets[file] = Number(sizes[index]?.split(":")[0]) || 0; });
+        }
+        const scanned = await entry.scan(entry.filePath, { trackerDir: path.dirname(sidecarPath), legacyOffsets });
         rows = Array.isArray(scanned) ? scanned.filter(Boolean) : (scanned ? [scanned] : []);
         // Batch sources count the files they had to give up on themselves.
         // A dsh batch is one deduplicated inventory, so a single unreadable log

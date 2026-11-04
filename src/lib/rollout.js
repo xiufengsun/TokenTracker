@@ -1,4 +1,4 @@
-const { createBackendResolver, mergeBackendUsage, claudeLines } = require("./claude-backend");
+const { preserveLegacyClaudeGroups, preserveLegacyClaudePrefix, createBackendResolver, mergeBackendUsage, claudeLines } = require("./claude-backend");
 const { claudeUserIdentity, collectClaudeForkAliases } = require("./claude-user-identity");
 const fs = require("node:fs/promises");
 const fssync = require("node:fs");
@@ -1085,6 +1085,9 @@ async function parseClaudeIncremental({
   const prevHashes = Array.isArray(cursors.claudeHashes) ? cursors.claudeHashes : [];
   const seenMessageHashes = new Set(prevHashes);
   const defaultSource = normalizeSourceInput(source) || "claude";
+  preserveLegacyClaudeGroups(files.filter((entry) =>
+    (typeof entry === "string" ? defaultSource : normalizeSourceInput(entry?.source) || defaultSource) === "claude"
+  ).map((entry) => typeof entry === "string" ? entry : entry?.path), path.dirname(queuePath));
   // Resolve all changed-file lineage before counting: fork files may sort first.
   const forkTimes = new Map();
   const forkAliases = await collectClaudeForkAliases(files, cursors,
@@ -1154,6 +1157,7 @@ async function parseClaudeIncremental({
     const truncated = sameInode && prevOffset > st.size;
     const startOffset = sameInode && !truncated ? prevOffset : 0;
 
+    if (fileSource === "claude") preserveLegacyClaudePrefix(filePath, path.dirname(queuePath), startOffset);
     let fileId = null;
     if (seenFileIds) {
       const cachedFileId =
@@ -3213,7 +3217,8 @@ async function parseClaudeFile({
 
     if (dedupHash) seenMessageHashes.add(dedupHash);
     delta.conversation_count = 0;
-    if (backendResolver) delta.backend_usage = [{ ...delta, ...backendResolver(obj, lineStart, byteOffset) }];
+    const backend = backendResolver?.(obj, lineStart, byteOffset);
+    if (backend) delta.backend_usage = [{ ...delta, ...backend }];
 
     const bucketStart = toUtcHalfHourStart(tokenTimestamp);
     if (!bucketStart) continue;

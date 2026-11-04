@@ -26,7 +26,11 @@ New hourly/project queue snapshots and session model/time buckets carry additive
 `backend_usage` token subsets. The existing aggregate keys and logical models
 are unchanged, so endpoints within one half-hour/session do not overwrite each
 other. Old totals without provenance remain untouched; only newly ingested
-subsets receive the new contract. Local export/import preserves this metadata.
+subsets receive the new contract. On upgrade, existing sync cursors and session
+metadata identify the already-accounted byte prefix; a frozen, digest-checked
+boundary keeps that prefix outside new attribution during ordinary and forced
+rescans. Existing per-record decisions still win. Local export/import preserves
+the backend token subsets in queue snapshots.
 
 Custom/unknown subsets contribute no estimated dollars to the known-cost
 subtotal. Pricing metadata is explicitly `unpriced`, session costs are marked
