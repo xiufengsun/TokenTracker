@@ -189,8 +189,13 @@ test("menu-bar popover prefers the status-item button and uses a fresh ephemeral
   );
   assert.match(
     source,
-    /private\s+func\s+makePopoverAnchorWindow\(\)\s*->\s*NSWindow[\s\S]*styleMask:\s*\[\.borderless\][\s\S]*collectionBehavior\s*=\s*\[[^\]]*\.canJoinAllSpaces[^\]]*\.fullScreenAuxiliary[^\]]*\.ignoresCycle[^\]]*\.stationary[^\]]*\]/,
-    "The anchor window should be borderless, invisible, and allowed in full-screen Spaces.",
+    /private\s+func\s+makePopoverAnchorWindow\(\)\s*->\s*NSWindow[\s\S]*styleMask:\s*\[\.borderless\][\s\S]*collectionBehavior\s*=\s*\[[^\]]*\.canJoinAllSpaces[^\]]*\.fullScreenAuxiliary[^\]]*\.ignoresCycle[^\]]*\]/,
+    "The anchor window should be borderless, invisible, and allowed in full-screen Spaces without .stationary pinning it to one Space.",
+  );
+  assert.doesNotMatch(
+    source,
+    /makePopoverAnchorWindow[\s\S]*\.stationary/,
+    "The anchor window must not be .stationary, otherwise macOS pins it to the initial Space (#506).",
   );
   assert.match(
     source,
@@ -236,6 +241,11 @@ test("menu-bar popover prefers the status-item button and uses a fresh ephemeral
     didCloseObserver,
     /Task\s*\{\s*@MainActor/,
     "The did-close cleanup must not be deferred through an unstructured MainActor task.",
+  );
+  assert.match(
+    source,
+    /NSWorkspace\.shared\.notificationCenter\.addObserver\(\s*forName:\s*NSWorkspace\.activeSpaceDidChangeNotification[\s\S]*closePopoverIfShown\(\)/,
+    "Switching desktop spaces must close the popover cleanly so it does not linger stranded on another space.",
   );
   assert.match(
     source,
