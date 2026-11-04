@@ -42,4 +42,30 @@ enum PopoverPlacementPolicy {
         if popoverFrame.minX < screenFrame.minX - overflowTolerance { return true }
         return !(popoverFrame.minX <= anchorFrame.midX && popoverFrame.maxX >= anchorFrame.midX)
     }
+
+    // MARK: - Anchor lifecycle (issue #866)
+
+    /// An `NSWindow` first ordered while the app was `.regular` stays pinned to
+    /// that desktop Space after returning to `.accessory`. Reusing it then
+    /// strands the popover off the active full-screen Space for the rest of
+    /// the process. Always create a fresh anchor instead of recycling one.
+    static func shouldReuseAnchorWindow() -> Bool { false }
+
+    /// Prefer the status-item button itself as the `NSPopover` positioning
+    /// view when the click landed on the button's own screen. The status item
+    /// already lives on the revealed menu bar of a full-screen Space, so a
+    /// custom anchor window is unnecessary and historically sticky (#866).
+    /// Cross-display clicks still need an ephemeral anchor under the cursor
+    /// (issue #481).
+    static func shouldPositionOnStatusItemButton(
+        buttonScreenID: ObjectIdentifier?,
+        clickScreenID: ObjectIdentifier?
+    ) -> Bool {
+        guard let buttonScreenID, let clickScreenID else {
+            // Missing screen info: fall back to the button. Creating an anchor
+            // without a reliable click screen is how sticky-Space bugs start.
+            return true
+        }
+        return buttonScreenID == clickScreenID
+    }
 }
