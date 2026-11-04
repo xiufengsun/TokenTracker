@@ -1494,6 +1494,14 @@ describe("UsageLimitsPanel", () => {
     // Collapsed: top-right auto-renew icon badge and the "Subscription" bar label.
     expect(screen.getByRole("img", { name: "Auto-renew" })).toBeInTheDocument();
     expect(screen.getByText("Subscription")).toBeInTheDocument();
+    // SubscriptionBar must opt into widest-label measurement like LimitBar,
+    // otherwise CJK "订阅" is clipped by --tt-limits-label-w from short 5h/7d labels (#1019).
+    const subscriptionLabel = screen.getByText("Subscription");
+    expect(subscriptionLabel.hasAttribute("data-limit-label")).toBe(true);
+    const labelGroup = subscriptionLabel.closest("[data-limit-label-group]");
+    expect(labelGroup).not.toBeNull();
+    const measured = [...labelGroup.querySelectorAll("[data-limit-label]")].map((el) => el.textContent);
+    expect(measured).toContain("Subscription");
 
     // Expanding reveals the subscription detail line.
     fireEvent.click(screen.getByText("Cursor").closest("[role='button']"));
