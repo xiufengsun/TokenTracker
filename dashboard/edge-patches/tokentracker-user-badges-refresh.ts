@@ -15,6 +15,12 @@
  *   POST calls `user_badges_refresh()` via the service role, then an InsForge
  *   schedule hits it on the same 6-hour cadence.
  *
+ *   Use the ordinary project-admin SQL endpoint, NOT /api/database/rpc:
+ *   the latter has a backend Axios proxy capped at 10s regardless of the SDK
+ *   or fetch timeout. This endpoint executes one fixed SELECT as project_admin
+ *   with a 30s server limit; it does not need unrestricted/root SQL access.
+ *   Apply the maintained-rollup migration first (docs/user-badges-refresh.md).
+ *
  * Auth (write path only):
  *   - `x-refresh-secret: $LEADERBOARD_REFRESH_SECRET` (cron / ops), or
  *   - `Authorization: Bearer $INSFORGE_SERVICE_ROLE_KEY`
@@ -24,8 +30,6 @@
  *   insforge schedules delete <id>
  *   insforge functions delete tokentracker-user-badges-refresh
  */
-import { createClient } from "npm:@insforge/sdk";
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -55,7 +59,7 @@ function authorizePrivileged(req: Request): boolean {
   if (secret && provided && timingSafeEqualStr(provided, secret)) return true;
 
   const auth = req.headers.get("Authorization");
-  const bearer = auth ? auth.replace(/^Bearer\s+/i, "").trim() : "";
+  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? "";
   const serviceKey = Deno.env.get("INSFORGE_SERVICE_ROLE_KEY");
   if (bearer && serviceKey && timingSafeEqualStr(bearer, serviceKey)) return true;
   return false;
@@ -77,43 +81,48 @@ export default async function (req: Request): Promise<Response> {
   if (!baseUrl || !serviceRoleKey) {
     return json({ error: "server misconfigured" }, 500);
   }
-  const incomingApiKey =
-    req.headers.get("apikey") ??
-    req.headers.get("Apikey") ??
-    req.headers.get("x-api-key") ??
-    undefined;
-  const anonKey =
-    Deno.env.get("INSFORGE_ANON_KEY") ??
-    Deno.env.get("ANON_KEY") ??
-    incomingApiKey ??
-    undefined;
-
-  const client = createClient({
-    baseUrl,
-    edgeFunctionToken: serviceRoleKey,
-    anonKey,
-    // SQL sets statement_timeout=120s; keep SDK under that but well above the
-    // default 10s so a full-history recompute for all users can finish.
-    timeout: 110_000,
-    ...(anonKey ? { headers: { apikey: anonKey } } : {}),
-  });
-
   const started = Date.now();
   logBadgeRefresh({ event: "start" });
-  const { data, error } = await client.database.rpc("user_badges_refresh");
-  if (error) {
+  // One attempt only: after a transport error the commit outcome is unknown.
+  // The SQL function owns the shared claim and the entire atomic recompute.
+  const signal = AbortSignal.timeout(110_000);
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/database/advance/rawsql`, {
+      method: "POST",
+      redirect: "error",
+      headers: {
+        Authorization: `Bearer ${serviceRoleKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: "SELECT public.user_badges_refresh() AS result" }),
+      signal,
+    });
+    if (!response.ok) {
+      // Backend error bodies can contain SQL or credentials. Log status only.
+      await response.body?.cancel();
+      logBadgeRefresh({ event: "error", status: response.status, ms: Date.now() - started });
+      return json({ ok: false, error: "user_badges_refresh failed" }, 500);
+    }
+    const payload = await response.json();
+    const value = payload?.rows?.[0]?.result;
+    // PostgreSQL bigint arrives as a decimal string on the admin SQL endpoint.
+    // Missing/malformed rows must not turn into a false successful refresh.
+    const result = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value;
+    if (payload?.rows?.length !== 1 || !Number.isSafeInteger(result) || result < 0) {
+      throw new Error("Invalid refresh result");
+    }
+    const ms = Date.now() - started;
+    logBadgeRefresh({ event: "ok", ms, result });
+    return json({ ok: true, ms, result });
+  } catch {
     logBadgeRefresh({
       event: "error",
-      message: error.message || "rpc failed",
+      reason: signal.aborted ? "timeout" : "request_failed",
       ms: Date.now() - started,
     });
-    return json({ ok: false, error: error.message || "user_badges_refresh failed" }, 500);
+    return json({
+      ok: false,
+      error: signal.aborted ? "user_badges_refresh timed out" : "user_badges_refresh failed",
+    }, signal.aborted ? 504 : 500);
   }
-
-  logBadgeRefresh({ event: "ok", ms: Date.now() - started, result: data ?? null });
-  return json({
-    ok: true,
-    ms: Date.now() - started,
-    result: data ?? null,
-  });
 }
