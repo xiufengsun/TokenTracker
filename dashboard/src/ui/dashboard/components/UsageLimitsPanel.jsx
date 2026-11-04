@@ -1073,6 +1073,11 @@ function renderUnlinkedProvider(id, statusNodes, expanded, onToggle, subscriptio
 
 function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = null, now = Date.now(), onKeySaved = null) {
   if (!PROVIDER_LIMIT_SPECS[id]) return null;
+  if (id === "claude" && data?.limits_status === "not_applicable") {
+    return renderUnlinkedProvider(id,
+      <StatusLine>{copy("limits.claude.custom_backend")}</StatusLine>,
+      expanded, onToggle, subscription, now, mode);
+  }
   if (!data?.configured) {
     return renderUnlinkedProvider(
       id,

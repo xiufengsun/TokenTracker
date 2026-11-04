@@ -5,7 +5,7 @@ const { ensureDir, readJson, writeJson } = require("./fs");
 const { buildNotifyCommand, notifyIdentity } = require("./notify-command");
 
 const DEFAULT_EVENT = "SessionEnd";
-const CLAUDE_USAGE_EVENTS = ["Stop", DEFAULT_EVENT];
+const CLAUDE_USAGE_EVENTS = ["SessionStart", "Stop", DEFAULT_EVENT];
 
 async function upsertClaudeHook({ settingsPath, hookCommand, event = DEFAULT_EVENT }) {
   return upsertClaudeHooks({ settingsPath, hookCommand, events: [event] });

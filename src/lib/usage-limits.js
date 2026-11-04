@@ -1,3 +1,4 @@
+const { readCustomBackend } = require("./claude-backend");
 const cp = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -4945,7 +4946,10 @@ async function fetchUsageLimitsUncached({
     // hidden Claude skips even that (#956): its row is the plain sentinel either way.
     const credentialsPresent = !hiddenSet.has("claude")
       && detectClaudeCodeCredentialsPresence({ platform, securityRunner, home });
-    claude = credentialsPresent
+    const backend = hiddenSet.has("claude") ? null : readCustomBackend({ home: home || os.homedir() });
+    claude = backend?.backend === "custom"
+      ? { configured: true, ...backend, limits_status: "not_applicable", cost_status: "unknown", error: null }
+      : credentialsPresent
       ? { configured: true, error: CLAUDE_AUTH_EXPIRED_MESSAGE, auth_action_required: "reauth" }
       : { configured: false };
   } else if (freshClaudeCache) {
@@ -5010,7 +5014,7 @@ async function fetchUsageLimitsUncached({
   // waiting out the poll interval. Re-read here (not the pre-fetch value) so a
   // cool-down just armed by this cycle's 429 is included; a successful read above
   // cleared the file, so this is null in the happy path.
-  if (claude.configured) {
+  if (claude.configured && claude.limits_status !== "not_applicable") {
     const claudeCooldownMs = readClaudeRateLimitRetryAtMs({
       home,
       nowMs,
@@ -5350,7 +5354,7 @@ async function fetchUsageLimitsUncached({
 
   const data = {
     fetched_at: new Date(nowMs).toISOString(),
-    claude: withPlanLabel(claude, claudePlanType, "Claude"),
+    claude: claude.limits_status === "not_applicable" ? claude : withPlanLabel(claude, claudePlanType, "Claude"),
     codex: withPlanLabel(codex, codex.plan_type, "Codex"),
     cursor: withPlanLabel(cursorLimits, cursorLimits.membership_type, "Cursor"),
     // Kimi's subType (TYPE_PURCHASE/TYPE_EVENT) is the credit *source*, not a plan

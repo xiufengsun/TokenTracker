@@ -1,3 +1,4 @@
+const { hasUnknownBackendCost, TOKEN_FIELDS } = require("../claude-backend");
 // Public pricing API. Replaces the hard-coded MODEL_PRICING table that used
 // to live in src/lib/local-api.js. Keeps the same synchronous shape so all
 // existing callers (computeRowCost, /functions/* handlers, tests) work
@@ -139,6 +140,7 @@ const pricingInfoCache = { revision: -1, entries: new Map() };
 // Preserve matcher provenance: a known zero rate is free, a missing model is
 // unpriced. Both return zero dollars, but they mean different things in the UI.
 function getModelPricingInfo(model, opts = {}) {
+  if (hasUnknownBackendCost(opts)) return { status: "unpriced", source: null, ...ZERO_PRICING };
   const source = typeof opts === "string" ? opts : opts.source;
   const sourceKey = typeof source === "string" ? source.toLowerCase() : null;
   if (pricingInfoCache.revision !== state.revision) {
@@ -340,6 +342,16 @@ function speedTierSubsetCost(row, prefix, pricing, ctx) {
 // computeRowCost in src/lib/local-api.js. Moved here so vite mock + local
 // server share one source of truth.
 function computeRowCost(row) {
+  if (hasUnknownBackendCost(row)) {
+    // Existing totals without provenance retain their historical estimate. Only
+    // the newly ingested custom/unknown subset is excluded from model pricing.
+    const priced = { ...row, backend_usage: undefined };
+    for (const part of row.backend_usage) {
+      if (part.backend === "anthropic") continue;
+      for (const field of TOKEN_FIELDS) priced[field] = Math.max(0, (priced[field] || 0) - (part[field] || 0));
+    }
+    return computeRowCost(priced);
+  }
   if (LOCAL_INFERENCE_SOURCES.has(String(row?.source || "").toLowerCase())) return 0;
   // Pi can route a turn through a subscription-backed Copilot provider. Pi's
   // usage record reports a zero marginal cost for those turns; do not

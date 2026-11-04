@@ -240,7 +240,14 @@ test("pricing cache refresh reprices old sidecars without changing request perfo
   t.after(() => { delete state.litellmPerMillionMap[model]; state.negativeCache.clear(); state.revision += 1; });
   const assistant = claudeAssistant("m1", "u1", 10);
   assistant.message.model = model;
-  const { home } = fixture(t, [claudeUser("u1", 0), assistant]);
+  const { file, home } = fixture(t, []);
+  const { captureClaudeBackend } = require("../src/lib/claude-backend");
+  const observe = (event) => captureClaudeBackend(path.join(home, ".tokentracker/tracker"), {
+    hook_event_name: event, session_id: "session", transcript_path: file,
+  }, { ANTHROPIC_BASE_URL: "https://api.anthropic.com" });
+  observe("SessionStart");
+  fs.appendFileSync(file, [claudeUser("u1", 0), assistant].map(JSON.stringify).join("\n") + "\n");
+  observe("Stop");
   const before = (await buildSessionAnalytics({ home, force: true }))[0];
   assert.equal(before.cost_is_partial, true);
   state.litellmPerMillionMap[model] = { input: 1, output: 2, cache_read: 0, cache_write: 0 };

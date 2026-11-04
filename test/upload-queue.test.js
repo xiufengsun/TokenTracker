@@ -335,3 +335,13 @@ test("session truth survives compaction and batch boundaries with older/equal/in
     }
   }
 });
+
+test("cloud upload omits local backend origins without changing logical usage", async (t) => {
+  const usage = { ...row("logical-model", 100), backend_usage: [
+    { backend: "custom", backend_origin: "https://private-gateway.example", input_tokens: 100, total_tokens: 100 },
+  ] };
+  const x = await fixture(t, encode(usage));
+  const batch = await readQueueBatch(x.queuePath, 0, 200);
+  assert.deepEqual(batch.buckets, [row("logical-model", 100)]);
+  assert.deepEqual(JSON.parse((await fs.readFile(x.queuePath, "utf8")).trim()), usage);
+});

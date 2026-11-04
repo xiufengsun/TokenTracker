@@ -1,4 +1,5 @@
 "use strict";
+const { createBackendResolver, mergeBackendUsage, claudeLines } = require("./claude-backend");
 
 // Metadata-only session analytics sidecar.
 //
@@ -146,6 +147,7 @@ function tokenTotals(usage) {
 }
 
 function addTotals(target, delta) {
+  mergeBackendUsage(target, delta);
   for (const key of ["input_tokens", "cached_input_tokens", "cache_creation_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens"]) {
     target[key] = finite(target[key]) + finite(delta?.[key]);
   }
@@ -226,6 +228,7 @@ function normalizeModelUsageRows(rows) {
       };
       byModel.set(model, row);
     }
+    mergeBackendUsage(row, value);
     for (const field of MODEL_USAGE_SUM_FIELDS) row[field] += finite(value?.[field]);
     row.performance = mergePerformance(row.performance, value?.performance);
     if (Array.isArray(value?.selected_models)) {
@@ -266,7 +269,7 @@ function normalizeModelUsageRows(rows) {
 // most of it the long_context_* counters for sessions with no requests over
 // OPENAI_LONG_CONTEXT_INPUT_THRESHOLD in src/lib/pricing/index.js.
 function serializeModelUsageRow(row) {
-  const out = { model: row.model };
+  const out = { model: row.model, ...(row.backend_usage ? { backend_usage: row.backend_usage } : {}) };
   for (const field of MODEL_USAGE_SUM_FIELDS) {
     const value = finite(row[field]);
     if (value !== 0) out[field] = value;
@@ -299,7 +302,7 @@ function repriceSessionRecord(record) {
     let hasUnpricedUsage = false;
     for (const row of modelUsage) {
       row.cost_usd = computeRowCost({ source: record.source, ...row });
-      row.pricing = getModelPricingInfo(row.model, { source: record.source });
+      row.pricing = getModelPricingInfo(row.model, { ...row, source: record.source });
       if (row.total_tokens > 0 && row.pricing.status === "unpriced") hasUnpricedUsage = true;
     }
     record.model_usage = modelUsage;
@@ -366,7 +369,7 @@ function modelUsageForAggregation(record) {
   }
   const priced = rows.map((row) => denseModelUsageRow({
     ...row,
-    pricing: getModelPricingInfo(row.model, { source: record.source }),
+    pricing: getModelPricingInfo(row.model, { ...row, source: record.source }),
     cost_usd: Number.isFinite(Number(row.cost_usd))
       ? Number(row.cost_usd)
       : computeRowCost({ source: record.source, ...row }),
@@ -548,7 +551,7 @@ function isRecoverableSessionReadError(error) {
   return ["ENOENT", "EACCES", "EPERM", "EISDIR", "EIO", "ESTALE"].includes(error?.code);
 }
 
-async function scanClaudeSession(filePath) {
+async function scanClaudeSession(filePath, { trackerDir } = {}) {
   // Native and WSL mounts can disappear independently after discovery. Keep
   // the surviving mirror instead of dropping the whole logical session.
   const filePaths = readableSessionPaths(filePath);
@@ -600,9 +603,8 @@ async function scanClaudeSession(filePath) {
   for (const currentFilePath of filePaths) {
     const currentRecordHashes = new Set();
     try {
-      const input = fs.createReadStream(currentFilePath, { encoding: "utf8" });
-      const lines = readline.createInterface({ input, crlfDelay: Infinity });
-      for await (const line of lines) {
+      const backend = trackerDir ? createBackendResolver(currentFilePath, trackerDir) : null;
+      for await (const { line, start, end } of claudeLines(currentFilePath)) {
         if (filePaths.length > 1) {
           const recordHash = crypto.createHash("sha256").update(line).digest("base64url");
           if (priorRecordHashes.has(recordHash)) continue;
@@ -649,6 +651,7 @@ async function scanClaudeSession(filePath) {
         if (candidateModel) model = candidateModel;
         currentTurnModel = model;
         const usage = normalizeClaudeUsage(obj.message.usage);
+        if (backend && usage.total_tokens > 0) usage.backend_usage = [{ ...usage, ...backend(obj, start, end) }];
         addTotals(tokens, usage);
         if (usage.total_tokens > 0) {
           const modelUsage = modelUsageByModel.get(model) || { model, ...emptyTotals(), usage_events: 0 };
@@ -2468,7 +2471,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     }
     if (!rows) {
       try {
-        const scanned = await entry.scan(entry.filePath);
+        const scanned = await entry.scan(entry.filePath, { trackerDir: path.dirname(sidecarPath) });
         rows = Array.isArray(scanned) ? scanned.filter(Boolean) : (scanned ? [scanned] : []);
         // Batch sources count the files they had to give up on themselves.
         // A dsh batch is one deduplicated inventory, so a single unreadable log
@@ -2659,6 +2662,7 @@ function scopeSessionUsage(row, from, to, context) {
     const modelName = previousModelUsage ? previousModelUsage.model : (row.model || bucket.model);
     const model = byModel.get(modelName) || {
       ...(previousModelUsage || {}),
+      backend_usage: undefined,
       model: modelName,
       ...Object.fromEntries(MODEL_USAGE_SUM_FIELDS.filter((field) => field !== "edit_turns").map((field) => [field, 0])),
       usage_events: 0,
