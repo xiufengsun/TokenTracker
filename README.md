@@ -468,6 +468,8 @@ Requires **Xcode 16+** and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 
 ## 🔧 Troubleshooting
 
+- **Antivirus quarantined `tracker.js` on Windows** — see [Antivirus false positives](docs/antivirus-false-positives.md) (suspected Kaspersky PDM false positive; vendor review still required).
+
 **ZCode totals decreased after v0.96.0?** This release corrects historical cache/reasoning double counting, including previously uploaded months. See the [ZCode history correction](docs/zcode-history-correction.md) for the accounting change and local backup details.
 
 ### CLI
