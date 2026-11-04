@@ -94,7 +94,7 @@ for (const reverse of [false, true]) test(`#927 daily models retain orchestrator
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
-for (const legacy of [false, true]) test(`#927 repairs persisted ${legacy ? "collapsed legacy" : "dominant-model"} rows without replaying logs`, async () => {
+for (const version of [undefined, 3]) for (const legacy of [false, true]) test(`#927 repairs persisted ${legacy ? "collapsed legacy" : "dominant-model"} rows without replaying logs (version=${version})`, async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tt-codex-model-repair-"));
   try {
     const queuePath = path.join(dir, "queue.jsonl");
@@ -103,7 +103,7 @@ for (const legacy of [false, true]) test(`#927 repairs persisted ${legacy ? "col
     const stored = { "gpt-6-astra": 100, "gpt-6.1-sol": 200, ...(legacy ? {} : { unknown: 50 }) };
     const stale = legacy ? { unknown: 300 } : { "gpt-6-astra": 100, "gpt-6.1-sol": 250, unknown: 0 };
     await fs.writeFile(queuePath, lines(Object.entries(stale).map(([model, n]) => ({ source: "codex", model, hour_start: HOUR, ...totals(n) }))));
-    let cursors = { hourly: { version: 3, buckets: Object.fromEntries(Object.entries(stored).map(([model, n]) =>
+    let cursors = { hourly: { ...(version ? { version } : {}), buckets: Object.fromEntries(Object.entries(stored).map(([model, n]) =>
       [`codex|${model}|${HOUR}`, { totals: totals(n), queuedKey: "old-key" }])),
       groupQueued: legacy ? { [`codex|${HOUR}`]: "old-group-key" } : {} } };
     const run = () => parseRolloutIncremental({ rolloutFiles: [], cursors, queuePath });
@@ -119,6 +119,52 @@ for (const legacy of [false, true]) test(`#927 repairs persisted ${legacy ? "col
     cursors = JSON.parse(JSON.stringify(cursors));
     assert.equal((await run()).bucketsQueued, 0);
     assert.equal(await fs.readFile(queuePath, "utf8"), stable);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test("#927 upgrades already-produced unversioned model buckets without inflating the second sync", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tt-codex-unversioned-models-"));
+  try {
+    const queuePath = path.join(dir, "queue.jsonl");
+    const cursorPath = path.join(dir, "cursors.json");
+    const totals = n => ({ input_tokens: n, output_tokens: 0, cached_input_tokens: 0,
+      cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_tokens: n,
+      billable_total_tokens: n, conversation_count: 1 });
+    const stored = { "gpt-6-astra": 100, "gpt-6.1-sol": 200 };
+    // Older repairs already wrote these model-aware buckets and queue rows,
+    // but omitted hourly.version. Upgrade this saved state without rebuilding it.
+    await fs.writeFile(cursorPath, JSON.stringify({ hourly: {
+      buckets: Object.fromEntries(Object.entries(stored).map(([model, n]) =>
+        [`codex|${model}|${HOUR}`, { totals: totals(n), queuedKey: "old-key" }])),
+      groupQueued: {},
+    } }));
+    await fs.writeFile(queuePath, lines(Object.entries(stored).map(([model, n]) =>
+      ({ source: "codex", model, hour_start: HOUR, ...totals(n) }))));
+    let upgradedQueue;
+    for (let sync = 0; sync < 2; sync++) {
+      const cursors = JSON.parse(await fs.readFile(cursorPath, "utf8"));
+      const result = await parseRolloutIncremental({ rolloutFiles: [], cursors, queuePath });
+      assert.equal(result.eventsAggregated, 0);
+      await fs.writeFile(cursorPath, JSON.stringify(cursors));
+      assert.equal(cursors.hourly.version, 3);
+      assert.deepEqual(Object.keys(cursors.hourly.buckets).sort(),
+        Object.keys(stored).map(model => `codex|${model}|${HOUR}`).sort());
+      const rows = await latest(queuePath);
+      assert.equal(rows.size, 2);
+      for (const [model, n] of Object.entries(stored)) {
+        assert.equal(rows.get(model).total_tokens, n);
+        assert.deepEqual(cursors.hourly.buckets[`codex|${model}|${HOUR}`].totals, totals(n));
+      }
+      const { fleet, models } = await dailyModels(queuePath);
+      assert.equal(fleet.usage, 300);
+      assert.deepEqual(models.map(row => row.name).sort(), Object.keys(stored).sort());
+      const queue = await fs.readFile(queuePath, "utf8");
+      if (sync === 0) upgradedQueue = queue;
+      else {
+        assert.equal(result.bucketsQueued, 0);
+        assert.equal(queue, upgradedQueue);
+      }
+    }
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 

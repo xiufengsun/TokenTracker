@@ -4073,18 +4073,29 @@ function normalizeHourlyState(raw) {
   const version = Number(state.version || 1);
   const rawBuckets = state.buckets && typeof state.buckets === "object" ? state.buckets : {};
   const buckets = {};
-  const groupQueued = {};
+  const existingGroupQueued =
+    state.groupQueued && typeof state.groupQueued === "object" ? state.groupQueued : {};
   const modelAttributionPolicy = Object.fromEntries(
     Object.entries(state.modelAttributionPolicy || {})
       .filter(([, policy]) => policy === "observed"),
   );
 
   if (!Number.isFinite(version) || version < 2) {
+    const groupQueued = { ...existingGroupQueued };
     for (const [key, value] of Object.entries(rawBuckets)) {
       const parsed = parseBucketKey(key);
       const hourStart = parsed.hourStart;
       if (!hourStart) continue;
       const source = normalizeSourceInput(parsed.source) || DEFAULT_SOURCE;
+      // Older repairs persisted model-aware keys without a schema version.
+      // Preserve them before v1 normalization can collapse sibling models into
+      // unknown; preserveCodexModelBuckets needs the original attribution (#927).
+      const firstSeparator = key.indexOf(BUCKET_SEPARATOR);
+      const hasModel = firstSeparator > 0 && key.indexOf(BUCKET_SEPARATOR, firstSeparator + 1) > 0;
+      if (hasModel) {
+        buckets[bucketKey(source, parsed.model, hourStart)] = value;
+        continue;
+      }
       const normalizedKey = bucketKey(source, DEFAULT_MODEL, hourStart);
       buckets[normalizedKey] = value;
       if (value?.queuedKey) {
@@ -4107,9 +4118,6 @@ function normalizeHourlyState(raw) {
     const normalizedKey = bucketKey(parsed.source, parsed.model, hourStart);
     buckets[normalizedKey] = value;
   }
-
-  const existingGroupQueued =
-    state.groupQueued && typeof state.groupQueued === "object" ? state.groupQueued : {};
 
   return {
     version: 3,

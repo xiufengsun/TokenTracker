@@ -774,8 +774,11 @@ test("background auto sync skips full-source migration and backfill work", async
         files: {},
         hourly: {
           buckets: {
-            "codex|gpt-5.5|2026-06-30T00:00:00.000Z": {
-              totals: { total_tokens: 99 },
+            "codex|gpt-6-astra|2026-06-30T00:00:00.000Z": {
+              totals: { total_tokens: 100 },
+            },
+            "codex|gpt-6.1-sol|2026-06-30T00:00:00.000Z": {
+              totals: { total_tokens: 200 },
             },
           },
           groupQueued: {
@@ -798,9 +801,13 @@ test("background auto sync skips full-source migration and backfill work", async
     // historical logs or reset upload state as the full-source repairs do.
     const repairedQueue = await readQueue(home);
     const rows = repairedQueue.trim().split("\n").map(JSON.parse);
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].model, "unknown");
-    assert.equal(rows[0].total_tokens, 99);
+    assert.equal(rows.length, 3);
+    assert.deepEqual(Object.fromEntries(rows.map(row => [row.model, row.total_tokens])), {
+      "gpt-6-astra": 100,
+      "gpt-6.1-sol": 200,
+      unknown: 0,
+    });
+    assert.equal(cursors.hourly.version, 3);
     await cmdSync(["--auto", "--background"]);
     assert.deepEqual(await readQueue(home), repairedQueue);
   });
