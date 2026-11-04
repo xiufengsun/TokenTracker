@@ -128,6 +128,31 @@ test("Qwen3.8 Max local and all cloud paths share Singapore International rates 
   }
 });
 
+test("Grok 4.7 and Grok 4.7 Build Fast are explicitly priced on the edge too", () => {
+  const { getModelPricing: localPricing } = require("../src/lib/pricing");
+  // Without explicit keys these ids only reached the right numbers through
+  // the "grok-4.7" / "grok-4.7"+fast fuzzy matchers, which would silently
+  // follow any future edit to the Cursor entries instead of these SKUs.
+  const models = ["grok-4.7", "grok-4.7-build-fast"];
+  for (const name of [CANONICAL, ...MIRRORS]) {
+    const { code } = transformSync(extractBlock(name), { loader: "ts", target: "es2020" });
+    const edgePricing = vm.runInNewContext(`${code}\ngetModelPricing;`);
+    for (const model of models) {
+      const local = localPricing(model);
+      const edge = JSON.parse(JSON.stringify(edgePricing(model)));
+      assert.equal(edge.input, local.input, `${name}: ${model} input`);
+      assert.equal(edge.output, local.output, `${name}: ${model} output`);
+      assert.equal(edge.cache_read, local.cache_read, `${name}: ${model} cache_read`);
+      assert.equal(edge.cache_write || 0, local.cache_write, `${name}: ${model} cache_write`);
+    }
+  }
+  assert.notEqual(
+    localPricing("grok-4.7-build-fast").input,
+    localPricing("grok-4.7").input,
+    "the Fast SKU must not collapse onto the base grok-4.7 rate",
+  );
+});
+
 test("canonical pricing block retains regression-prone entries and matcher order", () => {
   const block = extractBlock(CANONICAL);
 
@@ -146,6 +171,8 @@ test("canonical pricing block retains regression-prone entries and matcher order
     '"cursor-grok-4.6-fast"',
     '"cursor-grok-4.7"',
     '"cursor-grok-4.7-fast"',
+    '"grok-4.7"',
+    '"grok-4.7-build-fast"',
     '"composer-2.5"',
     '"composer-2.5-fast"',
     '"gemini-4-argon"',

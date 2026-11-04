@@ -731,6 +731,20 @@
       "cache_write": 0.1,
       "note": "StepFun Step 3.5 Flash incl. dated snapshots like step-3.5-flash-2603 (issue #283). Official platform.stepfun.ai pricing: $0.10 / $0.02 (cache hit) / $0.30 per MTok in/read/out. No published cache-write surcharge, so cache_write = input."
     },
+    "grok-4.7": {
+      "input": 2.0,
+      "output": 6.0,
+      "cache_read": 0.5,
+      "cache_write": 0,
+      "note": "xAI grok-4.7 short-context rates (docs.x.ai/developers/pricing, verified 2026-11-03): $2 / $0.50 / $6 per MTok input/cached/output below 200k prompt tokens. Same numbers as cursor-grok-4.7, kept as its own key so the bare API id resolves outside the Cursor normalizer. No cache-write rate is published, so cache_write stays 0 like the other Grok entries. Requests whose prompt reaches 200k tokens are billed entirely at the long-context rates ($4 / $1 / $12); the single flat rate here cannot express that tier."
+    },
+    "grok-4.7-build-fast": {
+      "input": 4.0,
+      "output": 12.0,
+      "cache_read": 1.0,
+      "cache_write": 0,
+      "note": "Grok 4.7 Fast as served in Grok Build (model id grok-4.7-build-fast in ZCode). xAI documents it as 2x the standard grok-4.7 token rates, 1.5x for long-context requests: $4 / $1 / $12 per MTok input/cached/output below 200k prompt tokens, $6 / $1.50 / $18 once the prompt reaches 200k (docs.x.ai/developers/pricing, verified 2026-11-03). It is not on the public xAI API and Grok Build's free tier excludes it. Same short-context numbers as cursor-grok-4.7-fast; the Cursor normalizer only rewrites the cursor source, so this id needs its own key. No cache-write rate is published, so cache_write stays 0. The flat rate is the short-context rate; the single-rate table cannot express the long-context tier."
+    },
     "grok-4.5-build": {
       "input": 2.0,
       "output": 6.0,
