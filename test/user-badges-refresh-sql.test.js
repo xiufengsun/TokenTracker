@@ -31,9 +31,15 @@ before(async () => {
   await db.exec(fs.readFileSync(path.join(__dirname, "../scripts/ops/user-badges.sql"), "utf8"));
   // Exercise a real upgrade as well as the canonical bootstrap. No legacy
   // rollup tables exist: any accidental v1 dependency fails at execution.
-  await db.exec("CREATE OR REPLACE FUNCTION user_badges_refresh() RETURNS bigint LANGUAGE sql AS $$SELECT -1::bigint$$");
+  await db.exec(`DROP FUNCTION user_badges_refresh_v2();
+    CREATE FUNCTION user_badges_refresh() RETURNS bigint LANGUAGE sql AS $$SELECT -1::bigint$$;
+    GRANT CREATE ON SCHEMA public TO project_admin;
+    SET ROLE project_admin;`);
   await db.exec(fs.readFileSync(path.join(__dirname,
     "../migrations/20261012120001_refresh-badges-from-maintained-rollup.sql"), "utf8"));
+  await db.exec("RESET ROLE");
+  assert.equal((await db.query("SELECT user_badges_refresh() AS legacy")).rows[0].legacy, -1,
+    "migration must leave the legacy function alone");
 });
 after(async () => db?.close());
 beforeEach(async () => {
@@ -50,7 +56,7 @@ beforeEach(async () => {
   `);
 });
 async function refresh() {
-  return (await db.query("SELECT user_badges_refresh() AS result")).rows[0].result;
+  return (await db.query("SELECT user_badges_refresh_v2() AS result")).rows[0].result;
 }
 async function badge(id) {
   return (await db.query("SELECT * FROM tokentracker_user_badges WHERE user_id=$1 AND badge_id=$2", [userId, id])).rows[0];
@@ -97,7 +103,7 @@ test("missing watermark fails and rolls back the claim instead of scanning unbou
 test("anon and authenticated roles cannot execute the migrated refresh", async () => {
   for (const role of ["anon", "authenticated"]) {
     await db.exec(`SET ROLE ${role}`);
-    try { await assert.rejects(refresh(), /permission denied for function user_badges_refresh/); }
+    try { await assert.rejects(refresh(), /permission denied for function user_badges_refresh_v2/); }
     finally { await db.exec("RESET ROLE"); }
   }
 });

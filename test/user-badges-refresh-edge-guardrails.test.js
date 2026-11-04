@@ -36,7 +36,7 @@ test("user-badges refresh edge requires privileged auth before database access",
 test("refresh bypasses the backend 10s RPC proxy without unrestricted SQL or SDK", () => {
   assert.doesNotMatch(codeBody, /createClient|database\.rpc\(|\/rawsql\/unrestricted/);
   assert.match(codeBody, /\/api\/database\/advance\/rawsql/);
-  assert.match(codeBody, /SELECT public\.user_badges_refresh\(\) AS result/);
+  assert.match(codeBody, /SELECT public\.user_badges_refresh_v2\(\) AS result/);
 });
 
 test("user-badges refresh edge rejects non-POST and has no signed-in write path", () => {
@@ -102,7 +102,7 @@ test("both privileged paths send only the server credential and fixed SQL with a
     assert.equal(options.method, "POST");
     assert.equal(options.redirect, "error");
     assert.deepEqual({ ...options.headers }, { Authorization: "Bearer test-service", "Content-Type": "application/json" });
-    assert.deepEqual(JSON.parse(options.body), { query: "SELECT public.user_badges_refresh() AS result" });
+    assert.deepEqual(JSON.parse(options.body), { query: "SELECT public.user_badges_refresh_v2() AS result" });
     assert.ok(options.signal instanceof AbortSignal);
     assert.deepEqual(f.budgets, [110_000]);
     assert.deepEqual(f.logs.map(l => l.event), ["start", "ok"]);

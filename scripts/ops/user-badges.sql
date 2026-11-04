@@ -11,7 +11,7 @@
 --      kept so the owner's progress toward unearned badges is served without
 --      extra compute. Per-tier first-achieved timestamps are 4 columns; they
 --      are set once and never overwritten.
---   3. user_badges_refresh() — pure-SQL compute + threshold evaluation +
+--   3. user_badges_refresh_v2() — pure-SQL compute + threshold evaluation +
 --      monotonic upsert, called by the privileged badges-refresh edge.
 --      Facts come from tokentracker_leaderboard_rollup_daily_v2 UNION ALL a
 --      live-deduped v2 tail — the exact base/tail cut leaderboard_usage_grouped
@@ -34,7 +34,7 @@
 --   SELECT cron.unschedule('tokentracker-user-badges-refresh');
 --   DROP FUNCTION user_badges_full(uuid, boolean);
 --   DROP FUNCTION user_badges_compact(uuid[]);
---   DROP FUNCTION user_badges_refresh();
+--   DROP FUNCTION user_badges_refresh_v2();
 --   DROP FUNCTION user_badges_assign_serials_trigger();
 --   DROP FUNCTION user_badges_assign_serials();
 --   DROP TABLE tokentracker_user_badges, tokentracker_badge_catalog;
@@ -269,7 +269,7 @@ REVOKE EXECUTE ON FUNCTION public.user_badges_assign_serials_trigger() FROM anon
 
 -- ── 3. Refresh: facts → tiers → monotonic upsert ─────────────────────────────
 
-CREATE OR REPLACE FUNCTION public.user_badges_refresh()
+CREATE OR REPLACE FUNCTION public.user_badges_refresh_v2()
 RETURNS bigint
 LANGUAGE plpgsql
 SET work_mem TO '48MB'
@@ -517,8 +517,8 @@ BEGIN
 END
 $func$;
 
-REVOKE EXECUTE ON FUNCTION public.user_badges_refresh() FROM anon, authenticated, PUBLIC;
-GRANT EXECUTE ON FUNCTION public.user_badges_refresh() TO project_admin;
+REVOKE EXECUTE ON FUNCTION public.user_badges_refresh_v2() FROM anon, authenticated, PUBLIC;
+GRANT EXECUTE ON FUNCTION public.user_badges_refresh_v2() TO project_admin;
 
 -- ── 4. Read RPCs (called by edges through the service role) ──────────────────
 
@@ -621,7 +621,7 @@ GRANT EXECUTE ON FUNCTION public.user_badges_full(uuid, boolean) TO project_admi
 -- SELECT cron.schedule(
 --   'tokentracker-user-badges-refresh',
 --   '32 */6 * * *',
---   'SELECT public.user_badges_refresh()'
+--   'SELECT public.user_badges_refresh_v2()'
 -- );
 
 -- ── 6. One-time recalibration (executed 2026-07-14; kept for the record) ─────

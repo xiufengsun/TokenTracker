@@ -4,8 +4,11 @@
 -- The legacy watermark stopped on 2026-08-15, making each run rescan months
 -- of raw usage. Keep the existing claim, tier rules, serial triggers and grants.
 -- Preserve production's 48MB / 2 / no-parallel memory settings.
+-- The original user_badges_refresh() is owned by a higher-privilege role on
+-- production. A new project_admin-owned entry point avoids altering that
+-- function or needing unrestricted SQL. Both entry points use the same claim.
 
-CREATE OR REPLACE FUNCTION public.user_badges_refresh()
+CREATE OR REPLACE FUNCTION public.user_badges_refresh_v2()
 RETURNS bigint
 LANGUAGE plpgsql
 SET work_mem TO '48MB'
@@ -253,6 +256,6 @@ BEGIN
 END
 $func$;
 
-REVOKE EXECUTE ON FUNCTION public.user_badges_refresh() FROM anon, authenticated, PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.user_badges_refresh_v2() FROM anon, authenticated, PUBLIC;
 
-GRANT EXECUTE ON FUNCTION public.user_badges_refresh() TO project_admin;
+GRANT EXECUTE ON FUNCTION public.user_badges_refresh_v2() TO project_admin;

@@ -3,7 +3,7 @@
 `tokentracker-user-badges-refresh` accepts POST with either
 `x-refresh-secret: $LEADERBOARD_REFRESH_SECRET` or a bearer matching the
 server's `INSFORGE_SERVICE_ROLE_KEY`. It executes exactly
-`SELECT public.user_badges_refresh() AS result`; request bodies and query
+`SELECT public.user_badges_refresh_v2() AS result`; request bodies and query
 parameters cannot supply SQL. Anonymous and ordinary signed-in callers are
 rejected before database access.
 
@@ -26,6 +26,12 @@ uses the same maintained daily v2 rollup and dedup v2 tail as
 An absent watermark fails explicitly. It preserves all badge calculations,
 global model-debut checks, monotonic tiers, first-achieved timestamps, serial
 triggers, the single `badges` claim, and production's memory settings.
+
+Production's original `user_badges_refresh()` is owned by a higher-privilege
+role, so the migration creates a separate `user_badges_refresh_v2()` entry
+point owned by `project_admin`. It leaves the legacy function and its grants
+intact. Both functions use the same claim key; the edge and HTTP schedule use
+the new function.
 
 The transport deadline is 110 seconds, including response-body consumption.
 The effective SQL limit on this route is **30 seconds**, despite the function's
@@ -88,7 +94,7 @@ npx -y @insforge/cli schedules logs b55a4848-b0e5-4d25-a98f-c42990994431 --limit
 
 To stop automated writes, deactivate this schedule with
 `npx -y @insforge/cli schedules update b55a4848-b0e5-4d25-a98f-c42990994431 --active false`.
-The migration changes only the refresh function; it neither deletes badge
+The migration adds only the new refresh function; it neither deletes badge
 data nor changes read RPCs. Redeploying the old edge reintroduces the 10-second
 proxy failure and is not a working fallback.
 

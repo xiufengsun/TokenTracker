@@ -2,7 +2,7 @@
  * InsForge Edge: cloud achievement / badge recompute trigger.
  *
  * Why this exists (issues #925 / #987):
- *   Badge metrics are computed by pure-SQL `public.user_badges_refresh()`
+ *   Badge metrics are computed by pure-SQL `public.user_badges_refresh_v2()`
  *   (see scripts/ops/user-badges.sql). Historically that ran on pg_cron
  *   (`tokentracker-user-badges-refresh`, six-hourly at minute 32 (cron minute 32, every 6 hours)). Around
  * 2026-10-17T00:32Z that job stopped advancing while InsForge HTTP
@@ -12,7 +12,7 @@
  *   InsForge's `schedules` API only invokes HTTP URLs (not raw SQL), and
  *   unrestricted SQL / cron.job access is unavailable on this project.
  *   This edge is therefore the durable production write path: a privileged
- *   POST calls `user_badges_refresh()` via the service role, then an InsForge
+ *   POST calls `user_badges_refresh_v2()` via the service role, then an InsForge
  *   schedule hits it on the same 6-hour cadence.
  *
  *   Use the ordinary project-admin SQL endpoint, NOT /api/database/rpc:
@@ -94,7 +94,7 @@ export default async function (req: Request): Promise<Response> {
         Authorization: `Bearer ${serviceRoleKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ query: "SELECT public.user_badges_refresh() AS result" }),
+      body: JSON.stringify({ query: "SELECT public.user_badges_refresh_v2() AS result" }),
       signal,
     });
     if (!response.ok) {
