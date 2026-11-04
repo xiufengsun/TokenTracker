@@ -72,14 +72,19 @@ function readLines(file) {
 // transcript in a large installation. Failed reads are retried on the next call.
 const legacyMetadataCache = new Map();
 function readLegacyMetadata(file) {
-  const stat = fs.statSync(file);
-  const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
-  const cached = legacyMetadataCache.get(file);
-  if (cached?.stamp === stamp) return cached.value;
-  const value = JSON.parse(fs.readFileSync(file, "utf8"));
-  legacyMetadataCache.set(file, { stamp, value });
-  if (legacyMetadataCache.size > 8) legacyMetadataCache.delete(legacyMetadataCache.keys().next().value);
-  return value;
+  const fd = fs.openSync(file, "r");
+  try {
+    // Bind the revision stamp and contents to the same open file, even if the
+    // metadata pathname is replaced while we read it.
+    const stat = fs.fstatSync(fd);
+    const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+    const cached = legacyMetadataCache.get(file);
+    if (cached?.stamp === stamp) return cached.value;
+    const value = JSON.parse(fs.readFileSync(fd, "utf8"));
+    legacyMetadataCache.set(file, { stamp, value });
+    if (legacyMetadataCache.size > 8) legacyMetadataCache.delete(legacyMetadataCache.keys().next().value);
+    return value;
+  } finally { fs.closeSync(fd); }
 }
 
 // Sync receives flat paths while session metadata keys ordered cross-root groups.
