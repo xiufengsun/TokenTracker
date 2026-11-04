@@ -31,9 +31,13 @@ subsets receive the new contract. Local export/import preserves this metadata.
 Custom/unknown subsets contribute no estimated dollars to the known-cost
 subtotal. Pricing metadata is explicitly `unpriced`, session costs are marked
 partial, and an unknown-only cost displays “Unpriced”, not a free/$0 claim.
-Existing Anthropic-attributed subsets retain normal model pricing. With no
-Anthropic OAuth token, a configured/observed custom endpoint produces an explicit
-“Custom backend — Anthropic limits not applicable” card (English and Chinese).
+Existing Anthropic-attributed subsets retain normal model pricing. A
+configured/observed custom endpoint takes precedence over existing Anthropic
+OAuth credentials and live or cached quotas. It produces an explicit “Custom
+backend — Anthropic limits not applicable” card (English and Chinese), with
+`limits_status=not_applicable` and `cost_status=unknown`, without requesting
+Anthropic usage or service status. Backend detection runs before aggregate cache
+selection and honors the supplied environment, including `CLAUDE_CONFIG_DIR`.
 
 Out of scope: gateway quota adapters, actual-provider/model discovery, gateway
 pricing metadata adapters, inferred free/unlimited service, historical relabeling,
