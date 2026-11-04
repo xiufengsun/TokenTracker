@@ -185,7 +185,7 @@ const {
 const { purgeProjectUsage } = require("../lib/project-usage-purge");
 const {
   fetchTraeCnUsageWithAuth,
-  resolveTraeCnStoragePath,
+  readTraeCnAuthFromStorage,
   isTraeCnUsageEnabled,
 } = require("../lib/trae-cn-config");
 const {
@@ -2315,9 +2315,10 @@ async function cmdSync(argv, context = {}) {
         Math.floor((endTime - 30 * 24 * 60 * 60) / HALF_HOUR_SEC) * HALF_HOUR_SEC,
       );
       try {
-        // Absent storage means "not signed in" — a silent skip, not an error.
-        const traeCnStoragePath = resolveTraeCnStoragePath({ env: process.env, home });
-        if (traeCnStoragePath && fssync.existsSync(traeCnStoragePath)) {
+        // Read through junctions and let the credential-safe reader distinguish
+        // missing auth from access/IO errors. existsSync masks both as absent.
+        const traeCnAuth = readTraeCnAuthFromStorage({ env: process.env, home });
+        if (traeCnAuth) {
           if (progress?.enabled) {
             progress.start(`Fetching TRAE Work CN usage...`);
           }

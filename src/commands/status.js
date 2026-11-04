@@ -856,13 +856,19 @@ async function cmdStatus(argv = []) {
   // official API, so status surfaces the opt-in flag, the resolved storage
   // path, and whether the auth blob decrypts — the three inputs a "why is my
   // TRAE CN data missing" diagnosis needs.
-  // A resolvable default path does NOT mean the app is installed - the
-  // macOS/Windows resolver always derives one. Match the sync path semantics
-  // exactly: installed iff the storage file actually exists on disk.
+  // Follow junctions with stat. Only missing paths mean absent; access/IO
+  // errors must reach the auth reader and be shown as unreadable, not hidden
+  // behind existsSync's false result. Explicit overrides can also be absent.
   const traeCnStoragePath = resolveTraeCnStoragePath({ env: process.env, home });
-  const traeCnInstalled = Boolean(
-    traeCnStoragePath && fssync.existsSync(traeCnStoragePath),
-  );
+  let traeCnInstalled = false;
+  if (traeCnStoragePath) {
+    try {
+      fssync.statSync(traeCnStoragePath);
+      traeCnInstalled = true;
+    } catch (error) {
+      traeCnInstalled = error?.code !== "ENOENT" && error?.code !== "ENOTDIR";
+    }
+  }
   let traeCnAuthState = "not-signed-in";
   if (traeCnInstalled) {
     try {
