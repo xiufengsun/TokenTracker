@@ -65,6 +65,16 @@ are trademarks of Cognition; the mark is bundled solely to identify the Devin
 CLI source and subscription quota in the dashboard, recoloured to `currentColor` like the
 other provider marks.
 
+
+## Factory / Droid brand mark
+
+`dashboard/public/brand-logos/factory.svg` is a monochrome vector trace of the
+official Factory mark published at `https://factory.com/icon.svg` (also used on
+`https://status.factory.ai`). The Factory name and logo are trademarks of
+Factory; the mark is bundled solely to identify the Factory / Droid CLI source
+and service status in the dashboard, recoloured to a black-on-transparent
+trace (with `dark:invert` in the UI) like the other provider marks.
+
 ## Hairline line figures
 
 The Cloud plan page uses [Hairline](https://github.com/lucasmarkes/hairline) v0.5.0 by Lucas Marques.

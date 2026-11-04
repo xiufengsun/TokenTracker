@@ -53,6 +53,11 @@ import { useAccountDevices } from "../hooks/use-account-devices.js";
 import { DeviceUsageCard } from "../ui/dashboard/components/DeviceUsageCard.jsx";
 import { formatDeviceLabel } from "../lib/device-label.js";
 import { localDeviceUsage } from "../lib/local-usage-transfer";
+import {
+  DEVICE_FILTER_LOCAL_SCOPE,
+  resolveUnifiedDeviceFilterChange,
+  unifiedDeviceFilterValue,
+} from "../lib/unified-device-filter.js";
 import { CLOUD_USAGE_SYNCED_EVENT, getCurrentDeviceId } from "../lib/cloud-sync-prefs";
 import { recordCloudPromptIntent } from "../lib/cloud-prompt-policy.js";
 import { ShareModal } from "../ui/share/ShareModal";
@@ -78,6 +83,8 @@ const LEFT_CARD_ORDER_DEFAULTS = [
   "sessionInsights",
 ];
 const RIGHT_CARD_ORDER_DEFAULTS = ["usageOverview", "dataDetails"];
+
+
 
 function hasUsageValue(value, level) {
   if (typeof level === "number" && level > 0) return true;
@@ -406,8 +413,9 @@ export function DashboardPage({
     () => accountDeviceSources.filter((s) => (Number(s.total_tokens) || 0) > 0),
     [accountDeviceSources],
   );
-  // Dropdown filter: choosing between devices needs 2+ of them.
-  const showDeviceFilter = activeDevices.length >= 2;
+  // Dropdown filter: 2+ devices, OR the unified scope/device select when both
+  // local and account scopes are live (This device · devices · Account-wide).
+  const showDeviceFilter = accountScopeSwitchable || activeDevices.length >= 2;
   // Breakdown card: needs 2+ rows; account-level sources count as rows.
   const showDeviceCard = (accountView || activeDevices.length >= 2) && activeDevices.length + accountSourceRows.length >= 2;
   // Reset the filter when no selector is visible, or when the selected device
@@ -425,15 +433,32 @@ export function DashboardPage({
 
   const deviceOptions = useMemo(() => {
     if (!showDeviceFilter) return [];
+    const deviceEntries = activeDevices.map((d) => {
+      const deviceLabel = formatDeviceLabel(d) || copy("dashboard.device_card.unnamed");
+      const currentSuffix = d.isCurrent ? ` (${copy("dashboard.device_card.current")})` : "";
+      return { value: d.id, label: `${deviceLabel}${currentSuffix}` };
+    });
+    // Fold This device / Account-wide into the same Select that lists devices
+    // (replaces the PR 986 segmented control). View-only: uploads keep following
+    // the cloud-sync preference via AccountViewContext.scopeOverride.
+    if (accountScopeSwitchable) {
+      return [
+        { value: DEVICE_FILTER_LOCAL_SCOPE, label: copy("usage.overview.scope_local") },
+        ...deviceEntries,
+        { value: "", label: copy("usage.overview.scope_account") },
+      ];
+    }
     return [
       { value: "", label: copy("dashboard.device_filter.all") },
-      ...activeDevices.map((d) => {
-        const deviceLabel = formatDeviceLabel(d) || copy("dashboard.device_card.unnamed");
-        const currentSuffix = d.isCurrent ? ` (${copy("dashboard.device_card.current")})` : "";
-        return { value: d.id, label: `${deviceLabel}${currentSuffix}` };
-      }),
+      ...deviceEntries,
     ];
-  }, [showDeviceFilter, activeDevices, resolvedLocale]);
+  }, [showDeviceFilter, accountScopeSwitchable, activeDevices, resolvedLocale]);
+
+  const deviceFilterValue = unifiedDeviceFilterValue({
+    accountScopeSwitchable,
+    accountView,
+    selectedDevice,
+  });
 
   const deviceUsageData = accountView ? { devices: activeDevices, accountSources: accountSourceRows }
     : localDeviceUsage(activeDevices, accountSourceRows, selectedDevice);
@@ -1397,7 +1422,6 @@ export function DashboardPage({
       copy={copy}
       accountView={accountView}
       accountScopeSwitchable={accountScopeSwitchable}
-      onAccountScopeChange={setAccountScopeOverride}
       onOpenShare={openShareModal}
       screenshotMode={screenshotMode}
       showExpiredGate={showExpiredGate}
@@ -1495,8 +1519,17 @@ export function DashboardPage({
       costModalOpen={costModalOpen}
       closeCostModal={closeCostModal}
       deviceOptions={deviceOptions}
-      selectedDevice={selectedDevice || ""}
+      selectedDevice={deviceFilterValue}
       onDeviceChange={(v) => {
+        if (accountScopeSwitchable) {
+          const next = resolveUnifiedDeviceFilterChange(v);
+          setAccountScopeOverride(next.scopeOverride);
+          if (next.scopeOverride === null && !publicMode) {
+            recordCloudPromptIntent(auth?.userId, "view");
+          }
+          setSelectedDevice(next.deviceId);
+          return;
+        }
         if (accountView && !publicMode) recordCloudPromptIntent(auth?.userId, "view");
         setSelectedDevice(v || null);
       }}

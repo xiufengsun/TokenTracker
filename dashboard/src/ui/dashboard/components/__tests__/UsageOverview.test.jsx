@@ -70,9 +70,7 @@ describe("UsageOverview", () => {
     expect(screen.getByTitle(copy("usage.overview.scope_account_tip"))).toBeVisible();
   });
 
-  it("switches the data scope in place when both scopes are live", async () => {
-    const user = userEvent.setup();
-    const onAccountScopeChange = vi.fn();
+  it("hides the segmented scope switcher when scopes fold into the device select", () => {
     render(
       <UsageOverview
         period="day"
@@ -84,19 +82,20 @@ describe("UsageOverview", () => {
         to="2026-07-16"
         accountView
         accountScopeSwitchable
-        onAccountScopeChange={onAccountScopeChange}
+        deviceOptions={[
+          { value: "__scope:local__", label: copy("usage.overview.scope_local") },
+          { value: "d1", label: "MacBook" },
+          { value: "", label: copy("usage.overview.scope_account") },
+        ]}
+        selectedDevice=""
+        onDeviceChange={() => {}}
       />,
     );
 
-    const group = screen.getByRole("group", { name: copy("usage.overview.scope_switch_aria") });
-    expect(group).toBeVisible();
-    expect(screen.queryByTitle(copy("usage.overview.scope_local_tip"))).toBeVisible();
-    expect(screen.queryByTitle(copy("usage.overview.scope_account_tip"))).toBeVisible();
-
-    await user.click(screen.getByTitle(copy("usage.overview.scope_local_tip")));
-    expect(onAccountScopeChange).toHaveBeenCalledWith("local");
-    await user.click(screen.getByTitle(copy("usage.overview.scope_account_tip")));
-    expect(onAccountScopeChange).toHaveBeenCalledWith(null);
+    expect(screen.queryByRole("group", { name: copy("usage.overview.scope_switch_aria") })).toBeNull();
+    // Badge is redundant when the select already lists Account-wide.
+    expect(screen.queryByTitle(copy("usage.overview.scope_account_tip"))).toBeNull();
+    expect(screen.getByLabelText(copy("usage.overview.scope_switch_aria"))).toBeVisible();
   });
 
   it("closes stale session details when the local import ledger changes", async () => {
