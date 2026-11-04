@@ -362,8 +362,12 @@ const PROVIDER_ICON_MAP = {
   CLAUDE: ClaudeIcon,
   ZCODE: ZcodeIcon,
   CODEBUDDY: CodeBuddyIcon,
-  // WorkBuddy ships the same Tencent "buddy" mascot mark as CodeBuddy.
+  // WorkBuddy ships the same Tencent "buddy" mascot mark as CodeBuddy. The
+  // international build reports its own source slug (`workbuddy-ai`, from
+  // ~/.workbuddy-ai), which used to fall through to the dashed placeholder
+  // on the dashboard provider cards and the logo wall.
   WORKBUDDY: CodeBuddyIcon,
+  "WORKBUDDY-AI": CodeBuddyIcon,
   CODEX: CodexIcon,
   COPILOT: CopilotIcon,
   CRAFT: CraftIcon,

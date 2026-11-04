@@ -71,6 +71,22 @@ describe("ProviderIcon", () => {
     expect(icon?.querySelector("circle")).toBeNull();
   });
 
+  it("renders the buddy mascot for both WorkBuddy variants instead of the placeholder", () => {
+    // The international build reports its own source slug (`workbuddy-ai`),
+    // which the dashboard cards label WORKBUDDY-AI — it used to fall through
+    // to the dashed placeholder circle.
+    for (const provider of ["WORKBUDDY", "WORKBUDDY-AI", "workbuddy-ai"]) {
+      const { container } = render(<ProviderIcon provider={provider} size={15} />);
+      const icon = container.querySelector("svg");
+
+      expect(icon, `${provider} maps to the buddy mascot`).not.toBeNull();
+      expect(icon).toHaveAttribute("width", "15");
+      expect(icon?.querySelector("path")).not.toBeNull();
+      expect(icon?.querySelector("circle")).toBeNull();
+      expect(container.querySelector(".text-oai-gray-400")).toBeNull();
+    }
+  });
+
   it("renders AStudio with its theme-aware brand assets", () => {
     const { container } = render(<ProviderIcon provider="acode" size={18} />);
     const lightIcon = container.querySelector('img[src="/brand-logos/acode.png"]');
