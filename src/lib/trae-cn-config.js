@@ -34,6 +34,9 @@ function isTraeCnUsageEnabled(env = process.env) {
 }
 const TRAE_CN_APP_DIRS = ["TRAE SOLO CN", "Trae CN"];
 const TRAE_CN_AUTH_KEY = "iCubeAuthInfo://icube.cloudide";
+const TRAE_CN_AUTH_HELP = "Sign in again in the TRAE CN app, then rerun tokentracker sync --source=trae-cn. " +
+  "If multiple CN apps are installed, set TOKENTRACKER_TRAE_CN_HOME to the signed-in app data root. " +
+  "Readable local auth does not prove API access; TokenTracker cannot refresh the app session.";
 
 const TRAE_CN_USAGE_URL = "https://api.trae.cn/trae/api/v1/pay/query_user_usage_group_by_session";
 // usage_type [7] mirrors the constant the official TRAE client sends when its
@@ -282,6 +285,26 @@ function extractTraeCnToken(auth) {
   throw new Error("Trae CN auth data has no token.");
 }
 
+// Local-only doctor probe. Return an allowlisted state, never credentials or
+// exception text. Opting out also avoids reading/decrypting the auth payload.
+function inspectTraeCnAuth(options = {}) {
+  const enabled = isTraeCnUsageEnabled(options.env ?? process.env);
+  const storagePath = resolveTraeCnStoragePath(options);
+  const result = { usage_opt_in: enabled, storage_path: storagePath, auth: "unchecked" };
+  if (!enabled) return result;
+  try {
+    const auth = readTraeCnAuthFromStorage(options);
+    if (!auth) result.auth = "not-signed-in";
+    else {
+      extractTraeCnToken(auth);
+      result.auth = "readable";
+    }
+  } catch (error) {
+    result.auth = error?.code === "TRAE_CN_STORAGE_UNREADABLE" ? "unreadable" : "malformed";
+  }
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // Usage API
 // ---------------------------------------------------------------------------
@@ -365,7 +388,7 @@ async function fetchTraeCnUsagePage({
       throw new Error("Trae CN usage API request failed.");
     }
     if (response.status === 401 || response.status === 403) {
-      throw usageError(`Trae CN usage API returned HTTP ${response.status}.`, { status: response.status });
+      throw usageError(`Trae CN usage API returned HTTP ${response.status}; authorization was rejected. ${TRAE_CN_AUTH_HELP}`, { status: response.status });
     }
     if (!response.ok) {
       throw usageError(`Trae CN usage API returned HTTP ${response.status}.`, { status: response.status });
@@ -377,8 +400,13 @@ async function fetchTraeCnUsagePage({
       throw new Error("Trae CN usage API returned a non-JSON response.");
     }
     const apiCode = parsed?.data?.code ?? parsed?.code;
+    if (apiCode !== undefined &&
+        !((typeof apiCode === "number" || (typeof apiCode === "string" && /^\d+$/.test(apiCode))) &&
+          Number.isSafeInteger(Number(apiCode)))) {
+      throw new Error("Trae CN usage API returned an invalid error code.");
+    }
     if (apiCode !== undefined && Number(apiCode) !== 0) {
-      throw usageError(`Trae CN usage API returned error code ${apiCode}.`, {
+      throw usageError(`Trae CN usage API returned error code ${Number(apiCode)}.`, {
         status: response.status,
         apiCode: Number(apiCode),
       });
@@ -543,6 +571,8 @@ module.exports = {
   isTraeCnUsageEnabled,
   TRAE_CN_APP_DIRS,
   TRAE_CN_AUTH_KEY,
+  TRAE_CN_AUTH_HELP,
+  inspectTraeCnAuth,
   TRAE_CN_USAGE_URL,
   TRAE_CN_USAGE_TYPE,
   TRAE_CN_USAGE_PAGE_SIZE,
