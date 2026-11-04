@@ -46,12 +46,23 @@ on 2026-11-04 UTC, from repository commit `d6542abf`:
 
 `20261104165655_skip-empty-leaderboard-repair-spans.sql` seeks the next occupied
 closed UTC day before each bounded rebuild. Candidates include raw hourly
-usage, TRAE session states, and existing daily rollups. Including the last set
-ensures that deleted or moved source data still has its old materialized totals
-removed. The migration preserves first-seed priority, device deduplication,
+usage, TRAE session states, archive manifests (when enabled), and existing daily
+rollups. Including the last set ensures that deleted or moved source data still
+has its old materialized totals removed. The migration preserves first-seed priority, device deduplication,
 old usage, and the seven-calendar-day bound on each rebuild. It also skips
 empty spans during bootstrap/catch-up and adds a partial session-bucket index;
 production already has the hourly timestamp and daily-rollup day indexes.
+The archive manifest's day index supports the cold-day probe without unpacking
+archived payloads. The advance function retains the archive scheduler's
+`cloud_repair_usage_days(7)` call before any catch-up early return. Its separate
+dirty-day work remains bounded to seven days, in addition to the existing
+seven-calendar-day catch-up/cyclic rebuild.
+
+Both archive-first and archive-last installation are supported. The sparse
+scheduler checks for archive objects at execution time, so it also works before
+archiving is enabled. The archive migration's SQL-shape guard recognizes this
+archive-aware scheduler and retains its occupied-day seeks; unknown scheduler
+shapes still fail migration validation.
 
 Apply this migration through an owner-capable database migration runner.
 The existing advance function is owned by `postgres` in production; an ordinary
@@ -76,3 +87,8 @@ and total-rollup triggers. It reproduces the stale recent total while the old
 cursor walks 1970, then verifies recovery, wraparound, idempotency, rollup-only
 deletions, revocations, model/bucket moves, per-user seed priority, session-only
 bootstrap, UTC boundaries, and the seven-day work limit.
+Composition tests apply the full archive and sparse-repair migrations in both
+orders, then verify cold-only bootstrap and cyclic recovery without dirty-day
+hints, repeated-advance idempotency, and downward cold corrections through the
+dirty-day hook even when catch-up returns early. The archive-last case also
+executes the sparse scheduler before archive installation on the same connection.

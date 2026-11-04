@@ -589,9 +589,21 @@ BEGIN
 
   SELECT pg_get_functiondef('public.leaderboard_rollup_daily_advance_v2()'::regprocedure) INTO v_def;
   v_old:=E'  SELECT\n    (date_trunc(''day'', MIN(h.hour_start) AT TIME ZONE ''UTC'') AT TIME ZONE ''UTC'')::date\n  INTO v_min_day\n  FROM public.tokentracker_hourly h;';
-  IF position(v_old IN v_def)=0 THEN RAISE EXCEPTION 'Rollup advance SQL shape drift'; END IF;
-  v_def:=replace(v_def,v_old,E'  PERFORM public.cloud_repair_usage_days(7);\n  SELECT min(day) INTO v_min_day FROM (\n    SELECT (min(hour_start) AT TIME ZONE ''UTC'')::date AS day FROM public.tokentracker_hourly\n    UNION ALL SELECT min(day) FROM public.tokentracker_usage_archive_manifest\n    UNION ALL SELECT (min(bucket_start) AT TIME ZONE ''UTC'')::date FROM public.tokentracker_account_session_states\n    UNION ALL SELECT min(day) FROM public.tokentracker_leaderboard_rollup_daily_v2\n  ) history;');
-  EXECUTE v_def;
+  IF position(v_old IN v_def)>0 THEN
+    v_def:=replace(v_def,v_old,E'  PERFORM public.cloud_repair_usage_days(7);\n  SELECT min(day) INTO v_min_day FROM (\n    SELECT (min(hour_start) AT TIME ZONE ''UTC'')::date AS day FROM public.tokentracker_hourly\n    UNION ALL SELECT min(day) FROM public.tokentracker_usage_archive_manifest\n    UNION ALL SELECT (min(bucket_start) AT TIME ZONE ''UTC'')::date FROM public.tokentracker_account_session_states\n    UNION ALL SELECT min(day) FROM public.tokentracker_leaderboard_rollup_daily_v2\n  ) history;');
+    EXECUTE v_def;
+  ELSIF position(E'    PERFORM public.cloud_repair_usage_days(7);' IN v_def)>0
+    AND position('v_min_day := public.leaderboard_rollup_next_day_v2(' IN v_def)>0
+    AND to_regprocedure('public.leaderboard_rollup_next_day_v2(timestamptz,timestamptz)') IS NOT NULL THEN
+    -- The sparse scheduler already drains dirty days and probes manifests as
+    -- soon as they exist. Keep its occupied-day seeks when archive ships later.
+    IF position('FROM public.tokentracker_usage_archive_manifest' IN pg_get_functiondef(
+      'public.leaderboard_rollup_next_day_v2(timestamptz,timestamptz)'::regprocedure))=0 THEN
+      RAISE EXCEPTION 'Rollup occupied-day SQL shape drift';
+    END IF;
+  ELSE
+    RAISE EXCEPTION 'Rollup advance SQL shape drift';
+  END IF;
 
   IF to_regprocedure('public.cloud_issue_device_token(uuid,text,text,text,text,text[],uuid,text,boolean,text)') IS NOT NULL THEN
     SELECT pg_get_functiondef('public.cloud_issue_device_token(uuid,text,text,text,text,text[],uuid,text,boolean,text)'::regprocedure) INTO v_def;

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { PGlite } = require('@electric-sql/pglite');
+const { setup: setupArchive } = require('./helpers/cloud-usage-archive-fixture');
 
 const read = (name) => fs.readFileSync(path.join(__dirname, '../migrations', name), 'utf8');
 const clusterSql = read('20260804043427_align-leaderboard-machine-clusters.sql');
@@ -175,3 +176,108 @@ test('sparse historical leaderboard repair executes in PostgreSQL', { skip: proc
     await db.close();
   }
 });
+
+for (const archiveFirst of [true, false]) {
+  test(`sparse repair composes with archive migration (${archiveFirst ? 'archive first' : 'archive last'})`,
+    { skip: process.platform === 'win32' }, async (t) => {
+      const db = await setupArchive();
+      const query = async (sql, params) => (await db.query(sql, params)).rows;
+      const advance = () => db.exec('SELECT public.leaderboard_rollup_daily_advance_v2()');
+      const total = async () => (await query(`SELECT COALESCE(sum(total_tokens),0)::text AS tokens
+        FROM tokentracker_leaderboard_rollup_total_v2 WHERE user_id=$1`, [USER]))[0].tokens;
+      const archive = () => db.exec(`SELECT public.cloud_commit_usage_archive(
+        public.cloud_prepare_usage_archive('${USER}','${DEVICE}','2026-01-02'))`);
+      try {
+        const archiveSql = read('20261005120000_cloud-usage-archive.sql');
+        for (const sql of archiveFirst ? [archiveSql, migration] : [migration, archiveSql]) {
+          await db.transaction(tx => tx.exec(sql));
+          if (!archiveFirst && sql === migration) {
+            // Exercise the optional hooks before archive objects exist, then
+            // verify this same connection discovers them after installation.
+            await advance();
+            await db.exec('DELETE FROM tokentracker_leaderboard_rollup_meta_v2');
+          }
+        }
+        await db.exec(`SET TIME ZONE 'Asia/Singapore';
+          INSERT INTO auth.users VALUES('${USER}');
+          INSERT INTO tokentracker_devices(id,user_id) VALUES('${DEVICE}','${USER}');
+          INSERT INTO tokentracker_hourly(user_id,device_id,source,model,hour_start,
+            input_tokens,cached_input_tokens,cache_creation_input_tokens,output_tokens,
+            reasoning_output_tokens,total_tokens,conversations)
+          VALUES('${USER}','${DEVICE}','codex','model-a','2026-01-02T23:30:00Z',100,0,0,0,0,100,1);`);
+        await archive();
+
+        await t.test('cold-only bootstrap finds manifests even without a dirty-day hint', async () => {
+          await db.exec('TRUNCATE tokentracker_usage_dirty_days');
+          assert.equal((await query('SELECT count(*)::integer AS n FROM tokentracker_hourly'))[0].n, 0);
+          assert.equal(await total(), '0');
+          assert.equal((await query(`SELECT public.leaderboard_rollup_next_day_v2(
+            '1970-01-01Z','2026-01-03Z')::text AS day`))[0].day, '2026-01-02');
+          assert.equal((await query(`SELECT public.leaderboard_rollup_next_day_v2(
+            '1970-01-01Z','2026-01-02Z')::text AS day`))[0].day, null);
+          await advance();
+          assert.equal(await total(), '100');
+          for (let i = 0; i < 3; i++) await advance();
+          assert.equal(await total(), '100');
+        });
+
+        await t.test('cyclic repair recovers a missing cold-only rollup across empty decades', async () => {
+          await db.exec(`DELETE FROM tokentracker_leaderboard_rollup_daily_v2;
+            UPDATE tokentracker_leaderboard_rollup_meta_v2
+            SET through=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',
+                repair_from='1970-01-08';`);
+          assert.equal(await total(), '0');
+          await advance();
+          assert.equal(await total(), '100');
+        });
+
+        await t.test('advance drains archive dirty days before the catch-up early return', async () => {
+          // Rehydrate, correct downward, then compact again: only cold truth remains.
+          await db.exec(`INSERT INTO tokentracker_hourly(user_id,device_id,source,model,hour_start,
+            input_tokens,cached_input_tokens,cache_creation_input_tokens,output_tokens,
+            reasoning_output_tokens,total_tokens,conversations)
+            VALUES('${USER}','${DEVICE}','codex','model-a','2026-01-02T23:30:00Z',40,0,0,0,0,40,1);`);
+          await archive();
+          assert.equal(await total(), '100');
+          assert.equal((await query('SELECT count(*)::integer AS n FROM tokentracker_usage_dirty_days'))[0].n, 1);
+          // Catch-up has no occupied dates left, so only the dirty-day hook can repair January.
+          await db.exec(`UPDATE tokentracker_leaderboard_rollup_meta_v2
+            SET through='2026-02-01Z',repair_from='2026-02-01';`);
+          await advance();
+          assert.equal(await total(), '40');
+          assert.equal((await query('SELECT count(*)::integer AS n FROM tokentracker_usage_dirty_days'))[0].n, 0);
+          await advance();
+          assert.equal(await total(), '40');
+        });
+      } finally {
+        await db.close();
+      }
+    });
+}
+
+test('archive installation rejects sparse schedulers missing either archive hook',
+  { skip: process.platform === 'win32' }, async () => {
+    const db = await setupArchive();
+    try {
+      await db.exec(migration);
+      const definition = (await db.query(`SELECT pg_get_functiondef(
+        'public.leaderboard_rollup_daily_advance_v2()'::regprocedure) AS sql`)).rows[0].sql;
+      const invalidShapes = [
+        [definition.replace('    PERFORM public.cloud_repair_usage_days(7);', '    NULL;'),
+          /Rollup advance SQL shape drift/],
+        [`CREATE OR REPLACE FUNCTION public.leaderboard_rollup_next_day_v2(
+          p_from timestamptz,p_to timestamptz) RETURNS date LANGUAGE sql STABLE
+          AS $$ SELECT NULL::date $$`, /Rollup occupied-day SQL shape drift/],
+      ];
+      for (const [sql, error] of invalidShapes) {
+        await assert.rejects(db.transaction(async tx => {
+          await tx.exec(sql);
+          await tx.exec(read('20261005120000_cloud-usage-archive.sql'));
+        }), error);
+        assert.equal((await db.query(`SELECT to_regclass(
+          'public.tokentracker_usage_archive_manifest')::text AS name`)).rows[0].name, null);
+      }
+    } finally {
+      await db.close();
+    }
+  });

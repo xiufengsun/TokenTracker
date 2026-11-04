@@ -4,6 +4,7 @@
 -- without discarding old usage or changing any aggregation/deduplication rule.
 -- Existing hourly(hour_start) and rollup_daily_v2(day) indexes cover two of
 -- the probes; session states need a global bucket index for the third.
+-- When archiving is enabled, its manifest(day,user_id) index covers cold days.
 CREATE INDEX IF NOT EXISTS tokentracker_session_states_repair_bucket_idx
   ON public.tokentracker_account_session_states (bucket_start)
   WHERE source = 'trae-cn';
@@ -12,10 +13,14 @@ CREATE OR REPLACE FUNCTION public.leaderboard_rollup_next_day_v2(
   p_from timestamptz,
   p_to timestamptz
 ) RETURNS date
-LANGUAGE sql STABLE
+LANGUAGE plpgsql STABLE
 SET search_path TO public, pg_temp
 AS $func$
-  SELECT MIN(candidate.day)
+DECLARE
+  v_next_day date;
+  v_archive_day date;
+BEGIN
+  SELECT MIN(candidate.day) INTO v_next_day
   FROM (
     SELECT (MIN(h.hour_start) AT TIME ZONE 'UTC')::date AS day
     FROM public.tokentracker_hourly h
@@ -34,7 +39,19 @@ AS $func$
     FROM public.tokentracker_leaderboard_rollup_daily_v2 r
     WHERE r.day >= (p_from AT TIME ZONE 'UTC')::date
       AND r.day < (p_to AT TIME ZONE 'UTC')::date
-  ) candidate
+  ) candidate;
+
+  -- Archiving can be enabled before or after this repair migration. Defer
+  -- planning this query until the manifest exists; never scan cold payloads.
+  IF to_regclass('public.tokentracker_usage_archive_manifest') IS NOT NULL THEN
+    SELECT MIN(m.day) INTO v_archive_day
+    FROM public.tokentracker_usage_archive_manifest m
+    WHERE m.day >= (p_from AT TIME ZONE 'UTC')::date
+      AND m.day < (p_to AT TIME ZONE 'UTC')::date;
+    v_next_day := LEAST(v_next_day, v_archive_day);
+  END IF;
+  RETURN v_next_day;
+END
 $func$;
 
 REVOKE ALL ON FUNCTION public.leaderboard_rollup_next_day_v2(timestamptz, timestamptz)
@@ -59,6 +76,11 @@ DECLARE
   v_seed_gap_day date;
   v_next_day date;
 BEGIN
+  -- Preserve the archive scheduler's bounded dirty-day repair, including
+  -- invocations that return early from catch-up below.
+  IF to_regprocedure('public.cloud_repair_usage_days(integer)') IS NOT NULL THEN
+    PERFORM public.cloud_repair_usage_days(7);
+  END IF;
   v_min_day := public.leaderboard_rollup_next_day_v2('-infinity', v_target);
   v_min_day := COALESCE(v_min_day, (v_target AT TIME ZONE 'UTC')::date);
 
