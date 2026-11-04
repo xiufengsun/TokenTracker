@@ -1002,3 +1002,238 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
     assert.equal(row.total_cost_usd, 0, "Qoder must not invent cost");
   }
 });
+
+// ── Credits sidecar ──────────────────────────────────────────────────────────
+//
+// Qoder's newer builds bill in credits and leave every token column at zero, so
+// the queue can only carry activity. The sidecar beside it is the one number the
+// transcripts actually prove, and it is what the dashboard's Qoder card reads.
+
+function readSidecar(queuePath, name = "qoder-credits.json") {
+  const p = path.join(path.dirname(queuePath), name);
+  if (!fs.existsSync(p)) return null;
+  return JSON.parse(fs.readFileSync(p, "utf8"));
+}
+
+test("credits sidecar totals the credit-bearing rows, per install", async (t) => {
+  const { res, queuePath } = await runOne(t, [
+    qRec({ credits: 1.5, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "c1" }),
+    qRec({ credits: 2.25, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "c2" }),
+    qRec({ credits: 0, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "c3" }),
+  ]);
+  assert.equal(res.messagesProcessed, 2, "the zero-credit row is not activity and must not admit");
+  const sidecar = readSidecar(queuePath);
+  assert.ok(sidecar, "sidecar must exist");
+  assert.equal(sidecar.version, 1);
+  assert.equal(sidecar.source, "qoder-usage-summary");
+  assert.equal(sidecar.total_credits, 3.75);
+  assert.equal(sidecar.record_count, 2, "rows without credits must not add records");
+  assert.equal(sidecar.session_count, 1);
+  assert.equal(sidecar.file_count, 1);
+  assert.equal(Object.keys(sidecar.installs).length, 1);
+  // Tokens stay 0: the sidecar reports credits, it never converts units.
+  for (const row of queueRows(queuePath).filter((r) => r.source === "qoder")) {
+    assert.equal(row.total_tokens, 0);
+    assert.equal(row.total_cost_usd, 0);
+  }
+});
+
+test("credits sidecar is idempotent: a re-sync of the same files changes nothing", async (t) => {
+  const tmp = tempDir();
+  const { dir, queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const sessionFile = path.join(tmp, "proj", "sess1.jsonl");
+  writeJsonl(sessionFile, [
+    qRec({ credits: 0.4, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "i1" }),
+  ]);
+  const cursors = {};
+  const args = { sessionFiles: [sessionFile], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew" };
+  await parseQoderNewIncremental(args);
+  const first = readSidecar(queuePath);
+  await parseQoderNewIncremental(args);
+  const second = readSidecar(queuePath);
+  assert.equal(second.total_credits, first.total_credits, "credits must not accumulate across syncs");
+  assert.equal(second.record_count, first.record_count);
+  assert.equal(Object.keys(second.installs).length, 1, "one install, not one entry per sync");
+});
+
+test("credits sidecar dedupes a turn mirrored into a subagent transcript", async (t) => {
+  // Same sessionId+message id appears in the main transcript and under
+  // subagents/; summing per row would bill the same turn twice.
+  const tmp = tempDir();
+  const { dir, queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const rec = qRec({ credits: 1.2, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "mirror" });
+  const main = path.join(tmp, "proj", "sess1.jsonl");
+  const sub = path.join(tmp, "proj", "subagents", "sess1.jsonl");
+  writeJsonl(main, [rec]);
+  writeJsonl(sub, [rec]);
+  const cursors = {};
+  await parseQoderNewIncremental({
+    sessionFiles: [main, sub], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  const sidecar = readSidecar(queuePath);
+  assert.equal(sidecar.total_credits, 1.2);
+  assert.equal(sidecar.record_count, 1);
+});
+
+test("credits sidecar keeps one entry per install and aggregates them", async (t) => {
+  const tmp = tempDir();
+  const { dir, queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const a = path.join(tmp, "install-a", "s.jsonl");
+  const b = path.join(tmp, "install-b", "s.jsonl");
+  writeJsonl(a, [qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "a1" })]);
+  writeJsonl(b, [qRec({ credits: 2, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "b1" })]);
+  const cursors = {};
+  await parseQoderNewIncremental({
+    sessionFiles: [a], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew", creditsInstallKey: a,
+  });
+  await parseQoderNewIncremental({
+    sessionFiles: [b], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew", creditsInstallKey: b,
+  });
+  const sidecar = readSidecar(queuePath);
+  assert.deepEqual(Object.keys(sidecar.installs).sort(), [a, b].sort());
+  assert.equal(sidecar.total_credits, 3);
+  assert.equal(sidecar.record_count, 2);
+});
+
+test("a deleted install reports zero instead of leaving stale credits behind", async (t) => {
+  const tmp = tempDir();
+  const { dir, queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const sessionFile = path.join(tmp, "proj", "sess1.jsonl");
+  writeJsonl(sessionFile, [
+    qRec({ credits: 5, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "d1" }),
+  ]);
+  const cursors = {};
+  const args = { sessionFiles: [sessionFile], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew" };
+  await parseQoderNewIncremental(args);
+  assert.equal(readSidecar(queuePath).total_credits, 5);
+  fs.rmSync(sessionFile);
+  await parseQoderNewIncremental({ ...args, sessionFiles: [sessionFile] });
+  const sidecar = readSidecar(queuePath);
+  assert.equal(sidecar.total_credits, 0, "deleted transcripts must not keep reporting spend");
+  assert.equal(sidecar.record_count, 0);
+});
+
+test("Qoder CN writes its own sidecar so the two installs never mix", async (t) => {
+  const { queuePath } = await runOne(t, [
+    qRec({ credits: 0.8, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "cn1" }),
+  ], { sourceKey: "qoder-cn", cursorKey: "qoderCnNew" });
+  assert.equal(readSidecar(queuePath, "qoder-cn-credits.json").total_credits, 0.8);
+  assert.equal(readSidecar(queuePath, "qoder-credits.json"), null);
+});
+
+test("credits use the record that wins the message key, not the last row read", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  const main = path.join(tmp, "proj", "sess-1.jsonl");
+  const sub = path.join(tmp, "proj", "sess-1", "subagents", "agent-1.jsonl");
+  writeJsonl(main, [
+    qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "same-id", sessionId: "sess-1" }),
+  ]);
+  writeJsonl(sub, [
+    qRec({ credits: 0.25, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "same-id", sessionId: "sess-1" }),
+  ]);
+  const cursors = {};
+  await parseQoderNewIncremental({
+    sessionFiles: [main, sub], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  const sidecar = readSidecar(queuePath);
+  assert.equal(sidecar.record_count, 1, "one message key stays one record");
+  assert.equal(
+    sidecar.total_credits,
+    1,
+    "the main transcript owns the key, so its credit value is the one reported",
+  );
+});
+
+test("a zero-credit rewrite of a message clears the credit it replaced", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  const file = path.join(tmp, "proj", "sess-1.jsonl");
+  writeJsonl(file, [
+    qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "dup", sessionId: "sess-1" }),
+    qRec(
+      { credits: 0, billable: true, input_tokens: 0, output_tokens: 0 },
+      { id: "dup", ts: "2026-09-10T08:01:00.000Z", sessionId: "sess-1" },
+    ),
+  ]);
+  const cursors = {};
+  await parseQoderNewIncremental({
+    sessionFiles: [file], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  const sidecar = readSidecar(queuePath);
+  assert.equal(
+    sidecar.record_count,
+    0,
+    "the winning record carries no credits, so the turn must not be reported",
+  );
+  assert.equal(sidecar.total_credits, 0);
+});
+
+test("an unreadable transcript leaves the previous credit total alone", async (t) => {
+  const tmp = tempDir();
+  const { queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(path.dirname(queuePath), { recursive: true, force: true });
+  });
+  const a = path.join(tmp, "proj", "sess-a.jsonl");
+  const b = path.join(tmp, "proj", "sess-b.jsonl");
+  const rec = (id) => qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id, sessionId: id });
+  writeJsonl(a, [rec("a1")]);
+  writeJsonl(b, [rec("b1")]);
+  const cursors = {};
+  const args = { sessionFiles: [a, b], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew" };
+  await parseQoderNewIncremental(args);
+  assert.equal(readSidecar(queuePath).total_credits, 2);
+
+  // A read failure says nothing about the spend in that file, so the reduced
+  // partial total must not replace the last figure the install really proved.
+  fs.rmSync(b);
+  fs.mkdirSync(b);
+  await parseQoderNewIncremental({ ...args, sessionFiles: [a, b] });
+  assert.equal(
+    readSidecar(queuePath).total_credits,
+    2,
+    "one unreadable file cannot silently halve the reported credits",
+  );
+
+  fs.rmdirSync(b);
+  writeJsonl(b, [rec("b1")]);
+  await parseQoderNewIncremental({ ...args, sessionFiles: [a, b] });
+  assert.equal(readSidecar(queuePath).total_credits, 2, "the total resumes once the file reads again");
+});
+
+test("sidecar file is owner-readable only", async (t) => {
+  const { queuePath } = await runOne(t, [
+    qRec({ credits: 1, billable: false, input_tokens: 0, output_tokens: 0 }, { id: "p1" }),
+  ]);
+  const sidecarPath = path.join(path.dirname(queuePath), "qoder-credits.json");
+  // POSIX mode bits do not describe Windows NTFS access permissions.
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(sidecarPath).mode & 0o777, 0o600);
+  }
+});

@@ -6957,11 +6957,20 @@ function resolveQoderCnProjectsDir({ home = os.homedir(), env = process.env, pla
   return path.join(home, ".qoder-cn", "projects");
 }
 
-async function listQoderNewSessionFiles(projectsDir) {
+async function listQoderNewSessionFiles(projectsDir, stats = null) {
   const out = [];
   if (!projectsDir || !fssync.existsSync(projectsDir)) return out;
   async function walk(dir) {
-    const entries = await safeReadDir(dir);
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch (_e) {
+      // A directory that cannot be listed is not an empty directory. Count it
+      // so callers never read the shorter file list as "the transcripts are
+      // gone" — safeReadDir would have hidden the failure entirely.
+      if (stats) stats.readFailures = (stats.readFailures || 0) + 1;
+      return;
+    }
     for (const e of entries) {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) {
@@ -7033,6 +7042,18 @@ function qoderNewTimestampMs(record) {
 // wild start around 0.2 (2026-10 CN corpus), so 1e-6 never suppresses genuine
 // activity.
 const MIN_QODER_CREDIT_ACTIVITY = 1e-6;
+
+// Qoder's newer builds bill in credits and leave every token column at zero,
+// so the queue can only report activity for them. The sidecar beside the queue
+// carries what the transcripts actually prove: nominal credits consumed. The
+// credit→token and credit→USD rates are not first-party knowledge, so nothing
+// here converts them — the number is surfaced as credits, in credits.
+const QODER_CREDITS_SIDECAR = "qoder-credits.json";
+const QODER_CN_CREDITS_SIDECAR = "qoder-cn-credits.json";
+
+function qoderCreditsSidecarName(sourceKey) {
+  return sourceKey === "qoder-cn" ? QODER_CN_CREDITS_SIDECAR : QODER_CREDITS_SIDECAR;
+}
 
 function readQoderNominalCredits(usage) {
   let max = 0;
@@ -7106,6 +7127,8 @@ async function parseQoderNewIncremental({
   sourceKey = "qoder",
   cursorKey = "qoderNew",
   publicRepoResolver,
+  creditsInstallKey = null,
+  creditsListingFailures = 0,
 } = {}) {
   await ensureDir(path.dirname(queuePath));
   const files = Array.isArray(sessionFiles) ? sessionFiles : [];
@@ -7148,13 +7171,27 @@ async function parseQoderNewIncremental({
 
   // Build current snapshot from all JSONL files
   const currentByKey = new Map();
+  // Credits keyed exactly like the token snapshot: one turn can appear both in
+  // the main transcript and in a mirrored subagent copy, so accumulating per
+  // row would count the same spend twice.
+  const creditByKey = new Map();
   const fileCount = files.length;
+  // A file that cannot be read proves nothing about its spend; it must not be
+  // booked as zero, so the sidecar keeps the last total the install proved.
+  // Directories the caller failed to list count the same way: the files they
+  // hid are missing from this scan too.
+  let creditReadFailures = Number(creditsListingFailures) || 0;
   for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
     const filePath = files[fileIdx];
     let raw;
     try {
       raw = await fs.readFile(filePath, "utf8");
-    } catch (_e) {
+    } catch (error) {
+      // A file the listing named but that no longer exists is evidence the
+      // transcript is gone, so it contributes zero. Any other read failure
+      // (permissions, an unmounted volume) says nothing about its spend, and
+      // treating it as zero would understate the install's credits.
+      if (error?.code !== "ENOENT") creditReadFailures += 1;
       continue;
     }
     // Separator-agnostic: WSL installs are walked over \\wsl$ UNC paths where
@@ -7255,6 +7292,20 @@ async function parseQoderNewIncremental({
         filePath,
         isMainSession,
       });
+      // Keyed after the precedence check so the credit map always holds the
+      // same record currentByKey booked; keyed like it, so a turn mirrored
+      // into a subagent transcript is counted once.
+      if (nominalCredits > 0) {
+        creditByKey.set(messageKey, {
+          credits: nominalCredits,
+          timestampMs,
+          sessionId: normalizeMessageKeyPart(record?.sessionId || record?.session_id) || filePath,
+        });
+      } else {
+        // This row now owns the key, and it says the turn spent nothing — the
+        // earlier value belonged to the record it replaced and must not survive.
+        creditByKey.delete(messageKey);
+      }
     }
     if (cb && (fileIdx % 50 === 0 || fileIdx === files.length - 1)) {
       cb({
@@ -7360,7 +7411,54 @@ async function parseQoderNewIncremental({
     projectState.updatedAt = updatedAt;
     cursors.projectHourly = projectState;
   }
+  await writeQoderCreditsSidecar({
+    queuePath,
+    sourceKey,
+    installKey: creditsInstallKey,
+    creditByKey,
+    fileCount,
+    readFailures: creditReadFailures,
+  });
   return { messagesProcessed, eventsAggregated, bucketsQueued, projectBucketsQueued };
+}
+
+// Recomputes the whole corpus on every sync (last-wins per message key, like
+// the token snapshot), so the sidecar is idempotent: re-parsing unchanged
+// transcripts yields the same total instead of accumulating. An install whose
+// transcripts were deleted reports zero, which is why the merge still runs when
+// creditByKey is empty.
+async function writeQoderCreditsSidecar({
+  queuePath,
+  sourceKey,
+  installKey,
+  creditByKey = new Map(),
+  fileCount = 0,
+  readFailures = 0,
+} = {}) {
+  // A scan that found no transcript is an answer — the install stopped
+  // spending — while a scan that could not read a file is not, so a partial
+  // read leaves the previous total in place instead of understating spend.
+  if (!queuePath || readFailures > 0) return;
+  const entries = creditByKey instanceof Map ? [...creditByKey.values()] : [];
+  let totalCredits = 0;
+  let latestMs = 0;
+  const sessionIds = new Set();
+  for (const entry of entries) {
+    totalCredits += entry.credits;
+    sessionIds.add(entry.sessionId);
+    if (entry.timestampMs > latestMs) latestMs = entry.timestampMs;
+  }
+  await writeCreditsSidecar({
+    queuePath,
+    sidecarFile: qoderCreditsSidecarName(sourceKey),
+    source: "qoder-usage-summary",
+    installKey: installKey || sourceKey || "default",
+    totalCredits,
+    recordCount: entries.length,
+    sessionCount: sessionIds.size,
+    fileCount,
+    latestAt: latestMs ? new Date(latestMs).toISOString() : null,
+  });
 }
 
 // ── Claude Science (Anthropic's local research workbench, issue #246) ──
@@ -9278,8 +9376,17 @@ async function readKiroCliV2SessionTurns(messagesPath) {
   };
 }
 
-async function writeKiroCliCreditsSidecar({
+// Credits sidecar — shared write path for providers billed in credits rather
+// than tokens (Kiro CLI, Qoder's JSONL transcripts). The queue carries tokens
+// and USD, so a credit figure has nowhere to live there; it is published beside
+// the queue as its own JSON file and read back by usage-limits.
+//
+// Dual-install (#306): one entry per install, aggregated at the top level, so a
+// second install's write never clobbers the first.
+async function writeCreditsSidecar({
   queuePath,
+  sidecarFile,
+  source,
   installKey,
   totalCredits,
   recordCount,
@@ -9287,15 +9394,11 @@ async function writeKiroCliCreditsSidecar({
   fileCount,
   latestAt,
 } = {}) {
-  if (!queuePath || !(fileCount > 0)) return;
-  const sidecarPath = path.join(
-    path.dirname(queuePath),
-    KIRO_CLI_CREDITS_SIDECAR,
-  );
+  // Whether a zero-file scan is worth publishing is each provider's call, so
+  // the shared writer only refuses a destination it cannot resolve.
+  if (!queuePath || !sidecarFile) return;
+  const sidecarPath = path.join(path.dirname(queuePath), sidecarFile);
   try {
-    // Dual-install (#306): keep one entry per install and aggregate at the
-    // top level, so a second install's write never clobbers the first. The
-    // top-level fields keep the v1 shape readKiroCreditsSummary consumes.
     let installs = {};
     try {
       const prev = JSON.parse(await fs.readFile(sidecarPath, "utf8"));
@@ -9343,7 +9446,7 @@ async function writeKiroCliCreditsSidecar({
     }
     await writeJson(sidecarPath, {
       version: 1,
-      source: "kiro-cli-usage-summary",
+      source,
       total_credits: Number(aggCredits.toFixed(12)),
       record_count: aggRecords,
       session_count: aggSessions,
@@ -9357,6 +9460,29 @@ async function writeKiroCliCreditsSidecar({
     // Credits are supplemental billing metadata. A sidecar write failure must
     // never block the canonical token queue.
   }
+}
+
+async function writeKiroCliCreditsSidecar({
+  queuePath,
+  installKey,
+  totalCredits,
+  recordCount,
+  sessionCount,
+  fileCount,
+  latestAt,
+} = {}) {
+  if (!(fileCount > 0)) return;
+  await writeCreditsSidecar({
+    queuePath,
+    sidecarFile: KIRO_CLI_CREDITS_SIDECAR,
+    source: "kiro-cli-usage-summary",
+    installKey,
+    totalCredits,
+    recordCount,
+    sessionCount,
+    fileCount,
+    latestAt,
+  });
 }
 
 // Canonicalize a Kiro-CLI-emitted model id so IDE and CLI rows collapse when
@@ -26239,6 +26365,7 @@ module.exports = {
   resolveQoderCnProjectsDir,
   listQoderNewSessionFiles,
   parseQoderNewIncremental,
+  writeQoderCreditsSidecar,
   resolveKiroBasePath,
   resolveKiroDbPath,
   resolveKiroJsonlPath,

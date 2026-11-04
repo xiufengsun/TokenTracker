@@ -36,6 +36,9 @@ const { collectLocalSubscriptions } = require("../lib/subscriptions");
 const {
   describeCopilotOtelStatus,
   readCopilotOauthToken,
+  readQoderCreditsSummary,
+  QODER_CREDITS_SIDECAR_FILE,
+  QODER_CN_CREDITS_SIDECAR_FILE,
 } = require("../lib/usage-limits");
 const {
   normalizeState: normalizeUploadState,
@@ -162,6 +165,16 @@ function formatResolvedPaths(paths, filename) {
 // yields "" so callers can fall back to "not found".
 function summarizeQoderDetail(dbPath, newPath) {
   return [dbPath, newPath].filter(Boolean).join(" + ") || "";
+}
+
+// Qoder's newer builds bill in credits and leave every token column at 0, so a
+// tracked Qoder row can read as "nothing counted". The sidecar sync writes
+// beside the queue carries the spend; print it so `status` says what is known.
+function formatQoderCreditsLine(home, sidecarFile) {
+  const tracked = readQoderCreditsSummary({ home, sidecarFile });
+  if (!tracked) return "";
+  const credits = Math.round(tracked.tracked_credits * 100) / 100;
+  return ` · ${credits} credits over ${tracked.tracked_credit_records} turns (credits only, no token counts)`;
 }
 
 // The Trae SOLO entitlement snapshot is read directly from the Trae Local
@@ -1382,10 +1395,10 @@ async function cmdStatus(argv = []) {
         ? `- ZCode: passive reader (${zcodeDbPath})`
         : null,
       qoderInstalled
-        ? `- Qoder: passive reader (${[qoderDbPath, qoderNewPath].filter(Boolean).join(" + ") || "not found"}${qoderNewInstalled && qoderActive.length > 0 ? " [legacy DB + new JSONL (both tracked)]" : ""}${qoderNewInstalled && qoderActive.length === 0 ? " [new JSONL only]" : ""})`
+        ? `- Qoder: passive reader (${[qoderDbPath, qoderNewPath].filter(Boolean).join(" + ") || "not found"}${qoderNewInstalled && qoderActive.length > 0 ? " [legacy DB + new JSONL (both tracked)]" : ""}${qoderNewInstalled && qoderActive.length === 0 ? " [new JSONL only]" : ""}${formatQoderCreditsLine(home, QODER_CREDITS_SIDECAR_FILE)})`
         : null,
       qoderCnInstalled
-        ? `- Qoder CN: passive reader (${summarizeQoderDetail(qoderCnDbPath, qoderCnNewPath) || "not found"}${qoderCnNewInstalled && qoderCnActive.length > 0 ? " [legacy DB + new JSONL (both tracked)]" : ""}${qoderCnNewInstalled && qoderCnActive.length === 0 ? " [new JSONL only]" : ""})`
+        ? `- Qoder CN: passive reader (${summarizeQoderDetail(qoderCnDbPath, qoderCnNewPath) || "not found"}${qoderCnNewInstalled && qoderCnActive.length > 0 ? " [legacy DB + new JSONL (both tracked)]" : ""}${qoderCnNewInstalled && qoderCnActive.length === 0 ? " [new JSONL only]" : ""}${formatQoderCreditsLine(home, QODER_CN_CREDITS_SIDECAR_FILE)})`
         : null,
       claudeScienceInstalled
         ? `- Claude Science: passive reader (${claudeScienceDbPath})`
@@ -1760,4 +1773,4 @@ function parseEpochMsToIso(v) {
   return d.toISOString();
 }
 
-module.exports = { cmdStatus, summarizeQoderDetail };
+module.exports = { cmdStatus, summarizeQoderDetail, formatQoderCreditsLine };

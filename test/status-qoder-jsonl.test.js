@@ -10,7 +10,11 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { cmdStatus, summarizeQoderDetail } = require("../src/commands/status");
+const {
+  cmdStatus,
+  summarizeQoderDetail,
+  formatQoderCreditsLine,
+} = require("../src/commands/status");
 
 const ENV_KEYS = [
   "HOME",
@@ -134,6 +138,43 @@ test("status JSON joins legacy DB and JSONL paths with ' + '", async () => {
     assert.ok(qoder.detail.includes(projectsDir), `detail should contain projects dir, got: ${qoder.detail}`);
   } finally {
     restoreEnv(saved);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("status credits line comes from the sidecar the sync wrote", async () => {
+  // A credit-billed Qoder install queues 0 tokens, so `status` alone reads as
+  // "tracked, but nothing counted". The sidecar total has to appear.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-status-qoder-credits-"));
+  try {
+    const trackerDir = path.join(tmp, ".tokentracker", "tracker");
+    fs.mkdirSync(trackerDir, { recursive: true });
+    assert.equal(
+      formatQoderCreditsLine(tmp, "qoder-credits.json"),
+      "",
+      "no sidecar means no credits claim",
+    );
+    fs.writeFileSync(
+      path.join(trackerDir, "qoder-credits.json"),
+      JSON.stringify({
+        version: 1,
+        source: "qoder-usage-summary",
+        total_credits: 1234.5678,
+        record_count: 42,
+        session_count: 3,
+        file_count: 1,
+        latest_at: "2026-11-03T14:00:00.000Z",
+        updated_at: "2026-11-03T14:00:00.000Z",
+      }),
+      "utf8",
+    );
+    assert.equal(
+      formatQoderCreditsLine(tmp, "qoder-credits.json"),
+      " · 1234.57 credits over 42 turns (credits only, no token counts)",
+    );
+    // The CN card must not read the international sidecar.
+    assert.equal(formatQoderCreditsLine(tmp, "qoder-cn-credits.json"), "");
+  } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

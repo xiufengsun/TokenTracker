@@ -882,10 +882,12 @@ function renderProviderExtra(kind, data) {
     return <StatusLine>{copy("limits.label.kimi_parallel", { count: data.parallel_limit })}</StatusLine>;
   }
   if (
-    kind === "kiro_credits" &&
+    (kind === "kiro_credits" || kind === "qoder_credits") &&
     Number.isFinite(Number(data.tracked_credits)) &&
     Number(data.tracked_credit_records) > 0
   ) {
+    // Shared with Qoder: the copy line is provider-neutral ("Local usage: …
+    // credits · … turns") and both providers report the same sidecar fields.
     const credits = formatCreditAmount(data.tracked_credits, {
       maximumFractionDigits: 2,
     });
@@ -1114,8 +1116,8 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
       id,
       <>
         <StatusLine tone="error">{data.error}</StatusLine>
-        {id === "kiro"
-          ? renderProviderExtra(PROVIDER_LIMIT_SPECS.kiro.extra, data)
+        {id === "kiro" || id === "qoder" || id === "qoderCn"
+          ? renderProviderExtra(PROVIDER_LIMIT_SPECS[id].extra, data)
           : null}
         {id === "deepseek" ? <SetupHint title={copy("limits.deepseek.setupHint.title")}><DeepseekSetupHint onSaved={onKeySaved} /></SetupHint> : null}
         {id === "deepseek" ? <EnvCredentialNotice providerId={id} data={data} onSaved={onKeySaved} /> : null}
