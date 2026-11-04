@@ -99,7 +99,11 @@ AS $func$
         ELSE ''
       END AS bucket,
       source, model,
-      CASE WHEN lower(model) LIKE '%deepseek-v4-flash%' OR lower(model) LIKE '%deepseek-v4-pro%' THEN CASE
+      -- '%deepseek-v4-flash%' does not match deepseek-v4.1-flash (the ".1"
+      -- breaks the substring run); both deepseek time-priced ids ride the same
+      -- peak/off-peak calendar (#1010).
+      CASE WHEN lower(model) LIKE '%deepseek-v4-flash%' OR lower(model) LIKE '%deepseek-v4.1-flash%'
+        OR lower(model) LIKE '%deepseek-flash%' OR lower(model) LIKE '%deepseek-v4-pro%' THEN CASE
         WHEN hour_start >= timestamptz '2026-08-22T16:00:00Z'
           AND extract(dow FROM ((hour_start AT TIME ZONE 'UTC') + interval '8 hours')) IN (0,6) THEN 'off_peak'
         WHEN extract(hour FROM hour_start AT TIME ZONE 'UTC') >= 1 AND extract(hour FROM hour_start AT TIME ZONE 'UTC') < 4
