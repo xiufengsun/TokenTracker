@@ -54,3 +54,23 @@ An active rollback journal or an oversized WAL index produces a retry
 diagnostic. If TRAE is still writing, retry after the current turn finishes.
 If an installation cannot be read, sync reports the error and keeps its
 previously collected usage; other TRAE installations still sync.
+
+## TRAE CN API authorization
+
+The separate `trae-cn` source requires `TOKENTRACKER_TRAE_CN_USAGE=1` and a
+foreground sync. HTTP 401/403 means TRAE rejected the selected app's local
+sign-in authorization. TokenTracker rereads storage and retries once in case
+the app rotated its session; it does not use the refresh token.
+
+Sign in again in the CN app and run `tokentracker sync --source=trae-cn`.
+With multiple CN clients installed, `TOKENTRACKER_TRAE_CN_HOME` selects the
+signed-in application-data root (the directory containing `User`, not
+`storage.json` itself). `tokentracker doctor` shows that selected path and
+local auth readability without making a TRAE API request. Readable credentials
+do not prove they are still accepted by TRAE. A persistent rejection may need
+an app update or vendor-side resolution; it is separate from a TokenTracker
+cloud upload HTTP 429.
+
+A failed usage fetch preserves previously imported CN usage and lets other
+providers continue. JWTs, refresh tokens, and API rejection bodies are never
+included in these diagnostics.

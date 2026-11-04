@@ -235,3 +235,19 @@ function createWriteCapture() {
     },
   };
 }
+
+test("doctor separates local TRAE CN auth readability from API authorization", async () => {
+  for (const auth of ["readable", "malformed", "unreadable", "not-signed-in"]) {
+    const report = await buildDoctorReport({
+      diagnostics: { trae_cn: { usage_opt_in: true, auth, storage_path: "~/Trae CN/User/globalStorage/storage.json" } },
+      fetch: async () => assert.fail("doctor must not probe the TRAE API"),
+    });
+    const check = report.checks.find((c) => c.id === "trae_cn.auth");
+    assert.equal(check.status, auth === "readable" ? "ok" : "warn");
+    assert.match(check.detail, /API access not checked/);
+    assert.match(check.detail, /Sign in again/);
+    assert.match(check.detail, /TOKENTRACKER_TRAE_CN_HOME/);
+  }
+  const report = await buildDoctorReport({ diagnostics: { trae_cn: { usage_opt_in: false, auth: "unchecked" } } });
+  assert.match(report.checks.find((c) => c.id === "trae_cn.auth").detail, /auth not read/);
+});

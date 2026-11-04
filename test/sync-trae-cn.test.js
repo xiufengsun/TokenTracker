@@ -446,3 +446,34 @@ test("failed TRAE CN fetch skips parser/queue/cursor mutation while other provid
     assert.equal(readCursors(home).traeCn, undefined);
   });
 });
+
+test("persistent 401 preserves prior TRAE CN usage across repeated syncs and gives safe recovery guidance", async (t) => {
+  await withTempTraeEnv(async ({ home, traeCnHome }) => {
+    writeTraeCnStorage(traeCnHome);
+    await cmdSync(["--auto", "--source=trae-cn"], {
+      traeCnFetchImpl: traeFetchOnce({ user_usage_group_by_sessions: [sampleSession(NOW_MS / 1000 - 60)], total: 1 }),
+      traeCnNowMs: NOW_MS,
+    });
+    const queueBefore = readQueueRows(home);
+    const stateBefore = readCursors(home).traeCn;
+    let output = "";
+    t.mock.method(process.stderr, "write", (chunk) => { output += chunk; return true; });
+    t.mock.method(process.stdout, "write", () => true);
+    let calls = 0;
+    const opts = {
+      traeCnNowMs: NOW_MS,
+      traeCnFetchImpl: async () => {
+        calls++;
+        return { ok: false, status: 401, json() { assert.fail("must not consume rejection body"); } };
+      },
+    };
+    await cmdSync(["--source=trae-cn"], opts);
+    await cmdSync(["--source=trae-cn"], opts);
+    assert.equal(calls, 4);
+    assert.deepEqual(readQueueRows(home), queueBefore);
+    assert.deepEqual(readCursors(home).traeCn, stateBefore);
+    assert.match(output, /HTTP 401.*Sign in again/);
+    assert.match(output, /TOKENTRACKER_TRAE_CN_HOME/);
+    assert.doesNotMatch(output, /fake-jwt-token|synthetic/);
+  });
+});

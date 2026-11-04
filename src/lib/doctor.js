@@ -293,6 +293,19 @@ async function checkNetwork({ baseUrl, fetch }) {
 
 function buildDiagnosticsChecks(diagnostics) {
   const checks = [];
+  const traeCn = diagnostics?.trae_cn;
+  if (traeCn) {
+    const { TRAE_CN_AUTH_HELP } = require("./trae-cn-config");
+    checks.push({
+      id: "trae_cn.auth",
+      status: !traeCn.usage_opt_in || traeCn.auth === "readable" ? "ok" : "warn",
+      detail: !traeCn.usage_opt_in
+        ? "usage sync off (TOKENTRACKER_TRAE_CN_USAGE=1 opts in); auth not read; no TRAE request made"
+        : `local auth ${traeCn.auth}; API access not checked (${traeCn.storage_path || "storage.json not found"}). ${TRAE_CN_AUTH_HELP}`,
+      critical: false,
+      meta: traeCn,
+    });
+  }
   const notify = diagnostics?.notify || {};
   const notifyConfigured = Boolean(
     notify.codex_notify_configured ||
