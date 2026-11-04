@@ -508,6 +508,7 @@ function SubscriptionBar({ subscription, now, mode = LIMIT_DISPLAY_MODES.USED })
   return (
     <div className="flex items-center gap-2">
       <span
+        data-limit-label=""
         className="text-xs sm:text-sm text-oai-gray-500 dark:text-oai-gray-400 shrink-0 whitespace-nowrap"
         style={{ width: "var(--tt-limits-label-w)" }}
       >
