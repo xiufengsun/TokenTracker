@@ -36,6 +36,14 @@ describe("ProviderIcon", () => {
     expect(icon).toHaveClass("dark:invert");
   });
 
+  it("renders Factory / Droid from the official factory.com mark", () => {
+    const { container } = render(<ProviderIcon provider="droid" size={20} />);
+    const icon = container.querySelector('img[src="/brand-logos/factory.svg"]');
+
+    expect(icon).not.toBeNull();
+    expect(icon).toHaveClass("dark:invert");
+  });
+
   it("keeps the theme-aware placeholder for unknown providers", () => {
     const { container } = render(<ProviderIcon provider="unknown-provider" />);
     const placeholder = container.querySelector("svg");
