@@ -101,6 +101,43 @@ test("sync publishes zero credits once the last transcript is deleted", async ()
   }
 });
 
+test("an unreadable projects dir keeps the last proven credit total", async (t) => {
+  // safeReadDir swallows a failed readdir and reports an empty tree, so a
+  // directory that merely could not be listed looks exactly like one whose
+  // transcripts were deleted. Zeroing on that reading would erase proven spend.
+  if (
+    process.platform === "win32"
+    || (typeof process.getuid === "function" && process.getuid() === 0)
+  ) {
+    t.skip("permission bits are not enforced for this user/platform");
+    return;
+  }
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-sync-qoder-unreadable-"));
+  const projectsDir = path.join(home, "projects");
+  const trackerDir = path.join(home, ".tokentracker", "tracker");
+  try {
+    await withEnv(home, projectsDir, async () => {
+      writeTranscript(path.join(projectsDir, "proj", "sess-1.jsonl"), "s1", 5);
+      await cmdSync(["--auto", "--source=qoder"]);
+      assert.equal(readSidecar(trackerDir).total_credits, 5);
+
+      fs.chmodSync(projectsDir, 0o000);
+      try {
+        await cmdSync(["--auto", "--source=qoder"]);
+      } finally {
+        fs.chmodSync(projectsDir, 0o755);
+      }
+      assert.equal(
+        readSidecar(trackerDir).total_credits,
+        5,
+        "a failed directory listing is not evidence the transcripts are gone",
+      );
+    });
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("sync leaves the sidecar untouched when the projects dir itself is gone", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-sync-qoder-absent-"));
   const projectsDir = path.join(home, "projects");

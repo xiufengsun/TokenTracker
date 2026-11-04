@@ -1547,7 +1547,11 @@ async function cmdSync(argv, context = {}) {
     if (sourceAllowed("qoder")) {
       try {
         const projectsDir = resolveQoderProjectsDir({ home, env: process.env });
-        const sessionFiles = await listQoderNewSessionFiles(projectsDir);
+        const listing = {};
+        const sessionFiles = await listQoderNewSessionFiles(projectsDir, listing);
+        // A dir that could not be listed is indistinguishable from an empty
+        // one from here, so neither write may treat a failed listing as proof.
+        const listingFailed = (listing.readFailures || 0) > 0;
         if (sessionFiles.length > 0) {
           if (progress?.enabled) {
             progress.start(`Parsing Qoder (new) ${renderBar(0)} | buckets 0`);
@@ -1561,13 +1565,14 @@ async function cmdSync(argv, context = {}) {
             sourceKey: "qoder",
             cursorKey: "qoderNew",
             creditsInstallKey: qoderInstallKey(projectsDir),
+            creditsListingFailures: listing.readFailures || 0,
           });
           qoderResult = {
             recordsProcessed: qoderResult.recordsProcessed + (parsed.messagesProcessed || 0),
             eventsAggregated: qoderResult.eventsAggregated + (parsed.eventsAggregated || 0),
             bucketsQueued: qoderResult.bucketsQueued + (parsed.bucketsQueued || 0),
           };
-        } else if (fssync.existsSync(projectsDir)) {
+        } else if (!listingFailed && fssync.existsSync(projectsDir)) {
           // The dir exists but holds no transcript: the install is still here
           // and stopped spending, so publish zero instead of letting the last
           // total keep showing. A missing dir is not this case — that install
@@ -1644,7 +1649,9 @@ async function cmdSync(argv, context = {}) {
         const cnProjectsDir = resolveQoderCnProjectsDir({ home, env: process.env });
         const intlProjectsDir = resolveQoderProjectsDir({ home, env: process.env });
         if (qoderInstallKey(cnProjectsDir) !== qoderInstallKey(intlProjectsDir)) {
-          const sessionFiles = await listQoderNewSessionFiles(cnProjectsDir);
+          const listing = {};
+          const sessionFiles = await listQoderNewSessionFiles(cnProjectsDir, listing);
+          const listingFailed = (listing.readFailures || 0) > 0;
           if (sessionFiles.length > 0) {
             if (progress?.enabled) {
               progress.start(`Parsing Qoder CN (new) ${renderBar(0)} | buckets 0`);
@@ -1658,13 +1665,14 @@ async function cmdSync(argv, context = {}) {
               sourceKey: "qoder-cn",
               cursorKey: "qoderCnNew",
               creditsInstallKey: qoderInstallKey(cnProjectsDir),
+              creditsListingFailures: listing.readFailures || 0,
             });
             qoderCnResult = {
               recordsProcessed: qoderCnResult.recordsProcessed + (parsed.messagesProcessed || 0),
               eventsAggregated: qoderCnResult.eventsAggregated + (parsed.eventsAggregated || 0),
               bucketsQueued: qoderCnResult.bucketsQueued + (parsed.bucketsQueued || 0),
             };
-          } else if (fssync.existsSync(cnProjectsDir)) {
+          } else if (!listingFailed && fssync.existsSync(cnProjectsDir)) {
             await writeQoderCreditsSidecar({
               queuePath,
               sourceKey: "qoder-cn",

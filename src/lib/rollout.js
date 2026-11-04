@@ -6898,11 +6898,20 @@ function resolveQoderCnProjectsDir({ home = os.homedir(), env = process.env, pla
   return path.join(home, ".qoder-cn", "projects");
 }
 
-async function listQoderNewSessionFiles(projectsDir) {
+async function listQoderNewSessionFiles(projectsDir, stats = null) {
   const out = [];
   if (!projectsDir || !fssync.existsSync(projectsDir)) return out;
   async function walk(dir) {
-    const entries = await safeReadDir(dir);
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch (_e) {
+      // A directory that cannot be listed is not an empty directory. Count it
+      // so callers never read the shorter file list as "the transcripts are
+      // gone" — safeReadDir would have hidden the failure entirely.
+      if (stats) stats.readFailures = (stats.readFailures || 0) + 1;
+      return;
+    }
     for (const e of entries) {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) {
@@ -7060,6 +7069,7 @@ async function parseQoderNewIncremental({
   cursorKey = "qoderNew",
   publicRepoResolver,
   creditsInstallKey = null,
+  creditsListingFailures = 0,
 } = {}) {
   await ensureDir(path.dirname(queuePath));
   const files = Array.isArray(sessionFiles) ? sessionFiles : [];
@@ -7109,7 +7119,9 @@ async function parseQoderNewIncremental({
   const fileCount = files.length;
   // A file that cannot be read proves nothing about its spend; it must not be
   // booked as zero, so the sidecar keeps the last total the install proved.
-  let creditReadFailures = 0;
+  // Directories the caller failed to list count the same way: the files they
+  // hid are missing from this scan too.
+  let creditReadFailures = Number(creditsListingFailures) || 0;
   for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
     const filePath = files[fileIdx];
     let raw;
