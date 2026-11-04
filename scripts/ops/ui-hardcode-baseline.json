@@ -415,7 +415,7 @@
       "colors": 0,
       "rawText": 2,
       "rawTextTokens": [
-        "); const cardClass = \"rounded-xl border border-oai-gray-200 bg-white dark:border-oai-gray-800 dark:bg-oai-gray-900\"; const headerClass = \"flex w-full items-center justify-between gap-3 border-b border-oai-gray-200 px-4 py-4 text-left dark:border-oai-gray-800 sm:px-5\"; const body =",
+        "); const cardClass = \"rounded-xl border border-oai-gray-200 bg-white dark:border-oai-gray-800 dark:bg-oai-gray-900\"; const headerClass = \"flex w-full items-center justify-between gap-3 border-b border-oai-gray-200 px-4 py-3 text-left dark:border-oai-gray-800 sm:px-5\"; const body =",
         "0 ? groups :"
       ]
     },
