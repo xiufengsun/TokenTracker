@@ -537,6 +537,8 @@
   "settings.appearance.language.german": "德語",
   "settings.appearance.currency.label": "貨幣",
   "settings.appearance.currency.hint": "選擇用量成本的顯示幣種。",
+  "settings.appearance.overview_period.label": "開啟時的範圍",
+  "settings.appearance.overview_period.hint": "開啟儀表板時顯示。日、周、月依日曆計算，總計為最近 24 個月。",
   "settings.appearance.token_format.label": "Token 數字顯示",
   "settings.appearance.token_format.hint": "全域使用精簡或完整數字；精簡模式下懸停可查看精確數值。",
   "settings.appearance.token_format.compact": "精簡",

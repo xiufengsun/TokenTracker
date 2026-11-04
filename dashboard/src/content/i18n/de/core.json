@@ -218,6 +218,8 @@
   "settings.appearance.language.korean": "Koreanisch",
   "settings.appearance.currency.label": "Währung",
   "settings.appearance.currency.hint": "Wähle die Währung für die Anzeige der Nutzungskosten.",
+  "settings.appearance.overview_period.label": "Bereich beim Öffnen",
+  "settings.appearance.overview_period.hint": "Wird beim Öffnen der Übersicht angezeigt. Tag, Woche und Monat folgen dem Kalender. Gesamt umfasst die letzten 24 Monate.",
   "settings.appearance.token_format.label": "Token-Zahlen",
   "settings.appearance.token_format.hint": "Verwende kompakte oder vollständige Zahlen überall. Bei kompakten Werten zeigt Hover die exakte Zahl.",
   "settings.appearance.token_format.compact": "Kompakt",
