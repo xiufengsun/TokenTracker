@@ -214,6 +214,73 @@ describe("Copilot limits disk-cache fallback", () => {
     }
   });
 
+  for (const nextLogin of ["another-login", ""]) {
+    for (const failure of ["HTTP 500", "timeout"]) {
+      it(`refuses stale windows when the login changes to ${nextLogin || "unknown"} during a ${failure}`, async () => {
+        const home = buildCopilotHome();
+        try {
+          await getUsageLimits(baseOptions(home, {
+            fetchImpl: copilotFetchImpl({ user: () => okResponse(copilotUserBody()) }),
+          }));
+          resetUsageLimitsCache();
+
+          const result = await getUsageLimits(baseOptions(home, {
+            providerTimeoutMs: failure === "timeout" ? 50 : 2000,
+            fetchImpl: copilotFetchImpl({ user: () => {
+              // The request already captured the old token and login.
+              writeCopilotAccount(home, nextLogin);
+              return failure === "timeout" ? new Promise(() => {}) : errorResponse(500);
+            } }),
+          }));
+          assert.ok(result.copilot.error);
+          assert.notEqual(result.copilot.stale, true);
+          assert.equal(result.copilot.primary_window, undefined);
+        } finally {
+          resetUsageLimitsCache();
+          fs.rmSync(home, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+
+  for (const survivingWindow of [false, true]) {
+    it(`checks resets after the failed request (${survivingWindow ? "partial" : "full"} rollover)`, async (t) => {
+      const home = buildCopilotHome();
+      const startedAt = Date.now();
+      t.mock.method(Date, "now", () => startedAt);
+      try {
+        seedCopilotCache(home, {
+          identity: LOGIN,
+          plan_name: "Individual",
+          primary_window: { used_percent: 25, reset_at: new Date(startedAt + 1000).toISOString() },
+          secondary_window: survivingWindow
+            ? { used_percent: 50, reset_at: new Date(startedAt + 86_400_000).toISOString() }
+            : null,
+          cached_at: new Date(startedAt - 60_000).toISOString(),
+        });
+        const result = await getUsageLimits(baseOptions(home, {
+          fetchImpl: copilotFetchImpl({ user: () => {
+            t.mock.method(Date, "now", () => startedAt + 2000);
+            return errorResponse(500);
+          } }),
+        }));
+        if (survivingWindow) {
+          assert.equal(result.copilot.error, null);
+          assert.equal(result.copilot.stale, true);
+          assert.equal(result.copilot.primary_window, null);
+          assert.equal(result.copilot.secondary_window.used_percent, 50);
+        } else {
+          assert.equal(result.copilot.error, "GitHub Copilot API error: HTTP 500");
+          assert.notEqual(result.copilot.stale, true);
+          assert.equal(result.copilot.primary_window, undefined);
+        }
+      } finally {
+        resetUsageLimitsCache();
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+  }
+
   it("drops a cached window whose reset_at has already passed", async () => {
     const home = buildCopilotHome();
     try {

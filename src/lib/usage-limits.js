@@ -5578,13 +5578,11 @@ async function fetchUsageLimitsUncached({
       });
     }
   } else {
-    // The slot's error object loses the fetcher's identity field when the outer
-    // timeout race wins (the common failure mode this cache exists for), so
-    // re-derive it from the local auth store on this failure-only path.
-    const identity = typeof copilot.cache_identity === "string"
-      ? copilot.cache_identity
-      : await resolveCopilotCacheIdentity({ home, platform, securityRunner });
-    const cached = readCopilotLimitsCache({ home, nowMs, identity });
+    // Re-read the current login even when the failed request carries an identity:
+    // the account may have changed while the request was in flight.
+    const identity = await resolveCopilotCacheIdentity({ home, platform, securityRunner });
+    // Sample after the async auth lookup too: a slow poll can straddle a reset.
+    const cached = readCopilotLimitsCache({ home, nowMs: Date.now(), identity });
     copilotWithCache = cached ? { ...copilot, ...cached } : copilot;
   }
   // cache_identity / auth_error are internal cache-plumbing markers, not payload.
