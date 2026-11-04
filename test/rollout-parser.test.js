@@ -3975,8 +3975,29 @@ test("readZcodeDbMessages preserves legacy history before native model_usage beg
       id: "legacy-covered-by-native",
       time: { created: 1787105605912, completed: 1787105665912 },
     };
+    // ZCode renamed the assistant-message field providerID -> providerId
+    // (lowercase d, ~2026-09, issue #1008). Post-rename rows only carry the new
+    // spelling and must still count as native history; the bundled sub-agent
+    // blocklist (#216) keeps applying to the new spelling.
+    const legacyRenamedField = {
+      id: "legacy-renamed-field",
+      sessionID: "session-real",
+      role: "assistant",
+      providerId: "account:bigmodel-coding-plan",
+      modelId: "GLM-5.3",
+      time: { created: 1784000000000, completed: 1784000060000 },
+      tokens: { input: 50, output: 8, reasoning: 0, cache: { read: 12, write: 0 } },
+    };
+    const legacyRenamedSubagent = {
+      ...legacyRenamedField,
+      id: "legacy-renamed-subagent",
+      providerId: "openai",
+      modelId: "gpt-5",
+    };
     const beforeJson = JSON.stringify(legacyBeforeNative).replace(/'/g, "''");
     const coveredJson = JSON.stringify(legacyCoveredByNative).replace(/'/g, "''");
+    const renamedJson = JSON.stringify(legacyRenamedField).replace(/'/g, "''");
+    const renamedSubagentJson = JSON.stringify(legacyRenamedSubagent).replace(/'/g, "''");
     runSqliteWrite(dbPath, `
       CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL);
       CREATE TABLE message (
@@ -4004,6 +4025,8 @@ test("readZcodeDbMessages preserves legacy history before native model_usage beg
       INSERT INTO session VALUES ('session-real', '/real/project');
       INSERT INTO message VALUES
         ('legacy-before-native', 'session-real', 1781514000000, 1781514060000, '${beforeJson}'),
+        ('legacy-renamed-field', 'session-real', 1784000000000, 1784000060000, '${renamedJson}'),
+        ('legacy-renamed-subagent', 'session-real', 1784000060000, 1784000120000, '${renamedSubagentJson}'),
         ('legacy-covered-by-native', 'session-real', 1787105605912, 1787105665912, '${coveredJson}');
       INSERT INTO model_usage VALUES
         ('native', 'logical-native', 0, 'session-real', 'builtin:zai-start-plan', 'GLM-5.3',
@@ -4011,9 +4034,15 @@ test("readZcodeDbMessages preserves legacy history before native model_usage beg
     `);
 
     const rows = readZcodeDbMessages(dbPath);
-    assert.deepEqual(rows.map((row) => row.id), ["legacy-before-native", "native"]);
+    assert.deepEqual(rows.map((row) => row.id), [
+      "legacy-before-native",
+      "legacy-renamed-field",
+      "native",
+    ]);
     assert.equal(rows[0].data.modelID, "GLM-5.2");
-    assert.equal(rows[1].data.modelID, "GLM-5.3");
+    assert.equal(rows[1].data.modelId, "GLM-5.3");
+    assert.equal(rows[1].data.providerId, "account:bigmodel-coding-plan");
+    assert.equal(rows[2].data.modelID, "GLM-5.3");
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
