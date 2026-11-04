@@ -794,7 +794,15 @@ test("background auto sync skips full-source migration and backfill work", async
     assert.equal(cursors.migrations.rolloutCumulativeDeltaReparse_2026_05, undefined);
     assert.equal(cursors.migrations.cloudConversationsBackfill_2026_06, undefined);
     assert.deepEqual(JSON.parse(await fs.readFile(queueStatePath, "utf8")), { offset: 123 });
-    await assert.rejects(readQueue(home), { code: "ENOENT" });
+    // Attribution repair only re-emits existing buckets; it does not scan
+    // historical logs or reset upload state as the full-source repairs do.
+    const repairedQueue = await readQueue(home);
+    const rows = repairedQueue.trim().split("\n").map(JSON.parse);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].model, "unknown");
+    assert.equal(rows[0].total_tokens, 99);
+    await cmdSync(["--auto", "--background"]);
+    assert.deepEqual(await readQueue(home), repairedQueue);
   });
 });
 

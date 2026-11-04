@@ -6372,8 +6372,10 @@ async function repairCodexRescanInflation({
       }
     }
     rebuilt = {
+      version: tmpCursors.hourly.version,
       buckets: tmpCursors.hourly.buckets || {},
       groupQueued: tmpCursors.hourly.groupQueued || {},
+      modelAttributionPolicy: tmpCursors.hourly.modelAttributionPolicy,
       codexHashes: Array.isArray(tmpCursors.codexHashes) ? tmpCursors.codexHashes : [],
       codexCompactionResponseIds: Array.isArray(tmpCursors.codexCompactionResponseIds)
         ? tmpCursors.codexCompactionResponseIds
@@ -6510,6 +6512,9 @@ async function repairCodexRescanInflation({
   //    rebuilt per-file cursors (offset at EOF) so the later parse in THIS sync
   //    does not re-read codex (which would re-inflate project buckets).
   const hourly = (cursors.hourly ||= { buckets: {}, groupQueued: {} });
+  // Without the rebuilt schema version, the next normalization treats these
+  // per-model keys as v1 and overwrites them all with an unknown bucket (#927).
+  hourly.version = rebuilt.version;
   hourly.buckets ||= {};
   hourly.groupQueued ||= {};
   for (const k of Object.keys(hourly.buckets)) {
@@ -6524,6 +6529,12 @@ async function repairCodexRescanInflation({
   for (const [k, v] of Object.entries(rebuilt.groupQueued)) {
     if (k.startsWith("codex|")) hourly.groupQueued[k] = v;
   }
+  // The rebuilt queue already uses the parser's current attribution policy.
+  // Preserve it so the following parse does not re-emit every repaired row.
+  hourly.modelAttributionPolicy = {
+    ...hourly.modelAttributionPolicy,
+    codex: rebuilt.modelAttributionPolicy.codex,
+  };
   cursors.files ||= {};
   for (const fp of Object.keys(cursors.files)) {
     if (isCodexSessionCursorPath(fp)) delete cursors.files[fp];

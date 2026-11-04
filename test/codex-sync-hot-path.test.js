@@ -766,6 +766,7 @@ test("source-scoped sync preserves audit state and reports the actual cursor com
         version: 3,
         buckets: {},
         groupQueued: {},
+        modelAttributionPolicy: { codex: "observed" },
         updatedAt: fixedNow,
       },
       projectHourly: {
