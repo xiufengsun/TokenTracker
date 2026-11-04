@@ -92,6 +92,9 @@ export default async function (req: Request): Promise<Response> {
     baseUrl,
     edgeFunctionToken: serviceRoleKey,
     anonKey,
+    // SQL sets statement_timeout=120s; keep SDK under that but well above the
+    // default 10s so a full-history recompute for all users can finish.
+    timeout: 110_000,
     ...(anonKey ? { headers: { apikey: anonKey } } : {}),
   });
 
