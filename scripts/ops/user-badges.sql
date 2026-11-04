@@ -11,11 +11,10 @@
 --      kept so the owner's progress toward unearned badges is served without
 --      extra compute. Per-tier first-achieved timestamps are 4 columns; they
 --      are set once and never overwritten.
---   3. user_badges_refresh() — pure-SQL compute + threshold evaluation +
---      monotonic upsert, called directly by pg_cron (same shape as
---      leaderboard_rollup_daily_rebuild; no edge function on the write path).
---      Facts come from tokentracker_leaderboard_rollup_daily UNION ALL a
---      live-deduped tail — the exact base/tail cut leaderboard_usage_grouped
+--   3. user_badges_refresh_v2() — pure-SQL compute + threshold evaluation +
+--      monotonic upsert, called by the privileged badges-refresh edge.
+--      Facts come from tokentracker_leaderboard_rollup_daily_v2 UNION ALL a
+--      live-deduped v2 tail — the exact base/tail cut leaderboard_usage_grouped
 --      uses, so badge numbers agree with leaderboard numbers.
 --   4. user_badges_compact(uuid[]) / user_badges_full(uuid, boolean) — read
 --      RPCs for the leaderboard list and profile edges. RPC (POST body)
@@ -35,7 +34,7 @@
 --   SELECT cron.unschedule('tokentracker-user-badges-refresh');
 --   DROP FUNCTION user_badges_full(uuid, boolean);
 --   DROP FUNCTION user_badges_compact(uuid[]);
---   DROP FUNCTION user_badges_refresh();
+--   DROP FUNCTION user_badges_refresh_v2();
 --   DROP FUNCTION user_badges_assign_serials_trigger();
 --   DROP FUNCTION user_badges_assign_serials();
 --   DROP TABLE tokentracker_user_badges, tokentracker_badge_catalog;
@@ -270,12 +269,13 @@ REVOKE EXECUTE ON FUNCTION public.user_badges_assign_serials_trigger() FROM anon
 
 -- ── 3. Refresh: facts → tiers → monotonic upsert ─────────────────────────────
 
-CREATE OR REPLACE FUNCTION public.user_badges_refresh()
+CREATE OR REPLACE FUNCTION public.user_badges_refresh_v2()
 RETURNS bigint
 LANGUAGE plpgsql
-SET work_mem TO '96MB'
-SET hash_mem_multiplier TO '4'
+SET work_mem TO '48MB'
+SET hash_mem_multiplier TO '2'
 SET statement_timeout TO '120s'
+SET max_parallel_workers_per_gather TO '0'
 AS $func$
 DECLARE
   v_through timestamptz;
@@ -289,9 +289,16 @@ BEGIN
   END IF;
 
   SELECT m.through INTO v_through
-  FROM tokentracker_leaderboard_rollup_meta m
+  FROM public.tokentracker_leaderboard_rollup_meta_v2 m
   WHERE m.id = 1;
-  v_through := COALESCE(v_through, '-infinity'::timestamptz);
+  -- The legacy v1 watermark stopped advancing in August 2026. Replaying its
+  -- growing raw tail exceeds both the RPC proxy and admin SQL time budgets.
+  -- Match the maintained leaderboard pipeline; never silently scan all raw
+  -- history if its rollup has not been initialized.
+  IF v_through IS NULL THEN
+    RAISE EXCEPTION 'leaderboard v2 rollup is not initialized';
+  END IF;
+  v_through := date_trunc('day', LEAST(v_through, now()) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
 
   WITH
   -- (user, source, model, day): rollup base + live tail. The watermark sits on
@@ -303,11 +310,12 @@ BEGIN
            SUM(x.output_tokens) AS output_tokens
     FROM (
       SELECT r.user_id, r.source, r.model, r.day, r.total_tokens, r.output_tokens
-      FROM tokentracker_leaderboard_rollup_daily r
+      FROM public.tokentracker_leaderboard_rollup_daily_v2 r
+      WHERE r.day < (v_through AT TIME ZONE 'UTC')::date
       UNION ALL
       SELECT t.user_id, t.source, t.model,
              (t.hour_start AT TIME ZONE 'UTC')::date AS day, t.total_tokens, t.output_tokens
-      FROM leaderboard_hourly_dedup(v_through, now()) t
+      FROM public.leaderboard_hourly_dedup_v2(v_through, now()) t
     ) x
     GROUP BY x.user_id, x.source, x.model, x.day
   ),
@@ -509,7 +517,8 @@ BEGIN
 END
 $func$;
 
-REVOKE EXECUTE ON FUNCTION public.user_badges_refresh() FROM anon, authenticated, PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.user_badges_refresh_v2() FROM anon, authenticated, PUBLIC;
+GRANT EXECUTE ON FUNCTION public.user_badges_refresh_v2() TO project_admin;
 
 -- ── 4. Read RPCs (called by edges through the service role) ──────────────────
 
@@ -587,6 +596,24 @@ GRANT EXECUTE ON FUNCTION public.user_badges_compact(uuid[]) TO project_admin;
 GRANT EXECUTE ON FUNCTION public.user_badges_full(uuid, boolean) TO project_admin;
 
 -- ── 5. Schedule (run once via CLI after applying the above) ──────────────────
+-- Production note (2026-11-04, issues #925 / #987):
+--   The historical pg_cron job `tokentracker-user-badges-refresh` stalled at
+--   2026-10-17T00:32Z while InsForge HTTP leaderboard schedules kept running.
+--   Unrestricted SQL / cron.job access is disabled on the hosted project, so
+--   the durable path is now the edge function
+--   `tokentracker-user-badges-refresh` (dashboard/edge-patches/...) invoked by
+--   an InsForge HTTP schedule on the same cadence:
+--     cron: 32 */6 * * *
+--     POST https://<app>.us-east.insforge.app/functions/tokentracker-user-badges-refresh
+--     headers: Content-Type, apikey, x-refresh-secret=$LEADERBOARD_REFRESH_SECRET
+--   Deploy: insforge functions deploy tokentracker-user-badges-refresh \
+--             --file dashboard/edge-patches/tokentracker-user-badges-refresh.ts
+--   One-shot catch-up after deploy: insforge functions invoke ... (privileged).
+--   The edge uses the ordinary project-admin SQL endpoint to avoid the 10s
+--   RPC proxy timeout. Apply the maintained-rollup migration before deploying;
+--   exact commands and timeout/verification notes: docs/user-badges-refresh.md.
+--   Legacy pg_cron snippet kept below for self-host / unrestricted SQL shops.
+
 -- Check existing ticks first: SELECT jobname, schedule FROM cron.job;
 -- Align ~15 min after the leaderboard refresh so every published rank is
 -- observed at least once (podium sampling).
@@ -594,7 +621,7 @@ GRANT EXECUTE ON FUNCTION public.user_badges_full(uuid, boolean) TO project_admi
 -- SELECT cron.schedule(
 --   'tokentracker-user-badges-refresh',
 --   '32 */6 * * *',
---   'SELECT public.user_badges_refresh()'
+--   'SELECT public.user_badges_refresh_v2()'
 -- );
 
 -- ── 6. One-time recalibration (executed 2026-07-14; kept for the record) ─────
