@@ -65,7 +65,7 @@ enum Strings {
     static var allProvidersHidden: String { t("All providers hidden", "所有提供方均已隐藏", "所有提供方均已隱藏", "すべてのプロバイダーが非表示です", "모든 제공자가 숨겨졌습니다") }
     static var cursorPlanLabel: String { t("Plan", "套餐", "套餐", "プラン", "플랜") }
     static var cursorAutoLabel: String { t("Auto", "自动", "自動", "自動", "자동") }
-    static var cursorGrokBotLabel: String { t("Grok Bot", "Grok 机器人", "Grok 機器人", "Grokボット", "Grok 봇") }
+    static var cursorGrokBotLabel: String { t("Grok Bot", "Grok Bot", "Grok Bot", "Grok Bot", "Grok Bot") }
     static var codexCreditsLabel: String { t("Credits", "额度", "額度", "クレジット", "크레딧") }
 
     static func limitCreditsDetail(used: Double, total: Double, remaining: Double) -> String {
