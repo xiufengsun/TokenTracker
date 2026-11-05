@@ -16,11 +16,7 @@ const CURSOR_SAND_USAGE_URL = "https://api2.cursor.sh/aiserver.v1.DashboardServi
 
 const USER_ID = "user_alpha";
 const AUTH_ID = `auth0|${USER_ID}`;
-const JWT = [
-  Buffer.from('{"alg":"HS256"}').toString("base64url"),
-  Buffer.from(JSON.stringify({ sub: AUTH_ID })).toString("base64url"),
-  "synthetic_signature",
-].join(".");
+const JWT = "test-jwt-token-0123456789";
 
 function inactiveRunner() {
   return { status: 1, stdout: "" };
