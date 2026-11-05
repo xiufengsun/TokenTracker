@@ -6,11 +6,14 @@ const os = require("node:os");
 const path = require("node:path");
 const {
   decodeCursorAccessToken,
+  isCursorKeychainBackoffActive,
   resetCursorDecodeMemoForTests,
 } = require("../src/lib/cursor-safe-storage");
 const {
+  buildCursorSyncEnv,
   extractCursorAuth,
   extractCursorSessionToken,
+  readCursorSessionCookieFromEnv,
   readCursorUserIdFromStateDb,
   resolveCursorPaths,
 } = require("../src/lib/cursor-config");
@@ -127,6 +130,89 @@ describe("Cursor safe-storage v1", () => {
     assert.equal(decodeCursorAccessToken(cbcToken(jwt(), "key"), { platform: "darwin", deps }), null);
     assert.equal(decodeCursorAccessToken(cbcToken(jwt(), "key"), { platform: "darwin", deps }), null);
     assert.equal(calls, 1);
+  });
+
+  it("reports backoff state per envelope without touching the OS store", () => {
+    const encrypted = cbcToken(jwt(), "key");
+    let calls = 0;
+    let nowMs = 0;
+    const deps = {
+      execFileSync: () => { calls++; throw new Error("user denied"); },
+      nowMs: () => nowMs,
+    };
+    assert.equal(isCursorKeychainBackoffActive(encrypted, { deps }), false);
+    assert.equal(decodeCursorAccessToken(encrypted, { platform: "darwin", deps }), null);
+    assert.equal(isCursorKeychainBackoffActive(encrypted, { deps }), true);
+    nowMs += 6 * 60 * 60 * 1000;
+    assert.equal(isCursorKeychainBackoffActive(encrypted, { deps }), false);
+    assert.equal(isCursorKeychainBackoffActive(jwt(), { deps }), false);
+    assert.equal(isCursorKeychainBackoffActive("cursor-safe-storage:v1:unknown", { deps }), false);
+    assert.equal(calls, 1);
+  });
+
+  it("parses forwarded sync cookies strictly", () => {
+    const good = "WorkosCursorSessionToken=user_TEST%3A%3AeyJhbGciOiJIUzI1NiJ9.eyJ9.synthetic_signature";
+    assert.deepEqual(readCursorSessionCookieFromEnv({ TOKENTRACKER_CURSOR_COOKIE: good }), {
+      cookie: good,
+      userId: "user_TEST",
+    });
+    for (const bad of [
+      undefined,
+      "",
+      "other=1",
+      "WorkosCursorSessionToken=no-separator",
+      "WorkosCursorSessionToken=%3A%3AeyJhbGciOiJIUzI1NiJ9.a.b",
+      "WorkosCursorSessionToken=user_TEST%3A%3Anot-a-jwt",
+      "WorkosCursorSessionToken=bad;user%3A%3Aa.b.c",
+      "WorkosCursorSessionToken=user TEST%3A%3Aa.b.c",
+      "WorkosCursorSessionToken=user_TEST%3A%3Aa.b\r\nEvil: 1",
+    ]) {
+      assert.equal(readCursorSessionCookieFromEnv({ TOKENTRACKER_CURSOR_COOKIE: bad }), null);
+    }
+  });
+
+  it("forwards the decoded session to spawned syncs and keeps it warm", (t) => {
+    const token = jwt();
+    const { options } = stateFixture(t, { "cursorAuth/accessToken": cbcToken(token, "key") });
+    let securityCalls = 0;
+    const inner = options.deps.execFileSync;
+    options.deps.execFileSync = (command, args, opts) => {
+      if (command === "/usr/bin/security") securityCalls++;
+      return inner(command, args, opts);
+    };
+    const expected = { TOKENTRACKER_CURSOR_COOKIE: `WorkosCursorSessionToken=user_TEST%3A%3A${token}` };
+    assert.deepEqual(buildCursorSyncEnv(options), expected);
+    assert.equal(securityCalls, 1);
+    assert.deepEqual(buildCursorSyncEnv(options), expected);
+    assert.equal(securityCalls, 1);
+  });
+
+  it("flags Cursor sync off instead of letting a fresh spawn re-prompt", (t) => {
+    const { options } = stateFixture(t, { "cursorAuth/accessToken": cbcToken(jwt(), "key") });
+    let securityCalls = 0;
+    const inner = options.deps.execFileSync;
+    options.deps.execFileSync = (command, args, opts) => {
+      if (command === "/usr/bin/security") {
+        securityCalls++;
+        throw new Error("user denied");
+      }
+      return inner(command, args, opts);
+    };
+    const denied = { TOKENTRACKER_CURSOR_SYNC_DISABLED: "1" };
+    assert.deepEqual(buildCursorSyncEnv(options), denied);
+    assert.equal(securityCalls, 1);
+    assert.deepEqual(buildCursorSyncEnv(options), denied);
+    assert.equal(securityCalls, 1);
+  });
+
+  it("adds nothing without Cursor or an empty store, and forwards legacy JWT sessions too", (t) => {
+    assert.deepEqual(buildCursorSyncEnv({ home: "/nonexistent/tokentracker-cursor-home" }), {});
+    const { options } = stateFixture(t, {});
+    assert.deepEqual(buildCursorSyncEnv(options), {});
+    const legacy = stateFixture(t, { "cursorAuth/accessToken": jwt() });
+    assert.deepEqual(buildCursorSyncEnv(legacy.options), {
+      TOKENTRACKER_CURSOR_COOKIE: `WorkosCursorSessionToken=user_TEST%3A%3A${jwt()}`,
+    });
   });
 
   it("uses DPAPI CurrentUser with a fixed PowerShell script and piped data", () => {

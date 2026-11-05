@@ -8,6 +8,7 @@ const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const { setImmediate: yieldToRequests } = require("node:timers/promises");
 const { createAsyncQueueReader } = require("./async-queue-reader");
+const { buildCursorSyncEnv } = require("./cursor-config");
 const { DEFAULT_BASE_URL, resolveRuntimeConfig, assertInsforgeRuntime, normalizeInstanceBaseUrl, clearDeviceIdentity, resetInstanceState } = require("./runtime-config");
 const {
   filterRowsByUsageScope,
@@ -2475,6 +2476,11 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         if (background && body.nativeOnlyWsl === true) {
           extraEnv.TOKENTRACKER_WSL_MODE = "native-only";
         }
+        // Every spawned sync is a fresh process whose Cursor decode memo is
+        // cold — forward the server-side session (env, never argv) or flag
+        // Cursor sync off so the child cannot re-open the macOS keychain
+        // dialog on every background run (#1043).
+        Object.assign(extraEnv, buildCursorSyncEnv({ home: os.homedir() }));
         if (body.deviceToken != null && !background) {
           json(res, { ok: false, error: "Use the current cloud session", code: getCloudSyncPref() ? "auth_session_required" : "CLOUD_SYNC_DISABLED" }, 409);
           return true;

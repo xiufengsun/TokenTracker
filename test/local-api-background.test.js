@@ -186,6 +186,9 @@ test("local-api forwards strict boolean auto background sync", async () => {
     "--background",
   ]);
   assert.equal(call.options.env.TOKENTRACKER_WSL_MODE, "native-only");
+  // No Cursor install under the isolated HOME: no sync-env forwarding keys.
+  assert.equal(call.options.env.TOKENTRACKER_CURSOR_COOKIE, undefined);
+  assert.equal(call.options.env.TOKENTRACKER_CURSOR_SYNC_DISABLED, undefined);
 });
 
 test("local-api treats lightweight true as background alias", async () => {

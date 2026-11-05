@@ -31,6 +31,16 @@ function resetCursorDecodeMemoForTests() {
   decodeMemo.clear();
 }
 
+/** Whether this envelope is in a post-failure keychain cooldown right now.
+ * Spawned sync subprocesses have a cold memo, so callers use this to flag
+ * Cursor sync off instead of letting a fresh process re-open the dialog. */
+function isCursorKeychainBackoffActive(value, { deps = {} } = {}) {
+  const memo = decodeMemo.get(value);
+  if (!memo || memo.token) return false;
+  const nowMs = deps.nowMs ? deps.nowMs() : Date.now();
+  return nowMs < memo.retryAtMs;
+}
+
 function decodeBase64(value) {
   if (typeof value !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return null;
   const bytes = Buffer.from(value, "base64");
@@ -164,4 +174,8 @@ function decodeEnvelopeBytes(bytes, { platform, appDir, deps }) {
   return isJwt(token) ? token : null;
 }
 
-module.exports = { decodeCursorAccessToken, resetCursorDecodeMemoForTests };
+module.exports = {
+  decodeCursorAccessToken,
+  isCursorKeychainBackoffActive,
+  resetCursorDecodeMemoForTests,
+};

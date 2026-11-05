@@ -4,7 +4,7 @@ const fs = require("node:fs");
 
 const { readJson } = require("./fs");
 const { readSqliteFirstValue } = require("./sqlite-reader");
-const { decodeCursorAccessToken } = require("./cursor-safe-storage");
+const { decodeCursorAccessToken, isCursorKeychainBackoffActive } = require("./cursor-safe-storage");
 
 // ── Path resolution ──
 
@@ -167,6 +167,66 @@ function extractUserIdFromJwt(jwt) {
   } catch {
     return null;
   }
+}
+
+// ── Spawned-sync credential forwarding (#1043) ──
+
+// The desktop server triggers each background sync in a fresh node
+// subprocess, so the in-process decode memo is cold every run and the child
+// would re-open the macOS keychain dialog on every sync. The server instead
+// forwards its already-decoded session through env (never argv, matching the
+// TOKENTRACKER_DEVICE_TOKEN precedent) and flags a denied/failed keychain so
+// the child skips the Cursor source rather than re-prompting.
+const CURSOR_COOKIE_ENV = "TOKENTRACKER_CURSOR_COOKIE";
+const CURSOR_SYNC_DISABLED_ENV = "TOKENTRACKER_CURSOR_SYNC_DISABLED";
+const CURSOR_COOKIE_PREFIX = "WorkosCursorSessionToken=";
+
+/** Parse a forwarded WorkosCursorSessionToken cookie. Fails closed on values
+ * that do not match the exact shape extractCursorAuth builds, so a tampered
+ * or stale env var can never reach the Cookie header. */
+function readCursorSessionCookieFromEnv(env = process.env) {
+  const raw = env[CURSOR_COOKIE_ENV];
+  if (typeof raw !== "string" || !raw.startsWith(CURSOR_COOKIE_PREFIX)) return null;
+  const rest = raw.slice(CURSOR_COOKIE_PREFIX.length);
+  const separator = rest.indexOf("%3A%3A");
+  if (separator <= 0) return null;
+  const userId = rest.slice(0, separator);
+  const token = rest.slice(separator + 6);
+  if (/[\s;\x00-\x1f\x7f]/.test(raw)) return null;
+  if (!/^[A-Za-z0-9_.|-]+$/.test(userId)) return null;
+  if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_.-]*$/.test(token)) return null;
+  return { cookie: raw, userId };
+}
+
+/**
+ * Env additions for a spawned sync subprocess, or {} to leave Cursor to its
+ * own devices (not installed, no stored token, or a legacy plaintext JWT the
+ * child decodes without any OS access). Never throws.
+ */
+function buildCursorSyncEnv({ home, platform, env, deps } = {}) {
+  const additions = {};
+  try {
+    if (!isCursorInstalled({ home, platform, env })) return additions;
+    const { stateDbPath } = resolveCursorPaths({ home, platform, env });
+    const envelope = readCursorAccessTokenFromStateDb(stateDbPath, deps);
+    if (!envelope) return additions;
+    if (isCursorKeychainBackoffActive(envelope, { deps })) {
+      additions[CURSOR_SYNC_DISABLED_ENV] = "1";
+      return additions;
+    }
+    const auth = extractCursorSessionToken({ home, platform, env, deps });
+    if (auth?.cookie) {
+      additions[CURSOR_COOKIE_ENV] = auth.cookie;
+    } else if (envelope.startsWith("cursor-safe-storage:v1:")) {
+      // A keychain-backed envelope that failed to decode here would fail the
+      // same way in the child — flag it off instead of letting the fresh
+      // process re-open the dialog.
+      additions[CURSOR_SYNC_DISABLED_ENV] = "1";
+    }
+  } catch (_error) {
+    // Sync must never be blocked by Cursor env plumbing.
+  }
+  return additions;
 }
 
 // ── API client ──
@@ -643,4 +703,6 @@ module.exports = {
   parseCursorCsv,
   isCursorBillableKind,
   normalizeCursorUsage,
+  readCursorSessionCookieFromEnv,
+  buildCursorSyncEnv,
 };

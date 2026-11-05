@@ -181,6 +181,7 @@ const {
   extractCursorSessionToken,
   fetchCursorUsageCsv,
   parseCursorCsv,
+  readCursorSessionCookieFromEnv,
 } = require("../lib/cursor-config");
 const { purgeProjectUsage } = require("../lib/project-usage-purge");
 const {
@@ -2221,8 +2222,18 @@ async function cmdSync(argv, context = {}) {
     const cursorInstalled = cursorSyncDeps.isInstalled || isCursorInstalled;
     const cursorAuthExtractor = cursorSyncDeps.extractAuth || extractCursorSessionToken;
     const cursorUsageFetcher = cursorSyncDeps.fetchUsageCsv || fetchCursorUsageCsv;
-    if (sourceAllowed("cursor") && cursorInstalled({ home })) {
-      const cursorAuth = cursorAuthExtractor({ home });
+    // The spawning server forwards its decoded session (env, never argv) so a
+    // fresh subprocess never re-reads the macOS keychain, or flags Cursor off
+    // when the keychain read was denied/failed on its side (#1043).
+    const envCookie = cursorSyncDeps.extractAuth
+      ? null
+      : readCursorSessionCookieFromEnv();
+    if (
+      sourceAllowed("cursor") &&
+      cursorInstalled({ home }) &&
+      process.env.TOKENTRACKER_CURSOR_SYNC_DISABLED !== "1"
+    ) {
+      const cursorAuth = envCookie || cursorAuthExtractor({ home });
       if (cursorAuth) {
         try {
           if (progress?.enabled) {
