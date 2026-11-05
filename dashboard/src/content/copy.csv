@@ -2171,3 +2171,15 @@ leaderboard.profile_modal.window.lifetime,dashboard,LeaderboardProfileModal,Stat
 leaderboard.profile_modal.window.period,dashboard,LeaderboardProfileModal,StatCards,period,Stats: {{from}} to {{to}}.,,active
 leaderboard.profile_modal.window.average,dashboard,LeaderboardProfileModal,StatCards,average,"Window cost divided by {{days}} calendar days, including days without usage.",,active
 limits.claude.custom_backend,ui,LimitsPage,UsageLimitsPanel,status,Custom backend — Anthropic limits not applicable,,active
+limits.cursor.connection.connect,dashboard,LimitsPage,CursorConnectionControl,connect,Connect,,active
+limits.cursor.connection.reconnect,dashboard,LimitsPage,CursorConnectionControl,reconnect,Reconnect Cursor,,active
+limits.cursor.connection.disconnect,dashboard,LimitsPage,CursorConnectionControl,disconnect,Disconnect,,active
+limits.cursor.connection.open,dashboard,LimitsPage,CursorConnectionControl,open,Open sign-in,,active
+limits.cursor.connection.cancel,dashboard,LimitsPage,CursorConnectionControl,cancel,Cancel,,active
+limits.cursor.connection.waiting,dashboard,LimitsPage,CursorConnectionControl,waiting,Waiting…,,active
+limits.cursor.connection.expired,dashboard,LimitsPage,CursorConnectionControl,expired,Cursor connection expired. Connect again to refresh usage.,,active
+limits.cursor.connection.failed,dashboard,LimitsPage,CursorConnectionControl,failed,Could not connect to Cursor. Try signing in again.,,active
+limits.cursor.connection.manage,dashboard,LimitsPage,CursorConnectionControl,manage,Cursor connection,,active
+limits.cursor.connection.retry,dashboard,LimitsPage,CursorConnectionControl,retry,Retry connection,,active
+limits.cursor.connection.description,dashboard,LimitsPage,CursorConnectionControl,description,Cursor encrypts its saved sign-in. Connect on Cursor's website to read your usage and limits.,,active
+limits.cursor.connection.privacy,dashboard,LimitsPage,CursorConnectionControl,privacy,Your sign-in credentials stay on this device and are never sent to TokenTracker servers.,,active

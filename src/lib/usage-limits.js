@@ -911,12 +911,15 @@ function normalizeCursorSandUsageStatus(body, { eligible = true } = {}) {
   return buildWindow({ usedPercent, resetAt, windowSeconds });
 }
 
-async function fetchCursorLimits({ home, env, fetchImpl = fetch } = {}) {
-  if (!isCursorInstalled({ home, env })) {
+async function fetchCursorLimits({ home, env, trackerDir, fetchImpl = fetch } = {}) {
+  if (!isCursorInstalled({ home, env, trackerDir })) {
     return { configured: false };
   }
-  const auth = extractCursorAuth({ home, env });
+  const auth = extractCursorAuth({ home, env, trackerDir });
   if (!auth?.cookie || !auth?.accessToken) {
+    if (require("./cursor-login").readCursorConnection({ home, trackerDir }).status === "expired") {
+      return { configured: true, connection_source: "browser", auth_error: true, auth_action_required: "reauth", error: "Cursor session expired. Reconnect Cursor in Usage & Limits." };
+    }
     return { configured: false };
   }
   try {
@@ -937,6 +940,7 @@ async function fetchCursorLimits({ home, env, fetchImpl = fetch } = {}) {
       configured: true,
       error: null,
       ...normalizeCursorUsageSummary(body),
+      ...(auth.source === "browser" ? { connection_source: "browser" } : {}),
       quaternary_window: grokBotWindow,
       // Internal cache-partition key (stripped before the payload is served).
       cache_identity: auth.userId,
@@ -945,10 +949,11 @@ async function fetchCursorLimits({ home, env, fetchImpl = fetch } = {}) {
     return {
       configured: true,
       error: error?.message || "Unknown error",
+      ...(auth.source === "browser" ? { connection_source: "browser" } : {}),
       // A session-expiry error is actionable (re-login) and must not be hidden
       // behind the stale disk-cache fallback (opencode-go auth_error precedent).
       // Internal marker — stripped before the payload is served.
-      ...(error?.code === "AUTH_EXPIRED" ? { auth_error: true } : {}),
+      ...(error?.code === "AUTH_EXPIRED" ? { auth_error: true, auth_action_required: "reauth" } : {}),
       cache_identity: auth.userId,
     };
   }
@@ -3178,9 +3183,9 @@ function writeCursorLimitsCache(limits, { home, nowMs = Date.now(), identity } =
 // Failure-only identity re-derivation for the cache fallback: when the provider slot's
 // result was produced by the outer timeout race, the fetcher's own identity field is
 // lost, so read the (still-local) state DB once to learn who we are serving for.
-function resolveCursorCacheIdentity({ home, env } = {}) {
+function resolveCursorCacheIdentity({ home, env, trackerDir } = {}) {
   try {
-    return extractCursorAuth({ home, env })?.userId || null;
+    return extractCursorAuth({ home, env, trackerDir })?.userId || null;
   } catch (_error) {
     return null;
   }
@@ -5207,7 +5212,7 @@ async function fetchUsageLimitsUncached({
           (reason) => ({ status: "rejected", reason }),
         )
       : Promise.resolve(null),
-    hiddenSet.has("cursor") ? hiddenSentinel : withProviderTimeout(fetchCursorLimits({ home, env, fetchImpl: providerFetch }), "Cursor", providerTimeoutMs)
+    hiddenSet.has("cursor") ? hiddenSentinel : withProviderTimeout(fetchCursorLimits({ home, env, trackerDir, fetchImpl: providerFetch }), "Cursor", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
     hiddenSet.has("kimi") ? hiddenSentinel : withProviderTimeout(fetchKimiLimits({ home, env, fetchImpl: providerFetch }), "Kimi", providerTimeoutMs)
       .catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
@@ -5647,7 +5652,7 @@ async function fetchUsageLimitsUncached({
         nowMs,
         identity: typeof cursor.cache_identity === "string"
           ? cursor.cache_identity
-          : resolveCursorCacheIdentity({ home, env }),
+          : resolveCursorCacheIdentity({ home, env, trackerDir }),
       });
     }
   } else {
@@ -5656,7 +5661,7 @@ async function fetchUsageLimitsUncached({
     // re-derive it from the local state DB on this failure-only path.
     const identity = typeof cursor.cache_identity === "string"
       ? cursor.cache_identity
-      : resolveCursorCacheIdentity({ home, env });
+      : resolveCursorCacheIdentity({ home, env, trackerDir });
     const cached = readCursorLimitsCache({ home, nowMs, identity });
     cursorWithCache = cached || cursor;
   }

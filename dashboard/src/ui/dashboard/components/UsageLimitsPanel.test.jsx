@@ -8,6 +8,8 @@ import { UsageLimitsPanel } from "./UsageLimitsPanel.jsx";
 
 vi.mock("../../../lib/api", () => ({
   saveProviderApiKey: vi.fn(),
+  isLocalhostHost: () => true,
+  updateCursorConnection: vi.fn(),
 }));
 
 function formatExpiry(iso) {
