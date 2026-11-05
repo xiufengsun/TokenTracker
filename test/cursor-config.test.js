@@ -477,6 +477,38 @@ describe("extractCursorSessionToken", () => {
     });
   });
 
+  it("rejects encrypted Cursor Safe Storage tokens without spawning security (#1043)", () => {
+    const encrypted = `cursor-safe-storage:v1:${Buffer.alloc(40).toString("base64")}`;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-cursor-safe-storage-reject-"));
+    const { stateDbPath, cliConfigPath } = resolveCursorPaths({ home, env: {} });
+    fs.mkdirSync(path.dirname(stateDbPath), { recursive: true });
+    fs.writeFileSync(stateDbPath, "", "utf8");
+    fs.mkdirSync(path.dirname(cliConfigPath), { recursive: true });
+    fs.writeFileSync(
+      cliConfigPath,
+      JSON.stringify({ authInfo: { authId: "auth0|user_ENCRYPTED" } }),
+      "utf8",
+    );
+    let securityCalls = 0;
+    const deps = {
+      execFileSync: (cmd, args) => {
+        if (String(cmd).includes("security") || (Array.isArray(args) && args.includes("Cursor Safe Storage"))) {
+          securityCalls += 1;
+          throw new Error("security must not be invoked");
+        }
+        return JSON.stringify([{ value: encrypted }]);
+      },
+      requireFn: () => {
+        throw new Error("sqlite3 CLI used");
+      },
+      env: {},
+    };
+
+    assert.equal(extractCursorAuth({ home, env: {}, deps }), null);
+    assert.equal(extractCursorSessionToken({ home, env: {}, deps }), null);
+    assert.equal(securityCalls, 0);
+  });
+
   it("exposes the bearer token only through the full Cursor auth helper", () => {
     const jwt = makeCursorJwt("user_RPC");
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-cursor-rpc-auth-"));
