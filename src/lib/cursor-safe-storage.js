@@ -5,6 +5,32 @@ const path = require("node:path");
 
 const PREFIX = "cursor-safe-storage:v1:";
 
+// Decode results are memoized per envelope for the lifetime of the process.
+// The pipeline re-derives Cursor auth on every background sync pass (60 s) and
+// each aggregate-limits refresh (2 min TTL), so an unmemoized decode would
+// re-invoke the OS secret store every cycle. macOS cannot persist an "Always
+// Allow" grant for cross-app /usr/bin/security reads on a foreign item
+// (issue #369 precedent), which turned v1.5.7's encrypted-token support
+// (#1029) into a recurring keychain password dialog. Successes are kept until
+// the envelope changes (a Cursor re-login re-encrypts and misses the memo);
+// failures enter a cooldown so a denied dialog is not re-nagged by the next
+// poll. Memory only — nothing is persisted and the memo never outlives the
+// process, so a restart (or an ACL fix) retries immediately.
+const DECODE_MEMO_MAX_ENTRIES = 8;
+const DECODE_FAILURE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const decodeMemo = new Map();
+
+function rememberDecodeResult(key, entry) {
+  if (decodeMemo.size >= DECODE_MEMO_MAX_ENTRIES && !decodeMemo.has(key)) {
+    decodeMemo.delete(decodeMemo.keys().next().value);
+  }
+  decodeMemo.set(key, entry);
+}
+
+function resetCursorDecodeMemoForTests() {
+  decodeMemo.clear();
+}
+
 function decodeBase64(value) {
   if (typeof value !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return null;
   const bytes = Buffer.from(value, "base64");
@@ -78,42 +104,64 @@ function decryptCbc(bytes, password, iterations) {
 /** Decode Cursor's base64 Electron safeStorage envelope, or retain a legacy JWT.
  * OS access is injectable. Unavailable/locked stores and unknown formats fail
  * closed, without exposing child-process errors (which can contain secrets).
+ * Results are memoized per envelope (see decodeMemo above) so repeated
+ * pipeline polls do not re-consult the OS secret store.
  */
 function decodeCursorAccessToken(value, { platform = process.platform, appDir, deps = {} } = {}) {
   if (isJwt(value)) return value;
   if (typeof value !== "string" || !value.startsWith(PREFIX)) return null;
   const bytes = decodeBase64(value.slice(PREFIX.length));
   if (!bytes?.length) return null;
-  try {
-    let token;
-    const version = bytes.subarray(0, 3).toString();
-    if (platform === "win32") {
-      token = decryptWindows(bytes, appDir, deps);
-    } else if (platform === "darwin" || platform === "linux") {
-      if (bytes.length <= 3 || (bytes.length - 3) % 16 !== 0) return null;
-      let password;
-      if (platform === "darwin") {
-        if (version !== "v10") return null;
-        password = runSecretCommand("/usr/bin/security", [
-          "find-generic-password", "-s", "Cursor Safe Storage", "-w",
-        ], deps);
-        if (!password) return null;
-      } else if (version === "v10") {
-        password = "peanuts"; // Chromium's basic_text backend.
-      } else if (version === "v11") {
-        // Best effort for Secret Service stores. KWallet-only/locked stores
-        // and hosts without secret-tool are intentionally unavailable.
-        password = runSecretCommand("secret-tool", ["lookup", "application", "cursor"], deps);
-        if (!password) return null;
-      } else {
-        return null;
-      }
-      token = decryptCbc(bytes, password, platform === "darwin" ? 1003 : 1);
-    }
-    return isJwt(token) ? token : null;
-  } catch {
-    return null;
+  const nowMs = deps.nowMs ? deps.nowMs() : Date.now();
+  const memo = decodeMemo.get(value);
+  if (memo) {
+    if (memo.token) return memo.token;
+    if (nowMs < memo.retryAtMs) return null;
+    decodeMemo.delete(value);
   }
+  let token = null;
+  try {
+    token = decodeEnvelopeBytes(bytes, { platform, appDir, deps });
+  } catch {
+    token = null;
+  }
+  if (isJwt(token)) {
+    rememberDecodeResult(value, { token });
+    return token;
+  }
+  rememberDecodeResult(value, { retryAtMs: nowMs + DECODE_FAILURE_COOLDOWN_MS });
+  return null;
 }
 
-module.exports = { decodeCursorAccessToken };
+// One envelope decode: the plaintext token or null. Throws only from OS
+// store/decryption failures; the caller records those in the memo cooldown.
+function decodeEnvelopeBytes(bytes, { platform, appDir, deps }) {
+  let token;
+  const version = bytes.subarray(0, 3).toString();
+  if (platform === "win32") {
+    token = decryptWindows(bytes, appDir, deps);
+  } else if (platform === "darwin" || platform === "linux") {
+    if (bytes.length <= 3 || (bytes.length - 3) % 16 !== 0) return null;
+    let password;
+    if (platform === "darwin") {
+      if (version !== "v10") return null;
+      password = runSecretCommand("/usr/bin/security", [
+        "find-generic-password", "-s", "Cursor Safe Storage", "-w",
+      ], deps);
+      if (!password) return null;
+    } else if (version === "v10") {
+      password = "peanuts"; // Chromium's basic_text backend.
+    } else if (version === "v11") {
+      // Best effort for Secret Service stores. KWallet-only/locked stores
+      // and hosts without secret-tool are intentionally unavailable.
+      password = runSecretCommand("secret-tool", ["lookup", "application", "cursor"], deps);
+      if (!password) return null;
+    } else {
+      return null;
+    }
+    token = decryptCbc(bytes, password, platform === "darwin" ? 1003 : 1);
+  }
+  return isJwt(token) ? token : null;
+}
+
+module.exports = { decodeCursorAccessToken, resetCursorDecodeMemoForTests };

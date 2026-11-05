@@ -1,10 +1,13 @@
-const { describe, it } = require("node:test");
+const { describe, it, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { decodeCursorAccessToken } = require("../src/lib/cursor-safe-storage");
+const {
+  decodeCursorAccessToken,
+  resetCursorDecodeMemoForTests,
+} = require("../src/lib/cursor-safe-storage");
 const {
   extractCursorAuth,
   extractCursorSessionToken,
@@ -38,6 +41,8 @@ function windowsFixture(token) {
 }
 
 describe("Cursor safe-storage v1", () => {
+  beforeEach(() => resetCursorDecodeMemoForTests());
+
   it("keeps legacy JWTs without invoking the OS store on any platform", () => {
     let calls = 0;
     for (const platform of ["darwin", "win32", "linux", "freebsd"]) {
@@ -60,6 +65,68 @@ describe("Cursor safe-storage v1", () => {
     assert.deepEqual(calls[0][1], ["find-generic-password", "-s", "Cursor Safe Storage", "-w"]);
     assert.deepEqual(calls[0][2].stdio, ["pipe", "pipe", "pipe"]);
     assert.equal(calls[0][2].timeout, 5000);
+  });
+
+  it("reads the keychain once per envelope while decodes are reused in-process", () => {
+    const encrypted = cbcToken(jwt(), "key");
+    let calls = 0;
+    const deps = { execFileSync: () => { calls++; return "key\n"; } };
+    assert.equal(decodeCursorAccessToken(encrypted, { platform: "darwin", deps }), jwt());
+    assert.equal(decodeCursorAccessToken(encrypted, { platform: "darwin", deps }), jwt());
+    assert.equal(decodeCursorAccessToken(encrypted, { platform: "darwin", deps }), jwt());
+    assert.equal(calls, 1);
+    const relogin = cbcToken(jwt("auth0|user_RELOGIN"), "key");
+    assert.equal(decodeCursorAccessToken(relogin, { platform: "darwin", deps }), jwt("auth0|user_RELOGIN"));
+    assert.equal(calls, 2);
+  });
+
+  it("backs off after a failed keychain read and retries only after the cooldown", () => {
+    const encrypted = cbcToken(jwt(), "key");
+    let calls = 0;
+    let nowMs = 1_000_000;
+    const deps = {
+      execFileSync: () => { calls++; throw new Error("user denied"); },
+      nowMs: () => nowMs,
+    };
+    assert.equal(decodeCursorAccessToken(encrypted, { platform: "darwin", deps }), null);
+    assert.equal(decodeCursorAccessToken(encrypted, { platform: "darwin", deps }), null);
+    assert.equal(decodeCursorAccessToken(encrypted, { platform: "darwin", deps }), null);
+    assert.equal(calls, 1);
+    nowMs += (6 * 60 * 60 * 1000) - 1;
+    assert.equal(decodeCursorAccessToken(encrypted, { platform: "darwin", deps }), null);
+    assert.equal(calls, 1);
+    nowMs += 1;
+    assert.equal(decodeCursorAccessToken(encrypted, { platform: "darwin", deps }), null);
+    assert.equal(calls, 2);
+  });
+
+  it("recovers the memo after the cooldown when the retry succeeds", () => {
+    const encrypted = cbcToken(jwt(), "key");
+    let deny = true;
+    let calls = 0;
+    let nowMs = 0;
+    const deps = {
+      execFileSync: () => {
+        calls++;
+        if (deny) throw new Error("user denied");
+        return "key\n";
+      },
+      nowMs: () => nowMs,
+    };
+    assert.equal(decodeCursorAccessToken(encrypted, { platform: "darwin", deps }), null);
+    nowMs += 6 * 60 * 60 * 1000;
+    deny = false;
+    assert.equal(decodeCursorAccessToken(encrypted, { platform: "darwin", deps }), jwt());
+    assert.equal(decodeCursorAccessToken(encrypted, { platform: "darwin", deps }), jwt());
+    assert.equal(calls, 2);
+  });
+
+  it("memoizes decryption failures without re-reading the OS store", () => {
+    let calls = 0;
+    const deps = { execFileSync: () => { calls++; return "wrong-key\n"; } };
+    assert.equal(decodeCursorAccessToken(cbcToken(jwt(), "key"), { platform: "darwin", deps }), null);
+    assert.equal(decodeCursorAccessToken(cbcToken(jwt(), "key"), { platform: "darwin", deps }), null);
+    assert.equal(calls, 1);
   });
 
   it("uses DPAPI CurrentUser with a fixed PowerShell script and piped data", () => {
@@ -107,6 +174,9 @@ describe("Cursor safe-storage v1", () => {
       { readFileSync: () => "{}" },
       { readFileSync: () => { throw new Error("missing Local State"); } },
     ]) {
+      // Fresh memo per shape so each rejection branch is exercised, not the
+      // previous iteration's cooldown entry.
+      resetCursorDecodeMemoForTests();
       assert.equal(decodeCursorAccessToken(wrap(fixture.bytes), {
         platform: "win32", appDir: "C:\\Cursor", deps,
       }), null);
@@ -132,8 +202,15 @@ describe("Cursor safe-storage v1", () => {
     } }), jwt());
     assert.equal(calls[0][0], "secret-tool");
     assert.deepEqual(calls[0][1], ["lookup", "application", "cursor"]);
-    for (const execFileSync of [() => "", () => { throw new Error("keyring unavailable"); }]) {
-      assert.equal(decodeCursorAccessToken(encrypted, { platform: "linux", deps: { execFileSync } }), null);
+    // Distinct envelopes for the unavailable-store cases: a memoized success
+    // is intentionally reused without consulting the store again.
+    for (const { execFileSync, password } of [
+      { execFileSync: () => "", password: "missing-a" },
+      { execFileSync: () => { throw new Error("keyring unavailable"); }, password: "missing-b" },
+    ]) {
+      assert.equal(decodeCursorAccessToken(cbcToken(jwt(), password, 1, "v11"), {
+        platform: "linux", deps: { execFileSync },
+      }), null);
     }
   });
 
@@ -196,6 +273,8 @@ function stateFixture(t, entries, { cliConfig = {}, platform = "darwin", passwor
 }
 
 describe("Cursor migrated auth state", () => {
+  beforeEach(() => resetCursorDecodeMemoForTests());
+
   it("reads encrypted auth and migrated identity through the real node:sqlite fallback", (t) => {
     let DatabaseSync;
     try { ({ DatabaseSync } = require("node:sqlite")); } catch { t.skip("node:sqlite unavailable"); return; }
