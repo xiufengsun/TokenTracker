@@ -3,6 +3,7 @@ const path = require("node:path");
 const fs = require("node:fs");
 
 const { readJson } = require("./fs");
+const { readCursorConnection, normalizeCursorSubject } = require("./cursor-login");
 const { readSqliteFirstValue } = require("./sqlite-reader");
 
 // ── Path resolution ──
@@ -32,7 +33,8 @@ function resolveCursorPaths({ home, platform = process.platform, env = process.e
   };
 }
 
-function isCursorInstalled({ home, platform, env } = {}) {
+function isCursorInstalled({ home, platform, env, trackerDir } = {}) {
+  if (readCursorConnection({ home, trackerDir }).status !== "disconnected") return true;
   const { appDir } = resolveCursorPaths({ home, platform, env });
   try {
     return fs.statSync(appDir).isDirectory();
@@ -66,7 +68,7 @@ function readCursorAccessTokenFromStateDb(stateDbPath, deps = {}) {
 }
 
 /**
- * Extract Cursor session cookie from local SQLite + cli-config.json.
+ * Prefer TokenTracker's browser connection, then Cursor's plaintext local login.
  * Returns { cookie, userId } or null on failure.
  *
  * Cookie format: WorkosCursorSessionToken=<userId>%3A%3A<jwt>
@@ -76,19 +78,21 @@ function readCursorAccessTokenFromStateDb(stateDbPath, deps = {}) {
  *   - Google sign-in via WorkOS:    "google-oauth2|<numeric>" → kept verbatim
  *   - other WorkOS subjects:        "github|…", "oidc|…"      → kept verbatim
  */
-function extractCursorSessionToken({ home, platform, env, deps } = {}) {
-  const auth = extractCursorAuth({ home, platform, env, deps });
+function extractCursorSessionToken({ home, platform, env, deps, trackerDir } = {}) {
+  const auth = extractCursorAuth({ home, platform, env, deps, trackerDir });
   if (!auth) return null;
   return { cookie: auth.cookie, userId: auth.userId };
 }
 
 /**
  * Extract the Cursor web session and API bearer token from Cursor's own local
- * login state. The raw access token is needed for Cursor's first-party Connect
+ * login state or an explicit TokenTracker browser connection. The raw access token is needed for Cursor's first-party Connect
  * RPCs, while callers that only need the web cookie should continue using
  * extractCursorSessionToken so the token is not propagated unnecessarily.
  */
-function extractCursorAuth({ home, platform, env, deps } = {}) {
+function extractCursorAuth({ home, platform, env, deps, trackerDir } = {}) {
+  const connection = readCursorConnection({ home, trackerDir });
+  if (connection.status !== "disconnected") return connection.auth || null;
   const { stateDbPath, cliConfigPath } = resolveCursorPaths({ home, platform, env });
 
   // 1. Extract JWT from SQLite
@@ -111,20 +115,6 @@ function extractCursorAuth({ home, platform, env, deps } = {}) {
   // 3. Build cookie
   const cookie = `WorkosCursorSessionToken=${userId}%3A%3A${jwt}`;
   return { cookie, userId, accessToken: jwt };
-}
-
-// WorkOS OAuth subject prefixes Cursor accepts as-is in the session cookie.
-// Verified against cursor.com/api/usage-summary (issue #88).
-const WORKOS_OAUTH_SUBJECT_RE = /^(google-oauth2|github|oidc|auth0)\|[^|]+$/;
-
-function normalizeCursorSubject(subject) {
-  if (!subject) return null;
-  // Native Cursor: "auth0|user_XXXXX" → strip provider prefix, return "user_XXXXX"
-  const native = subject.match(/\|(user_[A-Za-z0-9_]+)$/);
-  if (native) return native[1];
-  // WorkOS-bridged OAuth: keep the full "<provider>|<id>" subject
-  if (WORKOS_OAUTH_SUBJECT_RE.test(subject)) return subject;
-  return null;
 }
 
 function extractUserIdFromCliConfig(configPath) {
@@ -195,7 +185,7 @@ function resolveCursorRedirect(location, baseUrl) {
  * Fetch full usage CSV from Cursor API.
  * Returns raw CSV string or throws on error.
  */
-function fetchCursorUsageCsv({ cookie, timeoutMs = 30000, fetchImpl = fetch }) {
+function fetchCursorUsageCsv({ cookie, timeoutMs = 90000, fetchImpl = fetch }) {
   return fetchImpl(CURSOR_CSV_URL, {
     method: "GET",
     headers: {

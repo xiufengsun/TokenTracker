@@ -1166,6 +1166,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
   let relayCookies = new Map();
   const localAuthToken = crypto.randomBytes(24).toString("hex");
   const trackerDataDir = isolatedTrackerDataDir || path.dirname(qp);
+  const cursorLogin = require("./cursor-login").createCursorLogin({ trackerDir: trackerDataDir });
   const cookiePath = path.join(trackerDataDir, "relay-cookies.json");
   const localSyncDeviceTokenStore = createCloudDeviceTokenStore(path.join(trackerDataDir, "cloud-device-token.json"));
   const localSyncDeviceTokenCache = new Map();
@@ -3276,6 +3277,48 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           account_view: Boolean(getRefreshTokenForCloud()) && getCloudSyncPref(),
         },
       });
+      return true;
+    }
+
+    // Explicit Cursor browser authorization. Never return the verifier or session token.
+    if (p === "/functions/tokentracker-cursor-connection") {
+      if (!isAuthorizedLocalMutation(req)) {
+        json(res, { error: "Unauthorized" }, 401);
+        return true;
+      }
+      res.setHeader("Cache-Control", "no-store");
+      const method = String(req.method || "GET").toUpperCase();
+      if (method === "GET") {
+        json(res, cursorLogin.status());
+        return true;
+      }
+      if (method !== "POST") {
+        json(res, { error: "Method Not Allowed" }, 405);
+        return true;
+      }
+      let body;
+      try { body = await readJsonBody(req); } catch {
+        json(res, { error: "Invalid JSON body" }, 400);
+        return true;
+      }
+      try {
+        let result;
+        switch (body?.action) {
+          case "start": result = cursorLogin.start(); break;
+          case "poll": result = await cursorLogin.poll(body.attemptId); break;
+          case "cancel": result = cursorLogin.cancel(body.attemptId); break;
+          case "disconnect": result = cursorLogin.disconnect(); break;
+          default:
+            json(res, { error: "Unknown Cursor connection action" }, 400);
+            return true;
+        }
+        if (result.status === "connected" || result.status === "disconnected") {
+          require("./usage-limits").resetUsageLimitsCache({ invalidateInFlight: true });
+        }
+        json(res, result);
+      } catch {
+        json(res, { error: "Could not update the Cursor connection" }, 500);
+      }
       return true;
     }
 

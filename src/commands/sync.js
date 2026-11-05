@@ -2221,8 +2221,8 @@ async function cmdSync(argv, context = {}) {
     const cursorInstalled = cursorSyncDeps.isInstalled || isCursorInstalled;
     const cursorAuthExtractor = cursorSyncDeps.extractAuth || extractCursorSessionToken;
     const cursorUsageFetcher = cursorSyncDeps.fetchUsageCsv || fetchCursorUsageCsv;
-    if (sourceAllowed("cursor") && cursorInstalled({ home })) {
-      const cursorAuth = cursorAuthExtractor({ home });
+    if (sourceAllowed("cursor") && cursorInstalled({ home, trackerDir })) {
+      const cursorAuth = cursorAuthExtractor({ home, trackerDir });
       if (cursorAuth) {
         try {
           if (progress?.enabled) {
