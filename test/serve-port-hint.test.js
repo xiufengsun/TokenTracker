@@ -129,6 +129,15 @@ test("serve respects explicit port from --port and PORT env", (t) => {
   });
 });
 
+test("serve does not open a browser when started by a native app", () => {
+  for (const shell of ["macos", "windows", "linux"]) {
+    assert.equal(parseArgs([], { TOKENTRACKER_APP_SHELL: shell }).open, false, shell);
+  }
+  assert.equal(parseArgs([], {}).open, true);
+  assert.equal(parseArgs([], { TOKENTRACKER_APP_SHELL: "cli" }).open, true);
+  assert.equal(parseArgs(["--no-open"], {}).open, false);
+});
+
 // #267: Windows Delivery Optimization (DoSvc) holds 0.0.0.0:7680 on the host,
 // so under WSL the default port must move off 7680. Explicit --port / PORT
 // always win.

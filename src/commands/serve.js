@@ -760,7 +760,7 @@ function parseArgs(argv, env = process.env) {
     port: envPort || defaultPort,
     portExplicit: Boolean(envPort),
     wslDefaultPort: !envPort && defaultPort === WSL_DEFAULT_PORT,
-    open: true,
+    open: !["macos", "windows", "linux"].includes(env.TOKENTRACKER_APP_SHELL),
     sync: true,
   };
   for (let i = 0; i < argv.length; i++) {
