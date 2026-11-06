@@ -1850,9 +1850,13 @@ async function fingerprintFile(filePath) {
   }
 }
 
+// Legacy cursors.json is re-imported only when its content may have changed.
+// ctime moves on metadata-only events (chmod, xattr, backup tools); comparing
+// it re-imported a stale snapshot over newer v2 state and forced a full
+// re-read of every session log.
 function sameFingerprint(left, right) {
   if (!left || !right) return left === right;
-  return ["dev", "ino", "size", "mtimeNs", "ctimeNs"]
+  return ["dev", "ino", "size", "mtimeNs"]
     .every((key) => String(left[key]) === String(right[key]));
 }
 
