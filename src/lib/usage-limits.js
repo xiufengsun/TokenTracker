@@ -5194,12 +5194,15 @@ async function fetchUsageLimitsUncached({
     isCurrentGeneration: () => cacheGeneration === usageLimitsCacheGeneration,
     // A slow in-flight fetch must not clobber the on-disk entry of an
     // account that has since been switched away: only write when the
-    // snapshot's identity still matches the current credentials.
+    // snapshot's own identity still matches the current credentials. An
+    // identity-less snapshot (the id_token read at fetch start carried no
+    // email) cannot be attributed to anyone — never promote it to the
+    // account now holding the credentials.
     resolveWriteIdentity: (slot) => {
       const currentIdentity = resolveGeminiCacheIdentity({ home, env });
       const snapshotIdentity = typeof slot.cache_identity === "string"
         ? slot.cache_identity
-        : currentIdentity;
+        : null;
       return snapshotIdentity && snapshotIdentity === currentIdentity
         ? snapshotIdentity
         : null;

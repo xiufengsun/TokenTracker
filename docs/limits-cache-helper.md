@@ -45,7 +45,7 @@ keep them; the helper enforces them structurally.
 |---|---|---|
 | `file` | filename or `({ namespace }) => filename` | qoder partitions by filename |
 | `key` | payload wrapper key; `null` = flat payload | ark is flat |
-| `fields` | `{ name: kind }`; kinds `string`/`number`/`raw`/`boolTrue` or `{ read, write }` functions | per-provider field lists |
+| `fields` | `{ name: kind }`; kinds `string`/`number`/`raw`/`boolTrue` or `{ read, write }` functions; a kind may also declare `survivor(value, ctx)` — content counting as window survivors for the write guard and the read survivor gate | claude's scoped-only `weekly_scoped` snapshots |
 | `windowKeys` | object windows gated per-window by reset stamp | all |
 | `sparseWindowKeys` | omitted from payload when absent/dead instead of `null` | qoder `tertiary_window` |
 | `windowResetField` | per-window reset field name (`reset_at`) | claude uses `resets_at` |
