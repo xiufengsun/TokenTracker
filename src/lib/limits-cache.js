@@ -83,7 +83,10 @@ function clearCacheFile(cachePath) {
  *                     sides), "raw" (`?? null` both sides), "boolTrue"
  *                     (`=== true` both sides). A field may instead be
  *                     { read, write } functions for bespoke shapes
- *                     (claude's weekly_scoped array).
+ *                     (claude's weekly_scoped array). A kind may also
+ *                     declare `survivor(value, ctx)` — content counting as
+ *                     window survivors for the write guard and the read
+ *                     survivor gate (claude's scoped-only snapshots).
  *   windowKeys        object windows gated per-window by their reset stamp;
  *                     dead windows become null (or vanish — sparseWindowKeys).
  *   sparseWindowKeys  window keys omitted from the payload entirely when
@@ -147,6 +150,15 @@ function createLimitsCache(options) {
     dirOverride = null,
   } = options;
 
+  // Fields whose content can keep a snapshot usable even when no windowKey
+  // does (claude's weekly_scoped array). A kind declares a `survivor(value,
+  // ctx) => bool` hook — ctx mirrors the fields.read context — applied to the
+  // record on the write guard and to the raw entry on the read survivor gate,
+  // so scoped-only snapshots live and expire through the same predicate.
+  const survivorFields = Object.entries(fields).filter(
+    ([, kind]) => typeof kind?.survivor === "function",
+  );
+
   if (stale === "byAge" && !Number.isFinite(freshTtlMs)) {
     throw new Error("limits-cache: stale \"byAge\" requires freshTtlMs");
   }
@@ -156,13 +168,16 @@ function createLimitsCache(options) {
     return path.join(resolveTrackerDir({ home, trackerDir: dirOverride ? trackerDir : undefined }), name);
   }
 
-  function hasWindow(record) {
-    return windowKeys.some((windowKey) => Boolean(record?.[windowKey]));
+  function hasWindow(record, { nowMs = Date.now() } = {}) {
+    if (windowKeys.some((windowKey) => Boolean(record?.[windowKey]))) return true;
+    return survivorFields.some(([field, kind]) => Boolean(
+      kind.survivor(record?.[field], { nowMs, cachedAtMs: null, isWindowUsable }),
+    ));
   }
 
-  function shouldWrite(record) {
+  function shouldWrite(record, { nowMs } = {}) {
     if (writeGuard) return writeGuard(record);
-    return Boolean(record?.configured) && !record.error && hasWindow(record);
+    return Boolean(record?.configured) && !record.error && hasWindow(record, { nowMs });
   }
 
   // A window whose reset has already passed is stale data, not a usable
@@ -260,7 +275,17 @@ function createLimitsCache(options) {
         }
       }
     }
-    if (windowKeys.length > 0 && !hasSurvivor) return null;
+    // Extra survivor fields (claude's weekly_scoped) count as window content:
+    // their survivor predicate applies the field's own expiry filter, so a
+    // scoped-only snapshot survives while its entries are still live and a
+    // windowless shell is still refused when they are not.
+    let hasExtraSurvivor = false;
+    for (const [field, kind] of survivorFields) {
+      if (kind.survivor(raw?.[field], { nowMs, cachedAtMs, isWindowUsable })) {
+        hasExtraSurvivor = true;
+      }
+    }
+    if (windowKeys.length > 0 && !hasSurvivor && !hasExtraSurvivor) return null;
 
     if (effectiveMaxAge !== null) {
       if (maxAgeGate === "ifNoDatedSurvivor") {
@@ -318,7 +343,7 @@ function createLimitsCache(options) {
   function write(record, opts = {}) {
     const { home, namespace, trackerDir, nowMs = Date.now(), identity } = opts;
     if (identityField && identityRequired && !identity) return;
-    if (!shouldWrite(record)) return;
+    if (!shouldWrite(record, { nowMs })) return;
     const entry = {};
     if (identityField && identityRequired) entry[identityField] = identity;
     for (const [field, kind] of Object.entries(fields)) {

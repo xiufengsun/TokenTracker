@@ -487,3 +487,80 @@ describe("withLimitsCacheFallback", () => {
     assert.equal(out.error, null);
   });
 });
+
+// Claude-style provider: fixed object windows plus an array field that carries
+// its own expiry logic (weekly_scoped). The field declares when its content
+// still counts as a window survivor so windowless-looking snapshots are
+// written and restored like any other.
+describe("limits-cache extra survivor fields", () => {
+  function scopedCache(home) {
+    return createLimitsCache({
+      file: "test-scoped-limits-cache.json",
+      key: "scoped",
+      fields: {
+        label: "string",
+        scoped_windows: {
+          write: (record) => (Array.isArray(record?.scoped_windows) && record.scoped_windows.length > 0
+            ? record.scoped_windows
+            : null),
+          read: (raw) => (Array.isArray(raw?.scoped_windows) && raw.scoped_windows.length > 0
+            ? raw.scoped_windows
+            : null),
+          // An entry survives only while its own expiry lies in the future —
+          // the implementer's per-entry reset gate, mirroring claude's
+          // normalizeClaudeCachedScopedWeekly.
+          survivor: (value, { nowMs }) => Array.isArray(value) &&
+            value.some((entry) => entry && Number.isFinite(entry.expiryMs) && entry.expiryMs > nowMs),
+        },
+      },
+      windowKeys: ["primary_window"],
+    });
+  }
+
+  let home;
+  let cache;
+  beforeEach(() => {
+    home = tmpHome();
+    cache = scopedCache(home);
+  });
+
+  it("writes and serves a snapshot carrying only the extra survivor field", () => {
+    const now = 1_000_000_000_000;
+    cache.write({
+      configured: true,
+      error: null,
+      label: "Fable",
+      scoped_windows: [{ expiryMs: now + 2 * HOUR }],
+    }, { home, nowMs: now });
+
+    const cached = cache.read({ home, nowMs: now + HOUR });
+    assert.ok(cached, "scoped-only snapshot must be served on a later failure");
+    assert.equal(cached.label, "Fable");
+    assert.deepEqual(cached.scoped_windows, [{ expiryMs: now + 2 * HOUR }]);
+    assert.equal(cached.primary_window, null);
+  });
+
+  it("drops a snapshot whose extra-field entries have all expired", () => {
+    const now = 1_000_000_000_000;
+    const expiredOnly = {
+      label: "Fable",
+      scoped_windows: [{ expiryMs: now - HOUR }],
+      cached_at: iso(now - 30_000),
+    };
+    fs.mkdirSync(path.dirname(cache.path({ home })), { recursive: true });
+    fs.writeFileSync(cache.path({ home }), JSON.stringify({ scoped: expiredOnly }));
+    assert.equal(cache.read({ home, nowMs: now }), null,
+      "all-expired survivors must refuse the snapshot, never serve an empty shell");
+  });
+
+  it("still refuses to write a snapshot with no surfaces at all", () => {
+    const now = 1_000_000_000_000;
+    cache.write({
+      configured: true,
+      error: null,
+      label: "Fable",
+      scoped_windows: [],
+    }, { home, nowMs: now });
+    assert.equal(fs.existsSync(cache.path({ home })), false, "no window state, no cache write");
+  });
+});

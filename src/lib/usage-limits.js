@@ -2635,6 +2635,10 @@ const claudeLimitsCache = createLimitsCache({
         ? record.weekly_scoped
         : null),
       read: (raw, ctx) => normalizeClaudeCachedScopedWeekly(raw?.weekly_scoped, { nowMs: ctx.nowMs }),
+      // Scoped entries count as window survivors: a live read carrying only
+      // scoped windows must reach the disk cache and survive a later fallback
+      // read, while an all-expired array still refuses the snapshot.
+      survivor: (value, { nowMs } = {}) => normalizeClaudeCachedScopedWeekly(value, { nowMs }) !== null,
     },
   },
   windowKeys: ["five_hour", "seven_day", "seven_day_opus"],
