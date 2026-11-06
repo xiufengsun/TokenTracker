@@ -428,7 +428,10 @@ async function withLimitsCacheFallback(slot, {
     };
     if (isCurrentGeneration()) {
       const identity = await resolveWriteIdentity(slot);
-      if (identity) {
+      // Recheck after the await: a newer poll can bump the generation while
+      // the (copilot-style) async identity lookup runs, and the superseded
+      // fetch's stamp would then poison the account's current entry.
+      if (identity && isCurrentGeneration()) {
         cache.write(stamped, { home, nowMs, identity });
       }
     }

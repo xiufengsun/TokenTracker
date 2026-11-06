@@ -486,6 +486,25 @@ describe("withLimitsCacheFallback", () => {
     });
     assert.equal(out.error, null);
   });
+
+  it("does not write when the fetch generation is superseded during the async write-identity lookup", async () => {
+    const now = 1_000_000_000_000;
+    let current = true;
+    await withLimitsCacheFallback(slot(true), {
+      cache, home, nowMs: now,
+      isCurrentGeneration: () => current,
+      resolveWriteIdentity: async () => {
+        // A newer poll bumps the generation while the (copilot-style) async
+        // identity re-read is still in flight: the superseded fetch must not
+        // land a write after it finally resolves.
+        current = false;
+        return "acct-1";
+      },
+      resolveReadIdentity: () => "acct-1",
+    });
+    assert.equal(writes.length, 0, "a write from a superseded generation is poison");
+    assert.equal(fs.existsSync(cache.path({ home })), false);
+  });
 });
 
 // Claude-style provider: fixed object windows plus an array field that carries
