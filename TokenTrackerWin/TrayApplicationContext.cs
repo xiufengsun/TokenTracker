@@ -769,6 +769,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             // macOS-specific settings row out of the Windows page.
             launchAtLoginSupported = false,
             updateStatus,
+            updateAvailable = _updateChecker.State == UpdateChecker.UpdateState.UpdateAvailable,
+            latestVersion = _updateChecker.LatestVersion,
             updateBusy = _updateChecker.State is UpdateChecker.UpdateState.Checking
                 or UpdateChecker.UpdateState.Downloading
                 or UpdateChecker.UpdateState.Installing,
@@ -813,6 +815,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 break;
             case "checkForUpdates":
                 OnCheckUpdatesClicked();
+                break;
+            case "updateNow":
+                if (_updateChecker.State == UpdateChecker.UpdateState.UpdateAvailable)
+                    _ = _updateChecker.DownloadAndInstallAsync();
                 break;
             case "openAbout":
                 OpenInBrowser(Constants.GitHubUrl);

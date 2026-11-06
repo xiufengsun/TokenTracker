@@ -110,13 +110,6 @@ internal sealed class UpdateChecker
                 _checksumsUrl = release.ChecksumsUrl;
                 SetState(UpdateState.UpdateAvailable);
                 Diag.Log("update", $"update available current={CurrentVersion} latest={latest}");
-                if (silent && AutoUpdatePolicy.IsEnabled())
-                {
-                    // The launch-time check is the unattended path. Start the same
-                    // resumable installer flow used by the tray action; it asks the
-                    // tray to quit only after the download is complete.
-                    _ = DownloadAndInstallAsync();
-                }
                 return CheckOutcome.UpdateAvailable;
             }
 
