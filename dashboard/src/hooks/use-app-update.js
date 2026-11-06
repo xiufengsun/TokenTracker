@@ -114,11 +114,16 @@ export function useAppUpdate() {
 
   const [webRelease, setWebRelease] = useState(readCachedRelease);
 
+  const nativeSettingsLoading = nativeAvailable && nativeSettings === null;
   const hasExplicitNativeUpdateState =
     nativeAvailable && typeof nativeSettings?.updateAvailable === "boolean";
 
   useEffect(() => {
-    if (typeof window === "undefined" || hasExplicitNativeUpdateState) {
+    if (
+      typeof window === "undefined" ||
+      nativeSettingsLoading ||
+      hasExplicitNativeUpdateState
+    ) {
       return undefined;
     }
 
@@ -143,13 +148,15 @@ export function useAppUpdate() {
     return () => {
       cancelled = true;
     };
-  }, [hasExplicitNativeUpdateState]);
+  }, [hasExplicitNativeUpdateState, nativeSettingsLoading]);
 
   const nativeLatest = normalizeVersion(nativeSettings?.latestVersion);
   const latestVersion = nativeLatest || webRelease?.latestVersion || "";
-  const hasUpdate = hasExplicitNativeUpdateState
-    ? Boolean(nativeSettings.updateAvailable)
-    : isNewerVersion(currentVersion, latestVersion);
+  const hasUpdate =
+    !nativeSettingsLoading &&
+    (hasExplicitNativeUpdateState
+      ? Boolean(nativeSettings.updateAvailable)
+      : isNewerVersion(currentVersion, latestVersion));
 
   const updateBusy = Boolean(nativeSettings?.updateBusy);
   const updateStatus = nativeSettings?.updateStatus || null;

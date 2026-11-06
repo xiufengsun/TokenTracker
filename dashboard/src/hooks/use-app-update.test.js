@@ -156,6 +156,12 @@ describe("useAppUpdate & SidebarUpdatePill", () => {
       });
     });
 
+    fireEvent.click(screen.getByRole("button", { name: /1\.5\.12/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Update Now|立即更新/i }),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+
     act(() => {
       pushNativeSettings({
         platform: "windows",
@@ -167,6 +173,7 @@ describe("useAppUpdate & SidebarUpdatePill", () => {
       });
     });
 
+    expect(screen.getByRole("dialog")).toBeTruthy();
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("Update verification failed");
   });

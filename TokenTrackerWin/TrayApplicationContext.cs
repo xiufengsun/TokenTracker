@@ -248,8 +248,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // checker self-skips dev builds; installed builds check in the background when enabled.
         _updateChecker.Changed += () => PostToUi(() =>
         {
-            if (_updateChecker.State is UpdateChecker.UpdateState.Checking
-                or UpdateChecker.UpdateState.Downloading
+            if (_updateChecker.State is UpdateChecker.UpdateState.Downloading
                 or UpdateChecker.UpdateState.Installing
                 or UpdateChecker.UpdateState.Idle)
             {
@@ -359,6 +358,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         _strings = TrayStrings.For(NativeLocalization.ResolveLocale(_localePreference));
         _updateStrings = UpdateStrings.For(NativeLocalization.ResolveLocale(_localePreference));
+        if (_lastUpdateError is not null)
+        {
+            _lastUpdateError = _integrityCheckFailedDuringInstall
+                ? _updateStrings.IntegrityErrorMessage
+                : _updateStrings.ErrorMessage;
+        }
 
         _menuFont?.Dispose();
         _summaryFont?.Dispose();
@@ -404,6 +409,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _starItem.Text = _strings.StarOnGitHub;
         _quitItem.Text = _strings.Quit;
         RefreshUpdateMenuItem();
+        PushDashboardNativeSettings();
 
         ApplyThemeToMenu();
 
