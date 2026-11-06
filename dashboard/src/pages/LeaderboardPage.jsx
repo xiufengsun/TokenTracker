@@ -1233,11 +1233,13 @@ export function LeaderboardPage({
           accessToken={effectiveAuthToken}
           onClose={closeProfileModal}
         />
-        <CommunityStatsModal
-          isOpen={isStatsModalOpen}
-          onClose={() => setIsStatsModalOpen(false)}
-          communityStats={communityStats}
-        />
+        {isStatsModalOpen && (
+          <CommunityStatsModal
+            isOpen={isStatsModalOpen}
+            onClose={() => setIsStatsModalOpen(false)}
+            communityStats={communityStats}
+          />
+        )}
       </Suspense>
     </div>
   );
