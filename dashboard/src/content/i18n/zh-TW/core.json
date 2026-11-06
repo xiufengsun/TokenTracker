@@ -856,5 +856,6 @@
   "nav.update_confirm_title": "發現新版本",
   "nav.update_confirm_description": "偵測到新版本 {{version}}（目前 {{current}}）。是否立即更新？",
   "nav.update_confirm_yes": "立即更新",
-  "nav.update_confirm_no": "稍後"
+  "nav.update_confirm_no": "稍後",
+  "settings.menubar.autoUpdateHintWindows": "在背景自動檢查新版本並在有更新時提醒你。關閉後仍可手動檢查更新。"
 }

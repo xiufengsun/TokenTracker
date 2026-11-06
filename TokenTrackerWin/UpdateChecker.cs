@@ -77,9 +77,10 @@ internal sealed class UpdateChecker
     /// <summary>
     /// Check GitHub for a newer release. <paramref name="silent"/> launch checks are
     /// skipped for dev builds (no embedded server next to the exe) so a developer run
-    /// is never nudged to "update" to an official release. Installed builds perform
-    /// the download/install hand-off automatically when the preference is enabled;
-    /// manual checks remain available regardless of the preference.
+    /// is never nudged to "update" to an official release. Installed builds check for
+    /// new releases in the background when the preference is enabled and leave the
+    /// update ready for user confirmation; manual checks remain available regardless
+    /// of the preference.
     /// </summary>
     public async Task<CheckOutcome> CheckAsync(bool silent)
     {
@@ -125,7 +126,7 @@ internal sealed class UpdateChecker
         }
     }
 
-    /// <summary>Whether launch-time checks may download and install releases.</summary>
+    /// <summary>Whether launch-time and periodic background checks may check for new releases.</summary>
     public bool AutoUpdateEnabled
     {
         get => AutoUpdatePolicy.IsEnabled();

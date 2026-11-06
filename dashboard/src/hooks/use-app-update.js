@@ -8,11 +8,22 @@ const GITHUB_RELEASE_PAGE_URL =
 const RELEASE_CACHE_KEY = "tt.githubLatestRelease";
 const RELEASE_CACHE_TTL_MS = 30 * 60 * 1000;
 
+/**
+ * Strip leading 'v' prefixes and build/prerelease suffixes from a version string.
+ * @param {unknown} version
+ * @returns {string}
+ */
 export function normalizeVersion(version) {
   if (typeof version !== "string") return "";
   return version.trim().replace(/^v/i, "").split(/[+-]/)[0];
 }
 
+/**
+ * Compare two dotted numeric version strings and return true when `latest` > `current`.
+ * @param {string} current
+ * @param {string} latest
+ * @returns {boolean}
+ */
 export function isNewerVersion(current, latest) {
   const currNorm = normalizeVersion(current);
   const lateNorm = normalizeVersion(latest);
@@ -31,6 +42,10 @@ export function isNewerVersion(current, latest) {
   return false;
 }
 
+/**
+ * Read the cached GitHub release metadata from sessionStorage if still within the TTL.
+ * @returns {{ latestVersion: string, htmlUrl: string } | null}
+ */
 function readCachedRelease() {
   if (typeof window === "undefined") return null;
   try {
@@ -56,6 +71,11 @@ function readCachedRelease() {
   }
 }
 
+/**
+ * Persist GitHub release metadata into sessionStorage with a timestamp.
+ * @param {string} latestVersion
+ * @param {string} htmlUrl
+ */
 function writeCachedRelease(latestVersion, htmlUrl) {
   if (typeof window === "undefined") return;
   try {
@@ -133,6 +153,7 @@ export function useAppUpdate() {
 
   const updateBusy = Boolean(nativeSettings?.updateBusy);
   const updateStatus = nativeSettings?.updateStatus || null;
+  const updateError = nativeSettings?.updateError || null;
 
   const triggerUpdate = useCallback(() => {
     if (nativeAvailable) {
@@ -158,6 +179,7 @@ export function useAppUpdate() {
     latestVersion,
     updateBusy,
     updateStatus,
+    updateError,
     triggerUpdate,
   };
 }

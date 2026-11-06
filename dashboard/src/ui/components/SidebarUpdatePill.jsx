@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ArrowUpCircle } from "lucide-react";
 import { useAppUpdate } from "../../hooks/use-app-update.js";
 import { useLocale } from "../../hooks/useLocale.js";
@@ -6,16 +6,30 @@ import { cn } from "../../lib/cn";
 import { copy } from "../../lib/copy";
 import { ConfirmModal } from "./ConfirmModal";
 
+/**
+ * Sidebar update indicator pill.
+ * Renders nothing when the application is up to date, and displays an amber
+ * call-to-action pill with a confirmation modal when a newer release is ready.
+ *
+ * @param {{ collapsed?: boolean }} props
+ */
 export function SidebarUpdatePill({ collapsed = false }) {
   const {
     hasUpdate,
     currentVersion,
     latestVersion,
     updateBusy,
+    updateError,
     triggerUpdate,
   } = useAppUpdate();
   useLocale();
   const [confirmOpen, setConfirmOpen] = useState(false);
+
+  useEffect(() => {
+    if (updateError) {
+      setConfirmOpen(true);
+    }
+  }, [updateError]);
 
   if (!hasUpdate) return null;
 
@@ -78,6 +92,7 @@ export function SidebarUpdatePill({ collapsed = false }) {
           version: displayVersion,
           current: displayCurrent,
         })}
+        error={updateError}
         confirmLabel={copy("nav.update_confirm_yes")}
         cancelLabel={copy("nav.update_confirm_no")}
         busy={updateBusy}
