@@ -2347,11 +2347,13 @@ describe("getUsageLimits", () => {
         { label: "Fable", utilization: 8, resets_at: resetsAt },
       ]);
       const cachePath = path.join(tmp, ".tokentracker", "tracker", "claude-usage-limits-cache.json");
-      assert.ok(fs.existsSync(cachePath), "a scoped-only live read must reach the disk cache");
+      // A missing file throws here — the "never reached the disk cache"
+      // failure signal; read before asserting so no check-then-use pair
+      // (CodeQL's file-system race rule) exists in the test.
       const cachedOnDisk = JSON.parse(fs.readFileSync(cachePath, "utf8"));
       assert.deepEqual(cachedOnDisk.claude.weekly_scoped, [
         { label: "Fable", utilization: 8, resets_at: resetsAt },
-      ]);
+      ], "a scoped-only live read must reach the disk cache");
 
       // 2) Age the snapshot out of the fresh TTL so a failed poll has to fall
       // back to it; the scoped survivor must be restored.
