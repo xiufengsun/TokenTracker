@@ -32,6 +32,8 @@ async function financialDatabase(withWaffo = false, withAttempts = false) {
     await fixture.exec(fs.readFileSync(path.join(__dirname, "../migrations/20261007130000_cloud-waffo-retry.sql"), "utf8"));
     if (withAttempts) {
       await fixture.exec(fs.readFileSync(path.join(__dirname, "../migrations/20261007140000_cloud-waffo-attempts.sql"), "utf8"));
+      await fixture.exec(fs.readFileSync(path.join(__dirname, "../migrations/20261106011916_cloud-waffo-unused-checkout-retry.sql"), "utf8"));
+      await fixture.exec(fs.readFileSync(path.join(__dirname, "../migrations/20261106014534_cloud-checkout-recovery.sql"), "utf8"));
     }
   }
   await fixture.exec("UPDATE tokentracker_cloud_policy SET phase='active', launch_at=now() WHERE environment='sandbox'");
@@ -967,6 +969,50 @@ test('every still-renewing replacement subscription blocks a new purchase indepe
   const next = await attemptOrder(o.user_id);
   assert.equal(next.billing_mode,'fixed');
   assert.equal((await attemptsDb.query('SELECT status FROM tokentracker_cloud_subscriptions WHERE order_id=$1',[o.id])).rows.length,2);
+});
+
+test('an empty Waffo retry bundle requires an expired unused receipt and preserves one successor', async () => {
+  const o = await attemptOrder();
+  await assert.rejects(attemptRestart(o, []), /invalid verified/);
+  await attemptsDb.query(`UPDATE tokentracker_cloud_orders SET expires_at=now()-interval '1 hour',
+    checkout_claimed_at=now()-interval '2 hours' WHERE id=$1`, [o.id]);
+  const results = await Promise.all([attemptRestart(o, []), attemptRestart(o, [])]);
+  assert.equal(new Set(results.map(result => result.order.id)).size, 1);
+  assert.equal(results.filter(result => !result.reused).length, 1);
+  assert.equal((await attemptStored(o)).status, 'closed');
+  assert.equal((await attemptStored(o)).retry_order_id, results[0].order.id);
+  assert.equal((await attemptPayments(o)).length, 0);
+  const bound = await attemptOrder();
+  await attemptsDb.query(`UPDATE tokentracker_cloud_orders SET expires_at=now()-interval '1 hour',
+    checkout_claimed_at=now()-interval '2 hours' WHERE id=$1`, [bound.id]);
+  await registerAttempt(bound);
+  await assert.rejects(attemptRestart(bound, []), /complete registered/);
+  assert.equal((await attemptStored(bound)).status, 'ready');
+  const missingReceipt = await attemptOrder();
+  await attemptsDb.query(`UPDATE tokentracker_cloud_orders SET expires_at=now()-interval '1 hour',
+    checkout_claimed_at=now()-interval '2 hours',provider_checkout_id=NULL WHERE id=$1`, [missingReceipt.id]);
+  await assert.rejects(attemptRestart(missingReceipt, []), /invalid verified/);
+});
+
+test('Waffo receipt expiry is immutable and a terminal order cannot expose a late checkout', async () => {
+  const o = await attemptOrder(); const stored = await attemptStored(o);
+  const expiry = new Date(Date.now() + 1800000).toISOString();
+  const attach = value => attemptsDb.query('SELECT cloud_attach_waffo_checkout($1,$2,$3,$4,$5,$6) AS r',
+    [o.user_id,o.id,stored.provider_checkout_id,stored.provider_price_id,stored.checkout_url,value]);
+  await attach(expiry); await attach(expiry);
+  await assert.rejects(attach(new Date(Date.parse(expiry) + 60000).toISOString()), /different Waffo expiry/);
+  assert.equal(new Date((await attemptStored(o)).expires_at).getTime(), Date.parse(expiry));
+  const owner = await attemptUser();
+  const closed = (await attemptsDb.query("SELECT cloud_create_order($1,'sandbox','waffo','cloud_usd_monthly_fixed',$2) AS r", [owner,randomUUID()])).rows[0].r;
+  await attemptsDb.query("UPDATE tokentracker_cloud_orders SET status='closed' WHERE id=$1", [closed.id]);
+  const values = [owner,closed.id,`cs_${randomUUID()}`,'PROD_example','https://checkout.example.test/pay'];
+  await assert.rejects(attemptsDb.query('SELECT cloud_attach_waffo_checkout($1,$2,$3,$4,$5)',values), /terminal order/);
+  await assert.rejects(attemptsDb.query('SELECT cloud_attach_waffo_checkout($1,$2,$3,$4,$5,$6)',[...values,expiry]), /terminal order/);
+  assert.equal((await attemptStored(closed)).checkout_url, null);
+  const permissions = (await attemptsDb.query(`SELECT
+    has_function_privilege('authenticated','cloud_attach_waffo_checkout(uuid,uuid,text,text,text,timestamptz)','EXECUTE') AS user_execute,
+    has_function_privilege('project_admin','cloud_attach_waffo_checkout(uuid,uuid,text,text,text,timestamptz)','EXECUTE') AS server_execute`)).rows[0];
+  assert.deepEqual(permissions,{user_execute:false,server_execute:true});
 });
 
 test('Waffo bundle restart requires every registered ORD and never invents canonical payment identity', async () => {

@@ -373,6 +373,27 @@ describe("Cloud pricing and checkout", () => {
     expect(mocks.external).not.toHaveBeenCalled();
     expect(screen.queryByRole("heading", { name: "Your Cloud membership is active" })).not.toBeInTheDocument();
   });
+  it("recovers the saved successor when reopening an older checkout link", async () => {
+    const oldOrder = { ...prices[3], id: orderId, provider: "waffo", status: "closed", payment_state: "unpaid" };
+    const successor = { ...oldOrder, id: successorId, status: "ready",
+      checkout_url: "https://pancake.waffo.ai/checkout?session=saved" };
+    const purchase = { sku: oldOrder.sku, provider: "waffo", order_id: successorId,
+      request_id: "33333333-3333-4333-8333-333333333333" };
+    saveCloudPurchase("account-1", purchase);
+    mocks.request.mockImplementation(async (action, options) => ({
+      order: options.params.id === successorId ? successor : oldOrder, membership,
+    }));
+    show(`/billing/checkout?order=${orderId}`);
+    await screen.findByRole("button", { name: "Close checkout and try again" });
+    await click(screen.getByRole("button", { name: "Close checkout and try again" }));
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(`order=${successorId}`));
+    await screen.findByRole("heading", { name: "Waiting for payment" });
+    expect(mocks.request).toHaveBeenCalledWith("order", expect.objectContaining({ params: { id: successorId } }));
+    expect(mocks.request.mock.calls.every(([action]) => action === "order")).toBe(true);
+    expect(readCloudPurchase("account-1")).toEqual({ ...purchase, userId: "account-1" });
+    expect(mocks.external).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
   it("reuses a persisted restart identity after a timeout and a terminal-order reload", async () => {
     const oldOrder = { ...prices[3], id: orderId, provider: "waffo", status: "expired", payment_state: "unpaid" };
     const successor = { ...oldOrder, id: successorId, status: "ready",

@@ -116,7 +116,7 @@ test('expired unused checkout requires two complete provider snapshots and a rec
   assert.equal(reads, 2);
   for (const changed of [
     { expires_at: new Date(now + 1000).toISOString() },
-    { checkout_claimed_at: new Date(now - 1800000).toISOString() },
+    { expires_at: new Date(now - 1800000).toISOString() },
     { checkout_claimed_at: null }, { provider_checkout_id: null },
     { provider_order_id: paymentId }, { waffo_order_id: remoteId }, { status: 'paid' },
   ]) {
@@ -124,6 +124,15 @@ test('expired unused checkout requires two complete provider snapshots and a rec
       () => assert.fail('unsafe candidate must not reach the provider'), now), false);
   }
   assert.equal(await confirmExpiredUnusedWaffoCheckout(target, config, lookup([remote(target)], target), now), false);
+  for (const changed of [
+    { provider_checkout_id: null, checkout_url: null },
+    { status: 'closed' },
+  ]) {
+    assert.equal(await confirmExpiredUnusedWaffoCheckout({ ...target, ...changed }, config, lookup([], target), now), true);
+  }
+  assert.equal(await confirmExpiredUnusedWaffoCheckout({ ...target,
+    provider_checkout_expires_at: new Date(now + 600000).toISOString() }, config,
+    () => assert.fail('the real provider session is still live'), now), false);
   let snapshot = 0;
   const appeared = verifiedRequest(() => Response.json({ data: {
     subscriptionOrders: ++snapshot === 1 ? [] : [remote(target)] } }));
@@ -300,7 +309,8 @@ test("Waffo SDK signs product and checkout requests with a stable environment an
   });
   const result = await createWaffoCheckout(order, config, request);
   assert.deepEqual(result, { sessionId: "cs_test_session", priceId: productId,
-    checkoutUrl: "https://pancake.waffo.ai/store/test/checkout/cs_test_session?test=true" });
+    checkoutUrl: "https://pancake.waffo.ai/store/test/checkout/cs_test_session?test=true",
+    expiresAt: "2026-10-07T12:30:00.000Z" });
   await createWaffoCheckout(order, config, request);
   assert.deepEqual(calls.filter(Boolean), [`tokentracker-sandbox-checkout-${order.id}`, `tokentracker-sandbox-checkout-${order.id}`]);
 });

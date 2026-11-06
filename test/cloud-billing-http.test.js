@@ -44,6 +44,7 @@ test.before(async()=>{
   await db.exec(fs.readFileSync(path.join(__dirname,"../migrations/20261007150000_cloud-waffo-authorizations.sql"),"utf8"));
   await db.exec(fs.readFileSync(path.join(__dirname,"../migrations/20261007160000_cloud-waffo-sandbox-periods.sql"),"utf8"));
   await db.exec(fs.readFileSync(path.join(__dirname,"../migrations/20261008120000_self-hosted-access.sql"),"utf8"));
+  await db.exec(fs.readFileSync(path.join(__dirname,"../migrations/20261106014534_cloud-checkout-recovery.sql"),"utf8"));
   await db.exec("UPDATE tokentracker_cloud_policy SET phase='active',launch_at=now()-interval '1 hour' WHERE environment='sandbox'");
   server=http.createServer(async(req,res)=>{
     const send=(status,value)=>{res.writeHead(status,{"Content-Type":"application/json"});res.end(JSON.stringify(value));};

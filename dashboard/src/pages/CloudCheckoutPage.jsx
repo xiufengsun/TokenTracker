@@ -398,6 +398,11 @@ export function CloudCheckoutPage() {
 
   const restartCheckout = () =>
     perform(async () => {
+      const saved = readCloudPurchase(userId);
+      if (saved?.order_id && saved.order_id !== order.id && CLOUD_ORDER_ID_PATTERN.test(saved.order_id)) {
+        setParams({ order: saved.order_id }, { replace: true });
+        return;
+      }
       const purchase = getCloudCheckoutRestartRequest(userId, order);
       setRestartingCheckout(true);
       try {
