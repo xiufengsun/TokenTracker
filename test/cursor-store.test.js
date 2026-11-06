@@ -371,6 +371,31 @@ test("a downgraded legacy writer is detected and remigrated on upgrade", async (
   });
 });
 
+test("a metadata-only touch of legacy cursors.json keeps the newer v2 state", async () => {
+  await withCursorFixture(async ({ trackerDir, cursorsPath, day17File }) => {
+    const migrated = await openCursorStore({ trackerDir, cursorsPath, forceV2: true });
+    await migrated.loadCodexFilesForPaths([day17File]);
+    migrated.cursors.files[day17File].offset = 11;
+    await migrated.commit();
+
+    // chmod/xattr/backup tools move ctime without touching content or mtime.
+    const before = await fs.stat(cursorsPath, { bigint: true });
+    await fs.chmod(cursorsPath, 0o600);
+    const after = await fs.stat(cursorsPath, { bigint: true });
+    assert.notEqual(after.ctimeNs, before.ctimeNs);
+    assert.equal(after.mtimeNs, before.mtimeNs);
+
+    const reopened = await openCursorStore({ trackerDir, cursorsPath });
+    assert.equal(reopened.requiresCommit, false);
+    await reopened.loadCodexFilesForPaths([day17File]);
+    assert.equal(reopened.cursors.files[day17File].offset, 11);
+
+    const summary = await readCursorStateSummary({ trackerDir, cursorsPath });
+    assert.equal(summary.mode, "v2");
+    assert.equal(summary.legacyDrift, false);
+  });
+});
+
 test("commit does not acknowledge a concurrent legacy write it did not migrate", async () => {
   await withCursorFixture(async ({ trackerDir, cursorsPath, day17File, legacy }) => {
     const store = await openCursorStore({ trackerDir, cursorsPath, forceV2: true });
