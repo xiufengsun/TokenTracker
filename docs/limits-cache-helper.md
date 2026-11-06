@@ -1,10 +1,12 @@
 # The shared limits cache pipeline (`src/lib/limits-cache.js`)
 
-Every network-facing usage-limits provider serves stale bars from a last-good
-disk cache when a live poll fails transiently (issue #941). Fifteen providers
-shipped their own hand copy of that pipeline before it was folded into one
-module; the copies differed almost exclusively in three parameters — the
-identity partition key, the field/window list, and the TTL gates. This document
+Fifteen network-facing usage-limits providers serve stale bars from a last-good
+disk cache when a live poll fails transiently (issue #941). The remaining
+network-facing provider, CommandCode, keeps only the shared in-memory usage
+cache and never serves last-good bars after a failure. Those fifteen shipped
+their own hand copy of the pipeline before it was folded into one module; the
+copies differed almost exclusively in three parameters — the identity
+partition key, the field/window list, and the TTL gates. This document
 describes the shared pipeline and how each provider expresses its variation.
 
 ## The pipeline (invariants)
@@ -60,6 +62,10 @@ keep them; the helper enforces them structurally.
 | `writeGuard` | custom `(record) => bool` | ark (normalizer already rejects windowless payloads upstream) |
 | `dirOverride` | option name overriding the tracker dir | opencode-go `trackerDir` |
 
+Options whose only named users are qoder/ark parameterize those pending
+migrations (see Migration state); the option space itself is implemented and
+exercised by `test/limits-cache.test.js`.
+
 ## `withLimitsCacheFallback(slot, hooks)` → servable slot
 
 The standard assembly shape, shared verbatim by cursor, kimi, grok, copilot,
@@ -98,14 +104,18 @@ factory either way.
 
 ## Migration state
 
-All fifteen hand copies now sit on the shared pipeline:
+Eleven providers now sit on the shared pipeline:
 
 - usage-limits.js: antigravity, claude, codex, cursor, opencode-go, kimi, kiro,
   grok, copilot, gemini, devin
+
+Four hand-written copies remain pending and migrate in a follow-up:
+
 - qoder-limits.js: qoder + qoder-cn (namespace files)
 - ark-coding-plan-limits.js / ark-agent-plan-limits.js
 
 The per-provider fallback tests (`test/*-limits-cache-fallback.test.js`) are
 unchanged and act as the behavior-preservation oracle; `test/limits-cache.test.js`
-covers the pipeline itself. Adding provider #16 is now a constants block plus a
-factory call — the issue's "9th and 10th hand copy" problem stays solved.
+covers the pipeline itself. Adding the next disk-cache provider is now a
+constants block plus a factory call — the issue's "9th and 10th hand copy"
+problem stays solved.
