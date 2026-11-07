@@ -470,4 +470,50 @@ describe("Gemini limits disk-cache fallback", () => {
       fs.rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it("refuses a late write whose snapshot never carried an identity (emailless id_token at fetch start)", async () => {
+    const home = buildGeminiHome();
+    try {
+      // An id_token whose payload carries no email claim cannot be attributed
+      // to an account at fetch start. Substituting the current credentials'
+      // email in the write hook would pin whatever quota was fetched under
+      // whichever account holds the credentials NOW — a mid-flight switch
+      // turns that into cross-account poisoning. The snapshot must be
+      // writable only on its own identity, so the write is refused.
+      const credsPath = path.join(home, ".gemini", "oauth_creds.json");
+      const creds = JSON.parse(fs.readFileSync(credsPath, "utf8"));
+      const segment = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+      creds.id_token = `${segment({ alg: "none" })}.${segment({ sub: "no-email-at-entry" })}.sig`;
+      fs.writeFileSync(credsPath, JSON.stringify(creds));
+
+      // Account B's entry on disk is what the late write would poison.
+      seedGeminiCache(home, {
+        identity: SWITCHED_EMAIL,
+        account_email: SWITCHED_EMAIL,
+        account_plan: "Free",
+        primary_window: { used_percent: 58, reset_at: new Date(Date.now() + 86_400_000).toISOString() },
+        secondary_window: null,
+        tertiary_window: null,
+        cached_at: new Date(Date.now() - 60_000).toISOString(),
+      });
+      const seeded = JSON.parse(fs.readFileSync(cachePath(home), "utf8"));
+
+      const result = await getUsageLimits(baseOptions(home, {
+        fetchImpl: geminiFetchImpl({
+          quota: () => {
+            setGeminiAccount(home, SWITCHED_EMAIL);
+            return okResponse(quotaBody());
+          },
+        }),
+      }));
+      assert.equal(result.gemini.error, null, "the live read itself still succeeds");
+      const disk = JSON.parse(fs.readFileSync(cachePath(home), "utf8"));
+      assert.equal(disk.gemini.identity, SWITCHED_EMAIL, "the identity-less snapshot must not be written under B");
+      assert.equal(disk.gemini.account_email, SWITCHED_EMAIL);
+      assert.equal(disk.gemini.cached_at, seeded.gemini.cached_at, "B's entry keeps its own stamp");
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
