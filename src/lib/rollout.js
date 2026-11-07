@@ -11641,26 +11641,14 @@ async function parseWorkbuddyIncremental({
     const startOffset = stat.size < prevSize || inodeChanged ? 0 : prevSize;
     if (stat.size <= startOffset) continue;
 
-    let stream;
-    try {
-      stream = fssync.createReadStream(filePath, {
-        encoding: "utf8",
-        start: startOffset,
-      });
-    } catch { continue; }
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-
-    for await (const line of rl) {
-      if (!line || !line.trim()) continue;
-      let entry;
-      try { entry = JSON.parse(line); } catch { continue; }
-      if (!entry || typeof entry !== "object") continue;
+    const committedEndOffset = await scanOmpLikeTranscript(filePath, startOffset, OMP_LIKE_MAX_RECORD_BYTES, (entry) => {
+      if (!entry || typeof entry !== "object") return;
 
       // Usage is carried on ANY record with providerData.rawUsage — assistant
       // messages AND function_call records. Aggregate them all; dedup per id.
       const provider = entry.providerData;
       const rawUsage = provider && typeof provider === "object" ? provider.rawUsage : null;
-      if (!rawUsage || typeof rawUsage !== "object") continue;
+      if (!rawUsage || typeof rawUsage !== "object") return;
 
       const sessionId =
         typeof entry.sessionId === "string" && entry.sessionId
@@ -11668,7 +11656,7 @@ async function parseWorkbuddyIncremental({
           : path.basename(filePath, ".jsonl");
       const sqliteSession = sqliteSessions[sessionId];
       if (sqliteSession?.detailed || tracedSessionIds.has(sessionId)) {
-        continue;
+        return;
       }
       const tsMs =
         Number.isFinite(Number(entry.timestamp)) && Number(entry.timestamp) > 0
@@ -11688,24 +11676,24 @@ async function parseWorkbuddyIncremental({
                 : tsMs != null
                   ? `${sessionId}:${tsMs}`
                   : null;
-      if (!messageId) continue;
-      if (seenIds.has(messageId)) continue;
+      if (!messageId) return;
+      if (seenIds.has(messageId)) return;
 
       recordsProcessed++;
 
       const delta = workbuddyUsageDelta(rawUsage);
       if (delta.total_tokens === 0) {
         seenIds.add(messageId);
-        continue;
+        return;
       }
 
       if (tsMs == null) {
         seenIds.add(messageId);
-        continue;
+        return;
       }
       const tsIso = new Date(tsMs).toISOString();
       const bucketStart = toUtcHalfHourStart(tsIso);
-      if (!bucketStart) continue;
+      if (!bucketStart) return;
 
       const model =
         normalizeModelInput(provider.model) ||
@@ -11735,14 +11723,14 @@ async function parseWorkbuddyIncremental({
           bucketsQueued: touchedBuckets.size,
         });
       }
-    }
+    });
 
-    let postStat = stat;
-    try { postStat = fssync.statSync(filePath); } catch {}
+    // As in the project pass, acknowledge only records consumed in full. An
+    // unfinished tail or an append after EOF must remain visible next sync.
     fileOffsets[filePath] = {
-      size: postStat.size,
-      mtimeMs: postStat.mtimeMs,
-      ino: postStat.ino,
+      size: committedEndOffset,
+      mtimeMs: stat.mtimeMs,
+      ino: stat.ino,
     };
   }
 
