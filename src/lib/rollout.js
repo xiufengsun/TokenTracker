@@ -3526,32 +3526,72 @@ async function parseOpencodeMessageFile({
 // Re-emit stored buckets once on upgrade, including idle historical groups:
 // their totals still retain the original attribution, so no log replay is
 // needed. Queue readers replace rows by (source, model, hour_start).
+//
+// Older repairs sometimes flattened per-model keys into `codex|unknown|<hour>`
+// while leaving `groupQueued` pointing at the already-correct named queue
+// rows (#1052). Re-emitting that flattened unknown invents an `unknown`
+// sibling (and can zero a stale alignedModel) beside the named rows. Skip
+// re-emit for those flattened legacy groups; clear the marker only.
 function preserveCodexModelBuckets(hourlyState, touchedBuckets) {
   const upgrading = hourlyState.modelAttributionPolicy?.codex !== "observed";
-  if (!upgrading && !Object.keys(hourlyState.groupQueued).some(
+  const groupQueued =
+    hourlyState.groupQueued && typeof hourlyState.groupQueued === "object"
+      ? hourlyState.groupQueued
+      : {};
+  if (!upgrading && !Object.keys(groupQueued).some(
     key => key.startsWith(`${DEFAULT_SOURCE}${BUCKET_SEPARATOR}`),
   )) return;
-  const legacyGroups = new Set();
+
+  const groupModels = new Map();
   for (const [key, bucket] of Object.entries(hourlyState.buckets || {})) {
     const parsed = parseBucketKey(key);
     if (parsed.source !== DEFAULT_SOURCE || !bucket?.totals) continue;
     const groupKey = groupBucketKey(parsed.source, parsed.hourStart);
-    const legacy = Object.prototype.hasOwnProperty.call(hourlyState.groupQueued, groupKey);
-    if (legacy) legacyGroups.add(groupKey);
+    const model = normalizeModelInput(parsed.model) || DEFAULT_MODEL;
+    let entry = groupModels.get(groupKey);
+    if (!entry) {
+      entry = { named: false };
+      groupModels.set(groupKey, entry);
+    }
+    if (model !== DEFAULT_MODEL) entry.named = true;
+  }
+
+  const legacyGroups = new Set();
+  const flattenedLegacyGroups = new Set();
+  for (const groupKey of Object.keys(groupQueued)) {
+    if (!groupKey.startsWith(`${DEFAULT_SOURCE}${BUCKET_SEPARATOR}`)) continue;
+    legacyGroups.add(groupKey);
+    const entry = groupModels.get(groupKey);
+    // No named model buckets left: the hour was flattened to unknown (or the
+    // buckets were dropped). Named queue rows from the repair are the truth.
+    if (!entry || !entry.named) flattenedLegacyGroups.add(groupKey);
+  }
+
+  for (const [key, bucket] of Object.entries(hourlyState.buckets || {})) {
+    const parsed = parseBucketKey(key);
+    if (parsed.source !== DEFAULT_SOURCE || !bucket?.totals) continue;
+    const groupKey = groupBucketKey(parsed.source, parsed.hourStart);
+    const legacy = legacyGroups.has(groupKey);
+    if (flattenedLegacyGroups.has(groupKey)) continue;
     if (!upgrading && !legacy) continue;
     bucket.queuedKey = null;
     bucket.retractedUnknownKey = null;
     touchedBuckets.add(key);
   }
   for (const groupKey of legacyGroups) {
+    if (flattenedLegacyGroups.has(groupKey)) {
+      delete groupQueued[groupKey];
+      continue;
+    }
     const hourStart = groupKey.slice(DEFAULT_SOURCE.length + BUCKET_SEPARATOR.length);
     // Legacy groups emitted a combined unknown row for multiple named models.
     // Replace it with the actual unknown total (or zero) before splitting.
     const unknown = getHourlyBucket(hourlyState, DEFAULT_SOURCE, DEFAULT_MODEL, hourStart);
     unknown.queuedKey = null;
     touchedBuckets.add(bucketKey(DEFAULT_SOURCE, DEFAULT_MODEL, hourStart));
-    delete hourlyState.groupQueued[groupKey];
+    delete groupQueued[groupKey];
   }
+  hourlyState.groupQueued = groupQueued;
   hourlyState.modelAttributionPolicy = { ...hourlyState.modelAttributionPolicy, codex: "observed" };
 }
 
