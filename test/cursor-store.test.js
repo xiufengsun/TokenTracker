@@ -378,12 +378,17 @@ test("a metadata-only touch of legacy cursors.json keeps the newer v2 state", as
     migrated.cursors.files[day17File].offset = 11;
     await migrated.commit();
 
-    // chmod/xattr/backup tools move ctime without touching content or mtime.
-    const before = await fs.stat(cursorsPath, { bigint: true });
-    await fs.chmod(cursorsPath, 0o600);
-    const after = await fs.stat(cursorsPath, { bigint: true });
-    assert.notEqual(after.ctimeNs, before.ctimeNs);
-    assert.equal(after.mtimeNs, before.mtimeNs);
+    // Simulate a ctime-only metadata touch without relying on chmod (NTFS may
+    // leave ctime unchanged — Windows CI failed the chmod assertion). Bump only
+    // the recorded fingerprint's ctimeNs so size/mtime/dev/ino still match.
+    const storeRoot = path.join(trackerDir, STORE_DIRNAME);
+    const manifestPath = path.join(storeRoot, "manifest.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    assert.ok(manifest.legacyFingerprint?.ctimeNs);
+    const bumpedCtime = `${BigInt(manifest.legacyFingerprint.ctimeNs) + 1n}`;
+    assert.notEqual(bumpedCtime, manifest.legacyFingerprint.ctimeNs);
+    manifest.legacyFingerprint = { ...manifest.legacyFingerprint, ctimeNs: bumpedCtime };
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
     const reopened = await openCursorStore({ trackerDir, cursorsPath });
     assert.equal(reopened.requiresCommit, false);
