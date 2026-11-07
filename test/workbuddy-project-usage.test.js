@@ -114,10 +114,11 @@ test("WorkBuddy totals and projects retry a partial final record without losing 
     store = await openCursorStore({ trackerDir, forceV2: true });
     f.cursors = store.cursors;
   };
-  await fs.appendFile(f.file, record("first", 100, { cwd: f.project }) + "\n");
+  const first = record("first", 100, { cwd: f.project }) + "\n";
+  await fs.appendFile(f.file, first);
   await parseWorkbuddyIncremental(f);
   await reopen();
-  const completeSize = (await fs.stat(f.file)).size;
+  const completeSize = Buffer.byteLength(first);
 
   const tail = record("second", 200, { cwd: f.project });
   await fs.appendFile(f.file, tail.slice(0, -4));
@@ -161,7 +162,7 @@ for (const source of ["workbuddy", "workbuddy-ai"]) {
     await fs.appendFile(f.file, tail.subarray(split));
     await parseWorkbuddyIncremental(f);
     assert.equal((await rows(f.queuePath)).at(-1).total_tokens, 340);
-    assert.equal(f.cursors[source].fileOffsets[f.file].size, (await fs.stat(f.file)).size);
+    assert.equal(f.cursors[source].fileOffsets[f.file].size, Buffer.byteLength(prefix) + tail.length);
     const before = await fs.readFile(f.queuePath, "utf8");
     f.cursors = JSON.parse(JSON.stringify(f.cursors));
     await parseWorkbuddyIncremental(f);
@@ -174,10 +175,11 @@ test("WorkBuddy totals consume complete EOF JSON and skip malformed terminated l
   f.projectQueuePath = undefined;
   const prefix = "\r\n{invalid}\r\nnull\r\n";
   // Complete JSON without a trailing newline remains a supported legacy input.
-  await fs.writeFile(f.file, prefix + record("first", 100));
+  const initial = prefix + record("first", 100);
+  await fs.writeFile(f.file, initial);
   await parseWorkbuddyIncremental(f);
   assert.equal((await rows(f.queuePath)).at(-1).total_tokens, 120);
-  assert.equal(f.cursors.workbuddy.fileOffsets[f.file].size, (await fs.stat(f.file)).size);
+  assert.equal(f.cursors.workbuddy.fileOffsets[f.file].size, Buffer.byteLength(initial));
   f.cursors = JSON.parse(JSON.stringify(f.cursors));
   await fs.appendFile(f.file, "\r\n" + record("second", 200) + "\r\n");
   await parseWorkbuddyIncremental(f);
@@ -187,8 +189,9 @@ test("WorkBuddy totals consume complete EOF JSON and skip malformed terminated l
 
 test("WorkBuddy totals do not acknowledge records appended after the read stream reaches EOF", async (t) => {
   const f = await fixture(t);
-  await fs.writeFile(f.file, record("first", 100, { cwd: f.project }) + "\n");
-  const completeSize = (await fs.stat(f.file)).size;
+  const first = record("first", 100, { cwd: f.project }) + "\n";
+  await fs.writeFile(f.file, first);
+  const completeSize = Buffer.byteLength(first);
   const originalCreateReadStream = fssync.createReadStream;
   let appended = false;
   fssync.createReadStream = function (filePath, options) {
