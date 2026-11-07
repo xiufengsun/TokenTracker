@@ -1541,7 +1541,7 @@ test("parseDshIncremental cannot use a detected same-size rewrite as its histori
   try {
     fs.utimesSync(logPath, new Date(T0), new Date(T0));
     const cursors = await legacyDshState([logPath], queuePath);
-    const beforeSize = fs.statSync(logPath).size;
+    const beforeSize = cursors.dsh.files[logPath].size;
     await writeSessionLog(path.dirname(logPath), path.basename(logPath), [
       headerLine("same-size"), requestHeaderLine(0),
       assistantLine(1, { inputTokens: 10 }, { id: "copied" }),
