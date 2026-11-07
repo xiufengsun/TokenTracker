@@ -11,8 +11,8 @@
  *   - usage mapping (disjoint input/cache_read/cache_write/reasoning/output)
  *   - model from `assistant/message.data.message.source.model` with a
  *     `request/header` fallback
- *   - per-file `seq` watermark dedup: a second run adds nothing; an appended
- *     event adds only the delta
+ *   - inherited seed and global message-ID dedup, with seq/line watermarks
+ *   - versioned historical repairs with verified prefixes and atomic queue writes
  *
  * No real harness install is required: fixtures are written under a tempdir
  * and passed directly to the parser.
@@ -67,7 +67,9 @@ function requestHeaderLine(seq, model = "deepseek-v4-pro") {
   });
 }
 
-function assistantLine(seq, usage, { model, time = T0 } = {}) {
+let fixtureMessageId = 0;
+
+function assistantLine(seq, usage, { model, time = T0, id = `fixture-${++fixtureMessageId}` } = {}) {
   const source = model
     ? { kind: "model", provider: "deepseek-official", model }
     : undefined;
@@ -78,7 +80,7 @@ function assistantLine(seq, usage, { model, time = T0 } = {}) {
     data: {
       turn: 1,
       step: 1,
-      message: { role: "assistant", content: [], source, id: `m-${seq}` },
+      message: { role: "assistant", content: [], source, ...(id == null ? {} : { id }) },
       usage,
     },
   });
@@ -552,7 +554,7 @@ test("parseDshIncremental reconciles legacy prefixes when a stale artifact gaine
   const firstPath = await writeSessionLog(firstDir, "session.jsonl", [
     headerLine("sess-first"),
     requestHeaderLine(0),
-    assistantLine(1, { inputTokens: 100, outputTokens: 20 }),
+    assistantLine(1, { inputTokens: 100, outputTokens: 20 }, { id: "legacy-prefix-first" }),
   ]);
   const secondPath = await writeSessionLog(secondDir, "session.jsonl", [
     headerLine("sess-second"),
@@ -579,7 +581,7 @@ test("parseDshIncremental reconciles legacy prefixes when a stale artifact gaine
     await writeSessionLog(firstDir, "session.v3.jsonl", [
       headerLine("sess-first"),
       requestHeaderLine(0),
-      assistantLine(1, { inputTokens: 100, outputTokens: 20 }),
+      assistantLine(1, { inputTokens: 100, outputTokens: 20 }, { id: "legacy-prefix-first" }),
       appended,
     ]);
 
@@ -612,7 +614,7 @@ test("parseDshIncremental defers incomplete replacements and recovers later", as
     lines: [
       headerLine("sess-replace"),
       requestHeaderLine(0),
-      assistantLine(1, { inputTokens: 100, outputTokens: 20 }),
+      assistantLine(1, { inputTokens: 100, outputTokens: 20 }, { id: "replacement-original" }),
     ],
   });
   const replacementPath = path.join(sessionDir, "session.v3.jsonl");
@@ -636,7 +638,7 @@ test("parseDshIncremental defers incomplete replacements and recovers later", as
     await writeSessionLog(sessionDir, "session.v3.jsonl", [
       headerLine("sess-replace"),
       requestHeaderLine(0),
-      assistantLine(1, { inputTokens: 100, outputTokens: 20 }),
+      assistantLine(1, { inputTokens: 100, outputTokens: 20 }, { id: "replacement-original" }),
     ]);
     const recovered = await parseDshIncremental({
       sessionFiles: [replacementPath],
@@ -840,7 +842,7 @@ test("parseDshIncremental replaces a same-session artifact when seq is rewritten
     lines: [
       headerLine("same-session"),
       requestHeaderLine(99),
-      assistantLine(100, { inputTokens: 100, outputTokens: 20 }),
+      assistantLine(100, { inputTokens: 100, outputTokens: 20 }, { id: "rewritten-original" }),
     ],
   });
   const replacementPath = path.join(sessionDir, "session.v3.jsonl");
@@ -852,7 +854,7 @@ test("parseDshIncremental replaces a same-session artifact when seq is rewritten
     await writeSessionLog(sessionDir, "session.v3.jsonl", [
       headerLine("same-session"),
       requestHeaderLine(0),
-      assistantLine(1, { inputTokens: 100, outputTokens: 20 }),
+      assistantLine(1, { inputTokens: 100, outputTokens: 20 }, { id: "rewritten-original" }),
     ]);
     const migrated = await parseDshIncremental({
       sessionFiles: [replacementPath],
@@ -1032,7 +1034,7 @@ test("parseDshIncremental accepts a replacement session whose seq restarts", asy
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("parseDshIncremental isolates corrupt logs and prunes deleted-session cursors", async () => {
+test("parseDshIncremental isolates corrupt logs and retains unidentified historical cursors", async () => {
   const { dir, sessionDir, logPath } = await makeTree({
     compression: "none",
     lines: [
@@ -1064,7 +1066,7 @@ test("parseDshIncremental isolates corrupt logs and prunes deleted-session curso
   assert.equal(result.eventsAggregated, 1, "healthy sessions still aggregate");
   assert.ok(cursors.dsh.files[logPath]);
   assert.equal(cursors.dsh.files[corruptPath], undefined, "failed logs retry on a later sync");
-  assert.equal(cursors.dsh.files[deletedPath], undefined, "deleted sessions do not leak cursor state");
+  assert.ok(cursors.dsh.files[deletedPath], "unidentified historical state survives missing logs");
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -1187,3 +1189,564 @@ test("parseDshIncremental parses DeepSeek Harness v3 session files end-to-end", 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+
+// Fixtures for the seq-only cursor schema shipped before fork/replay repair.
+// Build the old ledger directly from raw deltas, not through the fixed parser.
+async function legacyDshState(files, queuePath, { ledger = true } = {}) {
+  const cursors = { hourly: { version: 3, buckets: {} }, dsh: { files: {}, sessions: {} } };
+  const empty = () => ({ input_tokens: 0, cached_input_tokens: 0,
+    cache_creation_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0,
+    total_tokens: 0, billable_total_tokens: 0, total_cost_usd: 0, conversation_count: 0 });
+  for (const filePath of files) {
+    const parsed = extractDshSessionUsage(await readDshSessionText(filePath));
+    const contributions = {};
+    for (const delta of parsed.rawDeltas) {
+      const bucketStart = new Date(Math.floor(delta.timeMs / 1800000) * 1800000).toISOString();
+      const key = `dsh|${delta.model}|${bucketStart}`;
+      const contribution = contributions[key] ||= { model: delta.model, bucketStart, totals: empty() };
+      const bucket = cursors.hourly.buckets[key] ||= { totals: empty() };
+      const totals = { ...delta.totals, billable_total_tokens: delta.totals.total_tokens };
+      for (const [field, value] of Object.entries(totals)) {
+        contribution.totals[field] += value;
+        bucket.totals[field] += value;
+      }
+    }
+    const stat = fs.statSync(filePath);
+    cursors.dsh.files[filePath] = { inode: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs,
+      sessionId: parsed.sessionId, lastSeq: parsed.maxSeq, ...(ledger ? { contributions } : {}) };
+    if (ledger && parsed.sessionId) cursors.dsh.sessions[parsed.sessionId] = { lastPath: filePath, contributions };
+  }
+  if (!ledger) delete cursors.dsh.sessions;
+  const rows = Object.entries(cursors.hourly.buckets).map(([key, bucket]) => {
+    const [source, model, hour_start] = key.split("|");
+    bucket.queuedKey = Object.values(bucket.totals).join("|");
+    return { source, model, hour_start, ...bucket.totals };
+  });
+  fs.writeFileSync(queuePath, rows.map(JSON.stringify).join("\n") + "\n");
+  return JSON.parse(JSON.stringify(cursors));
+}
+
+function seededHeader(id, extra = {}) {
+  return JSON.stringify({ ...JSON.parse(headerLine(id)), isSeeded: true, ...extra });
+}
+
+function seedMarker(seq, inherited = true) {
+  return JSON.stringify({ type: "session/end-seed", seq, time: T0,
+    data: inherited ? { inherited: true } : {} });
+}
+
+function latestDshTotal(queuePath) {
+  if (!fs.existsSync(queuePath)) return 0;
+  const rows = fs.readFileSync(queuePath, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  const latest = new Map(rows.map((row) => [`${row.source}|${row.model}|${row.hour_start}`, row]));
+  return [...latest.values()].filter((row) => row.source === "dsh")
+    .reduce((sum, row) => sum + row.total_tokens, 0);
+}
+
+test("extractDshSessionUsage ignores nested inherited prefixes, not normal resume markers", () => {
+  const parsed = extractDshSessionUsage([
+    seededHeader("nested"), requestHeaderLine(0),
+    assistantLine(1, { inputTokens: 4000 }, { id: "inherited-root" }), seedMarker(2),
+    assistantLine(3, { inputTokens: 300 }, { id: "inherited-parent" }), seedMarker(4),
+    assistantLine(5, { inputTokens: 7 }, { id: "own-first" }), seedMarker(6, false),
+    assistantLine(7, { inputTokens: 3 }, { id: "own-second" }),
+    // Re-emitting an inherited message after the boundary is still a replay.
+    assistantLine(8, { inputTokens: 4000 }, { id: "inherited-root" }),
+  ].join("\n"));
+  assert.equal(parsed.seedComplete, true);
+  assert.deepEqual(parsed.deltas.map((delta) => delta.messageId), ["own-first", "own-second"]);
+  assert.equal(parsed.deltas.reduce((sum, delta) => sum + delta.totals.total_tokens, 0), 10);
+});
+
+test("extractDshSessionUsage recognizes legacy exclusive seq seedLength and incomplete seeds", () => {
+  for (const extra of [{ seedLength: 3 }, { data: { seedLength: 3 } }]) {
+    const parsed = extractDshSessionUsage([
+      seededHeader("legacy", extra), requestHeaderLine(0),
+      assistantLine(2, { inputTokens: 100 }), assistantLine(3, { inputTokens: 7 }),
+      seedMarker(4, false), assistantLine(5, { inputTokens: 3 }),
+    ].join("\n"));
+    assert.equal(parsed.seedComplete, true);
+    assert.equal(parsed.deltas.reduce((sum, delta) => sum + delta.totals.total_tokens, 0), 10);
+  }
+  for (const seedLength of [undefined, -1, "broken"]) {
+    const parsed = extractDshSessionUsage([
+      seededHeader("unfinished", { seedLength }), requestHeaderLine(0),
+      assistantLine(1, { inputTokens: 100 }), seedMarker(2, false),
+    ].join("\n"));
+    assert.equal(parsed.seedComplete, false);
+    assert.deepEqual(parsed.deltas, []);
+  }
+});
+
+for (const historical of [false, true]) {
+  test(`parseDshIncremental counts twenty forks once (${historical ? "historical repair" : "fresh"})`, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-twenty-forks-"));
+    const queuePath = path.join(dir, "queue.jsonl");
+    const files = [];
+    const original = assistantLine(1, { inputTokens: 100, outputTokens: 20, cacheReadTokens: 4000 },
+      { id: "original-message" });
+    try {
+      for (let i = 0; i < 20; i++) {
+        files.push(await writeSessionLog(dir, `fork-${i}.jsonl`, [
+          seededHeader(`fork-${i}`), requestHeaderLine(0), original, seedMarker(2),
+          assistantLine(3, { inputTokens: 10 }, { id: `fork-own-${i}` }),
+        ]));
+      }
+      // Deliberately discover the origin last. Seed recognition must not rely
+      // on path order or on the origin even being present.
+      files.push(await writeSessionLog(dir, "parent.jsonl", [
+        headerLine("parent"), requestHeaderLine(0), original,
+      ]));
+      let cursors = historical ? await legacyDshState(files, queuePath) : {};
+      if (historical) assert.equal(latestDshTotal(queuePath), 86720);
+      const first = await parseDshIncremental({ sessionFiles: files, cursors, queuePath });
+      assert.equal(first.deferredMigrations, 0);
+      assert.equal(first.eventsAggregated, 21);
+      assert.equal(latestDshTotal(queuePath), 4320);
+      const queue = fs.readFileSync(queuePath, "utf8");
+      cursors = JSON.parse(JSON.stringify(cursors));
+      const second = await parseDshIncremental({ sessionFiles: files, cursors, queuePath });
+      assert.equal(second.eventsAggregated, 0);
+      assert.equal(second.bucketsQueued, 0);
+      assert.equal(fs.readFileSync(queuePath, "utf8"), queue);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("parseDshIncremental persists replay ownership after its origin disappears", async () => {
+  const { dir, logPath } = await makeTree({ compression: "none", lines: [
+    headerLine("origin"), requestHeaderLine(0),
+    assistantLine(1, { inputTokens: 10 }, { id: "durable-id" }),
+  ] });
+  const queuePath = path.join(dir, "queue.jsonl");
+  let cursors = {};
+  try {
+    await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+    fs.appendFileSync(logPath, assistantLine(2, { inputTokens: 10 }, { id: "durable-id" }) + "\n");
+    let result = await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+    assert.equal(result.eventsAggregated, 0, "same id at a later seq is replay");
+    fs.unlinkSync(logPath);
+    await parseDshIncremental({ sessionFiles: [], cursors, queuePath });
+    assert.equal(cursors.dsh.messageOwners["a:durable-id"], "origin");
+    assert.ok(cursors.dsh.sessions.origin);
+    cursors = JSON.parse(JSON.stringify(cursors));
+    const copiedPath = await writeSessionLog(dir, "copy.jsonl", [
+      headerLine("copy"), requestHeaderLine(0),
+      assistantLine(1, { inputTokens: 10 }, { id: "durable-id" }),
+      assistantLine(2, { inputTokens: 7 }, { id: "genuine-id" }),
+    ]);
+    result = await parseDshIncremental({ sessionFiles: [copiedPath], cursors, queuePath });
+    assert.equal(result.eventsAggregated, 1);
+    assert.equal(latestDshTotal(queuePath), 17);
+    assert.ok(!JSON.stringify(cursors).includes('"content"'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseDshIncremental retains genuine ID-less seq and line-watermarked events", async () => {
+  const { dir, logPath } = await makeTree({ compression: "none", lines: [
+    headerLine("idless"), requestHeaderLine(0),
+    assistantLine(1, { inputTokens: 10 }, { id: null }),
+    assistantLine(undefined, { inputTokens: 3 }, { id: null }),
+  ] });
+  const queuePath = path.join(dir, "queue.jsonl");
+  let cursors = {};
+  try {
+    await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+    cursors = JSON.parse(JSON.stringify(cursors));
+    fs.appendFileSync(logPath, [
+      assistantLine(2, { inputTokens: 7 }, { id: null }),
+      assistantLine(undefined, { inputTokens: 5 }, { id: null }), "",
+    ].join("\n"));
+    const appended = await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+    assert.equal(appended.eventsAggregated, 2);
+    assert.equal(latestDshTotal(queuePath), 25);
+    cursors = JSON.parse(JSON.stringify(cursors));
+    assert.equal((await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath })).eventsAggregated, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+for (const ledger of [false, true]) {
+  test(`parseDshIncremental repairs repeated IDs from a verified historical prefix (ledger=${ledger})`, async () => {
+    const { dir, logPath } = await makeTree({ compression: "none", lines: [
+      headerLine("replayed"), requestHeaderLine(0),
+      assistantLine(1, { inputTokens: 10 }, { id: "same" }),
+      assistantLine(2, { inputTokens: 10 }, { id: "same" }),
+    ] });
+    const queuePath = path.join(dir, "queue.jsonl");
+    try {
+      const cursors = await legacyDshState([logPath], queuePath, { ledger });
+      assert.equal(latestDshTotal(queuePath), 20);
+      // This append is genuine and must not be subtracted with the old prefix.
+      fs.appendFileSync(logPath, assistantLine(3, { inputTokens: 7 }, { id: "appended" }) + "\n");
+      const result = await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+      assert.equal(result.deferredMigrations, 0);
+      assert.equal(latestDshTotal(queuePath), 17);
+      assert.equal(cursors.dsh.files[logPath].accountingVersion, 2);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("parseDshIncremental emits a zero replacement for fully inherited historical usage", async () => {
+  const { dir, logPath } = await makeTree({ compression: "none", lines: [
+    seededHeader("seed-only"), requestHeaderLine(0),
+    assistantLine(1, { inputTokens: 100 }, { id: "missing-origin" }), seedMarker(2),
+  ] });
+  const queuePath = path.join(dir, "queue.jsonl");
+  try {
+    const cursors = await legacyDshState([logPath], queuePath);
+    const result = await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+    assert.equal(result.deferredMigrations, 0);
+    assert.equal(result.bucketsQueued, 1);
+    assert.equal(latestDshTotal(queuePath), 0);
+    const last = fs.readFileSync(queuePath, "utf8").trim().split("\n").map(JSON.parse).at(-1);
+    assert.equal(last.total_tokens, 0);
+    assert.equal(last.conversation_count, 0);
+    assert.deepEqual(cursors.dsh.sessions["seed-only"].contributions, {});
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseDshIncremental defers missing, corrupt and boundary-less history without erasing it", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-defer-history-"));
+  const queuePath = path.join(dir, "queue.jsonl");
+  try {
+    const files = [];
+    for (const id of ["active", "archived", "corrupt", "unfinished"]) {
+      files.push(await writeSessionLog(dir, `${id}.jsonl`, [
+        id === "unfinished" ? seededHeader(id) : headerLine(id), requestHeaderLine(0),
+        assistantLine(1, { inputTokens: 10 }, { id: `${id}-id` }),
+        assistantLine(2, { inputTokens: 10 }, { id: `${id}-id` }),
+      ]));
+    }
+    const cursors = await legacyDshState(files, queuePath);
+    fs.unlinkSync(files[1]);
+    fs.writeFileSync(files[2], "corrupt JSON\n");
+    const result = await parseDshIncremental({ sessionFiles: [files[0], files[2], files[3]], cursors, queuePath });
+    assert.equal(result.deferredMigrations, 3);
+    assert.equal(latestDshTotal(queuePath), 70, "only the verified active replay is repaired");
+    assert.equal(cursors.dsh.sessions.archived.contributions[Object.keys(cursors.dsh.sessions.archived.contributions)[0]].totals.total_tokens, 20);
+    assert.equal(cursors.dsh.sessions.corrupt.accountingVersion, undefined);
+    assert.equal(cursors.dsh.sessions.unfinished.accountingVersion, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseDshIncremental reports absent pre-ledger history without resetting it", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-absent-legacy-"));
+  try {
+    const missingPath = path.join(dir, "missing.jsonl");
+    const cursors = { dsh: { files: { [missingPath]: {
+      sessionId: "missing", inode: 42, size: 100, mtimeMs: 1, lastSeq: 9,
+    } } } };
+    const result = await parseDshIncremental({ sessionFiles: [], cursors, queuePath: path.join(dir, "queue.jsonl") });
+    assert.equal(result.deferredMigrations, 1);
+    assert.equal(cursors.dsh.files[missingPath].lastSeq, 9);
+    assert.ok(cursors.dsh.deferredMigrations.reasons.includes("history-unverified"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseDshIncremental rejects cropped history even when replay totals cover the old bucket", async () => {
+  const { dir, logPath } = await makeTree({ compression: "none", lines: [
+    headerLine("cropped"), requestHeaderLine(0),
+    assistantLine(1, { inputTokens: 10 }, { id: "genuine-lost" }),
+    assistantLine(2, { inputTokens: 100 }, { id: "copied" }),
+  ] });
+  const queuePath = path.join(dir, "queue.jsonl");
+  try {
+    const cursors = await legacyDshState([logPath], queuePath);
+    await writeSessionLog(path.dirname(logPath), path.basename(logPath), [
+      headerLine("cropped"), requestHeaderLine(0),
+      assistantLine(1, { inputTokens: 100 }, { id: "copied" }),
+      assistantLine(2, { inputTokens: 100 }, { id: "copied" }), seedMarker(3),
+    ]);
+    const result = await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+    assert.equal(result.deferredMigrations, 1);
+    assert.equal(latestDshTotal(queuePath), 110);
+    assert.ok(cursors.dsh.deferredMigrations.reasons.includes("historical-prefix-unverified"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+for (const historical of [false, true]) {
+  test(`parseDshIncremental rolls back all existing state on queue failure (historical=${historical})`, async () => {
+    const { dir, logPath } = await makeTree({ compression: "none", lines: [
+      headerLine("transaction"), requestHeaderLine(0),
+      assistantLine(1, { inputTokens: 10 }, { id: "transaction-message" }),
+      assistantLine(2, { inputTokens: 10 }, { id: "transaction-message" }),
+    ] });
+    const queuePath = path.join(dir, "queue.jsonl");
+    try {
+      let cursors = historical ? await legacyDshState([logPath], queuePath) : {};
+      if (!historical) await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+      cursors = JSON.parse(JSON.stringify(cursors));
+      fs.appendFileSync(logPath, assistantLine(3, { inputTokens: 7 }, { id: "new-transaction-message" }) + "\n");
+      const before = structuredClone(cursors);
+      const badQueue = path.join(dir, "queue-directory");
+      fs.mkdirSync(badQueue);
+      await assert.rejects(parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath: badQueue }));
+      assert.deepEqual(cursors, before, "failed append must not commit ledgers, owners, metadata or hourly totals");
+      await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+      assert.equal(latestDshTotal(queuePath), 17);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("parseDshIncremental repairs legacy usage across plain/zstd and version migration", async () => {
+  const lines = [seededHeader("migrated-fork"), requestHeaderLine(0),
+    assistantLine(1, { inputTokens: 100 }, { id: "parent-migration" }), seedMarker(2),
+    assistantLine(3, { inputTokens: 10 }, { id: "own-migration" })];
+  const { dir, logPath, sessionDir } = await makeTree({ compression: "none", lines });
+  const queuePath = path.join(dir, "queue.jsonl");
+  try {
+    let cursors = await legacyDshState([logPath], queuePath);
+    const compressed = await writeSessionLog(sessionDir, "session.v3.jsonl.zstd", lines, { zstd: true });
+    const first = await parseDshIncremental({ sessionFiles: [compressed], cursors, queuePath });
+    assert.equal(first.deferredMigrations, 0);
+    assert.equal(latestDshTotal(queuePath), 10);
+    const plain = await writeSessionLog(sessionDir, "session.v4.jsonl", lines);
+    fs.unlinkSync(compressed);
+    cursors = JSON.parse(JSON.stringify(cursors));
+    const second = await parseDshIncremental({ sessionFiles: [plain], cursors, queuePath });
+    assert.equal(second.deferredMigrations, 0);
+    assert.equal(latestDshTotal(queuePath), 10);
+    assert.equal(cursors.dsh.messageOwners["a:own-migration"], "migrated-fork");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseDshIncremental cannot use a detected same-size rewrite as its historical baseline", async () => {
+  const oldMarker = JSON.stringify({ type: "session/end-seed", seq: 3, time: T0, data: { inherited: false } });
+  const { dir, logPath } = await makeTree({ compression: "none", lines: [
+    headerLine("same-size"), requestHeaderLine(0),
+    assistantLine(1, { inputTokens: 10 }, { id: "ownaaa" }),
+    assistantLine(2, { inputTokens: 100 }, { id: "copied" }), oldMarker,
+  ] });
+  const queuePath = path.join(dir, "queue.jsonl");
+  try {
+    fs.utimesSync(logPath, new Date(T0), new Date(T0));
+    const cursors = await legacyDshState([logPath], queuePath);
+    const beforeSize = cursors.dsh.files[logPath].size;
+    await writeSessionLog(path.dirname(logPath), path.basename(logPath), [
+      headerLine("same-size"), requestHeaderLine(0),
+      assistantLine(1, { inputTokens: 10 }, { id: "copied" }),
+      assistantLine(2, { inputTokens: 100 }, { id: "copied" }), seedMarker(3),
+    ]);
+    fs.appendFileSync(logPath, " "); // false -> true removes exactly one byte.
+    const descriptor = fs.openSync(logPath, "r+");
+    try {
+      assert.equal(fs.fstatSync(descriptor).size, beforeSize);
+      fs.futimesSync(descriptor, new Date(T0 + 1000), new Date(T0 + 1000));
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    const result = await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+    assert.equal(result.deferredMigrations, 1);
+    assert.equal(latestDshTotal(queuePath), 110);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+for (const historical of [false, true]) {
+  test(`parseDshIncremental defers a lost session header rather than replaying its usage (historical=${historical})`, async () => {
+    const event = assistantLine(1, { inputTokens: 100 }, { id: "header-loss", model: "deepseek-v4-pro" });
+    const { dir, logPath } = await makeTree({ compression: "none", lines: [headerLine("known"), event] });
+    const queuePath = path.join(dir, "queue.jsonl");
+    try {
+      const cursors = historical ? await legacyDshState([logPath], queuePath) : {};
+      if (!historical) await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+      fs.writeFileSync(logPath, `${event}\n`);
+      const result = await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+      assert.equal(result.eventsAggregated, 0);
+      assert.equal(result.deferredMigrations, 1);
+      assert.equal(latestDshTotal(queuePath), 100);
+      assert.equal(cursors.dsh.files[logPath].sessionId, "known");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("parseDshIncremental verifies historical event identities across artifact replacement", async () => {
+  const { dir, logPath, sessionDir } = await makeTree({ compression: "none", lines: [
+    headerLine("evidence"), requestHeaderLine(0),
+    assistantLine(1, { inputTokens: 10 }, { id: "genuine" }),
+    assistantLine(2, { inputTokens: 100 }, { id: "copy" }),
+  ] });
+  const queuePath = path.join(dir, "queue.jsonl");
+  try {
+    const cursors = await legacyDshState([logPath], queuePath);
+    const replacement = await writeSessionLog(sessionDir, "session.v3.jsonl", [
+      seededHeader("evidence"), requestHeaderLine(0),
+      assistantLine(1, { inputTokens: 100 }, { id: "copy" }),
+      assistantLine(2, { inputTokens: 100 }, { id: "copy" }), seedMarker(3),
+    ]);
+    const result = await parseDshIncremental({ sessionFiles: [replacement], cursors, queuePath });
+    assert.equal(result.deferredMigrations, 1);
+    assert.equal(latestDshTotal(queuePath), 110, "the original readable prefix does not prove a cropped candidate");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseDshIncremental preserves already-corrected ID-less history when a replacement gains a seed marker", async () => {
+  const event = assistantLine(1, { inputTokens: 10 }, { id: null });
+  const { dir, logPath, sessionDir } = await makeTree({ compression: "none", lines: [
+    headerLine("current-idless"), requestHeaderLine(0), event,
+  ] });
+  const queuePath = path.join(dir, "queue.jsonl");
+  try {
+    const cursors = {};
+    await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+    const replacement = await writeSessionLog(sessionDir, "session.v3.jsonl", [
+      seededHeader("current-idless"), requestHeaderLine(0), event, seedMarker(2),
+    ]);
+    const result = await parseDshIncremental({ sessionFiles: [replacement], cursors, queuePath });
+    assert.equal(result.deferredMigrations, 1);
+    assert.equal(latestDshTotal(queuePath), 10);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseDshIncremental backfills a missing ledger without stealing another session's ownership", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-backfill-owner-"));
+  const queuePath = path.join(dir, "queue.jsonl");
+  const event = assistantLine(1, { inputTokens: 100 }, { id: "shared-owner", model: "deepseek-v4-pro" });
+  try {
+    const origin = await writeSessionLog(dir, "origin.jsonl", [headerLine("owner"), event]);
+    const copy = await writeSessionLog(dir, "copy.jsonl", [headerLine("copy"), event]);
+    const cursors = {};
+    await parseDshIncremental({ sessionFiles: [origin, copy], cursors, queuePath });
+    assert.equal(latestDshTotal(queuePath), 100);
+    delete cursors.dsh.sessions.copy;
+    delete cursors.dsh.files[copy].contributions;
+    await parseDshIncremental({ sessionFiles: [origin, copy], cursors, queuePath });
+    assert.deepEqual(cursors.dsh.sessions.copy.contributions, {});
+    fs.utimesSync(copy, new Date(T0), new Date(T0));
+    await parseDshIncremental({ sessionFiles: [origin, copy], cursors, queuePath });
+    assert.deepEqual(cursors.dsh.sessions.copy.contributions, {});
+    assert.equal(latestDshTotal(queuePath), 100);
+    assert.equal(cursors.dsh.messageOwners["a:shared-owner"], "owner");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseDshIncremental reparses a whole session when an already-tracked alias appends", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-alias-append-"));
+  const queuePath = path.join(dir, "queue.jsonl");
+  const event = assistantLine(1, { inputTokens: 100 }, { id: "alias-first", model: "deepseek-v4-pro" });
+  try {
+    const first = await writeSessionLog(dir, "first.jsonl", [headerLine("same-session"), event]);
+    const second = await writeSessionLog(dir, "second.jsonl", [headerLine("same-session"), event]);
+    let cursors = {};
+    await parseDshIncremental({ sessionFiles: [first, second], cursors, queuePath });
+    assert.equal(latestDshTotal(queuePath), 100);
+    cursors = JSON.parse(JSON.stringify(cursors));
+    fs.appendFileSync(first, assistantLine(2, { inputTokens: 10 },
+      { id: "alias-second", model: "deepseek-v4-pro" }) + "\n");
+    const changed = await parseDshIncremental({ sessionFiles: [first, second], cursors, queuePath });
+    assert.equal(changed.deferredMigrations, 0);
+    assert.equal(latestDshTotal(queuePath), 110);
+    const queue = fs.readFileSync(queuePath, "utf8");
+    cursors = JSON.parse(JSON.stringify(cursors));
+    const repeat = await parseDshIncremental({ sessionFiles: [first, second], cursors, queuePath });
+    assert.equal(repeat.eventsAggregated, 0);
+    assert.equal(fs.readFileSync(queuePath, "utf8"), queue);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseDshIncremental defers ambiguous pre-fix alias ledgers", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-legacy-aliases-"));
+  const queuePath = path.join(dir, "queue.jsonl");
+  const event = assistantLine(1, { inputTokens: 100 }, { id: "legacy-shared", model: "deepseek-v4-pro" });
+  try {
+    const first = await writeSessionLog(dir, "first.jsonl", [headerLine("same-session"), event]);
+    const second = await writeSessionLog(dir, "second.jsonl", [headerLine("same-session"), event]);
+    const cursors = await legacyDshState([first, second], queuePath);
+    const result = await parseDshIncremental({ sessionFiles: [second], cursors, queuePath });
+    assert.equal(result.deferredMigrations, 2);
+    assert.equal(latestDshTotal(queuePath), 200);
+    assert.ok(cursors.dsh.files[first]);
+    assert.ok(cursors.dsh.files[second]);
+    assert.ok(cursors.dsh.deferredMigrations.reasons.includes("ambiguous-legacy-session-aliases"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+for (const divergentTokens of [10, 20]) {
+  test(`parseDshIncremental defers a divergent alias with equal/larger totals (${divergentTokens})`, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-divergent-alias-"));
+    const queuePath = path.join(dir, "queue.jsonl");
+    const firstEvent = assistantLine(1, { inputTokens: 100 }, { id: "shared", model: "deepseek-v4-pro" });
+    try {
+      const first = await writeSessionLog(dir, "first.jsonl", [headerLine("divergent"), firstEvent]);
+      const second = await writeSessionLog(dir, "second.jsonl", [headerLine("divergent"), firstEvent]);
+      let cursors = {};
+      await parseDshIncremental({ sessionFiles: [first, second], cursors, queuePath });
+      fs.appendFileSync(first, assistantLine(2, { inputTokens: 10 },
+        { id: "first-only", model: "deepseek-v4-pro" }) + "\n");
+      await parseDshIncremental({ sessionFiles: [first, second], cursors, queuePath });
+      assert.equal(latestDshTotal(queuePath), 110);
+      cursors = JSON.parse(JSON.stringify(cursors));
+      fs.appendFileSync(second, assistantLine(2, { inputTokens: divergentTokens },
+        { id: "second-only", model: "deepseek-v4-pro" }) + "\n");
+      const result = await parseDshIncremental({ sessionFiles: [first, second], cursors, queuePath });
+      assert.equal(result.deferredMigrations, 1);
+      assert.equal(latestDshTotal(queuePath), 110, "known first-only usage must not be replaced by unrelated counts");
+      assert.equal(cursors.dsh.messageOwners["a:first-only"], "divergent");
+      assert.equal(cursors.dsh.messageOwners["a:second-only"], undefined);
+      assert.ok(cursors.dsh.deferredMigrations.reasons.includes("replacement-drops-owned-message"));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const missing of [false, true]) {
+  test("parseDshIncremental preserves unidentified legacy history (missing=" + missing + ")", async () => {
+    const { dir, logPath } = await makeTree({ compression: "none", lines: [
+      JSON.stringify({ type: "session", version: 0, createdAt: T0 }),
+      assistantLine(1, { inputTokens: 10, outputTokens: 5, reasoningTokens: 2 },
+        { id: "unidentified-history", model: "deepseek-v4-pro" }),
+    ] });
+    const queuePath = path.join(dir, "queue.jsonl");
+    try {
+      let cursors = await legacyDshState([logPath], queuePath);
+      assert.equal(cursors.dsh.files[logPath].sessionId, null);
+      assert.deepEqual(cursors.dsh.sessions, {});
+      if (missing) fs.unlinkSync(logPath);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await parseDshIncremental({
+          sessionFiles: missing ? [] : [logPath], cursors, queuePath,
+        });
+        assert.equal(result.deferredMigrations, 1);
+        assert.equal(latestDshTotal(queuePath), 17);
+        assert.equal(cursors.dsh.files[logPath].accountingVersion, undefined);
+        cursors = JSON.parse(JSON.stringify(cursors));
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
