@@ -643,5 +643,17 @@
   "cloud.free.device_scope": "現在のデバイスの使用量のみを集計",
   "cloud.plan.includes_local": "無料版のすべてのローカル機能を含む",
   "cloud.plan.device_sync": "デバイス台数の制限なし、使用量をまとめて同期",
-  "cloud.plan.device_fair_use": "通常の個人利用ではデバイス台数の制限や台数ごとの追加料金はありません。大量または異常なデバイス接続には同期保護が適用される場合があります。"
+  "cloud.plan.device_fair_use": "通常の個人利用ではデバイス台数の制限や台数ごとの追加料金はありません。大量または異常なデバイス接続には同期保護が適用される場合があります。",
+  "heatmap.view.claude": "Claude",
+  "heatmap.view.codex": "Codex",
+  "heatmap.resets.claude.tab_title": "Claude Code の使用上限リセット",
+  "heatmap.resets.codex.tab_title": "Codex の使用上限リセット",
+  "heatmap.resets.type.regular": "自動リセット",
+  "heatmap.resets.type.banked": "保存済みリセット",
+  "heatmap.resets.legend.none": "リセットなし",
+  "heatmap.resets.tooltip.none": "この日に発表されたリセットはありません。",
+  "heatmap.resets.cell_label": "{{day}}：{{types}}",
+  "heatmap.resets.loading": "リセット履歴を読み込み中…",
+  "heatmap.resets.error": "リセット履歴を読み込めませんでした。",
+  "heatmap.resets.source": "出典：claude-resets.com"
 }
