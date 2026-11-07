@@ -25487,7 +25487,7 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
       reportProgress(idx, recordsProcessed, eventsAggregated, total);
       continue;
     }
-    if (previousSessionId && !sessionId) {
+    if (prev && !sessionId && (previousSessionId || needsAccountingUpgrade)) {
       deferredFilePaths.add(filePath);
       deferredMigrationPaths.set(filePath, "replacement-session-id-missing");
       reportProgress(idx, recordsProcessed, eventsAggregated, total);
@@ -25724,7 +25724,8 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
     // Retain pre-ledger identity until a replacement is verified. Its counted
     // usage survives file deletion, so elapsed time cannot authorize replay.
     // Current ledgers retain the same identity in sessionState instead.
-    if (legacySessionId && !storedDshContributions(state) && !sessionState[legacySessionId]) {
+    if ((legacySessionId && !storedDshContributions(state) && !sessionState[legacySessionId]) ||
+      (!legacySessionId && state.accountingVersion !== DSH_ACCOUNTING_VERSION)) {
       if (state.accountingVersion !== DSH_ACCOUNTING_VERSION) {
         deferredMigrationPaths.set(filePath, "history-unverified");
       }

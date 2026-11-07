@@ -1034,7 +1034,7 @@ test("parseDshIncremental accepts a replacement session whose seq restarts", asy
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("parseDshIncremental isolates corrupt logs and prunes deleted-session cursors", async () => {
+test("parseDshIncremental isolates corrupt logs and retains unidentified historical cursors", async () => {
   const { dir, sessionDir, logPath } = await makeTree({
     compression: "none",
     lines: [
@@ -1066,7 +1066,7 @@ test("parseDshIncremental isolates corrupt logs and prunes deleted-session curso
   assert.equal(result.eventsAggregated, 1, "healthy sessions still aggregate");
   assert.ok(cursors.dsh.files[logPath]);
   assert.equal(cursors.dsh.files[corruptPath], undefined, "failed logs retry on a later sync");
-  assert.equal(cursors.dsh.files[deletedPath], undefined, "deleted sessions do not leak cursor state");
+  assert.ok(cursors.dsh.files[deletedPath], "unidentified historical state survives missing logs");
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -1214,7 +1214,7 @@ async function legacyDshState(files, queuePath, { ledger = true } = {}) {
     const stat = fs.statSync(filePath);
     cursors.dsh.files[filePath] = { inode: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs,
       sessionId: parsed.sessionId, lastSeq: parsed.maxSeq, ...(ledger ? { contributions } : {}) };
-    if (ledger) cursors.dsh.sessions[parsed.sessionId] = { lastPath: filePath, contributions };
+    if (ledger && parsed.sessionId) cursors.dsh.sessions[parsed.sessionId] = { lastPath: filePath, contributions };
   }
   if (!ledger) delete cursors.dsh.sessions;
   const rows = Object.entries(cursors.hourly.buckets).map(([key, bucket]) => {
@@ -1717,6 +1717,34 @@ for (const divergentTokens of [10, 20]) {
       assert.equal(cursors.dsh.messageOwners["a:first-only"], "divergent");
       assert.equal(cursors.dsh.messageOwners["a:second-only"], undefined);
       assert.ok(cursors.dsh.deferredMigrations.reasons.includes("replacement-drops-owned-message"));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const missing of [false, true]) {
+  test("parseDshIncremental preserves unidentified legacy history (missing=" + missing + ")", async () => {
+    const { dir, logPath } = await makeTree({ compression: "none", lines: [
+      JSON.stringify({ type: "session", version: 0, createdAt: T0 }),
+      assistantLine(1, { inputTokens: 10, outputTokens: 5, reasoningTokens: 2 },
+        { id: "unidentified-history", model: "deepseek-v4-pro" }),
+    ] });
+    const queuePath = path.join(dir, "queue.jsonl");
+    try {
+      let cursors = await legacyDshState([logPath], queuePath);
+      assert.equal(cursors.dsh.files[logPath].sessionId, null);
+      assert.deepEqual(cursors.dsh.sessions, {});
+      if (missing) fs.unlinkSync(logPath);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await parseDshIncremental({
+          sessionFiles: missing ? [] : [logPath], cursors, queuePath,
+        });
+        assert.equal(result.deferredMigrations, 1);
+        assert.equal(latestDshTotal(queuePath), 17);
+        assert.equal(cursors.dsh.files[logPath].accountingVersion, undefined);
+        cursors = JSON.parse(JSON.stringify(cursors));
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
