@@ -98,6 +98,8 @@ const {
 const SIDECAR_VERSION = 28;
 // Invalidate only Codex token summaries; other sources keep their cached rows.
 const CODEX_USAGE_VERSION = 1;
+// DSH reasoning is a subset of reported output; invalidate only DSH rows.
+const DSH_USAGE_VERSION = 1;
 const EDIT_TOOLS = new Set([
   "apply_patch",
   "edit",
@@ -2358,7 +2360,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
         // `recheck` deliberately skips the TTL so Refresh always re-walks the
         // directories; the per-file stat reuse below still avoids re-parsing.
         !recheck &&
-        !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION &&
+        !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.dsh_usage_version === DSH_USAGE_VERSION &&
         Number.isFinite(checkedAt) &&
         Date.now() - checkedAt < Math.max(0, Number(cacheTtlMs) || 0)
       ) {
@@ -2405,7 +2407,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   // transcript, so a transient read/parse failure can recover without waiting
   // for the file itself to change.
   const retrySkippedOnRecheck = recheck && Number(previousMeta?.skipped_files) > 0;
-  if (!force && !retrySkippedOnRecheck && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.signature === signature) {
+  if (!force && !retrySkippedOnRecheck && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.dsh_usage_version === DSH_USAGE_VERSION && previousMeta.signature === signature) {
     const cached = readSidecarWithMeta(sidecarPath, previousMeta);
     // A missing/corrupt sidecar reads as an empty list. The source signature
     // can still match, so only an explicit refresh used to notice the loss;
@@ -2461,7 +2463,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       continue;
     }
     let rows = null;
-    if (!force && !(entry.source === "codex" && previousMeta?.codex_usage_version !== CODEX_USAGE_VERSION) && !(entry.source === "zcode" && retryZcodeScan) && !(entry.source === "opencode" && retryOpencodeScan) && !(entry.source === "kimi" && retryKimiScan) && !(entry.source === "omp" && retryOmpScan) && !(entry.source === "dsh" && retryDshScan) && previousFiles[cacheKey]?.stat_key === statKey) {
+    if (!force && !(entry.source === "codex" && previousMeta?.codex_usage_version !== CODEX_USAGE_VERSION) && !(entry.source === "zcode" && retryZcodeScan) && !(entry.source === "opencode" && retryOpencodeScan) && !(entry.source === "kimi" && retryKimiScan) && !(entry.source === "omp" && retryOmpScan) && !(entry.source === "dsh" && (retryDshScan || previousMeta?.dsh_usage_version !== DSH_USAGE_VERSION)) && previousFiles[cacheKey]?.stat_key === statKey) {
       if (entry.source === "zcode" || entry.source === "opencode" || entry.source === "kimi" || entry.source === "omp" || entry.source === "dsh") {
         // One db scans to many cached rows; recover them all from the previous
         // pass. An empty recovery means the sidecar lost its rows — rescan.
@@ -2561,6 +2563,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     await writeAtomic(metaPath, `${JSON.stringify({
       version: SIDECAR_VERSION,
       codex_usage_version: incompleteCodexUsage ? 0 : CODEX_USAGE_VERSION,
+      dsh_usage_version: DSH_USAGE_VERSION,
       signature,
       generated_at: generatedAt,
       checked_at: generatedAt,

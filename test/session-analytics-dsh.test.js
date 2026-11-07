@@ -24,6 +24,7 @@ const os = require("node:os");
 const path = require("node:path");
 const zlib = require("node:zlib");
 const { test } = require("node:test");
+const { computeRowCost } = require("../src/lib/pricing");
 
 const {
   buildSessionAnalytics,
@@ -546,4 +547,122 @@ test("the transcript cache budget tracks event metadata, not entry count", async
   } finally {
     resetDshTranscriptCacheForTests();
   }
+});
+
+const REASONING_TOKENS = {
+  input_tokens: 100,
+  cached_input_tokens: 40,
+  cache_creation_input_tokens: 10,
+  output_tokens: 5,
+  reasoning_output_tokens: 15,
+  total_tokens: 170,
+};
+
+function assertReasoningUsage(row) {
+  assert.deepEqual(row.tokens, REASONING_TOKENS);
+  assert.equal(row.total_tokens, 170);
+  const expectedCost = computeRowCost({ source: "dsh", model: "deepseek-v4-pro", ...REASONING_TOKENS });
+  assert.ok(expectedCost > 0);
+  assert.equal(row.cost_usd, expectedCost);
+  assert.equal(row.model_usage[0].output_tokens, 5);
+  assert.equal(row.model_usage[0].reasoning_output_tokens, 15);
+  assert.equal(row.model_usage[0].total_tokens, 170);
+}
+
+async function legacyReasoningSidecar(t) {
+  const home = fixture(t);
+  const file = await writeTranscript(path.join(home, ".dsh"), {
+    records: [dshHeader(), userEntry("u-reasoning"), assistantEntry("m-reasoning", {
+      input: 100, output: 20, cacheRead: 40, cacheWrite: 10, reasoningTokens: 15,
+    })],
+  });
+  const claudeFile = path.join(home, ".claude", "projects", "test", "claude.jsonl");
+  fs.mkdirSync(path.dirname(claudeFile), { recursive: true });
+  fs.writeFileSync(claudeFile, JSON.stringify({
+    type: "assistant", sessionId: "claude-unchanged", timestamp: new Date(T0).toISOString(),
+    message: { id: "claude-message", model: "claude-sonnet-4", usage: { input_tokens: 5, output_tokens: 1 }, content: [] },
+  }) + "\n");
+  await buildSessionAnalytics({ home, force: true });
+  const sidecar = resolveSessionSidecarPath(home);
+  const metaPath = sidecar + ".meta.json";
+  const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+  delete meta.dsh_usage_version;
+  fs.writeFileSync(metaPath, JSON.stringify(meta) + "\n");
+  const rows = fs.readFileSync(sidecar, "utf8").trim().split("\n").map(JSON.parse);
+  assert.equal(rows.filter((row) => row.source === "claude").length, 1);
+  function legacyCounts(value) {
+    if (!value || typeof value !== "object") return;
+    if (Object.hasOwn(value, "output_tokens")) value.output_tokens = 20;
+    if (Object.hasOwn(value, "total_tokens")) value.total_tokens = 185;
+    for (const child of Object.values(value)) legacyCounts(child);
+  }
+  for (const row of rows) {
+    if (row.source === "dsh") legacyCounts(row);
+    else row.cache_reuse_probe = "keep unrelated cached row";
+  }
+  fs.writeFileSync(sidecar, rows.map(JSON.stringify).join("\n") + "\n");
+  resetDshTranscriptCacheForTests();
+  t.after(() => resetDshTranscriptCacheForTests());
+  return { home, file, sidecar, metaPath, meta };
+}
+
+test("DSH reasoning is billed once in session and per-model usage", async (t) => {
+  const home = fixture(t);
+  await writeTranscript(path.join(home, ".dsh"), {
+    records: [dshHeader(), userEntry("u-reasoning"), assistantEntry("m-reasoning", {
+      input: 100, output: 20, cacheRead: 40, cacheWrite: 10, reasoningTokens: 15,
+    })],
+  });
+  const rows = await buildSessionAnalytics({ home, force: true });
+  assertReasoningUsage(rows.find((row) => row.source === "dsh"));
+});
+
+for (const recheck of [false, true]) {
+  test(`DSH usage migration bypasses ${recheck ? "signature" : "TTL"} cache without rebuilding other providers`, async (t) => {
+    const { home, metaPath, meta } = await legacyReasoningSidecar(t);
+    const rows = await buildSessionAnalytics({ home, recheck });
+    assertReasoningUsage(rows.find((row) => row.source === "dsh"));
+    assert.equal(rows.find((row) => row.source === "claude").cache_reuse_probe, "keep unrelated cached row");
+    const upgraded = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    assert.equal(upgraded.dsh_usage_version, 1);
+    assert.equal(upgraded.codex_usage_version, meta.codex_usage_version);
+    assert.equal(upgraded.version, meta.version);
+    assert.equal(upgraded.signature, meta.signature);
+    assert.deepEqual(upgraded.files, meta.files);
+    for (const nextRecheck of [false, true]) {
+      const again = await buildSessionAnalytics({ home, recheck: nextRecheck });
+      assertReasoningUsage(again.find((row) => row.source === "dsh"));
+      assert.equal(again.find((row) => row.source === "claude").cache_reuse_probe, "keep unrelated cached row");
+    }
+  });
+}
+
+test("incomplete DSH usage migration preserves the old snapshot and retries unchanged files", async (t) => {
+  const { home, file, sidecar, metaPath, meta } = await legacyReasoningSidecar(t);
+  const snapshot = fs.readFileSync(sidecar, "utf8");
+  const metaSnapshot = fs.readFileSync(metaPath, "utf8");
+  const fsp = require("node:fs/promises");
+  const originalOpen = fsp.open;
+  const mockedOpen = t.mock.method(fsp, "open", async function (target, ...args) {
+    if (target === file) throw Object.assign(new Error("synthetic read denial"), { code: "EACCES" });
+    return originalOpen.call(this, target, ...args);
+  });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const partial = await buildSessionAnalytics({ home });
+    assert.equal(partial.skippedFiles, 1);
+    assert.equal(partial.find((row) => row.source === "dsh").total_tokens, 185);
+    assert.equal(fs.readFileSync(sidecar, "utf8"), snapshot);
+    assert.equal(fs.readFileSync(metaPath, "utf8"), metaSnapshot);
+    assert.equal(fs.existsSync(metaPath + ".dsh-incomplete"), true);
+  }
+  mockedOpen.mock.restore();
+  const recovered = await buildSessionAnalytics({ home });
+  assert.equal(recovered.skippedFiles, 0);
+  assertReasoningUsage(recovered.find((row) => row.source === "dsh"));
+  assert.equal(recovered.find((row) => row.source === "claude").cache_reuse_probe, "keep unrelated cached row");
+  const upgraded = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+  assert.equal(upgraded.dsh_usage_version, 1);
+  assert.equal(upgraded.signature, meta.signature);
+  assert.equal(fs.existsSync(metaPath + ".dsh-incomplete"), false);
+  assertReasoningUsage((await buildSessionAnalytics({ home })).find((row) => row.source === "dsh"));
 });

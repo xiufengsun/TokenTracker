@@ -24377,9 +24377,9 @@ async function parseTraeCnApiIncremental({
 // (epoch ms), and `data`. Token accounting rides on `assistant/message` events
 // (`data.usage`), and the model on the same event's `data.message.source.model`
 // (falling back to the most recent `request/header` config). Usage counts are
-// DISJOINT — `inputTokens` is uncached input only, cache reads/writes and
-// reasoning travel separately — so the mapping to our queue columns is direct
-// (no cache subtraction, unlike Codex).
+// `inputTokens` is uncached input only and cache reads/writes are separate.
+// `reasoningTokens` is a SUBSET of `outputTokens`; normalize output/reasoning
+// into disjoint queue columns so local and cloud pricing count them once.
 //
 // Zstd artifacts are a concatenated-frame container: a single decompress call
 // decodes only the first frame (silently dropping every event line), so we
@@ -24394,9 +24394,10 @@ async function parseTraeCnApiIncremental({
 const DSH_SESSION_LOG_MAX_BYTES = 64 * 1024 * 1024;
 const DSH_SESSION_TEXT_MAX_BYTES = 128 * 1024 * 1024;
 const DSH_SOURCE = "dsh";
-// v2 excludes fork seeds and replayed assistant identities. Old ledgers need
-// a verified replacement, not a reset of the provider-wide hourly totals.
-const DSH_ACCOUNTING_VERSION = 2;
+// v2 excludes fork seeds and replayed assistant identities. v3 also removes
+// reasoning double-counting. Old ledgers need a verified replacement under
+// their ORIGINAL accounting version, never a provider-wide reset.
+const DSH_ACCOUNTING_VERSION = 3;
 
 // Precedence mirrors the harness's own resolveDshHome: an explicit
 // TokenTracker override, then the harness's $DSH_HOME, then `~/.dsh`. Tests
@@ -24754,7 +24755,24 @@ function dshContributionsFromDeltas(deltas) {
   return contributions;
 }
 
-function legacyDshContributionsFromSnapshot(snapshot, previousState) {
+function dshDeltasForAccountingVersion(parsed, previousState, messageOwners = {}) {
+  const version = previousState?.accountingVersion;
+  const deltas = version === DSH_ACCOUNTING_VERSION ? parsed.deltas
+    : version === 2 ? parsed.legacyDeltas : parsed.rawDeltas;
+  // v2 already excluded messages owned by another session. Preserve that
+  // historical decision while reconstructing its pre-reasoning-fix totals.
+  return version >= 2 ? deltas.filter((delta) => !delta.messageId ||
+    !messageOwners[`a:${delta.messageId}`] ||
+    messageOwners[`a:${delta.messageId}`] === previousState.sessionId) : deltas;
+}
+
+function dshDeltaInHistoricalPrefix(delta, previousState) {
+  return delta.seq != null ? delta.seq <= previousState.lastSeq
+    : previousState.accountingVersion >= 2 && Number.isSafeInteger(previousState.lastLine) &&
+      delta.line <= previousState.lastLine;
+}
+
+function legacyDshContributionsFromSnapshot(snapshot, previousState, messageOwners = {}) {
   if (
     !snapshot?.text ||
     !previousState ||
@@ -24773,21 +24791,25 @@ function legacyDshContributionsFromSnapshot(snapshot, previousState) {
     parsed.maxSeq < previousState.lastSeq) return null;
   // The pre-ledger parser replayed unknown-sequence usage on every pass, so
   // there is no safe prefix boundary for such a record. Defer instead.
-  const priorDeltas = previousState.accountingVersion === DSH_ACCOUNTING_VERSION
-    ? parsed.deltas : parsed.rawDeltas;
-  if (priorDeltas.some((delta) => !Number.isSafeInteger(delta.seq))) return null;
+  const priorDeltas = dshDeltasForAccountingVersion(parsed, previousState, messageOwners);
+  if (priorDeltas.some((delta) => !Number.isSafeInteger(delta.seq)) &&
+    !(previousState.accountingVersion >= 2 && Number.isSafeInteger(previousState.lastLine))) return null;
   return dshContributionsFromDeltas(
-    priorDeltas.filter((delta) => delta.seq <= previousState.lastSeq),
+    priorDeltas.filter((delta) => dshDeltaInHistoricalPrefix(delta, previousState)),
   );
 }
 
 // When the old and new artifacts differ, aggregate equality alone does not
 // establish that the replacement contains the historical events. Match the
 // count-only metadata as a multiset, allowing seq rewrites but no lost events.
-function dshRawUsageCoversPrefix(candidate, snapshot, previousState) {
+function dshRawUsageCoversPrefix(candidate, snapshot, previousState, messageOwners = null) {
   if (!snapshot?.text || !previousState) return false;
-  const prefix = extractDshSessionUsage(snapshot.text).rawDeltas
-    .filter((delta) => delta.seq != null && delta.seq <= previousState.lastSeq);
+  const parsed = extractDshSessionUsage(snapshot.text);
+  // For v2 upgrades, every previously counted event must still be eligible,
+  // not merely present as a newly inherited seed in the replacement's raw log.
+  const priorDeltas = messageOwners
+    ? dshDeltasForAccountingVersion(parsed, previousState, messageOwners) : parsed.rawDeltas;
+  const prefix = priorDeltas.filter((delta) => dshDeltaInHistoricalPrefix(delta, previousState));
   const key = (delta) => JSON.stringify([
     delta.messageId, delta.model, delta.timeMs, delta.totals,
   ]);
@@ -24949,9 +24971,9 @@ function normalizeDshModelName(value) {
   return name ? name : null;
 }
 
-// Convert a harness `TokenUsage` object into our queue `totals` delta. Counts
-// are disjoint, so every column maps 1:1; returns null for an all-zero usage.
-function dshUsageToTotals(usage) {
+// Keep the former interpretation only for proving pre-v3 historical ledgers.
+// Do not use these overlapping output/reasoning columns for new queue rows.
+function dshLegacyUsageToTotals(usage) {
   if (!usage || typeof usage !== "object") return null;
   const input = toNonNegativeInt(usage.inputTokens);
   const output = toNonNegativeInt(usage.outputTokens);
@@ -24970,6 +24992,23 @@ function dshUsageToTotals(usage) {
     total_tokens: input + output + cacheRead + cacheWrite + reasoning,
     conversation_count: 1,
   };
+}
+
+// Harness TokenUsage defines reasoningTokens as included in outputTokens:
+// https://github.com/deepseek-ai/deepseek-harness/blob/fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159/docs/subsystems/llm-streaming.md#L334-L360
+// Our generic DSH pricing sums output + reasoning, so split them here. Bound
+// malformed reasoning to output rather than inventing additional output usage.
+function normalizeDshReasoningTotals(totals) {
+  if (!totals) return null;
+  const reasoning = Math.min(totals.reasoning_output_tokens, totals.output_tokens);
+  const total = totals.total_tokens - totals.reasoning_output_tokens;
+  if (total === 0) return null;
+  return { ...totals, output_tokens: totals.output_tokens - reasoning,
+    reasoning_output_tokens: reasoning, total_tokens: total };
+}
+
+function dshUsageToTotals(usage) {
+  return normalizeDshReasoningTotals(dshLegacyUsageToTotals(usage));
 }
 
 // Return one top-level JSON object property's raw value slice without parsing
@@ -25199,8 +25238,9 @@ function isCompleteDshJsonLine(raw) {
 }
 
 // Read routing metadata and counts only; never materialize message content.
-// rawDeltas preserves the former seq-only interpretation for migration proof.
-// deltas excludes the inherited prefix and repeated assistant message ids.
+// rawDeltas preserves the original seq-only totals for migration proof.
+// legacyDeltas applies v2 fork/replay filtering with those ORIGINAL totals.
+// deltas additionally normalizes reasoning for v3 counting and pricing.
 function extractDshSessionUsage(text, lastSeq = -1, lastLine = -1) {
   const rawDeltas = [];
   const watermark = Number.isFinite(lastSeq) ? lastSeq : -1;
@@ -25265,7 +25305,7 @@ function extractDshSessionUsage(text, lastSeq = -1, lastLine = -1) {
       (source && parseDshJsonString(findDshJsonProperty(source, "model"))) ||
       parseDshJsonString(findDshJsonProperty(data, "model")),
     ) || headerModel;
-    const totals = dshUsageToTotals(parseDshUsageSlice(
+    const totals = dshLegacyUsageToTotals(parseDshUsageSlice(
       findDshJsonProperty(data, "usage") || findDshJsonProperty(line, "usage"),
     ));
     if (!model || !totals) continue;
@@ -25281,7 +25321,7 @@ function extractDshSessionUsage(text, lastSeq = -1, lastLine = -1) {
 
   const seedComplete = !isSeeded || inheritedThrough >= 0 || seedLength != null;
   const seen = new Set();
-  const deltas = rawDeltas.filter((delta) => {
+  const legacyDeltas = rawDeltas.filter((delta) => {
     if (delta.messageId) {
       if (seen.has(delta.messageId)) return false;
       // Claim before applying the watermark: a replay at a newer seq is not new.
@@ -25292,7 +25332,9 @@ function extractDshSessionUsage(text, lastSeq = -1, lastLine = -1) {
     if (seedLength != null && (delta.seq == null || delta.seq < seedLength)) return false;
     return delta.seq != null ? delta.seq > watermark : delta.line > lastLine;
   });
-  return { deltas, rawDeltas, maxSeq, maxLine, sessionId, complete, seedComplete };
+  const deltas = legacyDeltas.map((delta) => ({ ...delta,
+    totals: normalizeDshReasoningTotals(delta.totals) })).filter((delta) => delta.totals);
+  return { deltas, legacyDeltas, rawDeltas, maxSeq, maxLine, sessionId, complete, seedComplete };
 }
 
 // Incremental parser entrypoint. Mirrors the other passive JSONL readers:
@@ -25341,7 +25383,7 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
   const deferredFilePaths = new Set();
   const legacyAliases = new Map();
   for (const [filePath, state] of Object.entries(fileState)) {
-    if (!state?.sessionId || state.accountingVersion === DSH_ACCOUNTING_VERSION) continue;
+    if (!state?.sessionId || state.accountingVersion >= 2) continue;
     const aliases = legacyAliases.get(state.sessionId) || [];
     aliases.push(filePath);
     legacyAliases.set(state.sessionId, aliases);
@@ -25541,9 +25583,7 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
       // A pure rename preserves the same bytes. Reusing the parsed full
       // contribution is safe here because replacement below subtracts and
       // re-adds it; no sequence watermark is transferred.
-      oldContributions = dshContributionsFromDeltas(
-        previousState.accountingVersion === DSH_ACCOUNTING_VERSION ? parsed.deltas : parsed.rawDeltas,
-      );
+      oldContributions = legacyDshContributionsFromSnapshot(snapshot, previousState, messageOwners);
     }
 
     // Cursors written before the contribution ledger existed can still be
@@ -25554,10 +25594,10 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
     if (sessionId && previousPath && !oldContributions) {
       const oldState = fileState[previousPath];
       const oldSnapshot = await readDshSessionSnapshot(previousPath).catch(() => null);
-      oldContributions = legacyDshContributionsFromSnapshot(oldSnapshot, oldState);
+      oldContributions = legacyDshContributionsFromSnapshot(oldSnapshot, oldState, messageOwners);
     }
     if (sessionId && upgradeCurrentFile && !oldContributions) {
-      oldContributions = legacyDshContributionsFromSnapshot(snapshot, prev);
+      oldContributions = legacyDshContributionsFromSnapshot(snapshot, prev, messageOwners);
     }
     const replaceSession = Boolean(
       sessionId &&
@@ -25626,7 +25666,7 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
     });
     // Known ownership is stronger evidence than bucket totals. An equal or
     // larger divergent alias can still omit a previously counted message.
-    const ownedIds = new Set(parsed.deltas.map((delta) => delta.messageId).filter(Boolean));
+    const ownedIds = new Set(parsed.legacyDeltas.map((delta) => delta.messageId).filter(Boolean));
     const dropsOwnedId = replaceSession && Object.entries(messageOwners).some(([key, value]) =>
       value === owner && !ownedIds.has(key.slice(2)),
     );
@@ -25637,17 +25677,26 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
       continue;
     }
     const correctedContributions = dshContributionsFromDeltas(acceptedDeltas);
-    if (replaceSession && !dshContributionsCoverPrior(oldContributions, correctedContributions)) {
+    const baselineState = previousState || prev;
+    if (replaceSession && (baselineState?.accountingVersion === 2 ||
+      !dshContributionsCoverPrior(oldContributions, correctedContributions))) {
       // Aggregate >= is not proof: a cropped transcript can substitute larger
       // unrelated/replayed usage for a lost event. Reconstruct EXACTLY the
       // acknowledged prefix before allowing a downward/zero correction.
-      const baselineState = previousState || prev;
       let baselineSnapshot = snapshot;
       if (previousPath && !sameDshSessionMetadata(baselineState, snapshot)) {
         baselineSnapshot = await readDshSessionSnapshot(previousPath).catch(() => null);
       }
-      const proven = legacyDshContributionsFromSnapshot(baselineSnapshot, baselineState);
+      const proven = legacyDshContributionsFromSnapshot(baselineSnapshot, baselineState, messageOwners);
+      // v2 already repaired forks/replays. This upgrade may only remove the
+      // reasoning overlap, not reinterpret previously counted events as seeds.
+      const priorVersionCandidate = dshContributionsFromDeltas(
+        dshDeltasForAccountingVersion(parsed, baselineState, messageOwners),
+      );
       if (baselineState?.accountingVersion === DSH_ACCOUNTING_VERSION ||
+        (baselineState?.accountingVersion === 2 &&
+          (!dshContributionsCoverPrior(oldContributions, priorVersionCandidate) ||
+            !dshRawUsageCoversPrefix(parsed.legacyDeltas, baselineSnapshot, baselineState, messageOwners))) ||
         !proven || !dshContributionsCoverPrior(oldContributions, proven) ||
         !dshContributionsCoverPrior(proven, oldContributions) ||
         !dshRawUsageCoversPrefix(parsed.rawDeltas, baselineSnapshot, baselineState)) {
