@@ -11659,7 +11659,7 @@ async function parseWorkbuddyIncremental({
         return;
       }
       const tsMs =
-        Number.isFinite(Number(entry.timestamp)) && Number(entry.timestamp) > 0
+        Number.isFinite(new Date(Number(entry.timestamp)).getTime()) && Number(entry.timestamp) > 0
           ? Number(entry.timestamp)
           : null;
       // One usage record per LLM round-trip; providerData.messageId is the
@@ -11723,7 +11723,7 @@ async function parseWorkbuddyIncremental({
           bucketsQueued: touchedBuckets.size,
         });
       }
-    });
+    }, { recoverReadErrors: true });
 
     // As in the project pass, acknowledge only records consumed in full. An
     // unfinished tail or an append after EOF must remain visible next sync.
@@ -11838,7 +11838,7 @@ async function parseWorkbuddyIncremental({
           if (sqliteSession?.detailed || tracedSessionIds.has(sessionId)) return;
 
           const tsMs =
-            Number.isFinite(Number(entry.timestamp)) && Number(entry.timestamp) > 0
+            Number.isFinite(new Date(Number(entry.timestamp)).getTime()) && Number(entry.timestamp) > 0
               ? Number(entry.timestamp)
               : null;
           if (tsMs == null) return;
@@ -11878,6 +11878,7 @@ async function parseWorkbuddyIncremental({
           addTotals(projectBucket.totals, delta);
           projectTouchedBuckets.add(projectBucketKey(projectKey, source, bucketStart));
         },
+        { recoverReadErrors: true },
       );
 
       // Commit only past records that were read in full: a record appended
@@ -16879,7 +16880,7 @@ function ompEntryTimestampMs(msg, entry) {
 // records are orders of magnitude smaller.
 const OMP_LIKE_MAX_RECORD_BYTES = 64 * 1024 * 1024;
 
-async function scanOmpLikeTranscript(filePath, startOffset, maxRecordBytes, onEntry) {
+async function scanOmpLikeTranscript(filePath, startOffset, maxRecordBytes, onEntry, { recoverReadErrors = false } = {}) {
   let stream;
   try {
     stream = fssync.createReadStream(filePath, { start: startOffset });
@@ -16888,26 +16889,33 @@ async function scanOmpLikeTranscript(filePath, startOffset, maxRecordBytes, onEn
   }
   let scannedEndOffset = startOffset;
   let committedEndOffset = startOffset;
-  for await (const record of physicalJsonlRecords(stream, {
-    invalidUtf8: "record",
-    maxRecordBytes,
-  })) {
-    scannedEndOffset += record.physicalBytes;
-    if (record.terminated) {
-      committedEndOffset = scannedEndOffset;
-      if (record.oversized || !record.utf8Valid || !record.line || !record.line.trim()) continue;
+  try {
+    for await (const record of physicalJsonlRecords(stream, {
+      invalidUtf8: "record",
+      maxRecordBytes,
+    })) {
+      scannedEndOffset += record.physicalBytes;
+      if (record.terminated) {
+        committedEndOffset = scannedEndOffset;
+        if (record.oversized || !record.utf8Valid || !record.line || !record.line.trim()) continue;
+        let entry;
+        try { entry = JSON.parse(record.line); } catch { continue; }
+        onEntry(entry);
+        continue;
+      }
+      // A final incomplete record may still be in the process of being written.
+      if (record.oversized || !record.utf8Valid || !record.line || !record.line.trim()) break;
       let entry;
-      try { entry = JSON.parse(record.line); } catch { continue; }
+      try { entry = JSON.parse(record.line); } catch { break; }
       onEntry(entry);
-      continue;
+      committedEndOffset = scannedEndOffset;
+      break;
     }
-    // A final incomplete record may still be in the process of being written.
-    if (record.oversized || !record.utf8Valid || !record.line || !record.line.trim()) break;
-    let entry;
-    try { entry = JSON.parse(record.line); } catch { break; }
-    onEntry(entry);
-    committedEndOffset = scannedEndOffset;
-    break;
+  } catch (error) {
+    // WorkBuddy can publish complete records and continue with other files or
+    // fallbacks after a read failure. Unfinished bytes are never acknowledged.
+    // Do not swallow callback/parser errors, or change other readers' policy.
+    if (!recoverReadErrors || stream.errored !== error) throw error;
   }
   return committedEndOffset;
 }

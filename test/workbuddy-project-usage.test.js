@@ -6,6 +6,8 @@ const fs = require("node:fs/promises");
 const fssync = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { Readable } = require("node:stream");
+const { setImmediate: nextTurn } = require("node:timers/promises");
 const { parseWorkbuddyIncremental } = require("../src/lib/rollout");
 const { openCursorStore } = require("../src/lib/cursor-store");
 
@@ -335,3 +337,148 @@ test("WorkBuddy project pass tolerates a JSON null line without aborting", async
   assert.equal((await rows(f.queuePath)).at(-1).total_tokens, 340);
   assert.equal((await rows(f.projectQueuePath)).at(-1).total_tokens, 340);
 });
+
+for (const source of ["workbuddy", "workbuddy-ai"]) {
+  for (const pass of ["totals", "project"]) {
+    test(`${source} ${pass} read failures commit only complete records and do not block other files`, async (t) => {
+      const f = await fixture(t);
+      f.source = source;
+      f.env.WORKBUDDY_AI_HOME = path.join(f.dir, "wb-ai-home");
+      const trackerDir = path.join(f.dir, "tracker");
+      let store = await openCursorStore({ trackerDir, forceV2: true });
+      f.cursors = store.cursors;
+      const reopen = async () => {
+        await store.commit(f.cursors);
+        store = await openCursorStore({ trackerDir, forceV2: true });
+        f.cursors = store.cursors;
+      };
+      const first = record("first", 100, { cwd: f.project }) + "\n";
+      await fs.writeFile(f.file, first);
+      await parseWorkbuddyIncremental(f);
+      await reopen();
+
+      const second = record("second", 200, { cwd: f.project }) + "\n";
+      const third = record("third", 300, { cwd: f.project }) + "\n";
+      await fs.appendFile(f.file, second + third);
+      const healthy = path.join(f.dir, "projects", "healthy.jsonl");
+      await fs.writeFile(healthy, record("healthy", 400, { cwd: f.project, session: "healthy" }) + "\n");
+      const trace = path.join(f.dir, "trace.json");
+      await fs.writeFile(trace, JSON.stringify({ trace: {
+        traceId: "same-session-trace", sessionId: "s1", startedAt: time,
+        modelInfo: { totalInputTokens: 600, totalOutputTokens: 60 },
+      } }));
+      f.projectFiles.push(healthy, { path: trace, kind: "trace" });
+
+      const original = fssync.createReadStream;
+      let scans = 0;
+      let injected = false;
+      fssync.createReadStream = function (filePath, options) {
+        // Cwd lookup is bounded; inject only into the totals/project stream.
+        if (filePath === f.file && options?.end === undefined) {
+          scans++;
+          if (scans === (pass === "totals" ? 1 : 2)) {
+            injected = true;
+            return Readable.from((async function* () {
+              yield Buffer.from(second + third.slice(0, -5));
+              await nextTurn();
+              throw Object.assign(new Error("synthetic read failure"), { code: "EIO" });
+            })());
+          }
+        }
+        return original.call(this, filePath, options);
+      };
+      try {
+        await parseWorkbuddyIncremental(f);
+      } finally {
+        fssync.createReadStream = original;
+      }
+      assert.equal(injected, true);
+      const failedOffsets = pass === "totals" ? "fileOffsets" : "projectFileOffsets";
+      assert.equal(f.cursors[source][failedOffsets][f.file].size, Buffer.byteLength(first + second));
+      assert.equal((await rows(f.queuePath)).at(-1).total_tokens, pass === "totals" ? 760 : 1080);
+      assert.equal((await rows(f.projectQueuePath)).at(-1).total_tokens, pass === "project" ? 760 : 1080);
+      assert.equal(f.cursors[source].tracedSessionIds.includes("s1"), false);
+
+      await reopen();
+      await parseWorkbuddyIncremental(f);
+      assert.equal((await rows(f.queuePath)).at(-1).total_tokens, 1080);
+      assert.equal((await rows(f.projectQueuePath)).at(-1).total_tokens, 1080);
+      await reopen();
+      const totalsBefore = await fs.readFile(f.queuePath, "utf8");
+      const projectsBefore = await fs.readFile(f.projectQueuePath, "utf8");
+      await parseWorkbuddyIncremental(f);
+      assert.equal(await fs.readFile(f.queuePath, "utf8"), totalsBefore);
+      assert.equal(await fs.readFile(f.projectQueuePath, "utf8"), projectsBefore);
+    });
+  }
+}
+
+test("WorkBuddy unreadable JSONL still permits trace fallback without replaying it on recovery", async (t) => {
+  const f = await fixture(t);
+  await fs.writeFile(f.file, record("unreadable", 100, { cwd: f.project }) + "\n");
+  const healthy = path.join(f.dir, "projects", "healthy.jsonl");
+  await fs.writeFile(healthy, record("healthy", 200, { cwd: f.project, session: "healthy" }) + "\n");
+  const trace = path.join(f.dir, "trace.json");
+  await fs.writeFile(trace, JSON.stringify({ trace: {
+    traceId: "unreadable-trace", sessionId: "s1", startedAt: time,
+    modelInfo: { model: "deepseek-v4.1-flash", totalInputTokens: 100, totalOutputTokens: 20 },
+  } }));
+  f.projectFiles.push(healthy, { path: trace, kind: "trace" });
+  const original = fssync.createReadStream;
+  fssync.createReadStream = function (filePath, options) {
+    if (filePath === f.file && options?.end === undefined) {
+      return Readable.from((async function* () {
+        throw Object.assign(new Error("synthetic open failure"), { code: "EACCES" });
+      })());
+    }
+    return original.call(this, filePath, options);
+  };
+  try {
+    await parseWorkbuddyIncremental(f);
+  } finally {
+    fssync.createReadStream = original;
+  }
+  assert.equal(f.cursors.workbuddy.fileOffsets[f.file].size, 0);
+  assert.equal(f.cursors.workbuddy.projectFileOffsets[f.file].size, 0);
+  assert.equal((await rows(f.queuePath)).at(-1).total_tokens, 340);
+  assert.equal((await rows(f.projectQueuePath)).at(-1).total_tokens, 220);
+  assert.deepEqual(f.cursors.workbuddy.tracedSessionIds, ["s1"]);
+  f.cursors = JSON.parse(JSON.stringify(f.cursors));
+  const before = await fs.readFile(f.queuePath, "utf8");
+  await parseWorkbuddyIncremental(f);
+  assert.equal(await fs.readFile(f.queuePath, "utf8"), before);
+  assert.equal((await rows(f.projectQueuePath)).at(-1).total_tokens, 220);
+});
+
+test("WorkBuddy callback failures still reject without publishing partial cursors", async (t) => {
+  const f = await fixture(t);
+  await fs.writeFile(f.file, record("first", 100, { cwd: f.project }) + "\n");
+  const error = new Error("progress callback failed");
+  await assert.rejects(parseWorkbuddyIncremental({ ...f, onProgress: () => { throw error; } }), error);
+  assert.deepEqual(f.cursors, {});
+});
+
+for (const source of ["workbuddy", "workbuddy-ai"]) {
+  for (const projectOnly of [false, true]) {
+    test(`${source} ${projectOnly ? "project backfill" : "totals and projects"} skips out-of-range timestamps`, async (t) => {
+      const f = await fixture(t);
+      f.source = source;
+      f.env.WORKBUDDY_AI_HOME = path.join(f.dir, "wb-ai-home");
+      const invalid = JSON.parse(record("invalid", 500, { cwd: f.project }));
+      invalid.timestamp = 8640000000000001;
+      const input = [record("first", 100, { cwd: f.project }), JSON.stringify(invalid), record("second", 200, { cwd: f.project }), ""].join("\n");
+      await fs.writeFile(f.file, input);
+      // An independent project backfill must also validate timestamps even
+      // when the totals cursor has already consumed this file.
+      if (projectOnly) f.cursors[source] = { fileOffsets: { [f.file]: { size: Buffer.byteLength(input) } } };
+      await parseWorkbuddyIncremental(f);
+      if (!projectOnly) assert.equal((await rows(f.queuePath)).at(-1).total_tokens, 340);
+      assert.equal((await rows(f.projectQueuePath)).at(-1).total_tokens, 340);
+      assert.equal(f.cursors[source].projectFileOffsets[f.file].size, Buffer.byteLength(input));
+      f.cursors = JSON.parse(JSON.stringify(f.cursors));
+      const before = await fs.readFile(f.projectQueuePath, "utf8");
+      await parseWorkbuddyIncremental(f);
+      assert.equal(await fs.readFile(f.projectQueuePath, "utf8"), before);
+    });
+  }
+}
