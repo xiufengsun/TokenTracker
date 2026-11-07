@@ -13,6 +13,20 @@ import Foundation
 // MARK: - App Group constants
 
 public enum WidgetSharedConstants {
+#if DEBUG
+    /// Shared App Group identifier for the Dev variant: suite-scoped state
+    /// (NativeLocalization's language preference) isolates with it. Entitlements
+    /// are config-independent and intentionally unchanged — an ad-hoc-signed
+    /// Dev build has no provisioned group container, so snapshot delivery rides
+    /// the widget-bundle container fallback below.
+    public static let appGroupIdentifier = "group.com.tokentracker.bar.dev"
+
+    /// Bundle identifier of the Dev widget extension. Used by the host app to
+    /// write snapshot files directly into the widget's sandbox container as
+    /// a fallback path for ad-hoc / dev signed builds where the App Group
+    /// container is not actually provisioned by the system.
+    public static let widgetBundleIdentifier = "com.tokentracker.bar.dev.widget"
+#else
     /// Shared App Group identifier. Must be added to *both* targets'
     /// entitlements (`com.apple.security.application-groups`).
     public static let appGroupIdentifier = "group.com.tokentracker.bar"
@@ -22,6 +36,7 @@ public enum WidgetSharedConstants {
     /// a fallback path for ad-hoc / dev signed builds where the App Group
     /// container is not actually provisioned by the system.
     public static let widgetBundleIdentifier = "com.tokentracker.bar.widget"
+#endif
 
     /// Filename of the snapshot inside the App Group container.
     public static let snapshotFilename = "widget-snapshot.json"

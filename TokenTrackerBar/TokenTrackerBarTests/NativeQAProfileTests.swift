@@ -179,6 +179,7 @@ final class NativeQAProfileTests: XCTestCase {
             for message: [String: Any] in [
                 ["type": "action", "name": "syncNow"], ["type": "requestNotificationPermission"],
                 ["type": "setSetting", "key": "launchAtLogin", "value": true],
+                ["type": "setSetting", "key": "launchSilently", "value": true],
                 ["type": "setSetting", "key": "currency", "value": NSNull()],
                 ["type": "setSetting", "key": "currency", "value": String(repeating: "a", count: 21)],
                 ["type": "setSetting", "key": "exchangeRate", "value": true],

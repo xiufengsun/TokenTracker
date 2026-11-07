@@ -196,7 +196,8 @@ final class NativeBridge {
                 "showStats": false, "menuBarItems": [], "menuBarAvailableItems": [], "menuBarMaxItems": 3,
                 "menuBarIconStyle": "static", "animatedIcon": false, "toastOnReset": false,
                 "confettiOnReset": false, "autoUpdateEnabled": false, "launchAtLogin": false,
-                "launchAtLoginSupported": false, "dynamicIslandEnabled": false,
+                "launchAtLoginSupported": false, "launchSilently": false,
+                "launchSilentlySupported": false, "dynamicIslandEnabled": false,
                 "dynamicIslandSupported": false, "hideMenuBarIcon": false, "isSyncing": false,
                 "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
                 "updateStatus": NSNull(), "updateBusy": false, "locale": NativeLocalization.currentPreference,
@@ -335,6 +336,7 @@ final class NativeBridge {
             "autoUpdateEnabled": UpdateChecker.shared.autoUpdateEnabled,
             "launchAtLogin": launchAtLoginValue,
             "launchAtLoginSupported": launchAtLoginSupported,
+            "launchSilently": UserDefaults.standard.bool(forKey: StatusBarController.launchSilentlyKey),
             "dynamicIslandEnabled": UserDefaults.standard.bool(forKey: DynamicIslandController.enabledDefaultsKey),
             "hideMenuBarIcon": UserDefaults.standard.bool(forKey: StatusBarController.hideMenuBarIconKey),
             // macOS-only feature flag: the Windows bridge never sends this, so
@@ -418,6 +420,13 @@ final class NativeBridge {
         case "launchAtLogin":
             if let bool = value as? Bool {
                 setLaunchAtLogin(bool)
+            }
+        case "launchSilently":
+            // No .nativeSettingsChanged post: nothing live depends on this flag
+            // (the menu rebuilds on open, launch reads it once) — the trailing
+            // pushSettings() echo updates the panel, matching launchAtLogin.
+            if let bool = value as? Bool {
+                StatusBarController.setSilentStart(bool)
             }
         case "dynamicIslandEnabled":
             if let bool = value as? Bool {
@@ -556,11 +565,15 @@ final class NativeBridge {
                 Task { await viewModel.triggerSync() }
             }
         case "checkForUpdates":
+            // Unavailable in Debug (Dev variant) builds — the official build
+            // must not be installed over the dev one.
+            #if !DEBUG
             UpdateChecker.shared.check(silent: false)
             // UpdateChecker mutates statusText synchronously; push a follow-up snapshot
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                 self?.pushSettings()
             }
+            #endif
         case "openAbout":
             if let url = URL(string: "https://github.com/xiufengsun/TokenTracker") {
                 NSWorkspace.shared.open(url)

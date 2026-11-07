@@ -11,6 +11,8 @@ const nativeSettingsMock = vi.hoisted(() => ({
     confettiOnReset: true,
     launchAtLogin: false,
     launchAtLoginSupported: true,
+    launchSilently: true,
+    launchSilentlySupported: true,
     autoUpdateEnabled: true,
   },
   setSetting: vi.fn(),
@@ -84,5 +86,47 @@ describe("MenuBarSection limit-reset feedback", () => {
     expect(
       screen.getByRole("button", { name: /settings\.menubar\.checkUpdates/ }),
     ).toBeEnabled();
+  });
+
+  it("toggles silent start from the panel", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <MenuBarSection />
+      </MemoryRouter>,
+    );
+
+    const silentSwitch = screen.getByRole("switch", {
+      name: "settings.menubar.silentStart",
+    });
+    expect(silentSwitch).toHaveAttribute("aria-checked", "true");
+
+    await act(async () => {
+      await user.click(silentSwitch);
+    });
+
+    expect(nativeSettingsMock.setSetting).toHaveBeenCalledWith("launchSilently", false);
+  });
+
+  it("hides silent start when the platform does not support it", () => {
+    const original = nativeSettingsMock.settings;
+    nativeSettingsMock.settings = { ...original, launchSilentlySupported: false };
+    try {
+      render(
+        <MemoryRouter>
+          <MenuBarSection />
+        </MemoryRouter>,
+      );
+
+      expect(
+        screen.queryByRole("switch", { name: "settings.menubar.silentStart" }),
+      ).toBeNull();
+      // The launch-at-login gate is independent and stays visible.
+      expect(
+        screen.getByRole("switch", { name: "settings.menubar.launchAtLogin" }),
+      ).toBeInTheDocument();
+    } finally {
+      nativeSettingsMock.settings = original;
+    }
   });
 });
