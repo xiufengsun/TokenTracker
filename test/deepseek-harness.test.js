@@ -8,7 +8,7 @@
  *   - `resolveDshSessionFiles` finds both plaintext and zstd artifacts
  *   - `readDshSessionText` reassembles a concatenated-frame zstd container
  *     frame-by-frame with a bounded aggregate output
- *   - usage mapping (disjoint input/cache_read/cache_write/reasoning/output)
+ *   - usage mapping (disjoint input/cache columns, reasoning subset of output)
  *   - model from `assistant/message.data.message.source.model` with a
  *     `request/header` fallback
  *   - inherited seed and global message-ID dedup, with seq/line watermarks
@@ -184,7 +184,7 @@ test("normalizeDshModelName drops provider-qualified prefixes", () => {
   assert.equal(normalizeDshModelName("/"), null);
 });
 
-test("dshUsageToTotals maps disjoint columns 1:1 and rejects all-zero", () => {
+test("dshUsageToTotals splits reasoning from inclusive output and rejects all-zero", () => {
   assert.deepEqual(
     dshUsageToTotals({
       inputTokens: 100,
@@ -197,9 +197,9 @@ test("dshUsageToTotals maps disjoint columns 1:1 and rejects all-zero", () => {
       input_tokens: 100,
       cached_input_tokens: 10,
       cache_creation_input_tokens: 5,
-      output_tokens: 50,
+      output_tokens: 43,
       reasoning_output_tokens: 7,
-      total_tokens: 172,
+      total_tokens: 165,
       conversation_count: 1,
     },
   );
@@ -399,10 +399,10 @@ test("parseDshIncremental writes queue rows, dedups on rerun, and adds appended 
   const dshRows = rows.filter((r) => r.source === "dsh");
   assert.equal(dshRows.length, 2, "two distinct half-hour buckets");
   assert.ok(dshRows.every((r) => r.model === "deepseek-v4-pro"));
-  const first = dshRows.find((r) => r.total_tokens === 172);
+  const first = dshRows.find((r) => r.total_tokens === 165);
   assert.ok(first);
   assert.equal(first.input_tokens, 100);
-  assert.equal(first.output_tokens, 50);
+  assert.equal(first.output_tokens, 43);
   assert.equal(first.cached_input_tokens, 10);
   assert.equal(first.cache_creation_input_tokens, 5);
   assert.equal(first.reasoning_output_tokens, 7);
@@ -426,7 +426,7 @@ test("parseDshIncremental writes queue rows, dedups on rerun, and adds appended 
   assert.equal(res3.eventsAggregated, 1, "only the appended event is counted");
   const rows3 = fs.readFileSync(queuePath, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
   const dshTokens = rows3.filter((r) => r.source === "dsh").reduce((s, r) => s + r.total_tokens, 0);
-  assert.equal(dshTokens, 172 + 25 + 330, "no re-count of the seed events");
+  assert.equal(dshTokens, 165 + 25 + 330, "no re-count of the seed events");
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -1034,7 +1034,7 @@ test("parseDshIncremental accepts a replacement session whose seq restarts", asy
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("parseDshIncremental isolates corrupt logs and retains unidentified historical cursors", async () => {
+test("parseDshIncremental isolates corrupt logs and preserves unidentified legacy cursors", async () => {
   const { dir, sessionDir, logPath } = await makeTree({
     compression: "none",
     lines: [
@@ -1066,7 +1066,8 @@ test("parseDshIncremental isolates corrupt logs and retains unidentified histori
   assert.equal(result.eventsAggregated, 1, "healthy sessions still aggregate");
   assert.ok(cursors.dsh.files[logPath]);
   assert.equal(cursors.dsh.files[corruptPath], undefined, "failed logs retry on a later sync");
-  assert.ok(cursors.dsh.files[deletedPath], "unidentified historical state survives missing logs");
+  assert.equal(cursors.dsh.files[deletedPath].lastSeq, 9, "unknown historical usage is not safe to forget");
+  assert.equal(result.deferredMigrations, 1);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -1182,9 +1183,9 @@ test("parseDshIncremental parses DeepSeek Harness v3 session files end-to-end", 
   assert.equal(rows[0].input_tokens, 100);
   assert.equal(rows[0].cached_input_tokens, 50);
   assert.equal(rows[0].cache_creation_input_tokens, 10);
-  assert.equal(rows[0].output_tokens, 40);
+  assert.equal(rows[0].output_tokens, 20);
   assert.equal(rows[0].reasoning_output_tokens, 20);
-  assert.equal(rows[0].total_tokens, 220);
+  assert.equal(rows[0].total_tokens, 200);
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -1192,15 +1193,22 @@ test("parseDshIncremental parses DeepSeek Harness v3 session files end-to-end", 
 
 // Fixtures for the seq-only cursor schema shipped before fork/replay repair.
 // Build the old ledger directly from raw deltas, not through the fixed parser.
-async function legacyDshState(files, queuePath, { ledger = true } = {}) {
+async function legacyDshState(files, queuePath, { ledger = true, accountingVersion } = {}) {
   const cursors = { hourly: { version: 3, buckets: {} }, dsh: { files: {}, sessions: {} } };
   const empty = () => ({ input_tokens: 0, cached_input_tokens: 0,
     cache_creation_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0,
     total_tokens: 0, billable_total_tokens: 0, total_cost_usd: 0, conversation_count: 0 });
+  const owners = {};
   for (const filePath of files) {
     const parsed = extractDshSessionUsage(await readDshSessionText(filePath));
-    const contributions = {};
-    for (const delta of parsed.rawDeltas) {
+    const contributions = accountingVersion === 2
+      ? cursors.dsh.sessions[parsed.sessionId]?.contributions || {} : {};
+    const deltas = accountingVersion === 2 ? parsed.legacyDeltas : parsed.rawDeltas;
+    for (const delta of deltas) {
+      if (accountingVersion === 2 && delta.messageId) {
+        if (owners[`a:${delta.messageId}`]) continue;
+        owners[`a:${delta.messageId}`] = parsed.sessionId;
+      }
       const bucketStart = new Date(Math.floor(delta.timeMs / 1800000) * 1800000).toISOString();
       const key = `dsh|${delta.model}|${bucketStart}`;
       const contribution = contributions[key] ||= { model: delta.model, bucketStart, totals: empty() };
@@ -1213,8 +1221,13 @@ async function legacyDshState(files, queuePath, { ledger = true } = {}) {
     }
     const stat = fs.statSync(filePath);
     cursors.dsh.files[filePath] = { inode: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs,
-      sessionId: parsed.sessionId, lastSeq: parsed.maxSeq, ...(ledger ? { contributions } : {}) };
-    if (ledger && parsed.sessionId) cursors.dsh.sessions[parsed.sessionId] = { lastPath: filePath, contributions };
+      sessionId: parsed.sessionId, lastSeq: parsed.maxSeq, lastLine: parsed.maxLine, accountingVersion,
+      ...(ledger ? { contributions } : {}) };
+    if (ledger && parsed.sessionId) cursors.dsh.sessions[parsed.sessionId] = { lastPath: filePath, accountingVersion, contributions };
+  }
+  if (accountingVersion === 2) {
+    cursors.dsh.accountingVersion = 2;
+    cursors.dsh.messageOwners = owners;
   }
   if (!ledger) delete cursors.dsh.sessions;
   const rows = Object.entries(cursors.hourly.buckets).map(([key, bucket]) => {
@@ -1387,7 +1400,7 @@ for (const ledger of [false, true]) {
       const result = await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
       assert.equal(result.deferredMigrations, 0);
       assert.equal(latestDshTotal(queuePath), 17);
-      assert.equal(cursors.dsh.files[logPath].accountingVersion, 2);
+      assert.equal(cursors.dsh.files[logPath].accountingVersion, 3);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1720,6 +1733,258 @@ for (const divergentTokens of [10, 20]) {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+}
+
+test("dsh reasoning subset matches total and generic local/cloud cost inputs", () => {
+  const { computeRowCost } = require("../src/lib/pricing");
+  const usage = { inputTokens: 9707, cacheReadTokens: 1280, outputTokens: 153, reasoningTokens: 132 };
+  const totals = dshUsageToTotals(usage);
+  assert.equal(totals.total_tokens, 11140);
+  assert.equal(totals.output_tokens, 21);
+  assert.equal(totals.reasoning_output_tokens, 132);
+  const row = { source: "dsh", model: "deepseek-v4-pro", ...totals };
+  const inclusiveRow = { ...row, output_tokens: 153, reasoning_output_tokens: 0 };
+  assert.equal(computeRowCost(row), computeRowCost(inclusiveRow));
+  assert.ok(computeRowCost(row) > 0);
+  assert.equal(totals.output_tokens + totals.reasoning_output_tokens, 153,
+    "generic local and edge pricing add these disjoint columns");
+  const parsed = extractDshSessionUsage([
+    headerLine(), assistantLine(1, usage, { model: "deepseek-v4-pro" }),
+  ].join("\n"));
+  assert.equal(parsed.rawDeltas[0].totals.total_tokens, 11272, "original proof retains inflated totals");
+  assert.equal(parsed.legacyDeltas[0].totals.output_tokens, 153, "v2 proof keeps inclusive output");
+  assert.equal(parsed.deltas[0].totals.total_tokens, 11140);
+});
+
+test("dsh reasoning normalization bounds malformed subsets and handles omitted reasoning", () => {
+  for (const reasoningTokens of [0, 5, 99, -1, "bad", undefined]) {
+    const totals = dshUsageToTotals({ inputTokens: 10, outputTokens: 5, reasoningTokens });
+    assert.equal(totals.total_tokens, 15);
+    assert.ok(totals.output_tokens >= 0 && totals.reasoning_output_tokens <= 5);
+    assert.equal(totals.output_tokens + totals.reasoning_output_tokens, 5);
+  }
+  assert.equal(dshUsageToTotals({ reasoningTokens: 20 }), null);
+  assert.deepEqual(dshUsageToTotals({ outputTokens: 5, reasoningTokens: 99 }), {
+    input_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0,
+    output_tokens: 0, reasoning_output_tokens: 5, total_tokens: 5, conversation_count: 1,
+  });
+});
+
+for (const accountingVersion of [undefined, 2]) {
+  for (const ledger of [false, true]) {
+    test(`dsh repairs reasoning from original historical totals (version=${accountingVersion}, ledger=${ledger})`, async () => {
+      const usage = { inputTokens: 9707, cacheReadTokens: 1280, outputTokens: 153, reasoningTokens: 132 };
+      const { dir, logPath } = await makeTree({ compression: "none", lines: [
+        headerLine("reasoning-upgrade"), requestHeaderLine(0),
+        assistantLine(1, usage, { id: "reasoning-original" }),
+        assistantLine(2, usage, { id: "reasoning-original" }),
+      ] });
+      const queuePath = path.join(dir, "queue.jsonl");
+      try {
+        let cursors = await legacyDshState([logPath], queuePath, { ledger, accountingVersion });
+        assert.equal(latestDshTotal(queuePath), accountingVersion === 2 ? 11272 : 22544);
+        fs.appendFileSync(logPath, assistantLine(3, { inputTokens: 10, outputTokens: 5, reasoningTokens: 3 },
+          { id: "reasoning-new" }) + "\n");
+        const result = await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+        assert.equal(result.deferredMigrations, 0);
+        assert.equal(latestDshTotal(queuePath), 11155);
+        assert.equal(cursors.dsh.files[logPath].accountingVersion, 3);
+        assert.equal(cursors.dsh.messageOwners["a:reasoning-original"], "reasoning-upgrade");
+        const queue = fs.readFileSync(queuePath, "utf8");
+        for (let i = 0; i < 2; i++) {
+          cursors = JSON.parse(JSON.stringify(cursors));
+          const repeated = await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+          assert.equal(repeated.eventsAggregated, 0);
+          assert.equal(fs.readFileSync(queuePath, "utf8"), queue);
+        }
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+  }
+}
+
+test("dsh v2 reasoning upgrade preserves fork filtering, ownership and ID-less line prefixes", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-v2-reasoning-"));
+  const queuePath = path.join(dir, "queue.jsonl");
+  try {
+    const shared = assistantLine(1, { inputTokens: 100, outputTokens: 20, reasoningTokens: 10 },
+      { id: "global-reasoning", model: "deepseek-v4-pro" });
+    const origin = await writeSessionLog(dir, "origin.jsonl", [headerLine("origin"), shared]);
+    const copy = await writeSessionLog(dir, "copy.jsonl", [headerLine("copy"), shared,
+      assistantLine(2, { inputTokens: 10, outputTokens: 5, reasoningTokens: 2 },
+        { id: null, model: "deepseek-v4-pro" }),
+      assistantLine(undefined, { inputTokens: 10, outputTokens: 5, reasoningTokens: 2 },
+        { id: null, model: "deepseek-v4-pro" })]);
+    const fork = await writeSessionLog(dir, "fork.jsonl", [seededHeader("fork"), shared, seedMarker(2),
+      assistantLine(3, { inputTokens: 10, outputTokens: 5, reasoningTokens: 2 },
+        { id: "fork-own", model: "deepseek-v4-pro" })]);
+    const files = [origin, copy, fork];
+    let cursors = await legacyDshState(files, queuePath, { accountingVersion: 2 });
+    assert.equal(latestDshTotal(queuePath), 181);
+    const result = await parseDshIncremental({ sessionFiles: files, cursors, queuePath });
+    assert.equal(result.deferredMigrations, 0);
+    assert.equal(latestDshTotal(queuePath), 165);
+    assert.equal(cursors.dsh.messageOwners["a:global-reasoning"], "origin");
+    cursors = JSON.parse(JSON.stringify(cursors));
+    assert.equal((await parseDshIncremental({ sessionFiles: files, cursors, queuePath })).eventsAggregated, 0);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("dsh v2 reasoning-only malformed usage is retracted without forgetting ownership", async () => {
+  const { dir, logPath } = await makeTree({ compression: "none", lines: [
+    headerLine("reasoning-only"), requestHeaderLine(0),
+    assistantLine(1, { reasoningTokens: 99 }, { id: "reasoning-only-id" }),
+  ] });
+  const queuePath = path.join(dir, "queue.jsonl");
+  try {
+    const cursors = await legacyDshState([logPath], queuePath, { accountingVersion: 2 });
+    const result = await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
+    assert.equal(result.deferredMigrations, 0);
+    assert.equal(latestDshTotal(queuePath), 0);
+    assert.equal(cursors.dsh.messageOwners["a:reasoning-only-id"], "reasoning-only");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("dsh v2 reasoning correction preserves missing, corrupt and incomplete history", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-v2-defer-"));
+  const queuePath = path.join(dir, "queue.jsonl");
+  try {
+    const files = [];
+    for (const id of ["valid", "missing", "corrupt", "incomplete"]) files.push(await writeSessionLog(dir, id + ".jsonl", [
+      headerLine(id), requestHeaderLine(0),
+      assistantLine(1, { inputTokens: 10, outputTokens: 5, reasoningTokens: 2 }, { id }),
+    ]));
+    let cursors = await legacyDshState(files, queuePath, { accountingVersion: 2 });
+    fs.unlinkSync(files[1]);
+    fs.writeFileSync(files[2], "corrupt\n");
+    fs.appendFileSync(files[3], '{"type":"assistant/message"');
+    const available = [files[0], files[2], files[3]];
+    const result = await parseDshIncremental({ sessionFiles: available, cursors, queuePath });
+    assert.equal(result.deferredMigrations, 3);
+    assert.equal(latestDshTotal(queuePath), 66);
+    for (const id of ["missing", "corrupt", "incomplete"]) assert.equal(cursors.dsh.sessions[id].accountingVersion, 2);
+    cursors = JSON.parse(JSON.stringify(cursors));
+    assert.equal((await parseDshIncremental({ sessionFiles: available, cursors, queuePath })).deferredMigrations, 3);
+    assert.equal(latestDshTotal(queuePath), 66);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("dsh v2 reasoning upgrade rolls back populated state on queue failure", async () => {
+  const { dir, logPath } = await makeTree({ compression: "none", lines: [
+    headerLine("v2-rollback"), requestHeaderLine(0),
+    assistantLine(1, { inputTokens: 10, outputTokens: 5, reasoningTokens: 2 }, { id: "v2-rollback" }),
+  ] });
+  const queuePath = path.join(dir, "queue.jsonl");
+  try {
+    const cursors = await legacyDshState([logPath], queuePath, { accountingVersion: 2 });
+    const before = structuredClone(cursors);
+    const badQueue = path.join(dir, "bad-queue"); fs.mkdirSync(badQueue);
+    await assert.rejects(parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath: badQueue }));
+    assert.deepEqual(cursors, before);
+    assert.equal(latestDshTotal(queuePath), 17);
+    assert.equal((await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath })).deferredMigrations, 0);
+    assert.equal(latestDshTotal(queuePath), 15);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("dsh v2 reasoning upgrade does not reinterpret known ID-less usage as a new seed", async () => {
+  const event = assistantLine(1, { inputTokens: 10, outputTokens: 5, reasoningTokens: 2 }, { id: null });
+  const { dir, logPath, sessionDir } = await makeTree({ compression: "none", lines: [
+    headerLine("v2-seed-change"), requestHeaderLine(0), event,
+  ] });
+  const queuePath = path.join(dir, "queue.jsonl");
+  try {
+    const cursors = await legacyDshState([logPath], queuePath, { accountingVersion: 2 });
+    const replacement = await writeSessionLog(sessionDir, "session.v3.jsonl", [
+      seededHeader("v2-seed-change"), requestHeaderLine(0), event, seedMarker(2),
+    ]);
+    const result = await parseDshIncremental({ sessionFiles: [replacement], cursors, queuePath });
+    assert.equal(result.deferredMigrations, 1);
+    assert.equal(latestDshTotal(queuePath), 17);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("dsh v2 reasoning upgrade keeps already-deduplicated alias ledgers", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-v2-alias-"));
+  const queuePath = path.join(dir, "queue.jsonl");
+  try {
+    const event = assistantLine(1, { inputTokens: 10, outputTokens: 5, reasoningTokens: 2 },
+      { id: "v2-alias", model: "deepseek-v4-pro" });
+    const first = await writeSessionLog(dir, "first.jsonl", [headerLine("alias"), event]);
+    const second = await writeSessionLog(dir, "second.jsonl", [headerLine("alias"), event]);
+    let cursors = await legacyDshState([first, second], queuePath, { accountingVersion: 2 });
+    assert.equal(latestDshTotal(queuePath), 17);
+    const result = await parseDshIncremental({ sessionFiles: [first, second], cursors, queuePath });
+    assert.equal(result.deferredMigrations, 0);
+    assert.equal(latestDshTotal(queuePath), 15);
+    cursors = JSON.parse(JSON.stringify(cursors));
+    const repeated = await parseDshIncremental({ sessionFiles: [first, second], cursors, queuePath });
+    assert.equal(repeated.eventsAggregated, 0);
+    assert.equal(repeated.deferredMigrations, 0);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+for (const missing of [false, true]) {
+  test(`dsh reasoning upgrade preserves historical files with no session identity (missing=${missing})`, async () => {
+    const { dir, logPath } = await makeTree({ compression: "none", lines: [
+      requestHeaderLine(0), assistantLine(1, { inputTokens: 10, outputTokens: 5, reasoningTokens: 2 }, { id: null }),
+    ] });
+    const queuePath = path.join(dir, "queue.jsonl");
+    try {
+      let cursors = await legacyDshState([logPath], queuePath, { ledger: false, accountingVersion: 2 });
+      if (missing) fs.unlinkSync(logPath);
+      const files = missing ? [] : [logPath];
+      for (let i = 0; i < 2; i++) {
+        const result = await parseDshIncremental({ sessionFiles: files, cursors, queuePath });
+        assert.equal(result.deferredMigrations, 1);
+        assert.equal(latestDshTotal(queuePath), 17);
+        assert.equal(cursors.dsh.files[logPath].accountingVersion, 2);
+        cursors = JSON.parse(JSON.stringify(cursors));
+      }
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+}
+
+test("dsh v2 upgrade rejects a new seed boundary even when new usage masks the loss", async () => {
+  const event = assistantLine(1, { inputTokens: 10, outputTokens: 5, reasoningTokens: 2 }, { id: null });
+  const { dir, logPath, sessionDir } = await makeTree({ compression: "none", lines: [
+    headerLine("v2-masked-loss"), requestHeaderLine(0), event,
+  ] });
+  const queuePath = path.join(dir, "queue.jsonl");
+  try {
+    const cursors = await legacyDshState([logPath], queuePath, { accountingVersion: 2 });
+    const replacement = await writeSessionLog(sessionDir, "session.v3.jsonl", [
+      seededHeader("v2-masked-loss"), requestHeaderLine(0), event, seedMarker(2),
+      assistantLine(3, { inputTokens: 100, outputTokens: 50, reasoningTokens: 20 }, { id: null }),
+    ]);
+    const result = await parseDshIncremental({ sessionFiles: [replacement], cursors, queuePath });
+    assert.equal(result.deferredMigrations, 1);
+    assert.equal(latestDshTotal(queuePath), 17, "new usage cannot prove that a counted historical event survives");
+    assert.equal(cursors.dsh.sessions["v2-masked-loss"].accountingVersion, 2);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+for (const accountingVersion of [undefined, 2]) {
+  test(`dsh reasoning and fork repair survive plaintext-to-zstd replacement (version=${accountingVersion})`, async () => {
+    const lines = [seededHeader("reasoning-format"), requestHeaderLine(0),
+      assistantLine(1, { inputTokens: 100, outputTokens: 20, reasoningTokens: 10 }, { id: "inherited-format" }),
+      seedMarker(2),
+      assistantLine(3, { inputTokens: 9707, cacheReadTokens: 1280, outputTokens: 153, reasoningTokens: 132 },
+        { id: "own-format" }),
+    ];
+    const { dir, logPath, sessionDir } = await makeTree({ compression: "none", lines });
+    const queuePath = path.join(dir, "queue.jsonl");
+    try {
+      let cursors = await legacyDshState([logPath], queuePath, { accountingVersion });
+      assert.equal(latestDshTotal(queuePath), accountingVersion === 2 ? 11272 : 11402);
+      const replacement = await writeSessionLog(sessionDir, "session.v3.jsonl.zstd", lines, { zstd: true });
+      const result = await parseDshIncremental({ sessionFiles: [replacement], cursors, queuePath });
+      assert.equal(result.deferredMigrations, 0);
+      assert.equal(latestDshTotal(queuePath), 11140);
+      cursors = JSON.parse(JSON.stringify(cursors));
+      assert.equal((await parseDshIncremental({ sessionFiles: [replacement], cursors, queuePath })).eventsAggregated, 0);
+      assert.equal(latestDshTotal(queuePath), 11140);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 }
 
