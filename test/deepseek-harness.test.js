@@ -1548,8 +1548,13 @@ test("parseDshIncremental cannot use a detected same-size rewrite as its histori
       assistantLine(2, { inputTokens: 100 }, { id: "copied" }), seedMarker(3),
     ]);
     fs.appendFileSync(logPath, " "); // false -> true removes exactly one byte.
-    assert.equal(fs.statSync(logPath).size, beforeSize);
-    fs.utimesSync(logPath, new Date(T0 + 1000), new Date(T0 + 1000));
+    const descriptor = fs.openSync(logPath, "r+");
+    try {
+      assert.equal(fs.fstatSync(descriptor).size, beforeSize);
+      fs.futimesSync(descriptor, new Date(T0 + 1000), new Date(T0 + 1000));
+    } finally {
+      fs.closeSync(descriptor);
+    }
     const result = await parseDshIncremental({ sessionFiles: [logPath], cursors, queuePath });
     assert.equal(result.deferredMigrations, 1);
     assert.equal(latestDshTotal(queuePath), 110);
