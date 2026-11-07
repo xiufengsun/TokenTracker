@@ -908,5 +908,13 @@
   "settings.local_data.error.too_many_devices": "已达到导入数据上限，请先移除不再需要的来源。",
   "settings.local_data.error.unknown_device": "这个导入来源已不存在。",
   "settings.local_data.error.transfer_failed": "操作失败，请检查文件和本地应用后重试。",
-  "settings.local_data.local_history_only": "离线快照不含会话记录。上下文分解需选择“本机”查看；项目、会话和效果分析始终只包含本机记录。"
+  "settings.local_data.local_history_only": "离线快照不含会话记录。上下文分解需选择“本机”查看；项目、会话和效果分析始终只包含本机记录。",
+  "nav.update_available": "更新到 v{{version}}",
+  "nav.update_available_short": "更新",
+  "nav.update_available_title": "发现新版本 {{version}}",
+  "nav.update_confirm_title": "发现新版本",
+  "nav.update_confirm_description": "检测到新版本 {{version}}（当前 {{current}}）。是否立即更新？",
+  "nav.update_confirm_yes": "立即更新",
+  "nav.update_confirm_no": "稍后",
+  "settings.menubar.autoUpdateHintWindows": "在后台自动检查新版本并在有更新时提醒你。关闭后仍可手动检查更新。"
 }

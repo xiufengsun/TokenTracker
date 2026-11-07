@@ -11,4 +11,5 @@ export { Select } from "./Select";
 export { SegmentedControl } from "./SegmentedControl.jsx";
 export { SearchableSelect } from "./SearchableSelect.jsx";
 export { DismissibleHint } from "./DismissibleHint.jsx";
+export { SidebarUpdatePill } from "./SidebarUpdatePill.jsx";
 export { default as Counter } from "./Counter";

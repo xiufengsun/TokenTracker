@@ -77,9 +77,10 @@ internal sealed class UpdateChecker
     /// <summary>
     /// Check GitHub for a newer release. <paramref name="silent"/> launch checks are
     /// skipped for dev builds (no embedded server next to the exe) so a developer run
-    /// is never nudged to "update" to an official release. Installed builds perform
-    /// the download/install hand-off automatically when the preference is enabled;
-    /// manual checks remain available regardless of the preference.
+    /// is never nudged to "update" to an official release. Installed builds check for
+    /// new releases in the background when the preference is enabled and leave the
+    /// update ready for user confirmation; manual checks remain available regardless
+    /// of the preference.
     /// </summary>
     public async Task<CheckOutcome> CheckAsync(bool silent)
     {
@@ -96,6 +97,7 @@ internal sealed class UpdateChecker
             return CheckOutcome.Skipped;
         }
 
+        var hadPendingUpdate = _setupUrl is not null && LatestVersion is not null;
         SetState(UpdateState.Checking);
         try
         {
@@ -110,16 +112,13 @@ internal sealed class UpdateChecker
                 _checksumsUrl = release.ChecksumsUrl;
                 SetState(UpdateState.UpdateAvailable);
                 Diag.Log("update", $"update available current={CurrentVersion} latest={latest}");
-                if (silent && AutoUpdatePolicy.IsEnabled())
-                {
-                    // The launch-time check is the unattended path. Start the same
-                    // resumable installer flow used by the tray action; it asks the
-                    // tray to quit only after the download is complete.
-                    _ = DownloadAndInstallAsync();
-                }
                 return CheckOutcome.UpdateAvailable;
             }
 
+            LatestVersion = null;
+            _setupUrl = null;
+            _setupSize = 0;
+            _checksumsUrl = null;
             SetState(UpdateState.Idle);
             Diag.Log("update", $"up to date current={CurrentVersion} latest={latest}");
             return CheckOutcome.UpToDate;
@@ -127,12 +126,12 @@ internal sealed class UpdateChecker
         catch (Exception ex)
         {
             Diag.Log("update", $"check failed: {ex.Message}");
-            SetState(UpdateState.Idle);
+            SetState(hadPendingUpdate ? UpdateState.UpdateAvailable : UpdateState.Idle);
             return CheckOutcome.Failed;
         }
     }
 
-    /// <summary>Whether launch-time checks may download and install releases.</summary>
+    /// <summary>Whether launch-time and periodic background checks may check for new releases.</summary>
     public bool AutoUpdateEnabled
     {
         get => AutoUpdatePolicy.IsEnabled();

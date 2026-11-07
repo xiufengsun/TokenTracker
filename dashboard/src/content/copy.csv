@@ -2183,3 +2183,11 @@ limits.cursor.connection.manage,dashboard,LimitsPage,CursorConnectionControl,man
 limits.cursor.connection.retry,dashboard,LimitsPage,CursorConnectionControl,retry,Retry connection,,active
 limits.cursor.connection.description,dashboard,LimitsPage,CursorConnectionControl,description,Cursor encrypts its saved sign-in. Connect on Cursor's website to read your usage and limits.,,active
 limits.cursor.connection.privacy,dashboard,LimitsPage,CursorConnectionControl,privacy,Your sign-in credentials stay on this device and are never sent to TokenTracker servers.,,active
+nav.update_available,shared,*,SidebarUpdatePill,update_available,"Update to v{{version}}",,active
+nav.update_available_short,shared,*,SidebarUpdatePill,update_available_short,"Update",,active
+nav.update_available_title,shared,*,SidebarUpdatePill,update_available_title,"New version {{version}} available",,active
+nav.update_confirm_title,shared,*,SidebarUpdatePill,update_confirm_title,"Update Available",,active
+nav.update_confirm_description,shared,*,SidebarUpdatePill,update_confirm_description,"Version {{version}} is available (current {{current}}). Would you like to update now?",,active
+nav.update_confirm_yes,shared,*,SidebarUpdatePill,update_confirm_yes,"Update Now",,active
+nav.update_confirm_no,shared,*,SidebarUpdatePill,update_confirm_no,"Later",,active
+settings.menubar.autoUpdateHintWindows,ui,SettingsPage,MenuBarSection,mb_auto_update_hint_win,"Check for new versions in the background and notify you when an update is ready. Manual checks stay available when this is off.",,active

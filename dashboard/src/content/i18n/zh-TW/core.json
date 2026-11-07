@@ -849,5 +849,13 @@
   "settings.local_data.error.too_many_devices": "已達匯入資料上限，請先移除不再需要的來源。",
   "settings.local_data.error.unknown_device": "此匯入來源已不存在。",
   "settings.local_data.error.transfer_failed": "操作失敗，請檢查檔案與本機應用程式後重試。",
-  "settings.local_data.local_history_only": "離線快照不含工作階段記錄。內容分解需選擇「本機」查看；專案、工作階段和成效分析始終只包含本機記錄。"
+  "settings.local_data.local_history_only": "離線快照不含工作階段記錄。內容分解需選擇「本機」查看；專案、工作階段和成效分析始終只包含本機記錄。",
+  "nav.update_available": "更新到 v{{version}}",
+  "nav.update_available_short": "更新",
+  "nav.update_available_title": "發現新版本 {{version}}",
+  "nav.update_confirm_title": "發現新版本",
+  "nav.update_confirm_description": "偵測到新版本 {{version}}（目前 {{current}}）。是否立即更新？",
+  "nav.update_confirm_yes": "立即更新",
+  "nav.update_confirm_no": "稍後",
+  "settings.menubar.autoUpdateHintWindows": "在背景自動檢查新版本並在有更新時提醒你。關閉後仍可手動檢查更新。"
 }
