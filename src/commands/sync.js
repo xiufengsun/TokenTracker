@@ -1854,7 +1854,7 @@ async function cmdSync(argv, context = {}) {
     if (sourceAllowed("dsh")) {
       await migrateLegacyDeepseekHarnessSource({ cursors, queuePath, queueStatePath });
       const dshSessionFiles = await resolveDshSessionFiles(process.env);
-      if (dshSessionFiles.length > 0) {
+      if (dshSessionFiles.length > 0 || cursors.dsh) {
         if (progress?.enabled) {
           progress.start(
             `Parsing DeepSeek Harness ${renderBar(0)} 0/${formatNumber(
@@ -1873,7 +1873,7 @@ async function cmdSync(argv, context = {}) {
             warnProviderParseFailure(
               "DeepSeek Harness",
               new Error(
-                `${dshResult.deferredMigrations} artifact migration(s) deferred; inspect cursors.dsh.deferredMigrations and retry after the replacement is complete`,
+                `${dshResult.deferredMigrations} accounting repair/artifact migration(s) deferred; inspect cursors.dsh.deferredMigrations, restore unavailable history or complete the replacement, then retry`,
               ),
               opts,
             );
