@@ -97,6 +97,7 @@ internal sealed class UpdateChecker
             return CheckOutcome.Skipped;
         }
 
+        var hadPendingUpdate = _setupUrl is not null && LatestVersion is not null;
         SetState(UpdateState.Checking);
         try
         {
@@ -114,6 +115,10 @@ internal sealed class UpdateChecker
                 return CheckOutcome.UpdateAvailable;
             }
 
+            LatestVersion = null;
+            _setupUrl = null;
+            _setupSize = 0;
+            _checksumsUrl = null;
             SetState(UpdateState.Idle);
             Diag.Log("update", $"up to date current={CurrentVersion} latest={latest}");
             return CheckOutcome.UpToDate;
@@ -121,7 +126,7 @@ internal sealed class UpdateChecker
         catch (Exception ex)
         {
             Diag.Log("update", $"check failed: {ex.Message}");
-            SetState(UpdateState.Idle);
+            SetState(hadPendingUpdate ? UpdateState.UpdateAvailable : UpdateState.Idle);
             return CheckOutcome.Failed;
         }
     }

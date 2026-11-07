@@ -1,5 +1,5 @@
 import React from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isNewerVersion, normalizeVersion } from "./use-app-update.js";
 import { LocaleProvider } from "../ui/foundation/LocaleProvider.jsx";
@@ -141,7 +141,7 @@ describe("useAppUpdate & SidebarUpdatePill", () => {
     expect(actions).toEqual([{ type: "action", name: "updateNow" }]);
   });
 
-  it("reopens modal and surfaces error alert when native update fails", () => {
+  it("reopens modal and surfaces error alert when native update fails", async () => {
     installWindowsBridge();
     renderPill({ collapsed: false });
 
@@ -160,7 +160,9 @@ describe("useAppUpdate & SidebarUpdatePill", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /Update Now|立即更新/i }),
     );
-    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
 
     act(() => {
       pushNativeSettings({
