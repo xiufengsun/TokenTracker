@@ -75,6 +75,8 @@ describe("TrendMonitor", () => {
   });
 
   it("renders future bars as flat estimates with an always-visible legend", () => {
+    // Guards the estimate styling: preview bars and the legend swatch must stay
+    // high-contrast gray instead of regressing to the old faint style.
     const rows = [
       { billable_total_tokens: 100 },
       { billable_total_tokens: 100 },
@@ -87,7 +89,13 @@ describe("TrendMonitor", () => {
     const previewBar = bars.at(-1);
     expect(previewBar?.dataset.trendKind).toBe("predicted");
     expect(previewBar?.style.opacity).toBe("0.9");
+    expect(previewBar?.className?.split(/\s+/)).toContain("bg-oai-gray-500");
     expect(previewBar?.style.backgroundImage).toBe("");
+    const legendSwatch = container.querySelector(
+      '[data-trend-prediction-legend="true"] span[aria-hidden="true"]',
+    );
+    expect(legendSwatch?.className?.split(/\s+/)).toContain("bg-oai-gray-500");
+    expect(legendSwatch?.className?.split(/\s+/)).toContain("opacity-90");
     expect(container.querySelector('[data-trend-prediction-legend="true"]')?.textContent).toContain(
       "~ Estimated",
     );
@@ -101,6 +109,23 @@ describe("TrendMonitor", () => {
     );
 
     expect(container.querySelector('[data-trend-prediction-legend="true"]')).toBeNull();
+  });
+
+  it("shows the estimate legend when the range only has missing rows", () => {
+    const rows = [
+      { billable_total_tokens: 100 },
+      { missing: true },
+      { billable_total_tokens: 100 },
+    ];
+    const { container } = render(
+      <TrendMonitor rows={rows} showTimeZoneLabel={false} />,
+    );
+    const bars = Array.from(container.querySelectorAll('[data-trend-bar="true"]'));
+
+    expect(bars[1]?.dataset.trendKind).toBe("unsynced");
+    expect(container.querySelector('[data-trend-prediction-legend="true"]')?.textContent).toContain(
+      "~ Estimated",
+    );
   });
 
   it("renders X-axis tick labels only in zoom mode (small card unchanged)", () => {

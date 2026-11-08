@@ -207,6 +207,8 @@ const PREVIEW_OPACITY = 0.9;
 const BASELINE_HEIGHT_PX = 2;
 const PREVIEW_MIN_HEIGHT_PX = 4;
 
+// Renders one trend column: real rows stack colored segments, predicted and
+// unsynced gaps render a flat muted-gray estimate bar, real-zero rows a 2px baseline.
 // Memoized so hover state in the parent (tooltip) doesn't re-render every
 // bar on each mouseenter/mouseleave — props are all stable across hovers.
 const TrendBar = React.memo(function TrendBar({
@@ -477,7 +479,7 @@ export function TrendMonitor({
     [rows],
   );
   const hasPredictions = React.useMemo(
-    () => series.some((row) => row?.future),
+    () => series.some((row) => row?.future || row?.missing),
     [series],
   );
 
