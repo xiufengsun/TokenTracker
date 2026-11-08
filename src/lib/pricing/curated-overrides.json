@@ -335,6 +335,30 @@
       "cache_read": 0.05,
       "note": "LiteLLM entry (sourced from https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing, cached 2026-10-31): $0.50/$3 per MTok, $0.05 cache read, no published cache-write rate. Same rate the edge table already pins; promoted so curated/edge parity guards the key (issue #929)."
     },
+    "gemini-3.5-flash": {
+      "input": 1.5,
+      "output": 9,
+      "cache_read": 0.15,
+      "note": "Google Gemini 3.5 Flash Global Standard list rate: $1.50/$9.00 per MTok, $0.15 cache read (output includes thinking). No published per-token cache-write rate (context-cache storage is billed separately per hour). Verified 2026-11-08 from https://cloud.google.com/model-garden/pricing; matches the existing LiteLLM snapshot. Promoted so curated/edge stay in parity after the Antigravity 3.x-flash remap was removed (issue #1063). Do not remap this id to gemini-2.5-flash — that SKU is $0.30/$2.50/$0.03."
+    },
+    "gemini-3.8-flash": {
+      "input": 0.75,
+      "output": 3.75,
+      "cache_read": 0.075,
+      "note": "Google Gemini 3.8 Flash Global Standard introductory list rate through 2026-12-31: $0.75/$3.75 per MTok, $0.075 cache read (output includes thinking). Starting 2027-01-01 the published standard list is $1.50/$7.50/$0.15. No published per-token cache-write rate (context-cache storage is billed separately per hour). Verified 2026-11-08 from https://cloud.google.com/model-garden/pricing and https://aistudio.google.com/docs/pricing (issue #1063). Do not remap these ids to gemini-2.5-flash — that SKU is $0.30/$2.50/$0.03."
+    },
+    "gemini-3.7-flash": {
+      "input": 0.75,
+      "output": 3.75,
+      "cache_read": 0.075,
+      "note": "Google Gemini 3.7 Flash Global Standard introductory list rate through 2026-12-31: $0.75/$3.75 per MTok, $0.075 cache read (output includes thinking). Starting 2027-01-01 the published standard list is $1.50/$7.50/$0.15. No published per-token cache-write rate (context-cache storage is billed separately per hour). Verified 2026-11-08 from https://cloud.google.com/model-garden/pricing and https://aistudio.google.com/docs/pricing (issue #1063). Do not remap these ids to gemini-2.5-flash — that SKU is $0.30/$2.50/$0.03."
+    },
+    "gemini-3.6-flash": {
+      "input": 0.75,
+      "output": 3.75,
+      "cache_read": 0.075,
+      "note": "Google Gemini 3.6 Flash Global Standard introductory list rate through 2026-12-31: $0.75/$3.75 per MTok, $0.075 cache read (output includes thinking). Starting 2027-01-01 the published standard list is $1.50/$7.50/$0.15. No published per-token cache-write rate (context-cache storage is billed separately per hour). Verified 2026-11-08 from https://cloud.google.com/model-garden/pricing and https://aistudio.google.com/docs/pricing (issue #1063). Do not remap these ids to gemini-2.5-flash — that SKU is $0.30/$2.50/$0.03."
+    },
     "MiniMax-M2.7": {
       "input": 0.3,
       "output": 1.2,

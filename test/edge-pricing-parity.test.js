@@ -176,6 +176,10 @@ test("canonical pricing block retains regression-prone entries and matcher order
     '"composer-2.5"',
     '"composer-2.5-fast"',
     '"gemini-4-argon"',
+    '"gemini-3.5-flash"',
+    '"gemini-3.8-flash"',
+    '"gemini-3.7-flash"',
+    '"gemini-3.6-flash"',
     '"kimi-k3.1-pro"',
     '"kimi-k3.1-pro-highspeed"',
     '"glm-5.3"',
@@ -233,6 +237,11 @@ test("canonical pricing block retains regression-prone entries and matcher order
   );
   order('lower.includes("grok-4.5"))', 'lower.includes("grok-4"))');
   order('lower.includes("gemini-4-argon")', 'lower.includes("gemini-3"))');
+  order('/gemini-3\\.[876]-flash-(?!cyber|tts|lite|image|live|thinking|xhigh|high|medium|low|fast)[a-z0-9]/', '/gemini-3\\.8-flash(?!-(?:cyber|tts|lite|image|live))/');
+  order('/gemini-3\\.8-flash(?!-(?:cyber|tts|lite|image|live))/', 'lower.includes("gemini-3"))');
+  order('/gemini-3\\.7-flash(?!-(?:cyber|tts|lite|image|live))/', 'lower.includes("gemini-3"))');
+  order('/gemini-3\\.6-flash(?!-(?:cyber|tts|lite|image|live))/', 'lower.includes("gemini-3"))');
+  order('/gemini-3\\.5-flash(?!-(?:cyber|tts|lite|image|live))/', 'lower.includes("gemini-3"))');
   order('lower.includes("kimi-k3.1-pro-highspeed")', 'lower.includes("kimi-k3.1-pro")');
   order('lower.includes("kimi-k3.1-pro")', 'lower.includes("kimi-k3")');
   order('lower.includes("kimi-k3")', 'lower.includes("kimi")');
@@ -697,6 +706,48 @@ test("Kimi K3.1 Pro / Highspeed priced distinctly from kimi-k3 locally and in al
       JSON.parse(JSON.stringify(edgePricing("gemini-4-argon"))),
       { input: 2, output: 10, cache_read: 0.1, cache_write: 0 },
       `${name}: gemini-4-argon`,
+    );
+    for (const flash of ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]) {
+      assert.deepEqual(
+        JSON.parse(JSON.stringify(edgePricing(flash))),
+        { input: 0.75, output: 3.75, cache_read: 0.075 },
+        `${name}: ${flash}`,
+      );
+      assert.equal(localPricing(flash).input, 0.75, `local ${flash}`);
+      assert.equal(localPricing(flash).output, 3.75, `local ${flash}`);
+      assert.notDeepEqual(
+        JSON.parse(JSON.stringify(edgePricing(flash))),
+        JSON.parse(JSON.stringify(edgePricing("gemini-3-flash-preview"))),
+        `${name}: ${flash} must not inherit gemini-3-flash-preview`,
+      );
+    }
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(edgePricing("gemini-3.8-flash-n"))),
+      { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+      `${name}: gemini-3.8-flash-n must stay unpriced`,
+    );
+    assert.equal(localPricing("gemini-3.8-flash-n", { source: "antigravity" }).input, 0);
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(edgePricing("gemini-3.8-flash-high"))),
+      { input: 0.75, output: 3.75, cache_read: 0.075 },
+      `${name}: gemini-3.8-flash-high keeps the published Flash rate`,
+    );
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(edgePricing("gemini-3.5-flash"))),
+      { input: 1.5, output: 9, cache_read: 0.15 },
+      `${name}: gemini-3.5-flash`,
+    );
+    assert.equal(localPricing("gemini-3.5-flash").input, 1.5);
+    assert.equal(localPricing("gemini-3.5-flash").output, 9);
+    assert.notDeepEqual(
+      JSON.parse(JSON.stringify(edgePricing("gemini-3.5-flash"))),
+      JSON.parse(JSON.stringify(edgePricing("gemini-3-flash-preview"))),
+      `${name}: gemini-3.5-flash must not inherit gemini-3-flash-preview`,
+    );
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(edgePricing("gemini-3.5-flash-n"))),
+      { input: 1.5, output: 9, cache_read: 0.15 },
+      `${name}: gemini-3.5-flash-n keeps the LiteLLM/fuzzy-aligned 3.5 Flash rate`,
     );
   }
 });
