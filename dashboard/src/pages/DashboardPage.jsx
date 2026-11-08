@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAccountView } from "../contexts/AccountViewContext.jsx";
-import { useActivityHeatmap } from "../hooks/use-activity-heatmap.js";
+import { useActivityHeatmap } from "../hooks/use-activity-heatmap";
 import { useDashboardCardOrder } from "../hooks/use-dashboard-card-order.js";
 import { useProjectUsageSummary } from "../hooks/use-project-usage-summary";
-import { useTrendData } from "../hooks/use-trend-data.js";
-import { useUsageData } from "../hooks/use-usage-data.js";
-import { useUsageLimits } from "../hooks/use-usage-limits.js";
-import { useUsageModelBreakdown } from "../hooks/use-usage-model-breakdown.js";
+import { useTrendData } from "../hooks/use-trend-data";
+import { useUsageData } from "../hooks/use-usage-data";
+import { useUsageLimits } from "../hooks/use-usage-limits";
+import { useUsageModelBreakdown } from "../hooks/use-usage-model-breakdown";
+import { useLocalCalendar } from "../hooks/use-local-calendar.js";
 import {
   isAccessTokenReady,
   normalizeAccessToken,
@@ -36,9 +37,6 @@ import { isScreenshotModeEnabled } from "../lib/screenshot-mode";
 import {
   formatTimeZoneLabel,
   formatTimeZoneShortLabel,
-  getBrowserTimeZone,
-  getBrowserTimeZoneOffsetMinutes,
-  getLocalDayKey,
 } from "../lib/timezone";
 import {
   getUserStatus,
@@ -49,7 +47,7 @@ import {
 } from "../lib/api";
 import { ActivityHeatmap } from "../ui/dashboard/components/ActivityHeatmap.jsx";
 import { DashboardView } from "../ui/dashboard/views/DashboardView.jsx";
-import { useAccountDevices } from "../hooks/use-account-devices.js";
+import { useAccountDevices } from "../hooks/use-account-devices";
 import { DeviceUsageCard } from "../ui/dashboard/components/DeviceUsageCard.jsx";
 import { formatDeviceLabel } from "../lib/device-label.js";
 import { localDeviceUsage } from "../lib/local-usage-transfer";
@@ -355,9 +353,11 @@ export function DashboardPage({
     };
   }, [linkCodeExpiresAt]);
 
-  const timeZone = useMemo(() => getBrowserTimeZone(), []);
-  const tzOffsetMinutes = useMemo(() => getBrowserTimeZoneOffsetMinutes(), []);
   const mockNow = useMemo(() => getMockNow(), []);
+  const calendar = useLocalCalendar(mockNow);
+  const timeZone = calendar.timeZone;
+  const tzOffsetMinutes = calendar.tzOffsetMinutes;
+  const todayKey = calendar.todayKey;
   const cacheKey = publicMode ? null : auth?.userId || auth?.email || "default";
   const [selectedPeriod, setSelectedPeriod] = useState("day");
   const [customFrom, setCustomFrom] = useState(null);
@@ -369,11 +369,11 @@ export function DashboardPage({
       return { from: customFrom, to: customTo };
     }
     return getRangeForPeriod(period, {
-      timeZone,
-      offsetMinutes: tzOffsetMinutes,
+      timeZone: calendar.timeZone,
+      offsetMinutes: calendar.tzOffsetMinutes,
       now: mockNow,
     });
-  }, [mockNow, period, timeZone, tzOffsetMinutes, customFrom, customTo]);
+  }, [mockNow, period, calendar, customFrom, customTo]);
   const from = range.from;
   const to = range.to;
 
@@ -492,15 +492,6 @@ export function DashboardPage({
   const trendTimeZone = timeZone;
   const trendTzOffsetMinutes = tzOffsetMinutes;
   const trendTimeZoneLabel = timeZoneLabel;
-  const todayKey = useMemo(
-    () =>
-      getLocalDayKey({
-        timeZone,
-        offsetMinutes: tzOffsetMinutes,
-        date: mockNow || new Date(),
-      }),
-    [mockNow, timeZone, tzOffsetMinutes],
-  );
   const dailyBreakdownRange = useMemo(() => {
     return buildDailyBreakdownRange({
       period,
