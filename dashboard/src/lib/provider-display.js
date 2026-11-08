@@ -19,6 +19,7 @@ const SPECIAL_PROVIDER_COPY_KEYS = {
   deepseek: "provider.display.deepseek_harness",
   dsh: "provider.display.deepseek_harness",
   omp: "provider.display.omp",
+  pi: "provider.display.pi",
   omo: "provider.display.omo",
   minimaxcode: "provider.display.minimax_code",
   commandcode: "provider.display.command_code",

@@ -337,6 +337,27 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("Review release")).not.toBeInTheDocument();
   });
 
+  it("filters pi sessions from the source picker and URL", async () => {
+    const pi = {
+      ...zcodeRow,
+      session_hash: "pi-row",
+      source: "pi",
+      title: "Pi session",
+      model: "claude-sonnet-4-5",
+      resume_command: "pi --session 01a1bc31-0000-7000-8000-000000000001",
+    };
+    getSessions.mockResolvedValue({ ...response, sessions: [...response.sessions, pi] });
+    window.history.replaceState(null, "", "/sessions?source=pi");
+    render(<SessionsPage />);
+    expect(await screen.findByText("Pi session")).toBeInTheDocument();
+    expect(screen.queryByText("Review release")).not.toBeInTheDocument();
+    await chooseSelect("Filter by session source", "All tools");
+    expect(screen.getByText("Review release")).toBeInTheDocument();
+    await chooseSelect("Filter by session source", "Pi");
+    expect(screen.getByText("Pi session")).toBeInTheDocument();
+    expect(screen.queryByText("Review release")).not.toBeInTheDocument();
+  });
+
   it("renders and searches every observed model in a mixed Codex session", async () => {
     const mixed = {
       ...response.sessions[1],
