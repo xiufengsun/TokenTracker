@@ -3,6 +3,7 @@ const cp = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { performance } = require("node:perf_hooks");
 const { test } = require("node:test");
 const {
   readAntigravityLinuxSecretRaw,
@@ -190,11 +191,13 @@ test("malformed keyring output preserves file credentials", async (t) => {
 test("keyring discovery consumes the provider budget and preserves cached quota", async (t) => {
   const home = tempHome(t);
   writeCache(home);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let elapsedMs = 0;
+  t.mock.method(performance, "now", () => elapsedMs);
   let lookupSignal;
   let lookupTimeout;
   let processCalls = 0;
-  const started = Date.now();
-  const result = await fetchAntigravityLimits({
+  const pending = fetchAntigravityLimits({
     home, platform: "linux", nowMs: NOW, providerTimeoutMs: 100,
     secretToolRunner(_bin, _args, options) {
       lookupSignal = options.signal;
@@ -204,8 +207,13 @@ test("keyring discovery consumes the provider budget and preserves cached quota"
     commandRunner() { processCalls += 1; return noProcess(); },
     fetchImpl() { throw new Error("must not fetch without credentials"); },
   });
-  assert.ok(Date.now() - started < 500, "lookup must not get a separate 2-second budget");
-  assert.ok(lookupTimeout > 0 && lookupTimeout < 100);
+  assert.ok(lookupTimeout > 0 && lookupTimeout < 100, "lookup must share the provider budget, not get a separate 2-second budget");
+  assert.equal(lookupSignal.aborted, false);
+  // Advance the deadline timer and the provider's monotonic clock together;
+  // real timer scheduling near the millisecond boundary must not decide this test.
+  elapsedMs = 100;
+  t.mock.timers.tick(elapsedMs);
+  const result = await pending;
   assert.equal(lookupSignal.aborted, true);
   assert.equal(processCalls, 0, "process scanning must not start after the budget is spent");
   assert.equal(result.cached, true);
