@@ -194,8 +194,8 @@ function getBarSegments(row) {
 // Bar kinds:
 //   - "real":      row carries a positive observed value; render stacked segments.
 //   - "real_zero": row is observed but value is 0 (truly idle period); render a flat baseline.
-//   - "predicted": row is `future`; render interpolated/extrapolated height as a faint preview.
-//   - "unsynced":  row is `missing`; render interpolated/extrapolated height as a faint preview.
+//   - "predicted": row is `future`; render interpolated/extrapolated height as a muted gray preview.
+//   - "unsynced":  row is `missing`; render interpolated/extrapolated height as a muted gray preview.
 function getBarKind(row, value) {
   if (row?.future) return "predicted";
   if (row?.missing) return "unsynced";
@@ -203,7 +203,7 @@ function getBarKind(row, value) {
   return "real_zero";
 }
 
-const PREVIEW_OPACITY = 0.35;
+const PREVIEW_OPACITY = 0.9;
 const BASELINE_HEIGHT_PX = 2;
 const PREVIEW_MIN_HEIGHT_PX = 4;
 
@@ -286,7 +286,11 @@ const TrendBar = React.memo(function TrendBar({
             data-trend-kind={kind}
             className={cn(
               "h-full w-full group-hover:brightness-110 transition-all",
-              kind === "real" ? "" : "bg-oai-gray-100 dark:bg-oai-gray-800",
+              kind === "real"
+                ? ""
+                : isPreview
+                  ? "bg-oai-gray-500"
+                  : "bg-oai-gray-100 dark:bg-oai-gray-800",
             )}
             style={{
               opacity: isPreview ? PREVIEW_OPACITY : 1,
@@ -726,7 +730,7 @@ export function TrendMonitor({
           >
             <span
               aria-hidden="true"
-              className="h-2.5 w-3 rounded-[2px] bg-oai-gray-100 dark:bg-oai-gray-800 opacity-50"
+              className="h-2.5 w-3 rounded-[2px] bg-oai-gray-500 opacity-90"
             />
             <span>~ {copy("trend.monitor.predicted")}</span>
           </div>

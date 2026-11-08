@@ -86,7 +86,7 @@ describe("TrendMonitor", () => {
     const bars = Array.from(container.querySelectorAll('[data-trend-bar="true"]'));
     const previewBar = bars.at(-1);
     expect(previewBar?.dataset.trendKind).toBe("predicted");
-    expect(previewBar?.style.opacity).toBe("0.35");
+    expect(previewBar?.style.opacity).toBe("0.9");
     expect(previewBar?.style.backgroundImage).toBe("");
     expect(container.querySelector('[data-trend-prediction-legend="true"]')?.textContent).toContain(
       "~ Estimated",
