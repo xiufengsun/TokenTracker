@@ -47,7 +47,10 @@ function normalizeAntigravityModel(model) {
   }
 
   if (/^gemini-3\.\d+-flash-lite/.test(lower)) return "gemini-2.5-flash-lite";
-  if (/^gemini-3\.\d+-flash/.test(lower)) return "gemini-2.5-flash";
+  // Gemini 3.x Flash models have their own published list rates (3.5 Flash
+  // and 3.6/3.7/3.8 Flash are curated so cloud edge stays in parity).
+  // Remapping the whole family to gemini-2.5-flash under-counted
+  // API-equivalent cost (#1063).
   if (/^gemini-3\.\d+-pro/.test(lower)) return "gemini-2.5-pro";
   if (/^claude-(sonnet|opus|haiku)-4\.\d+/.test(lower)) {
     return lower.replace(/^claude-(sonnet|opus|haiku)-4\.(\d+)/, "claude-$1-4-$2");

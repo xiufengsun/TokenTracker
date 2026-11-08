@@ -231,6 +231,13 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "gemini-2.5-pro-preview-05-06": { input: 1.25, output: 10, cache_read: 0.125 },
   "gemini-2.5-flash": { input: 0.3, output: 2.5, cache_read: 0.03 },
   "gemini-3-flash-preview": { input: 0.5, output: 3, cache_read: 0.05 },
+  // Gemini 3.8/3.7/3.6 Flash Global Standard introductory list rate through
+  // 2026-12-31 (issue #1063). Verified from cloud.google.com/model-garden/pricing
+  // and aistudio.google.com/docs/pricing. No published per-token cache-write rate.
+  "gemini-3.5-flash": { input: 1.5, output: 9, cache_read: 0.15 },
+  "gemini-3.8-flash": { input: 0.75, output: 3.75, cache_read: 0.075 },
+  "gemini-3.7-flash": { input: 0.75, output: 3.75, cache_read: 0.075 },
+  "gemini-3.6-flash": { input: 0.75, output: 3.75, cache_read: 0.075 },
   "gemini-3-pro-preview": { input: 2, output: 12, cache_read: 0.2 },
   "gemini-3.1-pro-preview": { input: 2, output: 12, cache_read: 0.2 },
   // ── Cursor Composer ──
@@ -520,6 +527,18 @@ function getModelPricing(model: string, source = "") {
   if (lower.includes("gpt-5")) return MODEL_PRICING["gpt-5"];
   // gemini-4-argon must precede gemini-3 / gemini-2.5 substring matchers.
   if (lower.includes("gemini-4-argon") || lower.includes("gemini-4.argon")) return MODEL_PRICING["gemini-4-argon"];
+  // Gemini 3.8/3.7/3.6 Flash introductory Standard rates must precede the
+  // gemini-3 catch-all (which bills at gemini-3-flash-preview). Alternate
+  // SKUs (cyber, tts, lite, image, live) have different published rates.
+  // Unknown suffixes such as -n have no published independent SKU — return
+  // zero rather than inventing a rate or inheriting preview (#1063).
+  // Reasoning-effort suffixes (high/medium/low/...) match the local
+  // normalizeAntigravityModel strip and keep the published Flash rate.
+  if (/gemini-3\.[876]-flash-(?!cyber|tts|lite|image|live|thinking|xhigh|high|medium|low|fast)[a-z0-9]/.test(lower)) return ZERO_PRICING;
+  if (/gemini-3\.8-flash(?!-(?:cyber|tts|lite|image|live))/.test(lower)) return MODEL_PRICING["gemini-3.8-flash"];
+  if (/gemini-3\.7-flash(?!-(?:cyber|tts|lite|image|live))/.test(lower)) return MODEL_PRICING["gemini-3.7-flash"];
+  if (/gemini-3\.6-flash(?!-(?:cyber|tts|lite|image|live))/.test(lower)) return MODEL_PRICING["gemini-3.6-flash"];
+  if (/gemini-3\.5-flash(?!-(?:cyber|tts|lite|image|live))/.test(lower)) return MODEL_PRICING["gemini-3.5-flash"];
   // gemini-3 pro tiers (gemini-3-pro, gemini-3.1-pro, -high, -customtools…)
   // must not fall through to the flash rate (4x undercount).
   if (lower.includes("gemini-3") && lower.includes("pro")) return MODEL_PRICING["gemini-3-pro-preview"];
