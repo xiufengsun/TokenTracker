@@ -62,9 +62,9 @@ keep them; the helper enforces them structurally.
 | `writeGuard` | custom `(record) => bool` | ark (normalizer already rejects windowless payloads upstream) |
 | `dirOverride` | option name overriding the tracker dir | opencode-go `trackerDir` |
 
-Options whose only named users are qoder/ark parameterize those pending
-migrations (see Migration state); the option space itself is implemented and
-exercised by `test/limits-cache.test.js`.
+Options whose only named users were qoder/ark existed to parameterize their
+migration (see Migration state); the option space is exercised by
+`test/limits-cache.test.js` in addition to those providers' own tests.
 
 ## `withLimitsCacheFallback(slot, hooks)` → servable slot
 
@@ -104,13 +104,10 @@ factory either way.
 
 ## Migration state
 
-Eleven providers now sit on the shared pipeline:
+All fifteen hand copies now sit on the shared pipeline:
 
 - usage-limits.js: antigravity, claude, codex, cursor, opencode-go, kimi, kiro,
   grok, copilot, gemini, devin
-
-Four hand-written copies remain pending and migrate in a follow-up:
-
 - qoder-limits.js: qoder + qoder-cn (namespace files)
 - ark-coding-plan-limits.js / ark-agent-plan-limits.js
 
