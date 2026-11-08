@@ -31,6 +31,7 @@ const {
   listSessionsForBrowser,
   resolveSessionSidecarPath,
   sessionsToCsv,
+  summarizeSessions,
 } = require("../src/lib/session-analytics");
 const {
   discoverDshSessionFiles,
@@ -99,8 +100,8 @@ function assistantEntry(id, options) {
     seq: 3,
     time: typeof opts.time === "number" ? opts.time : T0 + 2000,
     data: {
-      turn: 1,
-      step: 1,
+      turn: opts.turn ?? 1,
+      step: opts.step ?? 1,
       message: {
         role: "assistant",
         content: [{ type: "text", text: SECRET }],
@@ -114,7 +115,8 @@ function assistantEntry(id, options) {
         cacheWriteTokens: typeof opts.cacheWrite === "number" ? opts.cacheWrite : 0,
         reasoningTokens: typeof opts.reasoningTokens === "number" ? opts.reasoningTokens : 0,
       },
-      stream: false,
+      stream: opts.stream ?? false,
+      ...(opts.interrupted ? { interrupted: true } : {}),
     },
   };
 }
@@ -131,6 +133,14 @@ function toolEntry(callId, name, options) {
 
 function endSeedEntry(time) {
   return { type: "session/end-seed", seq: 9, time: time, data: {} };
+}
+
+function stepEntry(type, time, step = 1, turn = 1) {
+  return { type, time, data: { turn, step } };
+}
+
+function finishedStream(time, records = [], kind = "completed") {
+  return [...records, { type: "chunk", time, chunk: { type: "finish", reason: { kind } } }];
 }
 
 async function writeTranscript(dshHome, options) {
@@ -201,6 +211,129 @@ test("DSH sessions count assistant usage once and keep bodies out of the row", a
   const csv = sessionsToCsv(rows);
   assert.match(csv, /"dsh"/);
   assert.equal(csv.includes(SECRET), false);
+});
+
+test("DSH performance uses step boundaries, packed first deltas and once-counted model usage", async (t) => {
+  const dshHome = path.join(fixture(t), ".dsh");
+  const first = assistantEntry("m-timed-1", {
+    time: T0 + 11000, output: 250, reasoningTokens: 50,
+    stream: finishedStream(T0 + 11000, [
+      { type: "chunk", time: T0 + 1500, chunk: { type: "block-start", blockType: "reasoning" } },
+      { type: "reasoning-chunks", time0: T0 + 2000, texts: ["", SECRET], dt: [1000] },
+    ]),
+  });
+  const records = [dshHeader(), userEntry("u-timed"),
+    stepEntry("step/start", T0 + 1000), first, first,
+    toolEntry("slow-tool", "read", { time: T0 + 11000 }),
+    // A long-running tool cannot enter the next model request's denominator.
+    stepEntry("step/end", T0 + 99000), stepEntry("step/start", T0 + 100000, 2),
+    assistantEntry("m-timed-2", {
+      step: 2, time: T0 + 104000, output: 400, model: "deepseek-v4-flash",
+      stream: finishedStream(T0 + 104000, [
+        { type: "chunk", time: T0 + 100200, chunk: { type: "text-delta", text: "" } },
+        { type: "chunk", time: T0 + 100500, chunk: { type: "tool-call-delta", name: "read", argumentsDelta: "" } },
+      ]),
+    }),
+  ];
+  await writeTranscript(dshHome, { records });
+  // A seeded child replays all timed messages. Their timing, like their token
+  // usage, belongs only to the originating transcript.
+  await writeTranscript(dshHome, {
+    session: CHILD_ID,
+    records: [dshHeader({ id: CHILD_ID, createdAt: T0 + 200000, extra: { origin: "subagent", parentSession: PARENT_ID } }), ...records.slice(1),
+      userEntry("u-child-timed", { time: T0 + 201000 }),
+      assistantEntry("m-child-untimed", { time: T0 + 202000 })],
+  });
+
+  const rows = await readRows(dshHome);
+  const row = rows.find((item) => item.session_id === PARENT_ID);
+  assert.equal(row.performance.estimated_request_count, 2);
+  assert.equal(row.performance.estimated_output_tokens, 700);
+  assert.equal(row.performance.estimated_duration_ms, 14000);
+  assert.equal(row.performance.estimated_tokens_per_second, 50);
+  assert.equal(row.performance.first_response_sample_count, 2);
+  assert.equal(row.performance.first_response_ms, 1250);
+  assert.equal(row.model_usage.find((model) => model.model === "deepseek-v4-pro").performance.estimated_tokens_per_second, 30);
+  assert.equal(row.model_usage.find((model) => model.model === "deepseek-v4-flash").performance.first_response_ms, 500);
+  const browser = listSessionsForBrowser(rows);
+  assert.equal(summarizeSessions(rows).summary.performance.estimated_request_count, 2);
+  assert.equal(browser.sessions.find((item) => item.session_id === CHILD_ID).performance.estimated_request_count, 0);
+  assert.equal(JSON.stringify(browser).includes(SECRET), false);
+});
+
+test("DSH missing, failed, retried, interrupted and invalid timing keeps billable tokens without samples", async (t) => {
+  const dshHome = path.join(fixture(t), ".dsh");
+  const message = (id, extra = {}) => assistantEntry(id, {
+    time: T0 + 5000, output: 400,
+    stream: finishedStream(T0 + 5000, [{ type: "chunk", time: T0 + 2000, chunk: { type: "text-delta", text: SECRET } }]),
+    ...extra,
+  });
+  const cases = [
+    [message("missing-start")],
+    [{ type: "assistant/attempt" }, message("attempt-without-step")],
+    [stepEntry("step/start", T0 + 1000, 2), message("wrong-step")],
+    [stepEntry("step/start", T0 + 1000), message("interrupted", { interrupted: true })],
+    [stepEntry("step/start", T0 + 1000), message("error", { stream: finishedStream(T0 + 5000, [], "error") })],
+    [stepEntry("step/start", T0 + 1000), message("aborted", { stream: finishedStream(T0 + 5000, [], "aborted") })],
+    [stepEntry("step/start", T0 + 1000), message("unfinished", { stream: [] })],
+    [stepEntry("step/start", T0 + 1000), stepEntry("assistant/attempt", T0 + 2000), message("retry")],
+    [stepEntry("step/start", T0 + 1000), stepEntry("step/end", T0 + 3000), message("closed-step")],
+    [stepEntry("step/start", T0 + 1000), stepEntry("turn/end", T0 + 3000), message("closed-turn")],
+    [stepEntry("step/start", T0 + 10000), message("backwards")],
+    [stepEntry("step/start", T0 + 1000), message("suspended", { time: T0 + 3601001 })],
+  ];
+  for (let index = 0; index < cases.length; index += 1) {
+    await writeTranscript(dshHome, { session: `case-${index}`, records: [dshHeader({ id: `case-${index}` }), userEntry(`u-${index}`), ...cases[index]] });
+  }
+  const rows = await readRows(dshHome);
+  assert.equal(rows.length, cases.length);
+  for (const row of rows) {
+    assert.equal(row.tokens.output_tokens, 400);
+    assert.equal(row.performance.estimated_tokens_per_second, null, row.session_id);
+    assert.equal(row.performance.first_response_ms, null, row.session_id);
+  }
+});
+
+test("DSH legacy messages can estimate speed and short requests still record zero or packed tool first response", async (t) => {
+  const dshHome = path.join(fixture(t), ".dsh");
+  await writeTranscript(dshHome, { records: [dshHeader(), userEntry("u-legacy-timed"),
+    stepEntry("step/start", T0 + 1000), assistantEntry("legacy-timed", { time: T0 + 11000, output: 300 }),
+    stepEntry("step/start", T0 + 20000, 2), assistantEntry("instant", { step: 2, time: T0 + 20500, output: 10,
+      stream: finishedStream(T0 + 20500, [{ type: "text-chunks", time0: T0 + 20000, texts: [SECRET], dt: [] }]) }),
+    stepEntry("step/start", T0 + 30000, 3), assistantEntry("tool-packed", { step: 3, time: T0 + 30500, output: 10,
+      stream: finishedStream(T0 + 30500, [{ type: "tool-call-chunks", time0: T0 + 30000, args: ["", "", SECRET], dt: [100, 100] }]) }),
+    stepEntry("step/start", T0 + 40000, 4), assistantEntry("tool-name", { step: 4, time: T0 + 40500, output: 10,
+      stream: finishedStream(T0 + 40500, [{ type: "tool-call-chunks", time0: T0 + 40100, name: "read", args: [""], dt: [] }]) }),
+  ] });
+  const [row] = await readRows(dshHome);
+  assert.equal(row.performance.estimated_request_count, 1);
+  assert.equal(row.performance.estimated_tokens_per_second, 30);
+  assert.equal(row.performance.first_response_sample_count, 3);
+  assert.equal(row.performance.first_response_ms, 100);
+});
+
+test("DSH cached sidecars are rebuilt for performance and preserve timing without retaining streams", async (t) => {
+  const home = fixture(t);
+  await writeTranscript(path.join(home, ".dsh"), { records: [dshHeader(), userEntry("u-cache-timed"),
+    stepEntry("step/start", T0 + 1000), assistantEntry("cache-timed", { time: T0 + 11000, output: 300,
+      stream: finishedStream(T0 + 11000, [{ type: "chunk", time: T0 + 3000, chunk: { type: "reasoning-delta", text: SECRET } }]) }),
+  ] });
+  const first = await buildSessionAnalytics({ home, force: true });
+  const sidecar = resolveSessionSidecarPath(home);
+  const metaPath = sidecar + ".meta.json";
+  const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+  meta.version = 28;
+  fs.writeFileSync(metaPath, JSON.stringify(meta));
+  fs.writeFileSync(sidecar, first.map((row) => JSON.stringify({ ...row, version: 28, performance: undefined, model_usage: row.model_usage.map(({ performance, ...model }) => model) })).join("\n") + "\n");
+  const rebuilt = await buildSessionAnalytics({ home });
+  const warm = await buildSessionAnalytics({ home });
+  assert.equal(rebuilt[0].performance.estimated_tokens_per_second, 30);
+  assert.equal(rebuilt[0].performance.first_response_ms, 2000);
+  assert.deepEqual(warm[0].performance, rebuilt[0].performance);
+  assert.deepEqual(warm[0].model_usage, rebuilt[0].model_usage);
+  const serialized = fs.readFileSync(sidecar, "utf8");
+  assert.equal(serialized.includes(SECRET), false);
+  assert.equal(serialized.includes('"stream"'), false);
 });
 
 test("a seeded fork is attributed to the transcript that created each message", async (t) => {
