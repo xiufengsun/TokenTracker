@@ -208,6 +208,24 @@ test("mintAccessToken surfaces the csrf token paired with a rotation", async () 
   assert.equal(out.csrfToken, "csrf-new");
 });
 
+test("mintAccessToken surfaces the user object so refreshSession can persist (#1074)", async () => {
+  __resetCloudAccountCacheForTests();
+  const access = makeJwt({ expSeconds: Math.floor(Date.now() / 1000) + 3600 });
+  const user = { id: "user-1", email: "user@example.test" };
+  const first = await mintAccessToken({
+    refreshToken: "old",
+    fetchImpl: async () => jsonResponse({ accessToken: access, user }),
+  });
+  assert.deepEqual(first.user, user);
+  const cached = await mintAccessToken({
+    refreshToken: "old",
+    fetchImpl: async () => {
+      throw new Error("cache hit must not refresh again");
+    },
+  });
+  assert.deepEqual(cached.user, user);
+});
+
 test("fetchAccountFunction forwards query params except account/scope, sets auth headers", async () => {
   const captured = {};
   const fetchImpl = async (urlStr, opts) => {

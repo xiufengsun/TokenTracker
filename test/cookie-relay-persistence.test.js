@@ -269,6 +269,7 @@ test("refresh requests without browser auth context use the persisted refresh to
     assert.equal(proxiedUrl, "https://relay.example.test/api/auth/refresh?client_type=mobile");
     assert.deepEqual(proxiedBody, { refresh_token: "persisted-refresh-token" });
     assert.equal(proxiedCookieHeader, "");
+    assert.deepEqual(JSON.parse(res.body.toString("utf8")).user, { id: "user-1" });
     const saved = JSON.parse(await fs.readFile(cookiePath, "utf8"));
     assert.match(saved.insforge_refresh_token, /^insforge_refresh_token=rotated-refresh-token;/);
     assert.match(saved.insforge_csrf_token, /^insforge_csrf_token=csrf-from-refresh;/);

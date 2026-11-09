@@ -1400,6 +1400,13 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
     }
   }
 
+  function rememberIssuedAccessToken(accessToken, sourceFingerprint) {
+    if (!sourceFingerprint || typeof accessToken !== "string" || accessToken.length > 8192) return;
+    const hash = crypto.createHash("sha256").update(accessToken).digest("hex");
+    if (!issuedAccessTokenInstances.has(hash)) issuedAccessTokenInstances.set(hash, sourceFingerprint);
+    while (issuedAccessTokenInstances.size > 64) issuedAccessTokenInstances.delete(issuedAccessTokenInstances.keys().next().value);
+  }
+
   function captureAuthTokensFromBody(bodyBuffer, contentType, { newLogin = false, sourceFingerprint } = {}) {
     if (!bodyBuffer || !String(contentType || "").toLowerCase().includes("application/json")) return;
     let parsed = null;
@@ -1408,11 +1415,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
     } catch {
       return;
     }
-    if (sourceFingerprint && typeof parsed?.accessToken === "string" && parsed.accessToken.length <= 8192) {
-      const hash = crypto.createHash("sha256").update(parsed.accessToken).digest("hex");
-      if (!issuedAccessTokenInstances.has(hash)) issuedAccessTokenInstances.set(hash, sourceFingerprint);
-      while (issuedAccessTokenInstances.size > 64) issuedAccessTokenInstances.delete(issuedAccessTokenInstances.keys().next().value);
-    }
+    rememberIssuedAccessToken(parsed?.accessToken, sourceFingerprint);
     let changed = false;
     const token = typeof parsed?.csrfToken === "string" ? parsed.csrfToken.trim() : "";
     if (token) {
@@ -2141,11 +2144,13 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           const payload = { accessToken: minted.accessToken };
           if (minted.refreshToken) payload.refreshToken = minted.refreshToken;
           if (minted.csrfToken) payload.csrfToken = minted.csrfToken;
+          if (minted.user) payload.user = minted.user;
           // Persist the rotation without bumping sessionGeneration — that
           // would 409 a concurrent waiter that shared this mint.
           // setRelayRefreshToken matches the background account-read path.
           if (minted.refreshToken) setRelayRefreshToken(minted.refreshToken);
           if (minted.csrfToken) setRelayCsrfToken(minted.csrfToken);
+          rememberIssuedAccessToken(minted.accessToken, fingerprintFor(runtime));
           const resBody = Buffer.from(JSON.stringify(payload));
           res.writeHead(200, { "content-type": "application/json" });
           res.end(resBody);
