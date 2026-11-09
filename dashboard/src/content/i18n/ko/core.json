@@ -630,6 +630,8 @@
   "settings.instance.confirm.description": "서버를 전환하면 로그아웃됩니다. 서버마다 계정이 독립적이므로 전환 후 새 서버에서 다시 로그인해야 합니다.",
   "settings.instance.confirm.confirm": "전환 후 다시 연결",
   "settings.instance.guide": "셀프 호스팅 가이드",
+  "settings.instance.health.ok": "연결됨",
+  "settings.instance.health.unreachable": "서버에 연결할 수 없음",
   "limits.alert.blocked": "알림이 꺼져 있음 — 시스템 설정에서 허용하세요",
   "settings.limits.showSubscriptions": "구독을 한도에 표시",
   "settings.limits.showSubscriptionsHint": "수동으로 등록한 구독 갱신 바를 한도와 함께 표시합니다.",

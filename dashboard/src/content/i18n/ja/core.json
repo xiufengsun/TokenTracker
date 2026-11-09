@@ -630,6 +630,8 @@
   "settings.instance.confirm.description": "サーバーの切り替えによりサインアウトされます。サーバーごとにアカウントは独立しており、切り替え後に新しいサーバーで再ログインが必要です。",
   "settings.instance.confirm.confirm": "切り替えて再接続",
   "settings.instance.guide": "セルフホストガイド",
+  "settings.instance.health.ok": "接続中",
+  "settings.instance.health.unreachable": "サーバーに到達できません",
   "limits.alert.blocked": "通知がオフです — システム設定で許可してください",
   "settings.limits.showSubscriptions": "サブスクを制限表示に表示",
   "settings.limits.showSubscriptionsHint": "手動登録した更新日バーを制限と一緒に表示します。",

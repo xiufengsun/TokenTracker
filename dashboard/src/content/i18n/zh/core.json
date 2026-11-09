@@ -733,6 +733,8 @@
   "settings.instance.confirm.description": "切换服务器会退出当前登录——每个服务器的账号相互独立，切换后需要在新服务器重新登录。",
   "settings.instance.confirm.confirm": "切换并重新连接",
   "settings.instance.guide": "自部署指南",
+  "settings.instance.health.ok": "已连接",
+  "settings.instance.health.unreachable": "服务器不可达",
   "settings.section.labs.description": "提前体验即将成为标准功能的实验性洞察。",
   "limits.alert.blocked": "通知已关闭——去系统设置中允许",
   "limits.hover.resets_at": "{{time}} 重置",

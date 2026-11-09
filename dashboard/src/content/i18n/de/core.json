@@ -628,6 +628,8 @@
   "settings.instance.confirm.description": "Beim Serverwechsel wirst du abgemeldet: Jeder Server verwaltet eigene Konten, danach musst du dich auf dem neuen Server neu anmelden.",
   "settings.instance.confirm.confirm": "Wechseln & neu verbinden",
   "settings.instance.guide": "Self-Hosting-Anleitung",
+  "settings.instance.health.ok": "Verbunden",
+  "settings.instance.health.unreachable": "Server nicht erreichbar",
   "limits.alert.blocked": "Benachrichtigungen sind aus – in den Systemeinstellungen erlauben",
   "settings.limits.showSubscriptions": "Abos in Limits anzeigen",
   "settings.limits.showSubscriptionsHint": "Zeige manuell eingetragene Abo-Verlängerungen zusammen mit den Limits an.",
