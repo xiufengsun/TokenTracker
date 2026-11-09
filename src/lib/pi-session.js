@@ -89,11 +89,16 @@ function modelAlias(value) {
 
 // Match the hourly parser's reject window: placeholder epoch values would land
 // the session in 1970 and make it vanish from every current date filter.
+// Date's own ceiling is 8.64e15: past it every new Date(ms) is Invalid Date and
+// the row's later toISOString() throws RangeError, which would fail the whole pi
+// batch instead of just this record. Out-of-range numbers fall through to the
+// entry's ISO timestamp (Date.parse already validates) and then to null.
+const MAX_PI_TIMESTAMP_MS = 8.64e15;
 const MIN_PI_TIMESTAMP_MS = Date.UTC(2020, 0, 1);
 
 function entryTimestampMs(entry, message) {
   const direct = Number(message?.timestamp);
-  if (Number.isFinite(direct) && direct >= MIN_PI_TIMESTAMP_MS) return direct;
+  if (Number.isFinite(direct) && direct >= MIN_PI_TIMESTAMP_MS && direct <= MAX_PI_TIMESTAMP_MS) return direct;
   if (typeof entry?.timestamp === "string" && entry.timestamp) {
     const parsed = Date.parse(entry.timestamp);
     if (Number.isFinite(parsed) && parsed >= MIN_PI_TIMESTAMP_MS) return parsed;
@@ -109,9 +114,37 @@ function piInventoryIncomplete(pathName, error) {
   return err;
 }
 
+// A nested transcript dir can contain a symlink to another directory (a scratch
+// dir linked home, an agent workspace mount, or a link back to one of its own
+// ancestors). Crossing it costs twice: a link to an ancestor is re-entered at
+// every level, so enumeration grows exponentially and blocks the local API
+// before a single transcript is read; a link sideways folds foreign transcripts
+// into this session, inflating its subagent counters and letting it claim another
+// session's entry ids. So the walk never crosses a link at all, and as defense in
+// depth against mounts it also tracks the directory identities on its own
+// ancestor chain and stops at a fixed depth. pi and pi-subagents write real
+// files, so skipping links costs nothing in the supported layout.
+const MAX_NESTED_WALK_DEPTH = 12;
+
+function dirIdentity(dir) {
+  try {
+    const st = fs.statSync(dir);
+    return `${st.dev}:${st.ino}`;
+  } catch {
+    return null;
+  }
+}
+
 function listNestedJsonlSync(dir, { strict = false } = {}) {
   const found = [];
-  const walk = (current) => {
+  const chain = new Set();
+  const walk = (current, depth) => {
+    if (depth > MAX_NESTED_WALK_DEPTH) return;
+    const identity = dirIdentity(current);
+    if (identity) {
+      if (chain.has(identity)) return;
+      chain.add(identity);
+    }
     let entries;
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
@@ -121,6 +154,9 @@ function listNestedJsonlSync(dir, { strict = false } = {}) {
       return;
     }
     for (const entry of entries) {
+      // readdirSync({ withFileTypes: true }) does not follow links, so this is an
+      // lstat check: only a real directory or file is walked or counted.
+      if (entry.isSymbolicLink()) continue;
       const full = path.join(current, entry.name);
       let isDir = entry.isDirectory();
       let isFile = entry.isFile();
@@ -136,17 +172,44 @@ function listNestedJsonlSync(dir, { strict = false } = {}) {
       }
       // Recursive on purpose: pi-subagents forks transcripts one level deeper,
       // to <session stem>/<hash>/run-N/session.jsonl.
-      if (isDir) walk(full);
+      if (isDir) walk(full, depth + 1);
       else if (isFile && entry.name.endsWith(".jsonl")) found.push(full);
     }
+    if (identity) chain.delete(identity);
   };
-  walk(dir);
+  walk(dir, 0);
   found.sort((a, b) => a.localeCompare(b));
   return found;
 }
 
 function mainSessionStem(filePath) {
   return path.basename(filePath, ".jsonl");
+}
+
+// pi names every transcript `<session-start>_<session-id>.jsonl`, so the file
+// name already carries the session's start time. A fork (`pi --fork`) is always
+// created after the session it replays, so processing transcripts in start order
+// — rather than path order — guarantees the *originating* session claims the
+// replayed entry ids. Path order alone could let a cross-project fork, which may
+// sort into a different `<cwd>` directory, consume its parent's messages and
+// leave the parent looking empty.
+// Returns a fixed-width digit key so a plain string compare is a time compare;
+// a name with no trustworthy start time (a hand-written fixture, a flat
+// `<id>.jsonl`) sorts last instead of first.
+function sessionStartKey(filePath) {
+  const base = path.basename(filePath);
+  const split = base.indexOf("_");
+  const prefix = split > 0 ? base.slice(0, split) : base;
+  const digits = prefix.replace(/\D/g, "");
+  // 17 digits = YYYYMMDDHHMMSSmmm.
+  return digits.length === 17 ? digits : "9".repeat(17);
+}
+
+function bySessionStartThenPath(a, b) {
+  const keyA = sessionStartKey(a);
+  const keyB = sessionStartKey(b);
+  if (keyA !== keyB) return keyA < keyB ? -1 : 1;
+  return a.localeCompare(b);
 }
 
 /**
@@ -244,7 +307,7 @@ function toolNameFromBlock(block) {
 
 async function readPiSessionFiles(mainFiles, { seenEntryIds = new Set() } = {}) {
   const rows = [];
-  const mains = [...new Set((mainFiles || []).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const mains = [...new Set((mainFiles || []).filter(Boolean))].sort(bySessionStartThenPath);
 
   for (const mainPath of mains) {
     const nested = piSubagentFilesForMain(mainPath, { strict: true });
@@ -347,7 +410,11 @@ async function readPiSessionFiles(mainFiles, { seenEntryIds = new Set() } = {}) 
 
           // Entry-id dedup applies to activity metrics as well as tokens: pi
           // forks (`pi --fork`) copy the parent transcript with the same ids,
-          // so a fork must not recount its parent's work.
+          // so a fork must not recount its parent's work. The set is keyed by
+          // the bare entry id (not session + entry) on purpose: it mirrors the
+          // hourly ledger's single seenIds set, which is what keeps Sessions and
+          // Usage agreeing, and pi's own ids are time-ordered UUIDv7s, so two
+          // unrelated sessions sharing one id is not a realistic shape.
           const entryId = typeof entry.id === "string" && entry.id ? entry.id : null;
           if (entryId && seenEntryIds.has(entryId)) continue;
           if (entryId) seenEntryIds.add(entryId);
@@ -355,13 +422,20 @@ async function readPiSessionFiles(mainFiles, { seenEntryIds = new Set() } = {}) 
           const ts = entryTimestampMs(entry, message);
           if (ts != null) times.add(ts);
 
-          if (message.role === "user" && isMain) {
+          if (message.role === "user") {
             closeTurn();
-            turns += 1;
+            // Only the main transcript's prompts are user turns: a subagent's
+            // prompt is one delegation from the parent's point of view. Its
+            // transcript still opens a turn locally, so an edit made inside a
+            // child is counted against that child's model instead of leaving
+            // the whole session looking unproductive.
+            if (isMain) {
+              turns += 1;
+              const fingerprint = fingerprintContent(message.content ?? null);
+              if (lastPrompt && fingerprint === lastPrompt) retries += 1;
+              lastPrompt = fingerprint;
+            }
             turnOpen = true;
-            const fingerprint = fingerprintContent(message.content ?? null);
-            if (lastPrompt && fingerprint === lastPrompt) retries += 1;
-            lastPrompt = fingerprint;
             continue;
           }
 

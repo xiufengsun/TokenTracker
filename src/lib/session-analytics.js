@@ -2038,27 +2038,6 @@ async function scanPiSession(filePath) {
   return rows[0] || null;
 }
 
-async function scanPiSessions(filePaths) {
-  // Batch the whole pi inventory so `pi --fork` copies, which replay their
-  // parent's entry ids, are counted once across sessions (same contract as the
-  // hourly pi reader's seenIds set).
-  const rows = await readPiSessions(Array.isArray(filePaths) ? filePaths : [filePaths]);
-  return rows.map(({ identity, files, title, ...row }) => finalizeRecord({
-    ...row,
-    title: cleanSessionTitle(title),
-    version: SIDECAR_VERSION,
-    source: "pi",
-    session_hash: sessionHash("pi", identity),
-    project_key: projectKey(row.project_ref, files[0]),
-    ...sessionStorageUsage(files),
-  }));
-}
-
-async function scanPiSession(filePath) {
-  const rows = await scanPiSessions([filePath]);
-  return rows[0] || null;
-}
-
 async function scanDshSessions(filePaths) {
   // Batch the whole inventory: a seeded Harness session replays its parent's
   // message ids, so cross-file identity is resolved before any row is emitted
@@ -2320,6 +2299,13 @@ function analyticsEntryStatKey(source, filePath) {
   }
   if (source === "omp") {
     return `${sessionStat}|metadata:${filesSignature(ompSessionDependencies([filePaths].flat()))}`;
+  }
+  if (source === "pi") {
+    // The overall sidecar signature already covers piSessionDependencies, but
+    // the per-entry reuse below compares this key alone. Without the nested
+    // transcripts, a pi-subagents child that gained usage would leave the entry
+    // stat key unchanged and the previous pi rows would be reused.
+    return `${sessionStat}|metadata:${filesSignature(piSessionDependencies([filePaths].flat()))}`;
   }
   if (source === "grok") {
     const primary = filePaths[0];

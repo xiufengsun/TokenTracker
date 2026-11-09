@@ -14,8 +14,10 @@ const {
   sessionsToCsv,
   resolveSessionSidecarPath,
   resumeCommandFor,
+  analyticsEntryStatKey,
 } = require("../src/lib/session-analytics");
 const { parsePiIncremental } = require("../src/lib/rollout");
+const { piSessionDependencies } = require("../src/lib/pi-session");
 
 const T0 = Date.UTC(2026, 9, 10, 12, 0, 0);
 const SESSION_ID = "01a1bc31-0000-7000-8000-000000000001";
@@ -130,7 +132,9 @@ test("pi sessions count assistant usage once, fold nested subagents, and omit bo
   assert.equal(row.total_tokens, 170);
   assert.equal(row.turns, 1);
   assert.equal(row.edit_turns, 1);
-  assert.equal(row.subagent_calls >= 1, true);
+  // One `task` tool call and one nested transcript: the nested count is the
+  // floor, so the session observed exactly one child.
+  assert.equal(row.subagent_calls, 1);
   assert.equal(row.model, "claude-sonnet-4-5");
   assert.equal(row.title, null);
   assert.equal(row.project_ref, "/repo/pi-app");
@@ -185,9 +189,11 @@ test("pi session totals match the hourly sync parser for the same assistant rows
   assert.equal(queued[0].cache_creation_input_tokens, row.tokens.cache_creation_input_tokens);
 });
 
-test("pi usage keeps one model per routed backend out of the same model row", async (t) => {
-  // pi is a router: the same model id reached through two providers is priced
-  // differently, but the Sessions row keys by model like every other source.
+test("pi keeps every routed backend's tokens when one model is reached two ways", async (t) => {
+  // pi is a router. The Sessions sidecar has one source per row and no place to
+  // carry a per-model backend, so both turns land on the model row — see the
+  // follow-up noted in the PR description. What must never regress is the
+  // accounting: all 45 tokens are present, in as many rows as the reader uses.
   const home = fixture(t);
   const file = writeSession(home, `2026-10-10T12-00-00-000Z_${SESSION_ID}.jsonl`, [
     header(),
@@ -195,9 +201,10 @@ test("pi usage keeps one model per routed backend out of the same model row", as
     assistant({ id: "e2", provider: "github-copilot", input: 20, output: 10, totalTokens: 30, time: T0 + 2000 }),
   ]);
   const row = await scanPiSession(file);
+  const rowTokens = row.model_usage.reduce((sum, m) => sum + m.total_tokens, 0);
   assert.equal(row.total_tokens, 45);
-  assert.equal(row.model_usage.length, 1);
-  assert.equal(row.model_usage[0].model, "claude-sonnet-4-5");
+  assert.equal(rowTokens, row.total_tokens);
+  assert.equal(row.model_usage.some((m) => m.model === "claude-sonnet-4-5"), true);
 });
 
 test("resumeCommandFor rejects unsafe pi session ids", () => {
@@ -315,7 +322,8 @@ test("pi duplicate entry ids do not inflate turns, retries, or subagent calls", 
   assert.equal(row.total_tokens, 12);
   assert.equal(row.turns, 1);
   assert.equal(row.retry_turns, 0);
-  assert.equal(row.subagent_calls >= 1, true);
+  // The replayed `task` call must not count a second child.
+  assert.equal(row.subagent_calls, 1);
   assert.equal(row.subagent_types.task, 1);
 });
 
@@ -357,10 +365,185 @@ test("pi nested child transcripts do not steal parent edit attribution", async (
   assert.equal(gpt.edit_turns, 0);
 });
 
+test("pi entry stat key covers nested transcripts, so a child change rescans the batch", async (t) => {
+  // The overall sidecar signature already includes piSessionDependencies, but
+  // per-entry reuse compares analyticsEntryStatKey alone. Without the nested
+  // transcripts in that key a child that gained usage would reuse old rows.
+  const home = fixture(t);
+  const file = writeSession(home, `2026-10-10T12-00-00-000Z_${SESSION_ID}.jsonl`, [
+    header(),
+    user("u1"),
+    assistant({ id: "aaaaaaaa", input: 10, output: 2, totalTokens: 12 }),
+  ], {
+    nested: [{
+      name: "deadbeef/run-1/session.jsonl",
+      records: [header({ id: "child-session" }), assistant({ id: "bbbbbbbb", input: 5, output: 1, totalTokens: 6, time: T0 + 5000 })],
+    }],
+  });
+
+  const before = analyticsEntryStatKey("pi", [file]);
+  assert.equal(typeof before, "string");
+  assert.match(before, /\|metadata:/);
+
+  const nestedPath = path.join(file.replace(/\.jsonl$/i, ""), "deadbeef", "run-1", "session.jsonl");
+  fs.appendFileSync(nestedPath, JSON.stringify(assistant({ id: "cccccccc", input: 100, output: 20, totalTokens: 120, time: T0 + 9000 })) + "\n");
+
+  const after = analyticsEntryStatKey("pi", [file]);
+  assert.notEqual(after, before, "a nested transcript change must move the pi entry stat key");
+
+  const sessions = await buildSessionAnalytics({ home, force: true });
+  const row = sessions.find((r) => r.source === "pi" && r.session_id === SESSION_ID);
+  assert.equal(row.total_tokens, 138);
+});
+
 test("pi discovery yields no files and no incomplete entries when the install is absent", async (t) => {
   const home = fixture(t);
   const incomplete = [];
   const discovered = await discoverSessionFiles(home, { HOME: home }, { homedir: () => home, incomplete });
   assert.deepEqual(discovered.pi, []);
   assert.deepEqual(discovered.incomplete, []);
+});
+
+test("pi ignores an out-of-range message timestamp and uses the entry envelope instead", async (t) => {
+  // A hand-edited or buggy transcript must not take the whole pi batch down:
+  // new Date(1e21).toISOString() throws RangeError, so the value is rejected and
+  // the entry's ISO timestamp is used.
+  const home = fixture(t);
+  const file = writeSession(home, `2026-10-10T12-00-00-000Z_${SESSION_ID}.jsonl`, [
+    header(),
+    {
+      type: "message",
+      id: "aaaaaaaa",
+      parentId: "parent",
+      timestamp: new Date(T0 + 1000).toISOString(),
+      message: {
+        role: "assistant",
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        content: [],
+        usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, reasoning: 0, cost: 0, totalTokens: 12 },
+        timestamp: 1e21,
+      },
+    },
+  ]);
+  const row = await scanPiSession(file);
+  assert.equal(row.total_tokens, 12);
+  assert.equal(row.ended_at, new Date(T0 + 1000).toISOString());
+});
+
+test("pi counts an edit made only inside a nested subagent transcript", async (t) => {
+  // The session's only edit happened in a child. The parent's own turn stays
+  // unmarked, but the session must not read as unproductive.
+  const home = fixture(t);
+  const file = writeSession(home, `2026-10-10T12-00-00-000Z_${SESSION_ID}.jsonl`, [
+    header(),
+    user("u1"),
+    assistant({ id: "aaaaaaaa", input: 50, output: 10, totalTokens: 60, tools: [] }),
+  ], {
+    nested: [{
+      name: "deadbeef/run-1/session.jsonl",
+      records: [
+        header({ id: "child-session" }),
+        user("cu1", T0 + 4000),
+        assistant({ id: "bbbbbbbb", model: "gpt-5", input: 20, output: 5, totalTokens: 25, time: T0 + 5000, tools: ["edit"] }),
+      ],
+    }],
+  });
+  const row = await scanPiSession(file);
+  assert.equal(row.edit_turns, 1);
+  assert.equal(row.turns, 1);
+  const gpt = row.model_usage.find((m) => m.model === "gpt-5");
+  assert.equal(gpt.edit_turns, 1);
+  assert.equal(row.model_usage.find((m) => m.model === "claude-sonnet-4-5").edit_turns, 0);
+});
+
+test("pi assigns replayed entries to the originating session across projects", async (t) => {
+  // The fork lives in a cwd dir that sorts before the parent's, so a
+  // path-ordered batch would let the fork claim the parent's entry ids and leave
+  // the parent looking empty. Start-time ordering must win over path order.
+  const home = fixture(t);
+  const parentRecords = [
+    header({ cwd: "/repo/zzz-parent" }),
+    user("u1"),
+    assistant({ id: "aaaaaaaa", input: 100, output: 20, totalTokens: 120 }),
+  ];
+  writeSession(home, `2026-10-10T12-00-00-000Z_${SESSION_ID}.jsonl`, parentRecords, { cwdDir: "--repo-zzz-parent--" });
+  const forkId = "01a1bc31-0000-7000-8000-000000000003";
+  writeSession(home, `2026-10-10T14-00-00-000Z_${forkId}.jsonl`, [
+    header({ id: forkId, cwd: "/repo/aaa-fork", parentSession: SESSION_ID }),
+    ...parentRecords.slice(1),
+  ], { cwdDir: "--repo-aaa-fork--" });
+
+  const sessions = await buildSessionAnalytics({ home, force: true });
+  const parent = sessions.find((row) => row.session_id === SESSION_ID);
+  assert.ok(parent, "the originating session must still be listed");
+  assert.equal(parent.total_tokens, 120);
+  assert.equal(parent.turns, 1);
+});
+
+test("pi nested discovery survives a symlink cycle back to an ancestor", async (t) => {
+  const home = fixture(t);
+  const file = writeSession(home, `2026-10-10T12-00-00-000Z_${SESSION_ID}.jsonl`, [
+    header(),
+    user("u1"),
+    assistant({ id: "aaaaaaaa", input: 10, output: 2, totalTokens: 12 }),
+  ], {
+    nested: [{
+      name: "deadbeef/run-1/session.jsonl",
+      records: [header({ id: "child-session" }), assistant({ id: "bbbbbbbb", input: 5, output: 1, totalTokens: 6 })],
+    }],
+  });
+  // Link the nested transcript's own dir back above the sessions root, so a walk
+  // that crosses links would both loop and fold every other session's
+  // transcripts into this one.
+  const nestedDir = path.join(file.replace(/\.jsonl$/i, ""), "deadbeef");
+  const sessionsRoot = path.join(home, ".pi", "agent", "sessions");
+  try {
+    fs.symlinkSync(sessionsRoot, path.join(nestedDir, "loop"), "dir");
+  } catch (error) {
+    t.skip(`symlinks unavailable on this platform: ${error?.code}`);
+    return;
+  }
+  const row = await scanPiSession(file);
+  assert.ok(row);
+  assert.equal(row.total_tokens, 18);
+  // The cycle test must not just check tokens: the link also has to stay out of
+  // the subagent accounting, or a foreign transcript silently joins this session.
+  assert.equal(row.subagent_calls, 1);
+  assert.deepEqual(row.subagent_types, { session: 1 });
+
+  // The same containment has to hold for the dependency list that feeds the
+  // entry stat key, or a foreign transcript would ride the cache signature too.
+  assert.equal(piSessionDependencies([file]).length, 2);
+});
+
+test("pi nested discovery ignores a symlink without counting foreign transcripts", async (t) => {
+  const home = fixture(t);
+  const file = writeSession(home, `2026-10-10T12-00-00-000Z_${SESSION_ID}.jsonl`, [
+    header(),
+    user("u1"),
+    assistant({ id: "aaaaaaaa", input: 10, output: 2, totalTokens: 12 }),
+  ], {
+    nested: [{
+      name: "deadbeef/run-1/session.jsonl",
+      records: [header({ id: "child-session" }), assistant({ id: "bbbbbbbb", input: 5, output: 1, totalTokens: 6 })],
+    }],
+  });
+  // A sibling project's session dir linked into this session's nested tree must
+  // not be folded in: that would move another session's tokens here.
+  const other = writeSession(home, `2026-10-10T11-00-00-000Z_01a1bc31-0000-7000-8000-000000000009.jsonl`, [
+    header({ id: "01a1bc31-0000-7000-8000-000000000009", cwd: "/repo/other" }),
+    assistant({ id: "cccccccc", input: 500, output: 100, totalTokens: 600 }),
+  ], { cwdDir: "--repo-other--" });
+  const nestedDir = path.join(file.replace(/\.jsonl$/i, ""), "deadbeef");
+  try {
+    fs.symlinkSync(path.dirname(other), path.join(nestedDir, "other-project"), "dir");
+  } catch (error) {
+    t.skip(`symlinks unavailable on this platform: ${error?.code}`);
+    return;
+  }
+  const row = await scanPiSession(file);
+  assert.equal(row.total_tokens, 18, "the foreign session's 600 tokens must not land here");
+  assert.equal(row.subagent_calls, 1);
+  assert.deepEqual(row.subagent_types, { session: 1 });
 });
