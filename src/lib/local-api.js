@@ -2093,37 +2093,47 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
             timeoutMs: runtime.httpTimeoutMs,
             throwOnFailure: true,
           };
+          const rejectIfRefreshContextChanged = () => {
+            const currentRuntime = getRuntime();
+            if (currentRuntime.configurationError || currentRuntime.baseUrl !== runtime.baseUrl || currentRuntime.anonKey !== runtime.anonKey) {
+              json(res, { code: "instance_changed", error: "The configured backend changed during authentication. Reload and sign in again." }, 409);
+              return true;
+            }
+            if (authSessionAtStart !== getCloudAccountSessionGeneration()) {
+              json(res, { error: "Account session changed", code: "auth_session_changed" }, 409);
+              return true;
+            }
+            return false;
+          };
           let minted = null;
           try {
             try {
               minted = await mintAccessToken({ ...mintOpts, refreshToken: relayRefreshToken });
             } catch (error) {
+              // Only retry a consumed-token 401 against a just-rotated
+              // persisted token for the SAME backend/session. Otherwise a
+              // rejected mint from instance A could submit instance B's
+              // newly saved refresh token to A.
+              if (rejectIfRefreshContextChanged()) return true;
               const latest = getRelayCookieValue("insforge_refresh_token", { decode: true });
-              if (
-                latest &&
-                latest !== relayRefreshToken &&
-                (error?.status === 401 || error?.code === "auth_rejected")
-              ) {
+              if (latest && latest !== relayRefreshToken && error?.status === 401) {
                 minted = await mintAccessToken({ ...mintOpts, refreshToken: latest });
               } else {
                 throw error;
               }
             }
           } catch (error) {
-            if (authSessionAtStart !== getCloudAccountSessionGeneration()) {
-              json(res, { error: "Account session changed", code: "auth_session_changed" }, 409);
-              return true;
-            }
-            if (error?.status === 401 || error?.code === "auth_rejected") {
+            if (rejectIfRefreshContextChanged()) return true;
+            // performMint tags every non-OK HTTP status as auth_rejected.
+            // Only a real 401 means the credential was consumed/invalid;
+            // 429/503 must not sign the SPA out.
+            if (error?.status === 401) {
               json(res, { error: "AUTH_UNAUTHORIZED", message: "Invalid or expired refresh token" }, 401);
               return true;
             }
             throw error;
           }
-          if (authSessionAtStart !== getCloudAccountSessionGeneration()) {
-            json(res, { error: "Account session changed", code: "auth_session_changed" }, 409);
-            return true;
-          }
+          if (rejectIfRefreshContextChanged()) return true;
           if (!minted?.accessToken) {
             json(res, { error: "AUTH_UNAUTHORIZED", message: "Invalid or expired refresh token" }, 401);
             return true;
@@ -2131,10 +2141,12 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           const payload = { accessToken: minted.accessToken };
           if (minted.refreshToken) payload.refreshToken = minted.refreshToken;
           if (minted.csrfToken) payload.csrfToken = minted.csrfToken;
+          // Persist the rotation without bumping sessionGeneration — that
+          // would 409 a concurrent waiter that shared this mint.
+          // setRelayRefreshToken matches the background account-read path.
+          if (minted.refreshToken) setRelayRefreshToken(minted.refreshToken);
+          if (minted.csrfToken) setRelayCsrfToken(minted.csrfToken);
           const resBody = Buffer.from(JSON.stringify(payload));
-          captureAuthTokensFromBody(resBody, "application/json", {
-            newLogin: false, sourceFingerprint: fingerprintFor(runtime),
-          });
           res.writeHead(200, { "content-type": "application/json" });
           res.end(resBody);
           return true;

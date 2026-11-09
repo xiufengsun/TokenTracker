@@ -573,6 +573,104 @@ test("page refresh and background mint share one rotating refresh token (#1074)"
   });
 });
 
+test("two concurrent page refreshes both succeed on one shared rotation (#1074)", async () => {
+  await withTempHome(async (home) => {
+    const cookiePath = getCookiePath(home);
+    await fs.mkdir(path.dirname(cookiePath), { recursive: true });
+    await fs.writeFile(
+      cookiePath,
+      JSON.stringify({
+        insforge_refresh_token: "insforge_refresh_token=shared-refresh-token; Path=/; HttpOnly",
+      }),
+      "utf8",
+    );
+
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let refreshCalls = 0;
+    let rotated = false;
+    globalThis.fetch = async (url, options = {}) => {
+      if (!String(url).includes("/api/auth/refresh")) throw new Error(`unexpected fetch ${url}`);
+      refreshCalls += 1;
+      const sent = JSON.parse(String(options.body || "{}")).refresh_token;
+      await gate;
+      if (sent !== "shared-refresh-token" || rotated) {
+        return new Response(
+          JSON.stringify({ error: "AUTH_UNAUTHORIZED", message: "Invalid or expired refresh token" }),
+          { status: 401, headers: { "content-type": "application/json" } },
+        );
+      }
+      rotated = true;
+      return new Response(
+        JSON.stringify({
+          accessToken: makeJwt(),
+          refreshToken: "rotated-shared-token",
+          csrfToken: "csrf-shared",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const handler = createLocalApiHandler({ queuePath: path.join(home, ".tokentracker", "tracker", "queue.jsonl") });
+    const first = createResponse();
+    const second = createResponse();
+    const url = new URL("http://localhost/api/auth/refresh");
+    const firstRefresh = handler(createRequest({ method: "POST", headers: { cookie: "any=1" }, body: "{}" }), first, url);
+    const secondRefresh = handler(createRequest({ method: "POST", headers: { cookie: "any=1" }, body: "{}" }), second, url);
+    await new Promise((resolve, reject) => {
+      const start = Date.now();
+      const tick = () => {
+        if (refreshCalls >= 1) return resolve();
+        if (Date.now() - start > 1000) return reject(new Error("timed out waiting for refresh"));
+        setImmediate(tick);
+      };
+      tick();
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    release();
+    const [firstHandled, secondHandled] = await Promise.all([firstRefresh, secondRefresh]);
+
+    assert.equal(firstHandled, true);
+    assert.equal(secondHandled, true);
+    assert.equal(refreshCalls, 1);
+    assert.equal(first.statusCode, 200);
+    assert.equal(second.statusCode, 200);
+    assert.equal(JSON.parse(first.body.toString("utf8")).refreshToken, "rotated-shared-token");
+    assert.equal(JSON.parse(second.body.toString("utf8")).refreshToken, "rotated-shared-token");
+  });
+});
+
+test("transient refresh upstream failures do not look like an expired session (#1074)", async () => {
+  await withTempHome(async (home) => {
+    const cookiePath = getCookiePath(home);
+    await fs.mkdir(path.dirname(cookiePath), { recursive: true });
+    await fs.writeFile(
+      cookiePath,
+      JSON.stringify({
+        insforge_refresh_token: "insforge_refresh_token=still-valid-token; Path=/; HttpOnly",
+      }),
+      "utf8",
+    );
+
+    globalThis.fetch = async () => new Response("try again later", { status: 503 });
+
+    const handler = createLocalApiHandler({ queuePath: path.join(home, ".tokentracker", "tracker", "queue.jsonl") });
+    const res = createResponse();
+    const handled = await handler(
+      createRequest({ method: "POST", body: "{}" }),
+      res,
+      new URL("http://localhost/api/auth/refresh"),
+    );
+
+    assert.equal(handled, true);
+    assert.equal(res.statusCode, 502);
+    assert.doesNotMatch(res.body.toString("utf8"), /AUTH_UNAUTHORIZED/);
+    const saved = JSON.parse(await fs.readFile(cookiePath, "utf8"));
+    assert.match(saved.insforge_refresh_token, /=still-valid-token;/);
+  });
+});
+
 test("stale refresh csrf errors do not clear relay cookies when no relay cookies were replayed", async () => {
   await withTempHome(async (home) => {
     const cookiePath = getCookiePath(home);

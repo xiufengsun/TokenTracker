@@ -1068,9 +1068,13 @@ test("local sync remints relayed device token after active refresh token changes
     assert.equal(calls.length, 2);
     assert.equal(calls[0].options.env.TOKENTRACKER_DEVICE_TOKEN, "issued-device-token-1");
     assert.equal(calls[1].options.env.TOKENTRACKER_DEVICE_TOKEN, "issued-device-token-2");
+    // The page-refresh mint rotates to refresh-new and caches that access
+    // token under the new key, so the follow-up sync reuses it instead of
+    // posting refresh-new again. The device-token remint (above) is what
+    // this test actually guards.
     assert.deepEqual(
       fetchCalls.filter((c) => c.url.endsWith("/api/auth/refresh?client_type=mobile")).map((c) => c.body.refresh_token),
-      ["refresh-xyz", "refresh-xyz", "refresh-new"],
+      ["refresh-xyz", "refresh-xyz"],
     );
     assert.equal(fetchCalls.filter((c) => c.url.endsWith("/functions/tokentracker-device-token-issue")).length, 2);
     assert.equal(issueTokens.length, 0);
