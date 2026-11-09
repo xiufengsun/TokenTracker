@@ -2143,13 +2143,17 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           }
           const payload = { accessToken: minted.accessToken };
           if (minted.refreshToken) payload.refreshToken = minted.refreshToken;
-          if (minted.csrfToken) payload.csrfToken = minted.csrfToken;
           if (minted.user) payload.user = minted.user;
           // Persist the rotation without bumping sessionGeneration — that
           // would 409 a concurrent waiter that shared this mint.
           // setRelayRefreshToken matches the background account-read path.
           if (minted.refreshToken) setRelayRefreshToken(minted.refreshToken);
           if (minted.csrfToken) setRelayCsrfToken(minted.csrfToken);
+          // Cache hits return csrfToken:null. The SDK still needs the current
+          // CSRF to sign out; without it, logout 403s and a reload signs the
+          // user back in. Fall back to the relayed token we just persisted.
+          const csrfToken = minted.csrfToken || getRelayCookieValue(csrfRelayCookieName);
+          if (csrfToken) payload.csrfToken = csrfToken;
           rememberIssuedAccessToken(minted.accessToken, fingerprintFor(runtime));
           const resBody = Buffer.from(JSON.stringify(payload));
           res.writeHead(200, { "content-type": "application/json" });

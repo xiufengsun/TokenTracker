@@ -567,10 +567,61 @@ test("page refresh and background mint share one rotating refresh token (#1074)"
     assert.equal(res.statusCode, 200);
     const body = JSON.parse(res.body.toString("utf8"));
     assert.equal(body.refreshToken, "rotated-shared-token");
+    assert.equal(body.csrfToken, "csrf-shared");
     assert.equal(minted.refreshToken, "rotated-shared-token");
     assert.equal(minted.accessToken, body.accessToken);
     const saved = JSON.parse(await fs.readFile(cookiePath, "utf8"));
     assert.match(saved.insforge_refresh_token, /^insforge_refresh_token=rotated-shared-token;/);
+  });
+});
+
+test("cached shared refresh still returns the relayed CSRF token (#1074)", async () => {
+  await withTempHome(async (home) => {
+    const cookiePath = getCookiePath(home);
+    await fs.mkdir(path.dirname(cookiePath), { recursive: true });
+    await fs.writeFile(
+      cookiePath,
+      JSON.stringify({
+        insforge_refresh_token: "insforge_refresh_token=cached-refresh-token; Path=/; HttpOnly",
+        insforge_csrf_token: "insforge_csrf_token=valid-csrf; Path=/",
+      }),
+      "utf8",
+    );
+
+    let refreshCalls = 0;
+    globalThis.fetch = async (url) => {
+      if (!String(url).includes("/api/auth/refresh")) throw new Error(`unexpected fetch ${url}`);
+      refreshCalls += 1;
+      return new Response(
+        JSON.stringify({
+          accessToken: makeJwt(),
+          user: { id: "u1" },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const minted = await mintAccessToken({
+      baseUrl: "https://relay.example.test",
+      refreshToken: "cached-refresh-token",
+    });
+    assert.ok(minted.accessToken);
+    assert.equal(refreshCalls, 1);
+
+    const handler = createLocalApiHandler({ queuePath: path.join(home, ".tokentracker", "tracker", "queue.jsonl") });
+    const res = createResponse();
+    const handled = await handler(
+      createRequest({ method: "POST", headers: { cookie: "any=1" }, body: "{}" }),
+      res,
+      new URL("http://localhost/api/auth/refresh"),
+    );
+    assert.equal(handled, true);
+    assert.equal(res.statusCode, 200);
+    assert.equal(refreshCalls, 1, "page refresh must reuse the cached mint");
+    const body = JSON.parse(res.body.toString("utf8"));
+    assert.equal(body.accessToken, minted.accessToken);
+    assert.equal(body.csrfToken, "valid-csrf");
+    assert.deepEqual(body.user, { id: "u1" });
   });
 });
 
