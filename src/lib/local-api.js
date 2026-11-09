@@ -3681,6 +3681,103 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       return true;
     }
 
+    // --- cloud instance target (official cloud vs self-hosted InsForge) ---
+    // Persisted on config.json next to the queue. GET is unauthenticated so the
+    // settings page can probe availability; POST requires local-auth. Saving
+    // only writes the config — the next getRuntime() call notices the changed
+    // fingerprint and performs the instance switch cleanup (relay cookies,
+    // device identity, account-view state) itself.
+    if (p === "/functions/tokentracker-instance-config") {
+      const {
+        DEFAULT_BASE_URL,
+        DEFAULT_ANON_KEY,
+        normalizeInstanceBaseUrl: normalizeInstance,
+        isPublicAnonKey,
+      } = require("./runtime-config");
+      const { writeFileAtomic, chmod600IfPossible } = require("./fs");
+      const configPath = path.join(path.dirname(qp), "config.json");
+      const readConfig = () => {
+        try {
+          const parsed = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+        } catch {
+          return {};
+        }
+      };
+      const writeConfig = async (next) => {
+        await writeFileAtomic(configPath, JSON.stringify(next, null, 2));
+        await chmod600IfPossible(configPath);
+      };
+      const describe = () => {
+        const runtime = getRuntime();
+        const officialBase = normalizeInstance(DEFAULT_BASE_URL);
+        const normalized = normalizeInstance(runtime.baseUrl) || "";
+        return {
+          baseUrl: normalized,
+          officialUrl: officialBase,
+          custom: Boolean(normalized) && normalized !== officialBase,
+          dashboardUrl: normalizeInstance(runtime.dashboardUrl) || "",
+          anonKeySet: Boolean(runtime.anonKey),
+          configurationError: runtime.configurationError || null,
+        };
+      };
+      const method = String(req.method || "GET").toUpperCase();
+      if (method === "GET") {
+        json(res, describe());
+        return true;
+      }
+      if (method === "POST" || method === "PUT") {
+        if (!isAuthorizedLocalMutation(req)) {
+          json(res, { ok: false, error: "Unauthorized" }, 401);
+          return true;
+        }
+        let body = {};
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          json(res, { ok: false, error: "invalid JSON" }, 400);
+          return true;
+        }
+        const requested = normalizeInstance(String(body?.baseUrl ?? ""));
+        if (!requested) {
+          json(res, { ok: false, error: "invalid_instance_url" }, 400);
+          return true;
+        }
+        const official = requested === normalizeInstance(DEFAULT_BASE_URL);
+        const current = readConfig();
+        if (official) {
+          // Back to the official cloud: drop the override so env/defaults
+          // resume control instead of pinning the previous custom values.
+          delete current.baseUrl;
+          delete current.anonKey;
+          delete current.dashboardUrl;
+        } else {
+          const anonKey = typeof body?.anonKey === "string" ? body.anonKey.trim() : "";
+          if (!anonKey) {
+            json(res, { ok: false, error: "instance_anon_key_required" }, 400);
+            return true;
+          }
+          if (!isPublicAnonKey(anonKey) || anonKey === DEFAULT_ANON_KEY) {
+            json(res, { ok: false, error: "invalid_instance_anon_key" }, 400);
+            return true;
+          }
+          current.baseUrl = requested;
+          current.anonKey = anonKey;
+          current.dashboardUrl = requested;
+        }
+        try {
+          await writeConfig(current);
+        } catch (error) {
+          json(res, { ok: false, error: error?.message || "failed to save instance config" }, 500);
+          return true;
+        }
+        json(res, { ok: true, ...describe() });
+        return true;
+      }
+      json(res, { error: "Method Not Allowed" }, 405);
+      return true;
+    }
+
     // --- telemetry preference (anonymous analytics opt-out mirror) ---
     // The dashboard's analytics init on localhost / native-app surfaces asks
     // this before sending anything, so TOKENTRACKER_NO_TELEMETRY /

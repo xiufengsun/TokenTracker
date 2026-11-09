@@ -506,6 +506,25 @@ settings.labs.sessions.hint,ui,SettingsPage,LabsSection,sessions_hint,"Analyze m
 settings.labs.sessions.aria,ui,SettingsPage,LabsSection,sessions_aria,"Toggle session efficiency analysis",,active
 settings.section.labs,ui,SettingsPage,LabsSection,sec_labs,"Labs",,active
 settings.section.labs.description,ui,SettingsPage,LabsSection,sec_labs_description,"Try experimental insights before they become standard features.",,active
+settings.instance.title,ui,SettingsPage,InstanceSectionCard,inst_title,"Server",,active
+settings.instance.subtitle,ui,SettingsPage,InstanceSectionCard,inst_subtitle,"Point this client at the official cloud or your own self-hosted instance.",,active
+settings.instance.official,ui,SettingsPage,InstanceSectionCard,inst_official,"Official cloud",,active
+settings.instance.badge.official,ui,SettingsPage,InstanceSectionCard,inst_badge_official,"Official",,active
+settings.instance.badge.selfHosted,ui,SettingsPage,InstanceSectionCard,inst_badge_selfhosted,"Self-hosted",,active
+settings.instance.action.useSelfHosted,ui,SettingsPage,InstanceSectionCard,inst_action_use_selfhosted,"Use self-hosted server",,active
+settings.instance.action.edit,ui,SettingsPage,InstanceSectionCard,inst_action_edit,"Change server",,active
+settings.instance.action.save,ui,SettingsPage,InstanceSectionCard,inst_action_save,"Save and reconnect",,active
+settings.instance.action.restoreOfficial,ui,SettingsPage,InstanceSectionCard,inst_action_restore,"Restore official cloud",,active
+settings.instance.field.url,ui,SettingsPage,InstanceSectionCard,inst_field_url,"Server address",,active
+settings.instance.field.anonKey,ui,SettingsPage,InstanceSectionCard,inst_field_key,"Anon key",,active
+settings.instance.field.anonKeyHint,ui,SettingsPage,InstanceSectionCard,inst_field_key_hint,"Required for a custom server: the public anon key of your InsForge deployment (role=anon, provided by your instance operator).",,active
+settings.instance.applying,ui,SettingsPage,InstanceSectionCard,inst_applying,"Applying…",,active
+settings.instance.applied,ui,SettingsPage,InstanceSectionCard,inst_applied,"Saved. Reloading the dashboard with the new server…",,active
+settings.instance.loading,ui,SettingsPage,InstanceSectionCard,inst_loading,"Loading server settings…",,active
+settings.instance.error.url,ui,SettingsPage,InstanceSectionCard,inst_error_url,"Enter a valid server address (https://, or http:// on localhost).",,active
+settings.instance.error.keyRequired,ui,SettingsPage,InstanceSectionCard,inst_error_key_required,"A custom server also needs its anon key.",,active
+settings.instance.error.keyInvalid,ui,SettingsPage,InstanceSectionCard,inst_error_key_invalid,"This key is not a valid anon key for a custom server.",,active
+settings.instance.error.generic,ui,SettingsPage,InstanceSectionCard,inst_error_generic,"Could not save the server configuration.",,active
 qpd.card.title,ui,DashboardView,QualityPerDollarCard,title,"Quality & Avg Cost/PR",,active
 qpd.card.badge,ui,DashboardView,QualityPerDollarCard,badge,"BETA",,active
 qpd.card.subtitle,ui,DashboardView,QualityPerDollarCard,subtitle,"Avg token cost per delivery, from merged PRs and AI-attributed commits.",,active
