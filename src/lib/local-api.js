@@ -3798,6 +3798,52 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       return true;
     }
 
+    // --- cloud instance reachability probe ---
+    // Runs server-side so a self-hosted instance without CORS headers for the
+    // dashboard origin is still testable. Any HTTP response (including 4xx/5xx)
+    // proves the address is routable and TLS terminates; only network-level
+    // failures count as unreachable.
+    if (p === "/functions/tokentracker-instance-test") {
+      if (String(req.method || "GET").toUpperCase() !== "POST") {
+        json(res, { error: "Method Not Allowed" }, 405);
+        return true;
+      }
+      if (!isAuthorizedLocalMutation(req)) {
+        json(res, { ok: false, error: "Unauthorized" }, 401);
+        return true;
+      }
+      let body = {};
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        json(res, { ok: false, error: "invalid JSON" }, 400);
+        return true;
+      }
+      const { normalizeInstanceBaseUrl: normalizeInstance } = require("./runtime-config");
+      const target = normalizeInstance(String(body?.baseUrl ?? ""));
+      if (!target) {
+        json(res, { ok: false, error: "invalid_instance_url" }, 400);
+        return true;
+      }
+      let reachable = false;
+      let httpStatus = null;
+      let errorCode = "unreachable";
+      try {
+        const response = await fetch(target, {
+          method: "GET",
+          redirect: "manual",
+          signal: AbortSignal.timeout(8000),
+        });
+        reachable = true;
+        httpStatus = response.status;
+      } catch (error) {
+        if (error?.name === "TimeoutError") errorCode = "timeout";
+        else if (error?.name === "AbortError") errorCode = "timeout";
+      }
+      json(res, { ok: true, reachable, status: httpStatus, error: reachable ? null : errorCode });
+      return true;
+    }
+
     // --- telemetry preference (anonymous analytics opt-out mirror) ---
     // The dashboard's analytics init on localhost / native-app surfaces asks
     // this before sending anything, so TOKENTRACKER_NO_TELEMETRY /

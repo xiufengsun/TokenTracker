@@ -122,12 +122,25 @@ describe("useInstanceSettings", () => {
         configurationError: "invalid_insforge_base_url",
       }),
     );
+  it("probes a candidate address through the server-side test endpoint", async () => {
+    setHostname("localhost");
+    const fetchMock = vi.fn(async (url, init) => {
+      if (init?.method === "POST" && String(url).includes("instance-test")) {
+        return jsonResponse(200, { ok: true, reachable: true, status: 404, error: null });
+      }
+      return jsonResponse(200, GET_BODY);
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const { result } = renderHook(() => useInstanceSettings());
     await waitFor(() => expect(result.current.available).toBe(true));
     expect(result.current.config.baseUrl).toBe("");
     expect(result.current.config.configurationError).toBe("invalid_insforge_base_url");
+    let outcome;
+    await act(async () => {
+      outcome = await result.current.test(SELF_HOSTED);
+    });
+    expect(outcome).toEqual({ reachable: true, status: 404, error: null });
   });
 
   it("surfaces server rejections after the retry", async () => {
