@@ -506,6 +506,19 @@ settings.labs.sessions.hint,ui,SettingsPage,LabsSection,sessions_hint,"Analyze m
 settings.labs.sessions.aria,ui,SettingsPage,LabsSection,sessions_aria,"Toggle session efficiency analysis",,active
 settings.section.labs,ui,SettingsPage,LabsSection,sec_labs,"Labs",,active
 settings.section.labs.description,ui,SettingsPage,LabsSection,sec_labs_description,"Try experimental insights before they become standard features.",,active
+settings.section.about,ui,SettingsPage,AboutSection,sec_about,"About",,active
+settings.section.about.description,ui,SettingsPage,AboutSection,sec_about_description,"What Token Tracker is and the people behind it.",,active
+settings.about.intro.body,ui,SettingsPage,AboutSection,intro_body,"Token Tracker is a free, open-source dashboard that measures token usage and cost across your AI coding tools. All parsing and aggregation runs locally on your machine — no cloud account, no API keys, no setup.",,active
+settings.about.intro.version,ui,SettingsPage,AboutSection,intro_version,"Version",,active
+settings.about.intro.license,ui,SettingsPage,AboutSection,intro_license,"License",,active
+settings.about.intro.links,ui,SettingsPage,AboutSection,intro_links,"Project",,active
+settings.about.intro.website,ui,SettingsPage,AboutSection,intro_website,"Website",,active
+settings.about.contributors.title,ui,SettingsPage,AboutSection,contributors_title,"Contributors",,active
+settings.about.contributors.subtitle,ui,SettingsPage,AboutSection,contributors_subtitle,"Token Tracker is built together with its community. Thanks to everyone who contributes code, translations, and ideas.",,active
+settings.about.contributors.loading,ui,SettingsPage,AboutSection,contributors_loading,"Loading contributors…",,active
+settings.about.contributors.error,ui,SettingsPage,AboutSection,contributors_error,"Contributors could not be loaded right now. You can still view them on GitHub.",,active
+settings.about.contributors.viewAll,ui,SettingsPage,AboutSection,contributors_view_all,"View all",,active
+settings.about.contributors.itemTitle,ui,SettingsPage,AboutSection,contributors_item_title,"{{contributor}} — {{contributions}} contributions",,active
 qpd.card.title,ui,DashboardView,QualityPerDollarCard,title,"Quality & Avg Cost/PR",,active
 qpd.card.badge,ui,DashboardView,QualityPerDollarCard,badge,"BETA",,active
 qpd.card.subtitle,ui,DashboardView,QualityPerDollarCard,subtitle,"Avg token cost per delivery, from merged PRs and AI-attributed commits.",,active
