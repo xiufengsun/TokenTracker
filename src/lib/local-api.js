@@ -2073,6 +2073,72 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         const hasCsrfHeader = typeof proxyHeaders["x-csrf-token"] === "string" && proxyHeaders["x-csrf-token"].trim().length > 0;
         const relayCsrfToken = getRelayCookieValue(csrfRelayCookieName);
         const relayRefreshToken = getRelayCookieValue("insforge_refresh_token", { decode: true });
+        // Issue #1074: the backend rotates refresh tokens, but this proxy and
+        // `mintAccessToken` used to POST the same token independently. A page
+        // refresh concurrent with a background account read then consumed the
+        // token twice — the loser got 401 and the SPA signed the user out.
+        // Route every refresh that still has a persisted token through the
+        // shared mint (cache + single-flight + one retry against a just-
+        // rotated file) so both callers share one result.
+        if (p === "/api/auth/refresh" && relayRefreshToken && String(req.method || "GET").toUpperCase() === "POST") {
+          for await (const _chunk of req) { /* drain unused body */ }
+          const latestRuntime = getRuntime();
+          if (latestRuntime.configurationError || latestRuntime.baseUrl !== runtime.baseUrl || latestRuntime.anonKey !== runtime.anonKey) {
+            json(res, { code: "instance_changed", error: "The configured backend changed during authentication. Reload and sign in again." }, 409);
+            return true;
+          }
+          const mintOpts = {
+            baseUrl: insforgeBase,
+            anonKey: runtime.anonKey,
+            timeoutMs: runtime.httpTimeoutMs,
+            throwOnFailure: true,
+          };
+          let minted = null;
+          try {
+            try {
+              minted = await mintAccessToken({ ...mintOpts, refreshToken: relayRefreshToken });
+            } catch (error) {
+              const latest = getRelayCookieValue("insforge_refresh_token", { decode: true });
+              if (
+                latest &&
+                latest !== relayRefreshToken &&
+                (error?.status === 401 || error?.code === "auth_rejected")
+              ) {
+                minted = await mintAccessToken({ ...mintOpts, refreshToken: latest });
+              } else {
+                throw error;
+              }
+            }
+          } catch (error) {
+            if (authSessionAtStart !== getCloudAccountSessionGeneration()) {
+              json(res, { error: "Account session changed", code: "auth_session_changed" }, 409);
+              return true;
+            }
+            if (error?.status === 401 || error?.code === "auth_rejected") {
+              json(res, { error: "AUTH_UNAUTHORIZED", message: "Invalid or expired refresh token" }, 401);
+              return true;
+            }
+            throw error;
+          }
+          if (authSessionAtStart !== getCloudAccountSessionGeneration()) {
+            json(res, { error: "Account session changed", code: "auth_session_changed" }, 409);
+            return true;
+          }
+          if (!minted?.accessToken) {
+            json(res, { error: "AUTH_UNAUTHORIZED", message: "Invalid or expired refresh token" }, 401);
+            return true;
+          }
+          const payload = { accessToken: minted.accessToken };
+          if (minted.refreshToken) payload.refreshToken = minted.refreshToken;
+          if (minted.csrfToken) payload.csrfToken = minted.csrfToken;
+          const resBody = Buffer.from(JSON.stringify(payload));
+          captureAuthTokensFromBody(resBody, "application/json", {
+            newLogin: false, sourceFingerprint: fingerprintFor(runtime),
+          });
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(resBody);
+          return true;
+        }
         // A cookie-less client (fresh WebView after an app update/restart) has no
         // browser session to pair a CSRF token with — the persisted refresh token
         // replayed through the mobile flow is the only viable recovery. The relay

@@ -5,8 +5,17 @@ const path = require("node:path");
 const { test } = require("node:test");
 
 const { createLocalApiHandler } = require("../src/lib/local-api");
+const { mintAccessToken, __resetCloudAccountCacheForTests } = require("../src/lib/cloud-account");
 const { withHome } = require("./helpers/with-home");
 const { publicAnonFor, bindPublicInstance } = require("./helpers/public-instance-fixture");
+
+function b64url(obj) {
+  return Buffer.from(JSON.stringify(obj)).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function makeJwt(expSeconds = Math.floor(Date.now() / 1000) + 3600) {
+  return `${b64url({ alg: "HS256", typ: "JWT" })}.${b64url({ sub: "u1", exp: expSeconds })}.sig`;
+}
 
 function createRequest({ method = "GET", headers = {}, body } = {}) {
   return {
@@ -42,9 +51,11 @@ async function withTempHome(run) {
   try {
     restoreHome = withHome(tmp);
     process.env.TOKENTRACKER_INSFORGE_BASE_URL = "https://relay.example.test";
+    __resetCloudAccountCacheForTests();
     await bindPublicInstance(path.join(tmp, ".tokentracker", "tracker"), process.env.TOKENTRACKER_INSFORGE_BASE_URL, publicAnonFor("relay"));
     await run(tmp);
   } finally {
+    __resetCloudAccountCacheForTests();
     globalThis.fetch = prevFetch;
     restoreHome();
     if (prevBaseUrl === undefined) delete process.env.TOKENTRACKER_INSFORGE_BASE_URL;
@@ -112,7 +123,7 @@ test("local browser and native auth recovery can still use the persisted refresh
       assert.equal(url, "https://relay.example.test/api/auth/refresh?client_type=mobile");
       assert.equal(JSON.parse(options.body.toString()).refresh_token, "persisted-refresh-token");
       upstreamCalls += 1;
-      return new Response("{}", { headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ accessToken: "access-token" }), { headers: { "content-type": "application/json" } });
     };
     const preflight = createResponse();
     await handler(createRequest({ method: "OPTIONS", headers: { origin: "http://127.0.0.1:8791" } }), preflight,
@@ -129,7 +140,7 @@ test("local browser and native auth recovery can still use the persisted refresh
         new URL("http://127.0.0.1:8791/api/auth/refresh"));
       assert.equal(res.statusCode, 200);
     }
-    assert.equal(upstreamCalls, 6);
+    assert.equal(upstreamCalls, 1, "a still-valid access token must be reused instead of refreshing six times");
   });
 });
 
@@ -313,12 +324,17 @@ test("refresh requests prefer persisted relay auth over stale client cookies", a
       "utf8",
     );
 
-    let proxiedCookieHeader = null;
-    let proxiedCsrfHeader = null;
-    globalThis.fetch = async (_url, options = {}) => {
+    let proxiedUrl = null;
+    let proxiedBody = null;
+    let proxiedCookieHeader = "unset";
+    globalThis.fetch = async (url, options = {}) => {
+      proxiedUrl = String(url);
+      proxiedBody = JSON.parse(String(options.body || "{}"));
       proxiedCookieHeader = options.headers?.cookie || "";
-      proxiedCsrfHeader = options.headers?.["x-csrf-token"] || options.headers?.["X-CSRF-Token"] || "";
-      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({ accessToken: "access-token" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     };
 
     const handler = createLocalApiHandler({ queuePath: path.join(home, ".tokentracker", "tracker", "queue.jsonl") });
@@ -335,10 +351,10 @@ test("refresh requests prefer persisted relay auth over stale client cookies", a
 
     assert.equal(handled, true);
     assert.equal(res.statusCode, 200);
-    assert.match(proxiedCookieHeader, /insforge_refresh_token=persisted-refresh-token/);
-    assert.doesNotMatch(proxiedCookieHeader, /stale-client-token/);
-    assert.match(proxiedCookieHeader, /insforge_csrf_token=persisted-csrf/);
-    assert.equal(proxiedCsrfHeader, "persisted-csrf");
+    assert.equal(proxiedUrl, "https://relay.example.test/api/auth/refresh?client_type=mobile");
+    assert.deepEqual(proxiedBody, { refresh_token: "persisted-refresh-token" });
+    assert.equal(proxiedCookieHeader, "");
+    assert.doesNotMatch(JSON.stringify(proxiedBody), /stale-client-token/);
   });
 });
 
@@ -390,7 +406,7 @@ test("cookie-less refresh takes the mobile fallback even when a relay csrf token
   });
 });
 
-test("403 invalid csrf on the cookie path is rescued via the mobile flow", async () => {
+test("refresh with stale client CSRF uses the shared mobile mint (#1074)", async () => {
   await withTempHome(async (home) => {
     const cookiePath = getCookiePath(home);
     await fs.mkdir(path.dirname(cookiePath), { recursive: true });
@@ -406,18 +422,6 @@ test("403 invalid csrf on the cookie path is rescued via the mobile flow", async
     const proxiedUrls = [];
     globalThis.fetch = async (url, options = {}) => {
       proxiedUrls.push(String(url));
-      if (proxiedUrls.length === 1) {
-        // Cookie/csrf path: stale relayed csrf → upstream rejects and tells the
-        // browser to delete its refresh cookie.
-        return new Response(JSON.stringify({ message: "Invalid CSRF token" }), {
-          status: 403,
-          headers: {
-            "content-type": "application/json",
-            "set-cookie":
-              "insforge_refresh_token=; Path=/api/auth; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly",
-          },
-        });
-      }
       assert.deepEqual(JSON.parse(String(options.body || "{}")), {
         refresh_token: "persisted-refresh-token",
       });
@@ -447,8 +451,8 @@ test("403 invalid csrf on the cookie path is rescued via the mobile flow", async
 
     assert.equal(handled, true);
     assert.equal(res.statusCode, 200);
-    assert.equal(proxiedUrls.length, 2);
-    assert.equal(proxiedUrls[1], "https://relay.example.test/api/auth/refresh?client_type=mobile");
+    assert.equal(proxiedUrls.length, 1);
+    assert.equal(proxiedUrls[0], "https://relay.example.test/api/auth/refresh?client_type=mobile");
     assert.match(JSON.parse(res.body.toString("utf8")).accessToken, /^rescued-access-token$/);
     const saved = JSON.parse(await fs.readFile(cookiePath, "utf8"));
     assert.match(saved.insforge_refresh_token, /^insforge_refresh_token=rescued-refresh-token;/);
@@ -491,6 +495,81 @@ test("deletion set-cookies on error responses do not destroy the persisted relay
     assert.equal(res.statusCode, 403);
     const saved = JSON.parse(await fs.readFile(cookiePath, "utf8"));
     assert.match(saved.insforge_refresh_token, /=still-valid-token;/);
+  });
+});
+
+test("page refresh and background mint share one rotating refresh token (#1074)", async () => {
+  await withTempHome(async (home) => {
+    const cookiePath = getCookiePath(home);
+    await fs.mkdir(path.dirname(cookiePath), { recursive: true });
+    await fs.writeFile(
+      cookiePath,
+      JSON.stringify({
+        insforge_refresh_token: "insforge_refresh_token=shared-refresh-token; Path=/; HttpOnly",
+      }),
+      "utf8",
+    );
+
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let refreshCalls = 0;
+    let rotated = false;
+    globalThis.fetch = async (url, options = {}) => {
+      if (!String(url).includes("/api/auth/refresh")) throw new Error(`unexpected fetch ${url}`);
+      refreshCalls += 1;
+      const sent = JSON.parse(String(options.body || "{}")).refresh_token;
+      await gate;
+      if (sent !== "shared-refresh-token" || rotated) {
+        return new Response(
+          JSON.stringify({ error: "AUTH_UNAUTHORIZED", message: "Invalid or expired refresh token" }),
+          { status: 401, headers: { "content-type": "application/json" } },
+        );
+      }
+      rotated = true;
+      return new Response(
+        JSON.stringify({
+          accessToken: makeJwt(),
+          refreshToken: "rotated-shared-token",
+          csrfToken: "csrf-shared",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const handler = createLocalApiHandler({ queuePath: path.join(home, ".tokentracker", "tracker", "queue.jsonl") });
+    const res = createResponse();
+    const proxyRefresh = handler(
+      createRequest({ method: "POST", headers: { cookie: "any=1" }, body: "{}" }),
+      res,
+      new URL("http://localhost/api/auth/refresh"),
+    );
+    const backgroundMint = mintAccessToken({
+      baseUrl: "https://relay.example.test",
+      refreshToken: "shared-refresh-token",
+    });
+    await new Promise((resolve, reject) => {
+      const start = Date.now();
+      const tick = () => {
+        if (refreshCalls >= 1) return resolve();
+        if (Date.now() - start > 1000) return reject(new Error("timed out waiting for refresh"));
+        setImmediate(tick);
+      };
+      tick();
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    release();
+    const [handled, minted] = await Promise.all([proxyRefresh, backgroundMint]);
+
+    assert.equal(handled, true);
+    assert.equal(refreshCalls, 1, "proxy refresh and mintAccessToken must share one upstream rotation");
+    assert.equal(res.statusCode, 200);
+    const body = JSON.parse(res.body.toString("utf8"));
+    assert.equal(body.refreshToken, "rotated-shared-token");
+    assert.equal(minted.refreshToken, "rotated-shared-token");
+    assert.equal(minted.accessToken, body.accessToken);
+    const saved = JSON.parse(await fs.readFile(cookiePath, "utf8"));
+    assert.match(saved.insforge_refresh_token, /^insforge_refresh_token=rotated-shared-token;/);
   });
 });
 
