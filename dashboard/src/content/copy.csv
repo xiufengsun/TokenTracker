@@ -532,6 +532,10 @@ settings.instance.testing,ui,SettingsPage,InstanceSectionCard,inst_testing,"Test
 settings.instance.test.ok,ui,SettingsPage,InstanceSectionCard,inst_test_ok,"Server reachable (HTTP {{status}}).",,active
 settings.instance.test.unreachable,ui,SettingsPage,InstanceSectionCard,inst_test_unreachable,"Could not reach this server. Check the address and try again.",,active
 settings.instance.test.certificate,ui,SettingsPage,InstanceSectionCard,inst_test_certificate,"The server responded with an untrusted certificate — check the certificate, not the address.",,active
+settings.instance.confirm.title,ui,SettingsPage,InstanceSectionCard,inst_confirm_title,"Switch server?",,active
+settings.instance.confirm.description,ui,SettingsPage,InstanceSectionCard,inst_confirm_description,"Switching servers signs you out: every server keeps its own accounts, so you'll sign in again on the new server.",,active
+settings.instance.confirm.confirm,ui,SettingsPage,InstanceSectionCard,inst_confirm_confirm,"Switch and reconnect",,active
+settings.instance.guide,ui,SettingsPage,InstanceSectionCard,inst_guide,"Self-hosting guide",,active
 qpd.card.title,ui,DashboardView,QualityPerDollarCard,title,"Quality & Avg Cost/PR",,active
 qpd.card.badge,ui,DashboardView,QualityPerDollarCard,badge,"BETA",,active
 qpd.card.subtitle,ui,DashboardView,QualityPerDollarCard,subtitle,"Avg token cost per delivery, from merged PRs and AI-attributed commits.",,active

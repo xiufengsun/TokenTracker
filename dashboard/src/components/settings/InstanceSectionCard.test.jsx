@@ -31,6 +31,7 @@ vi.mock("../../lib/insforge-config", () => ({
 
 vi.mock("../../lib/copy", () => ({
   copy: (key, params) => (params ? `${key}:${JSON.stringify(params)}` : key),
+  getCopyLocale: () => "zh-CN",
 }));
 
 const OFFICIAL = "https://srctyff5.us-east.insforge.app";
@@ -176,5 +177,96 @@ describe("InstanceSectionCard", () => {
       await user.click(screen.getByRole("button", { name: "settings.instance.action.test" }));
     });
     expect(screen.getByRole("status").textContent).toBe("settings.instance.test.unreachable");
+  });
+
+  it("asks a signed-in user to confirm a server switch before saving", async () => {
+    const user = userEvent.setup();
+    hookMock.save.mockResolvedValue({
+      ok: true,
+      baseUrl: SELF_HOSTED,
+      officialUrl: OFFICIAL,
+      custom: true,
+      dashboardUrl: SELF_HOSTED,
+      anonKeySet: true,
+      configurationError: null,
+    });
+    render(<InstanceSectionCard signedIn />);
+
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: "settings.instance.action.useSelfHosted" }));
+    });
+    await act(async () => {
+      await user.type(screen.getByLabelText("settings.instance.field.url"), SELF_HOSTED);
+      await user.type(screen.getByLabelText("settings.instance.field.anonKey"), ANON_KEY);
+    });
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: "settings.instance.action.save" }));
+    });
+
+    // No save yet — the switch drops the signed-in session, so confirm first.
+    expect(hookMock.save).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("settings.instance.confirm.title");
+
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: "settings.instance.confirm.confirm" }));
+    });
+    expect(hookMock.save).toHaveBeenCalledWith({ baseUrl: SELF_HOSTED, anonKey: ANON_KEY });
+    expect(resetMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a signed-in user back out of the switch without saving", async () => {
+    const user = userEvent.setup();
+    render(<InstanceSectionCard signedIn />);
+
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: "settings.instance.action.useSelfHosted" }));
+    });
+    await act(async () => {
+      await user.type(screen.getByLabelText("settings.instance.field.url"), SELF_HOSTED);
+    });
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: "settings.instance.action.save" }));
+    });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: "shared.action.cancel" }));
+    });
+    expect(hookMock.save).not.toHaveBeenCalled();
+    expect(resetMock).not.toHaveBeenCalled();
+  });
+
+  it("saves without a prompt when the signed-in target equals the active server", async () => {
+    const user = userEvent.setup();
+    hookMock.config = {
+      ...hookMock.config,
+      baseUrl: SELF_HOSTED,
+      custom: true,
+      dashboardUrl: SELF_HOSTED,
+    };
+    hookMock.save.mockResolvedValue({
+      ok: true,
+      baseUrl: SELF_HOSTED,
+      officialUrl: OFFICIAL,
+      custom: true,
+      dashboardUrl: SELF_HOSTED,
+      anonKeySet: true,
+      configurationError: null,
+    });
+    render(<InstanceSectionCard signedIn />);
+
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: "settings.instance.action.edit" }));
+    });
+    await act(async () => {
+      await user.type(screen.getByLabelText("settings.instance.field.anonKey"), ANON_KEY);
+    });
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: "settings.instance.action.save" }));
+    });
+
+    expect(hookMock.save).toHaveBeenCalledWith({ baseUrl: SELF_HOSTED, anonKey: ANON_KEY });
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
