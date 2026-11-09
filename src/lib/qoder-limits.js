@@ -6,6 +6,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { fetchQoderCnCliLimits } = require("./qoder-cn-cli-limits");
+const { createLimitsCache } = require("./limits-cache");
 
 const QODER_SITES = {
   international: {
@@ -406,18 +407,40 @@ function writeQoderActivityCache(window, {
   } catch (_error) {}
 }
 
-function qoderLimitsCachePath({ home = os.homedir(), namespace } = {}) {
-  const file = namespace
+// The active region partitions the cache by filename (cn vs global); the
+// record itself stays account-agnostic. A window without a parseable reset is
+// kept only within the 12h unknown-reset TTL, and the global max-age only
+// bounds snapshots with no future-dated window — a dated survivor outlives it.
+// Provenance must describe the data's age, not the transport (#955): a fresh
+// hit re-serves the winning source it was written with, an older hit honestly
+// reports the disk cache.
+const qoderLimitsCache = createLimitsCache({
+  file: ({ namespace }) => (namespace
     ? `qoder-${namespace}-usage-limits-cache.json`
-    : QODER_LIMITS_CACHE_FILE;
-  return path.join(home, ".tokentracker", "tracker", file);
-}
+    : QODER_LIMITS_CACHE_FILE),
+  key: "qoder",
+  maxAgeMs: QODER_LIMITS_CACHE_MAX_AGE_MS,
+  maxAgeGate: "ifNoDatedSurvivor",
+  unknownResetTtlMs: QODER_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS,
+  fields: {
+    plan_label: "string",
+    quota_exceeded: "boolTrue",
+    // Remember the winning source so a fresh re-serve keeps honest provenance
+    // instead of always claiming "disk-cache" (#955).
+    source: { write: (record) => (typeof record?.source === "string" ? record.source : null) },
+  },
+  windowKeys: ["primary_window", "secondary_window", "tertiary_window"],
+  // tertiary_window is written only when present and read back only when it
+  // survives — primary/secondary always appear (null when dead).
+  sparseWindowKeys: ["tertiary_window"],
+  stale: "byAge",
+  freshTtlMs: QODER_LIMITS_CACHE_FRESH_TTL_MS,
+  cachedFlag: true,
+  source: "provenance",
+});
 
-function qoderCachedWindow(window, { cachedAtMs, nowMs } = {}) {
-  if (!window || typeof window !== "object") return null;
-  const resetAtMs = Date.parse(window.reset_at || "");
-  if (Number.isFinite(resetAtMs)) return resetAtMs > nowMs ? window : null;
-  return nowMs - cachedAtMs <= QODER_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS ? window : null;
+function qoderLimitsCachePath({ home = os.homedir(), namespace } = {}) {
+  return qoderLimitsCache.path({ home, namespace });
 }
 
 function readQoderLimitsCache({
@@ -425,44 +448,7 @@ function readQoderLimitsCache({
   nowMs = Date.now(),
   namespace,
 } = {}) {
-  try {
-    const raw = JSON.parse(fs.readFileSync(qoderLimitsCachePath({ home, namespace }), "utf8"))?.qoder;
-    const cachedAtMs = Date.parse(raw?.cached_at || "");
-    if (!Number.isFinite(cachedAtMs) || cachedAtMs > nowMs + 60_000) return null;
-    const primaryWindow = qoderCachedWindow(raw.primary_window, { cachedAtMs, nowMs });
-    const secondaryWindow = qoderCachedWindow(raw.secondary_window, { cachedAtMs, nowMs });
-    const tertiaryWindow = qoderCachedWindow(raw.tertiary_window, { cachedAtMs, nowMs });
-    if (!primaryWindow && !secondaryWindow && !tertiaryWindow) return null;
-    const hasUnexpiredDatedWindow = [primaryWindow, secondaryWindow, tertiaryWindow]
-      .some((window) => Number.isFinite(Date.parse(window?.reset_at || "")));
-    if (nowMs - cachedAtMs > QODER_LIMITS_CACHE_MAX_AGE_MS && !hasUnexpiredDatedWindow) {
-      return null;
-    }
-    // Provenance must describe the data's age, not the transport (#955): a
-    // successful refresh writes this cache and immediately floors later log
-    // scans, so the next refresh re-serves the same payload. Marking every
-    // hit stale/disk-cache made the Limits page permanently partial.
-    const ageMs = nowMs - cachedAtMs;
-    const fresh = ageMs <= QODER_LIMITS_CACHE_FRESH_TTL_MS;
-    const writtenSource = typeof raw.source === "string" && raw.source.trim()
-      ? raw.source.trim()
-      : null;
-    return {
-      configured: true,
-      error: null,
-      plan_label: typeof raw.plan_label === "string" ? raw.plan_label : null,
-      quota_exceeded: raw.quota_exceeded === true,
-      primary_window: primaryWindow,
-      secondary_window: secondaryWindow,
-      ...(tertiaryWindow ? { tertiary_window: tertiaryWindow } : {}),
-      cached: true,
-      stale: !fresh,
-      cached_at: raw.cached_at,
-      source: fresh && writtenSource ? writtenSource : "disk-cache",
-    };
-  } catch (_error) {
-    return null;
-  }
+  return qoderLimitsCache.read({ home, nowMs, namespace });
 }
 
 function writeQoderLimitsCache(limits, {
@@ -470,27 +456,7 @@ function writeQoderLimitsCache(limits, {
   nowMs = Date.now(),
   namespace,
 } = {}) {
-  if (!limits?.configured || limits.error || (!limits.primary_window && !limits.secondary_window && !limits.tertiary_window)) return;
-  const cachePath = qoderLimitsCachePath({ home, namespace });
-  const payload = {
-    qoder: {
-      plan_label: limits.plan_label || null,
-      quota_exceeded: limits.quota_exceeded === true,
-      primary_window: limits.primary_window || null,
-      secondary_window: limits.secondary_window || null,
-      ...(limits.tertiary_window ? { tertiary_window: limits.tertiary_window } : {}),
-      // Remember the winning source so a fresh re-serve keeps honest
-      // provenance instead of always claiming "disk-cache" (#955).
-      source: typeof limits.source === "string" ? limits.source : null,
-      cached_at: new Date(nowMs).toISOString(),
-    },
-  };
-  try {
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const tmpPath = `${cachePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(tmpPath, cachePath);
-  } catch (_error) {}
+  qoderLimitsCache.write(limits, { home, nowMs, namespace });
 }
 
 function buildQoderActivityHeaders(authStatus, {
