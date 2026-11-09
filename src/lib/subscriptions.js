@@ -445,6 +445,94 @@ function readClaudeCodeAccessToken(options = {}) {
   return readClaudeCodeOauthToken(options)?.accessToken ?? null;
 }
 
+// Returns the full Claude Code auth bundle (access token, refresh token, expiry, scopes,
+// keychain service / file path, raw payload) so callers can detect staleness and trigger
+// an automatic token refresh before expiration.
+function readClaudeCodeAuthBundle({
+  platform = process.platform,
+  securityRunner,
+  home,
+  fsReader,
+  env,
+  nowMs = Date.now(),
+} = {}) {
+  const account = resolveClaudeKeychainAccount({ env });
+  if (platform === "darwin") {
+    for (const service of CLAUDE_CODE_KEYCHAIN_SERVICES) {
+      try {
+        const raw = readMacosKeychainPassword({ service, securityRunner, env });
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        const oauth = parsed?.claudeAiOauth;
+        if (!oauth || typeof oauth !== "object") continue;
+
+        const accessToken = normalizeString(oauth?.accessToken);
+        const refreshToken = normalizeString(oauth?.refreshToken);
+        if (!accessToken && !refreshToken) continue;
+
+        const expiresAtMs = parseClaudeOauthExpiryMs(oauth?.expiresAt);
+        const refreshTokenExpiresAtMs = parseClaudeOauthExpiryMs(oauth?.refreshTokenExpiresAt);
+        const scopes = Array.isArray(oauth?.scopes) ? oauth.scopes : [];
+        const subscriptionType = normalizeScalarToString(oauth?.subscriptionType);
+        const rateLimitTier = normalizeScalarToString(oauth?.rateLimitTier);
+
+        return {
+          accessToken,
+          refreshToken,
+          expiresAtMs,
+          refreshTokenExpiresAtMs,
+          scopes,
+          subscriptionType,
+          rateLimitTier,
+          service,
+          account,
+          rawPayload: parsed,
+          platform,
+        };
+      } catch (_e) {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  if (!usesClaudeCodeCredentialsFile(platform)) return null;
+
+  const credPath = path.join(typeof home === "string" && home ? home : os.homedir(), ".claude", CLAUDE_CODE_CREDENTIALS_FILE);
+  const raw = readClaudeCodeCredentialsFile({ home, fsReader });
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const oauth = parsed?.claudeAiOauth;
+    if (!oauth || typeof oauth !== "object") return null;
+
+    const accessToken = normalizeString(oauth?.accessToken);
+    const refreshToken = normalizeString(oauth?.refreshToken);
+    if (!accessToken && !refreshToken) return null;
+
+    const expiresAtMs = parseClaudeOauthExpiryMs(oauth?.expiresAt);
+    const refreshTokenExpiresAtMs = parseClaudeOauthExpiryMs(oauth?.refreshTokenExpiresAt);
+    const scopes = Array.isArray(oauth?.scopes) ? oauth.scopes : [];
+    const subscriptionType = normalizeScalarToString(oauth?.subscriptionType);
+    const rateLimitTier = normalizeScalarToString(oauth?.rateLimitTier);
+
+    return {
+      accessToken,
+      refreshToken,
+      expiresAtMs,
+      refreshTokenExpiresAtMs,
+      scopes,
+      subscriptionType,
+      rateLimitTier,
+      credentialsPath: credPath,
+      rawPayload: parsed,
+      platform,
+    };
+  } catch (_e) {
+    return null;
+  }
+}
+
 async function readCodexAccessToken({ home, env } = {}) {
   try {
     const codexHome = resolveCodexHome({ home, env });
@@ -497,11 +585,13 @@ async function readCodexAuthBundle({ home, env } = {}) {
 }
 
 module.exports = {
+  CLAUDE_TOKEN_EXPIRY_SKEW_MS,
   resolveClaudeKeychainAccount,
   collectLocalSubscriptions,
   detectClaudeCodeCredentialsPresence,
   detectClaudeCodeSubscriptionDetails,
   readClaudeCodeAccessToken,
+  readClaudeCodeAuthBundle,
   readClaudeCodeOauthToken,
   readCodexAccessToken,
   readCodexAuthBundle,

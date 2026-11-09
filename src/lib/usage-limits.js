@@ -10,12 +10,20 @@ const { performance } = require("node:perf_hooks");
 const { promisify } = require("node:util");
 
 const {
+  CLAUDE_TOKEN_EXPIRY_SKEW_MS,
   detectClaudeCodeCredentialsPresence,
   detectClaudeCodeSubscriptionDetails,
+  readClaudeCodeAccessToken,
+  readClaudeCodeAuthBundle,
   readClaudeCodeOauthToken,
   readCodexAccessToken,
   readCodexAuthBundle,
 } = require("./subscriptions");
+const {
+  isClaudeTokenStale,
+  refreshClaudeTokens,
+  persistRefreshedClaudeAuth,
+} = require("./claude-token-refresh");
 const {
   isTokenStale,
   refreshCodexTokens,
@@ -4518,10 +4526,10 @@ async function fetchUsageLimitsUncached({
   // these upfront token/subscription probes are the first file and keychain
   // touches of the Claude/Codex chains, so they are gated here and every
   // downstream step keys off the resulting null token.
-  const [claudeOauth, claudeSubscription, codexAuth] = await Promise.all([
+  const [claudeAuth, claudeSubscription, codexAuth] = await Promise.all([
     hiddenSet.has("claude") || customClaudeBackend
       ? Promise.resolve(null)
-      : Promise.resolve().then(() => readClaudeCodeOauthToken({ platform, securityRunner, home, nowMs })),
+      : Promise.resolve().then(() => readClaudeCodeAuthBundle({ platform, securityRunner, home, nowMs, env })),
     hiddenSet.has("claude") || customClaudeBackend
       ? Promise.resolve(null)
       : Promise.resolve().then(() => detectClaudeCodeSubscriptionDetails({ platform, securityRunner, home })),
@@ -4529,9 +4537,55 @@ async function fetchUsageLimitsUncached({
       ? Promise.resolve(null)
       : readCodexAuthBundle({ home, env }),
   ]);
-  const claudeToken = claudeOauth?.accessToken || null;
-  const claudeTokenExpiresAtMs = claudeOauth?.expiresAtMs ?? null;
-  const claudePlanType = claudeSubscription?.planType || null;
+
+  // Match the official Claude Code CLI: when access token is stale or expired (<5m remaining),
+  // refresh using the refresh token and persist the new credentials.
+  let claudeRefreshError = null;
+  let claudeAuthRefreshed = claudeAuth;
+  if (
+    claudeAuth &&
+    isClaudeTokenStale(claudeAuth, nowMs) &&
+    claudeAuth.refreshToken
+  ) {
+    try {
+      const newTokens = await refreshClaudeTokens({
+        refreshToken: claudeAuth.refreshToken,
+        scopes: claudeAuth.scopes,
+        fetchImpl,
+        nowMs,
+      });
+      const updatedPayload = await persistRefreshedClaudeAuth({
+        currentPayload: claudeAuth.rawPayload,
+        newTokens,
+        platform,
+        service: claudeAuth.service,
+        account: claudeAuth.account,
+        credentialsPath: claudeAuth.credentialsPath,
+        home,
+        env,
+        securityRunner,
+      });
+      claudeAuthRefreshed = {
+        ...claudeAuth,
+        accessToken: newTokens.accessToken,
+        refreshToken: newTokens.refreshToken,
+        expiresAtMs: newTokens.expiresAt,
+        refreshTokenExpiresAtMs: newTokens.refreshTokenExpiresAt,
+        scopes: newTokens.scopes,
+        rawPayload: updatedPayload,
+      };
+    } catch (err) {
+      claudeRefreshError = err;
+    }
+  }
+
+  const claudeToken =
+    claudeAuthRefreshed &&
+    (!claudeAuthRefreshed.expiresAtMs || claudeAuthRefreshed.expiresAtMs > nowMs + CLAUDE_TOKEN_EXPIRY_SKEW_MS)
+      ? claudeAuthRefreshed.accessToken
+      : null;
+  const claudeTokenExpiresAtMs = claudeAuthRefreshed?.expiresAtMs ?? null;
+  const claudePlanType = claudeSubscription?.planType || claudeAuthRefreshed?.subscriptionType || null;
 
   // Match the official Codex CLI: prefer the access token's JWT expiry and refresh only
   // within five minutes of it; fall back to last_refresh >8 days for opaque/legacy tokens.
@@ -4582,6 +4636,38 @@ async function fetchUsageLimitsUncached({
     ? readFreshClaudeLimitsCache({ home, nowMs })
     : null;
 
+  const executeClaudeFetch = async () => {
+    try {
+      return await fetchClaudeUsageLimits(claudeToken, { fetchImpl: providerFetch, maxAttempts: 1 });
+    } catch (err) {
+      if (err?.code === "AUTH_EXPIRED" && claudeAuthRefreshed?.refreshToken && !claudeRefreshError) {
+        try {
+          const newTokens = await refreshClaudeTokens({
+            refreshToken: claudeAuthRefreshed.refreshToken,
+            scopes: claudeAuthRefreshed.scopes,
+            fetchImpl,
+            nowMs,
+          });
+          await persistRefreshedClaudeAuth({
+            currentPayload: claudeAuthRefreshed.rawPayload,
+            newTokens,
+            platform,
+            service: claudeAuthRefreshed.service,
+            account: claudeAuthRefreshed.account,
+            credentialsPath: claudeAuthRefreshed.credentialsPath,
+            home,
+            env,
+            securityRunner,
+          });
+          return await fetchClaudeUsageLimits(newTokens.accessToken, { fetchImpl: providerFetch, maxAttempts: 1 });
+        } catch (_retryErr) {
+          throw err;
+        }
+      }
+      throw err;
+    }
+  };
+
   const providerFetch = withFetchTimeout(fetchImpl, providerTimeoutMs);
   // What a hidden provider's Promise.all slot resolves to. Both shapes flow
   // through the same assembly branches as a genuinely unconfigured provider —
@@ -4594,7 +4680,7 @@ async function fetchUsageLimitsUncached({
   const hiddenSettled = Promise.resolve({ status: "fulfilled", value: { configured: false } });
   const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, devinRaw, workbuddy, workbuddyAi, deepseek, claudeServiceStatus] = await Promise.all([
     claudeToken && !freshClaudeCache && !claudeRetryAtMs
-      ? withProviderTimeout(fetchClaudeUsageLimits(claudeToken, { fetchImpl: providerFetch, maxAttempts: 1 }), "Claude", providerTimeoutMs).then(
+      ? withProviderTimeout(executeClaudeFetch(), "Claude", providerTimeoutMs).then(
           (value) => ({ status: "fulfilled", value }),
           (reason) => ({ status: "rejected", reason }),
         )
@@ -4769,7 +4855,11 @@ async function fetchUsageLimitsUncached({
     const credentialsPresent = !hiddenSet.has("claude")
       && detectClaudeCodeCredentialsPresence({ platform, securityRunner, home });
     claude = credentialsPresent
-      ? { configured: true, error: CLAUDE_AUTH_EXPIRED_MESSAGE, auth_action_required: "reauth" }
+      ? {
+          configured: true,
+          error: (claudeRefreshError && claudeRefreshError.code === "REFRESH_TOKEN_EXPIRED" ? claudeRefreshError.message : CLAUDE_AUTH_EXPIRED_MESSAGE),
+          auth_action_required: "reauth",
+        }
       : { configured: false };
   } else if (freshClaudeCache) {
     claude = freshClaudeCache;

@@ -1770,6 +1770,165 @@ describe("getUsageLimits", () => {
     }
   });
 
+  it("automatically refreshes stale Claude token before calling usage endpoint", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-auto-refresh-"));
+    try {
+      const nowMs = Date.parse("2026-05-05T12:00:00.000Z");
+      const claudeDir = path.join(tmp, ".claude");
+      fs.mkdirSync(claudeDir, { recursive: true });
+      const credPath = path.join(claudeDir, ".credentials.json");
+      fs.writeFileSync(
+        credPath,
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "stale-access-token",
+            refreshToken: "rt-claude-valid",
+            expiresAt: nowMs - 1000,
+            scopes: ["user:inference"],
+            subscriptionType: "team",
+          },
+        }),
+      );
+
+      let refreshCalled = false;
+      let usageAuthHeader = null;
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        nowMs,
+        providerTimeoutMs: 2000,
+        securityRunner() {
+          return { status: 1, stdout: "" };
+        },
+        commandRunner() {
+          return { status: 1, stdout: "" };
+        },
+        fetchImpl(url, opts) {
+          if (typeof url === "string" && url.includes("platform.claude.com/v1/oauth/token")) {
+            refreshCalled = true;
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                token_type: "Bearer",
+                access_token: "refreshed-claude-token",
+                refresh_token: "new-rt-claude",
+                expires_in: 28800,
+                scope: "user:inference",
+              }),
+            });
+          }
+          if (typeof url === "string" && url === "https://api.anthropic.com/api/oauth/usage") {
+            usageAuthHeader = opts?.headers?.Authorization || null;
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                five_hour: { utilization: 15, resets_at: "2026-05-05T17:00:00Z" },
+                seven_day: { utilization: 40, resets_at: "2026-05-12T12:00:00Z" },
+              }),
+            });
+          }
+          return pendingUnlessCodexReset(url);
+        },
+      });
+
+      assert.equal(refreshCalled, true, "Claude refresh endpoint must be called");
+      assert.equal(usageAuthHeader, "Bearer refreshed-claude-token");
+      assert.equal(result.claude.configured, true);
+      assert.equal(result.claude.error, null);
+      assert.equal(result.claude.five_hour.utilization, 15);
+      assert.equal(result.claude.seven_day.utilization, 40);
+
+      const updatedCreds = JSON.parse(fs.readFileSync(credPath, "utf8"));
+      assert.equal(updatedCreds.claudeAiOauth.accessToken, "refreshed-claude-token");
+      assert.equal(updatedCreds.claudeAiOauth.refreshToken, "new-rt-claude");
+      assert.equal(updatedCreds.claudeAiOauth.subscriptionType, "team");
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("retries Claude usage fetch after refreshing token when initial call returns 401", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-401-retry-"));
+    try {
+      const nowMs = Date.parse("2026-05-05T12:00:00.000Z");
+      const claudeDir = path.join(tmp, ".claude");
+      fs.mkdirSync(claudeDir, { recursive: true });
+      const credPath = path.join(claudeDir, ".credentials.json");
+      fs.writeFileSync(
+        credPath,
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "rejected-access-token",
+            refreshToken: "rt-claude-retry",
+            expiresAt: nowMs + 3600 * 1000,
+            scopes: ["user:inference"],
+          },
+        }),
+      );
+
+      let usageAttempts = 0;
+      let refreshCalled = false;
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        nowMs,
+        providerTimeoutMs: 2000,
+        securityRunner() {
+          return { status: 1, stdout: "" };
+        },
+        commandRunner() {
+          return { status: 1, stdout: "" };
+        },
+        fetchImpl(url, opts) {
+          if (typeof url === "string" && url.includes("platform.claude.com/v1/oauth/token")) {
+            refreshCalled = true;
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                token_type: "Bearer",
+                access_token: "second-chance-token",
+                refresh_token: "new-rt-retry",
+                expires_in: 28800,
+              }),
+            });
+          }
+          if (typeof url === "string" && url === "https://api.anthropic.com/api/oauth/usage") {
+            usageAttempts += 1;
+            if (opts?.headers?.Authorization === "Bearer rejected-access-token") {
+              return Promise.resolve({ ok: false, status: 401 });
+            }
+            if (opts?.headers?.Authorization === "Bearer second-chance-token") {
+              return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: async () => ({
+                  five_hour: { utilization: 20, resets_at: "2026-05-05T17:00:00Z" },
+                  seven_day: { utilization: 50, resets_at: "2026-05-12T12:00:00Z" },
+                }),
+              });
+            }
+          }
+          return pendingUnlessCodexReset(url);
+        },
+      });
+
+      assert.equal(usageAttempts, 2, "Should attempt usage fetch, fail with 401, refresh, and retry");
+      assert.equal(refreshCalled, true);
+      assert.equal(result.claude.configured, true);
+      assert.equal(result.claude.error, null);
+      assert.equal(result.claude.five_hour.utilization, 20);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces a reauth-required error when the refresh token itself is expired", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-codex-reauth-"));
