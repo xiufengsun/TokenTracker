@@ -249,7 +249,7 @@ export function SettingsPage() {
 
 
   return (
-    <div className={cn("flex flex-1 flex-col font-oai text-oai-black antialiased dark:text-oai-white", activeSection === SETTINGS_SECTION_IDS.CLOUD && "tt-cloud-settings")}>
+    <div className="flex flex-1 flex-col font-oai text-oai-black antialiased dark:text-oai-white">
       <main className="flex-1 pb-12 pt-8 sm:pb-16 sm:pt-10">
         <div className="mx-auto w-full max-w-5xl px-4 sm:px-6">
           <div className="mb-7 max-w-2xl">
@@ -309,12 +309,16 @@ export function SettingsPage() {
 
             <div className="min-w-0">
               {sections.map(({ id, label, content }) => (
+                // Keep the Cloud type scale inside its own panel so the shared
+                // page title, subtitle and section nav stay the same size on
+                // every settings sub-page.
                 <section
                   key={id}
                   id={`settings-panel-${id}`}
                   aria-labelledby={`settings-nav-${id}`}
                   aria-label={label}
                   data-settings-panel={id}
+                  className={id === SETTINGS_SECTION_IDS.CLOUD ? "tt-cloud-settings" : undefined}
                   hidden={activeSection !== id}
                 >
                   {content}
