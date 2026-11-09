@@ -95,7 +95,8 @@ const {
 // v27 adds oh-my-pi (omp) sessions from ~/.omp/agent/sessions/**/*.jsonl.
 // v28 records per-minute usage buckets for Claude and Grok, so date ranges
 // recompute in-range tokens/cost instead of falling back to lifetime totals.
-const SIDECAR_VERSION = 28;
+// v29 adds DSH request timing and first-response samples from step/stream metadata.
+const SIDECAR_VERSION = 29;
 // Invalidate only Codex token summaries; other sources keep their cached rows.
 const CODEX_USAGE_VERSION = 1;
 const EDIT_TOOLS = new Set([
