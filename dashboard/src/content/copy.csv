@@ -527,6 +527,10 @@ settings.instance.error.keyInvalid,ui,SettingsPage,InstanceSectionCard,inst_erro
 settings.instance.error.generic,ui,SettingsPage,InstanceSectionCard,inst_error_generic,"Could not save the server configuration.",,active
 settings.instance.error.invalidConfig,ui,SettingsPage,InstanceSectionCard,inst_error_invalid_config,"The saved server configuration is invalid — set it again below.",,active
 settings.instance.field.anonKeyPlaceholder,ui,SettingsPage,InstanceSectionCard,inst_field_key_placeholder,"eyJhbGciOi…",,active
+settings.instance.action.test,ui,SettingsPage,InstanceSectionCard,inst_action_test,"Test connection",,active
+settings.instance.testing,ui,SettingsPage,InstanceSectionCard,inst_testing,"Testing…",,active
+settings.instance.test.ok,ui,SettingsPage,InstanceSectionCard,inst_test_ok,"Server reachable (HTTP {{status}}).",,active
+settings.instance.test.unreachable,ui,SettingsPage,InstanceSectionCard,inst_test_unreachable,"Could not reach this server. Check the address and try again.",,active
 qpd.card.title,ui,DashboardView,QualityPerDollarCard,title,"Quality & Avg Cost/PR",,active
 qpd.card.badge,ui,DashboardView,QualityPerDollarCard,badge,"BETA",,active
 qpd.card.subtitle,ui,DashboardView,QualityPerDollarCard,subtitle,"Avg token cost per delivery, from merged PRs and AI-attributed commits.",,active

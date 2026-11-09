@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { isLocalDashboardHost } from "../lib/host-mode";
 
 const INSTANCE_CONFIG_PATH = "/functions/tokentracker-instance-config";
+const INSTANCE_TEST_PATH = "/functions/tokentracker-instance-test";
 
 const DEFAULT_CONFIG = {
   baseUrl: "",
@@ -36,23 +37,21 @@ async function authHeaders() {
   return getLocalApiAuthHeaders();
 }
 
-async function postInstanceConfig(payload) {
+async function postWithAuthRefresh(path, payload) {
   const { getLocalApiAuthHeaders, clearLocalApiAuthToken } = await import("../lib/local-api-auth");
   let headers = await getLocalApiAuthHeaders();
-  let res = await fetch(INSTANCE_CONFIG_PATH, {
+  let res = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json", ...headers },
     cache: "no-store",
     body: JSON.stringify(payload),
   });
   if (res.status === 401) {
-    // An instance switch invalidates previously issued local-auth tokens, so a
-    // 401 may just mean the cached token predates the switch (e.g. restoring
-    // the official cloud right after switching to self-hosted). Re-fetch the
-    // token once instead of failing the save.
+    // A restarted CLI (or an instance switch on older builds) invalidates the
+    // cached local-auth token. Re-fetch it once instead of failing the call.
     clearLocalApiAuthToken();
     headers = await getLocalApiAuthHeaders();
-    res = await fetch(INSTANCE_CONFIG_PATH, {
+    res = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json", ...headers },
       cache: "no-store",
@@ -120,7 +119,10 @@ export function useInstanceSettings() {
   }, []);
 
   const save = useCallback(async (next) => {
-    const res = await postInstanceConfig({ baseUrl: next.baseUrl, anonKey: next.anonKey || "" });
+    const res = await postWithAuthRefresh(INSTANCE_CONFIG_PATH, {
+      baseUrl: next.baseUrl,
+      anonKey: next.anonKey || "",
+    });
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok !== true) {
       throw new Error(
@@ -132,5 +134,21 @@ export function useInstanceSettings() {
     return loaded || data;
   }, []);
 
-  return { available, loading, config, save };
+  /**
+   * Probe a candidate server address server-side (avoids CORS: self-hosted
+   * instances rarely allow the dashboard origin). Any HTTP response counts as
+   * reachable; only network-level failures do not.
+   */
+  const test = useCallback(async (baseUrl) => {
+    const res = await postWithAuthRefresh(INSTANCE_TEST_PATH, { baseUrl });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.ok !== true) {
+      throw new Error(
+        (data && typeof data.error === "string" && data.error) || `HTTP ${res.status}`,
+      );
+    }
+    return { reachable: data.reachable === true, status: data.status ?? null, error: data.error || null };
+  }, []);
+
+  return { available, loading, config, save, test };
 }

@@ -16,6 +16,7 @@ const hookMock = vi.hoisted(() => ({
     configurationError: null,
   },
   save: vi.fn(),
+  test: vi.fn(),
 }));
 
 const resetMock = vi.hoisted(() => vi.fn());
@@ -49,6 +50,7 @@ describe("InstanceSectionCard", () => {
       configurationError: null,
     };
     hookMock.save.mockReset();
+    hookMock.test.mockReset();
     resetMock.mockReset();
     vi.stubGlobal("location", { ...window.location, reload: vi.fn() });
   });
@@ -148,5 +150,31 @@ describe("InstanceSectionCard", () => {
 
     expect(hookMock.save).toHaveBeenCalledWith({ baseUrl: OFFICIAL });
     expect(resetMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("probes the entered address and reports both outcomes", async () => {
+    const user = userEvent.setup();
+    render(<InstanceSectionCard />);
+
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: "settings.instance.action.useSelfHosted" }));
+    });
+    await act(async () => {
+      await user.type(screen.getByLabelText("settings.instance.field.url"), SELF_HOSTED);
+    });
+
+    hookMock.test.mockResolvedValue({ reachable: true, status: 200, error: null });
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: "settings.instance.action.test" }));
+    });
+    expect(hookMock.test).toHaveBeenCalledWith(SELF_HOSTED);
+    expect(screen.getByRole("status").textContent)
+      .toBe('settings.instance.test.ok:{"status":200}');
+
+    hookMock.test.mockResolvedValue({ reachable: false, status: null, error: "unreachable" });
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: "settings.instance.action.test" }));
+    });
+    expect(screen.getByRole("status").textContent).toBe("settings.instance.test.unreachable");
   });
 });

@@ -24,13 +24,15 @@ function errorMessage(error) {
  * nothing to reconfigure.
  */
 export function InstanceSectionCard() {
-  const { available, loading, config, save } = useInstanceSettings();
+  const { available, loading, config, save, test } = useInstanceSettings();
   const [baseUrl, setBaseUrl] = useState("");
   const [anonKey, setAnonKey] = useState("");
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [applied, setApplied] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
 
   useEffect(() => {
     if (!available) return;
@@ -57,6 +59,7 @@ export function InstanceSectionCard() {
   const persist = async (payload) => {
     setBusy(true);
     setError(null);
+    setTestResult(null);
     try {
       await save(payload);
       setApplied(true);
@@ -67,6 +70,20 @@ export function InstanceSectionCard() {
     } catch (reason) {
       setError(errorMessage(reason));
       setBusy(false);
+    }
+  };
+
+  const runTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    setError(null);
+    try {
+      const result = await test(baseUrl.trim() || config.officialUrl);
+      setTestResult(result);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -165,6 +182,21 @@ export function InstanceSectionCard() {
                 copy("settings.instance.action.save")
               )}
             </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={testing || busy || applied}
+              onClick={runTest}
+            >
+              {testing ? (
+                <>
+                  <Loader2 size={14} className="motion-safe:animate-spin" aria-hidden />
+                  {copy("settings.instance.testing")}
+                </>
+              ) : (
+                copy("settings.instance.action.test")
+              )}
+            </Button>
             {config.custom ? (
               <Button
                 size="sm"
@@ -190,6 +222,16 @@ export function InstanceSectionCard() {
             </Button>
           </div>
         </div>
+      ) : null}
+      {testResult ? (
+        <p
+          role="status"
+          className={`pb-3 text-xs ${testResult.reachable ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}
+        >
+          {testResult.reachable
+            ? copy("settings.instance.test.ok", { status: testResult.status ?? "—" })
+            : copy("settings.instance.test.unreachable")}
+        </p>
       ) : null}
       {applied ? (
         <p role="status" className="pb-3 text-xs text-oai-gray-500 dark:text-oai-gray-400">
