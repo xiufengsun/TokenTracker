@@ -220,6 +220,36 @@ test("keyring discovery consumes the provider budget and preserves cached quota"
   assert.equal(result.primary_window.used_percent, 31);
 });
 
+test("keyring lookup uses the provider budget left after earlier work", async (t) => {
+  const home = tempHome(t);
+  writeCache(home);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let reads = 0;
+  t.mock.method(performance, "now", () => {
+    reads += 1;
+    // fetchAntigravityLimits reads the start immediately. The lookup timeout
+    // is the next read, after synchronous file discovery, so that read is the
+    // budget already consumed before the keyring call.
+    return reads === 1 ? 0 : 7000;
+  });
+  let lookupTimeout;
+  const pending = fetchAntigravityLimits({
+    home, platform: "linux", nowMs: NOW, providerTimeoutMs: 10000,
+    secretToolRunner(_bin, _args, options) {
+      lookupTimeout = options.timeout;
+      return new Promise(() => {});
+    },
+    commandRunner() { return noProcess(); },
+    fetchImpl() { throw new Error("must not fetch without credentials"); },
+  });
+  assert.equal(reads, 2, "the lookup timeout is calculated on the second clock read");
+  assert.equal(lookupTimeout, 1500, "7s since the provider start leaves 1.5s after the 1.5s guard, below the fresh 2s lookup ceiling");
+  t.mock.timers.tick(10000);
+  const result = await pending;
+  assert.equal(result.cached, true);
+  assert.equal(result.primary_window.used_percent, 31);
+});
+
 test("cancelling discovery skips the remaining provider work", async (t) => {
   const home = tempHome(t);
   writeCache(home);

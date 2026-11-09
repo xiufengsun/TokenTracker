@@ -45,10 +45,18 @@ describe("useLocalCalendar", () => {
   });
 
   it("rechecks the local time zone and UTC offset on focus", () => {
+    const timeZone = vi.spyOn(timezone, "getBrowserTimeZone").mockReturnValue("UTC");
+    const offset = vi.spyOn(timezone, "getBrowserTimeZoneOffsetMinutes").mockReturnValue(0);
     const { result } = renderHook(() => useLocalCalendar());
-    vi.spyOn(timezone, "getBrowserTimeZone").mockReturnValue("Pacific/Honolulu");
-    vi.spyOn(timezone, "getBrowserTimeZoneOffsetMinutes").mockReturnValue(-600);
-    const expectedDay = timezone.getLocalDayKey({ timeZone: "Pacific/Honolulu", date: new Date() });
+    expect(result.current.timeZone).toBe("UTC");
+    expect(result.current.tzOffsetMinutes).toBe(0);
+    timeZone.mockReturnValue("Pacific/Honolulu");
+    offset.mockReturnValue(-600);
+    const expectedDay = timezone.getLocalDayKey({
+      timeZone: "Pacific/Honolulu",
+      offsetMinutes: -600,
+      date: new Date(),
+    });
     act(() => window.dispatchEvent(new Event("focus")));
     expect(result.current).toEqual({ timeZone: "Pacific/Honolulu", tzOffsetMinutes: -600, todayKey: expectedDay });
   });
