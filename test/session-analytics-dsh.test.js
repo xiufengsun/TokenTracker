@@ -294,6 +294,62 @@ test("DSH missing, failed, retried, interrupted and invalid timing keeps billabl
   }
 });
 
+function v1FinishChunk(kind, step = 1, turn = 1, time = T0 + 2000) {
+  return {
+    type: "assistant/chunk",
+    time,
+    data: { turn, step, chunk: { type: "finish", reason: { kind } } },
+  };
+}
+
+test("DSH v1 finish chunks exclude a failed retry step without dropping its tokens", async (t) => {
+  const dshHome = path.join(fixture(t), ".dsh");
+  const message = (id, extra = {}) => assistantEntry(id, {
+    time: T0 + 5000, output: 300, ...extra,
+  });
+  const cases = [
+    {
+      id: "v1-success",
+      records: [stepEntry("step/start", T0 + 1000), message("v1-success")],
+      sample: true,
+    },
+    {
+      id: "v1-error-retry",
+      records: [stepEntry("step/start", T0 + 1000), v1FinishChunk("error"), message("v1-error-retry")],
+      sample: false,
+    },
+    {
+      id: "v1-aborted-retry",
+      records: [stepEntry("step/start", T0 + 1000), v1FinishChunk("aborted"), message("v1-aborted-retry")],
+      sample: false,
+    },
+    {
+      id: "v1-other-step",
+      records: [
+        stepEntry("step/start", T0 + 1000),
+        v1FinishChunk("error", 2),
+        v1FinishChunk("aborted", 1, 2),
+        message("v1-other-step"),
+      ],
+      sample: true,
+    },
+  ];
+  for (const item of cases) {
+    await writeTranscript(dshHome, {
+      session: item.id,
+      records: [dshHeader({ id: item.id }), userEntry(`u-${item.id}`), ...item.records],
+    });
+  }
+  const rows = await readRows(dshHome);
+  assert.equal(rows.length, cases.length);
+  for (const item of cases) {
+    const row = rows.find((candidate) => candidate.session_id === item.id);
+    assert.equal(row.tokens.output_tokens, 300, item.id);
+    assert.equal(row.performance.estimated_request_count, item.sample ? 1 : 0, item.id);
+    assert.equal(row.performance.estimated_tokens_per_second, item.sample ? 75 : null, item.id);
+  }
+});
+
 test("DSH legacy messages can estimate speed and short requests still record zero or packed tool first response", async (t) => {
   const dshHome = path.join(fixture(t), ".dsh");
   await writeTranscript(dshHome, { records: [dshHeader(), userEntry("u-legacy-timed"),
@@ -334,6 +390,53 @@ test("DSH cached sidecars are rebuilt for performance and preserve timing withou
   const serialized = fs.readFileSync(sidecar, "utf8");
   assert.equal(serialized.includes(SECRET), false);
   assert.equal(serialized.includes('"stream"'), false);
+});
+
+test("a v29 sidecar that counted a failed v1 retry is rebuilt without force", async (t) => {
+  const home = fixture(t);
+  const file = await writeTranscript(path.join(home, ".dsh"), {
+    records: [
+      dshHeader(),
+      userEntry("u-stale-retry"),
+      stepEntry("step/start", T0 + 1000),
+      v1FinishChunk("error"),
+      assistantEntry("stale-retry", { time: T0 + 5000, input: 100, output: 300 }),
+    ],
+  });
+  const before = fs.readFileSync(file);
+  const fresh = await buildSessionAnalytics({ home, force: true });
+  assert.equal(fresh[0].tokens.total_tokens, 400);
+  assert.equal(fresh[0].performance.estimated_request_count, 0);
+  assert.equal(fresh[0].performance.estimated_tokens_per_second, null);
+
+  const sidecar = resolveSessionSidecarPath(home);
+  const metaPath = sidecar + ".meta.json";
+  const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+  assert.equal(meta.version, 30);
+  meta.version = 29;
+  const stale = {
+    ...fresh[0],
+    version: 29,
+    performance: {
+      ...fresh[0].performance,
+      estimated_request_count: 1,
+      estimated_tokens_per_second: 75,
+    },
+  };
+  fs.writeFileSync(metaPath, JSON.stringify(meta));
+  fs.writeFileSync(sidecar, `${JSON.stringify(stale)}\n`);
+
+  const rebuilt = await buildSessionAnalytics({ home, recheck: true });
+  assert.equal(rebuilt[0].performance.estimated_request_count, 0);
+  assert.equal(rebuilt[0].performance.estimated_tokens_per_second, null);
+  assert.equal(rebuilt[0].tokens.total_tokens, 400);
+  assert.equal(fs.readFileSync(file).equals(before), true);
+
+  const warm = await buildSessionAnalytics({ home });
+  assert.equal(warm[0].performance.estimated_request_count, 0);
+  assert.equal(warm[0].performance.estimated_tokens_per_second, null);
+  assert.equal(warm[0].tokens.total_tokens, 400);
+  assert.equal(JSON.parse(fs.readFileSync(metaPath, "utf8")).version, 30);
 });
 
 test("a seeded fork is attributed to the transcript that created each message", async (t) => {
