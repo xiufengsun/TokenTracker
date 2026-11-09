@@ -904,6 +904,14 @@
       "ref": "gpt-5.6-sol"
     },
     {
+      "match": "gemini-4-argon",
+      "ref": "gemini-4-argon"
+    },
+    {
+      "match": "gemini-4.argon",
+      "ref": "gemini-4-argon"
+    },
+    {
       "match": "kiro",
       "ref": "kiro-cli-agent"
     },

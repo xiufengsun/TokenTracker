@@ -702,11 +702,16 @@ test("Kimi K3.1 Pro / Highspeed priced distinctly from kimi-k3 locally and in al
       JSON.parse(JSON.stringify(edgePricing("kimi-k3"))),
       `${name}: k3.1-pro must not inherit kimi-k3`,
     );
-    assert.deepEqual(
-      JSON.parse(JSON.stringify(edgePricing("gemini-4-argon"))),
-      { input: 2, output: 10, cache_read: 0.1, cache_write: 0 },
-      `${name}: gemini-4-argon`,
-    );
+    for (const argon of ["gemini-4-argon", "gemini-4-argon-b", "gemini-4-argon-trial", "gemini-4.argon-b"]) {
+      assert.deepEqual(
+        JSON.parse(JSON.stringify(edgePricing(argon))),
+        { input: 2, output: 10, cache_read: 0.1, cache_write: 0 },
+        `${name}: ${argon}`,
+      );
+      assert.equal(localPricing(argon).input, 2, `local ${argon}`);
+      assert.equal(localPricing(argon).output, 10, `local ${argon}`);
+      assert.equal(localPricing(argon).cache_read, 0.1, `local ${argon}`);
+    }
     for (const flash of ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]) {
       assert.deepEqual(
         JSON.parse(JSON.stringify(edgePricing(flash))),
