@@ -40,7 +40,7 @@ const { USD_TICKS_PER_USD, normalizeGrokUsage } = require("./grok-usage");
 const wsl = require("./wsl-probe");
 const { discoverKimiWireFiles, kimiSessionDependencies, readKimiSessions } = require("./kimi-session");
 const { discoverOmpSessionFiles, ompSessionDependencies, readOmpSessions } = require("./omp-session");
-const { discoverPiSessionFiles, piSessionDependencies, readPiSessions } = require("./pi-session");
+const { discoverPiSessionFiles, piSessionDependencies, piSessionProbe, digestIssues, readPiSessions } = require("./pi-session");
 const { discoverDshSessionFiles, readDshSessions } = require("./dsh-session");
 const {
   appendUniqueDirs,
@@ -2305,7 +2305,15 @@ function analyticsEntryStatKey(source, filePath) {
     // the per-entry reuse below compares this key alone. Without the nested
     // transcripts, a pi-subagents child that gained usage would leave the entry
     // stat key unchanged and the previous pi rows would be reused.
-    return `${sessionStat}|metadata:${filesSignature(piSessionDependencies([filePaths].flat()))}`;
+    //
+    // Traversal problems are part of the key for the same reason: a transcript
+    // that cannot be listed is invisible to the dependency list, so an unreadable
+    // child appearing would otherwise leave the key untouched and reuse stale
+    // totals. With the note in the key the batch is rescanned, where the strict
+    // read surfaces it as an incomplete scan and keeps the last complete rows.
+    const probe = piSessionProbe([filePaths].flat());
+    const issues = probe.issues.length > 0 ? `|issues:${digestIssues(probe.issues)}` : "";
+    return `${sessionStat}|metadata:${filesSignature(probe.deps)}${issues}`;
   }
   if (source === "grok") {
     const primary = filePaths[0];

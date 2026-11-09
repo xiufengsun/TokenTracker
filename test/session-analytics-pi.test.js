@@ -17,7 +17,7 @@ const {
   analyticsEntryStatKey,
 } = require("../src/lib/session-analytics");
 const { parsePiIncremental } = require("../src/lib/rollout");
-const { piSessionDependencies } = require("../src/lib/pi-session");
+const { piSessionDependencies, piSessionProbe, digestIssues, readPiSessions } = require("../src/lib/pi-session");
 
 const T0 = Date.UTC(2026, 9, 10, 12, 0, 0);
 const SESSION_ID = "01a1bc31-0000-7000-8000-000000000001";
@@ -513,8 +513,134 @@ test("pi nested discovery survives a symlink cycle back to an ancestor", async (
   assert.deepEqual(row.subagent_types, { session: 1 });
 
   // The same containment has to hold for the dependency list that feeds the
-  // entry stat key, or a foreign transcript would ride the cache signature too.
-  assert.equal(piSessionDependencies([file]).length, 2);
+  // cache signature. It carries the stem directory itself as well, so a child
+  // that appears but cannot be listed still moves the signature.
+  const deps = piSessionDependencies([file]);
+  assert.deepEqual(
+    deps.sort(),
+    [file, path.join(file.replace(/\.jsonl$/i, "")), path.join(file.replace(/\.jsonl$/i, ""), "deadbeef", "run-1", "session.jsonl")].sort(),
+  );
+});
+
+test("pi rejects a symlinked stem directory instead of folding another session into it", async (t) => {
+  const home = fixture(t);
+  // Another session owns the transcripts under the linked stem.
+  const ownerFile = writeSession(home, `2026-10-10T11-00-00-000Z_01a1bc31-0000-7000-8000-000000000004.jsonl`, [
+    header({ id: "01a1bc31-0000-7000-8000-000000000004", cwd: "/repo/owner" }),
+    assistant({ id: "owner1", input: 900, output: 100, totalTokens: 1000 }),
+  ], {
+    cwdDir: "--repo-owner--",
+    nested: [{
+      name: "deadbeef/run-1/session.jsonl",
+      records: [header({ id: "owner-child" }), assistant({ id: "owner2", input: 400, output: 100, totalTokens: 500 })],
+    }],
+  });
+  assert.equal((await scanPiSession(ownerFile)).total_tokens, 1500);
+
+  // This session's stem is a bare link to that owner's stem directory.
+  const mine = writeSession(home, `2026-10-10T12-00-00-000Z_${SESSION_ID}.jsonl`, [
+    header(),
+    user("u1"),
+    assistant({ id: "aaaaaaaa", input: 10, output: 2, totalTokens: 12 }),
+  ]);
+  const ownerStem = path.join(path.dirname(ownerFile), path.basename(ownerFile, ".jsonl"));
+  const myStem = mine.replace(/\.jsonl$/i, "");
+  try {
+    fs.symlinkSync(ownerStem, myStem, "dir");
+  } catch (error) {
+    t.skip(`symlinks unavailable on this platform: ${error?.code}`);
+    return;
+  }
+
+  const row = await scanPiSession(mine);
+  assert.equal(row.total_tokens, 12, "the linked session's 1500 tokens must stay with its owner");
+  assert.equal(row.subagent_calls, 0);
+  // The link itself stays a dependency, so re-pointing or removing it busts the cache.
+  assert.equal(piSessionDependencies([mine]).includes(myStem), true);
+});
+
+test("pi keeps a renamed parent ahead of its timestamped fork", async (t) => {
+  // The parent was renamed, so its file name carries no start time. Its fork is
+  // named normally and would sort first on the filename alone.
+  const home = fixture(t);
+  const parentRecords = [
+    header({ id: SESSION_ID, cwd: "/repo/pi-app" }),
+    user("u1"),
+    assistant({ id: "aaaaaaaa", input: 100, output: 20, totalTokens: 120 }),
+  ];
+  const renamedParent = writeSession(home, `${SESSION_ID}.jsonl`, parentRecords);
+  const forkId = "01a1bc31-0000-7000-8000-000000000005";
+  writeSession(home, `2026-10-10T13-00-00-000Z_${forkId}.jsonl`, [
+    header({ id: forkId, parentSession: SESSION_ID }),
+    ...parentRecords.slice(1),
+  ]);
+
+  const sessions = await buildSessionAnalytics({ home, force: true });
+  const parent = sessions.find((row) => row.session_id === SESSION_ID);
+  assert.ok(parent, "a renamed parent must still claim its own transcript");
+  assert.equal(parent.total_tokens, 120);
+});
+
+test("pi reports an unreadable nested transcript through the entry stat key", async (t) => {
+  const home = fixture(t);
+  const file = writeSession(home, `2026-10-10T12-00-00-000Z_${SESSION_ID}.jsonl`, [
+    header(),
+    user("u1"),
+    assistant({ id: "aaaaaaaa", input: 10, output: 2, totalTokens: 12 }),
+  ], {
+    nested: [{
+      name: "deadbeef/run-1/session.jsonl",
+      records: [header({ id: "child-session" }), assistant({ id: "bbbbbbbb", input: 5, output: 1, totalTokens: 6 })],
+    }],
+  });
+  const runDir = path.join(file.replace(/\.jsonl$/i, ""), "deadbeef", "run-1");
+  const clean = analyticsEntryStatKey("pi", [file]);
+  assert.equal(clean.includes("|issues:"), false);
+
+  fs.chmodSync(runDir, 0o000);
+  let unreadable = null;
+  let dirty = null;
+  try {
+    fs.readdirSync(runDir);
+  } catch (error) {
+    unreadable = error;
+    dirty = analyticsEntryStatKey("pi", [file]);
+  } finally {
+    // Restored here rather than in t.after: the fixture's own after hook removes
+    // the home, and a 000 directory inside it makes that removal fail.
+    fs.chmodSync(runDir, 0o755);
+  }
+  if (unreadable?.code !== "EACCES") {
+    t.skip(`permissions are not enforced for this user (${unreadable?.code || "readable"})`);
+    return;
+  }
+  assert.match(dirty, /\|issues:unreadable-EACCES/);
+  assert.notEqual(dirty, clean, "an unreadable child must not reuse cached pi rows");
+});
+
+test("pi reports a depth-truncated nested tree instead of dropping it silently", async (t) => {
+  const home = fixture(t);
+  const file = writeSession(home, `2026-10-10T12-00-00-000Z_${SESSION_ID}.jsonl`, [
+    header(),
+    user("u1"),
+    assistant({ id: "aaaaaaaa", input: 10, output: 2, totalTokens: 12 }),
+  ], {
+    // Three levels under the stem, which is pi-subagents' real layout: the
+    // shallowest tree that can pass the bound while still having a child below
+    // it. Depth is injected, so this asserts the behaviour without building a
+    // path long enough to trip Windows' MAX_PATH before the bound engages.
+    nested: [{
+      name: "a/b/c/session.jsonl",
+      records: [header({ id: "deep-child" }), assistant({ id: "cccccccc", input: 5, output: 1, totalTokens: 6 })],
+    }],
+  });
+
+  const truncated = piSessionProbe([file], { maxDepth: 2 });
+  assert.equal(digestIssues(truncated.issues).includes("depth-truncated"), true,
+    "hitting the bound must be reported, not returned as a short inventory");
+  // A shallower bound that still covers the layout finds the child instead.
+  assert.equal(piSessionProbe([file], { maxDepth: 3 }).deps.includes(file), true);
+  await assert.rejects(() => readPiSessions([file], { maxDepth: 2 }), /pi inventory incomplete/);
 });
 
 test("pi nested discovery ignores a symlink without counting foreign transcripts", async (t) => {

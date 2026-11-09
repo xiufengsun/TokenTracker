@@ -124,22 +124,49 @@ function piInventoryIncomplete(pathName, error) {
 // depth against mounts it also tracks the directory identities on its own
 // ancestor chain and stops at a fixed depth. pi and pi-subagents write real
 // files, so skipping links costs nothing in the supported layout.
-const MAX_NESTED_WALK_DEPTH = 12;
+//
+// The depth limit is a safety bound against a pathological tree, not a way to
+// drop work quietly: hitting it is reported as an incomplete inventory, because a
+// silently truncated read would otherwise be persisted as if it were the whole
+// session. pi-subagents writes its transcripts three levels below the stem
+// (`<stem>/<hash>/run-N/session.jsonl`), so the bound leaves room for several
+// levels of nested delegation before it engages.
+const MAX_NESTED_WALK_DEPTH = 24;
 
+// Collects traversal problems (truncated depth, unreadable or linked dirs) so the
+// caller can both flag the scan incomplete and move the cache signature.
+function noteIssue(issues, dir, reason) {
+  if (Array.isArray(issues)) issues.push(`${reason}:${dir}`);
+}
+
+function digestIssues(issues) {
+  return [...new Set(issues)].sort().join(",");
+}
+
+// Identity of a directory for the cycle chain. realpath is the only form that is
+// stable across platforms: st.dev/st.ino are commonly 0 on Windows mounts, and an
+// all-zero identity makes every directory look like an already-visited ancestor,
+// which aborts the walk *silently* — the exact quiet data loss this guard exists
+// to prevent. A failed realpath proves nothing, so the walk continues.
 function dirIdentity(dir) {
   try {
-    const st = fs.statSync(dir);
-    return `${st.dev}:${st.ino}`;
+    return fs.realpathSync(dir);
   } catch {
     return null;
   }
 }
 
-function listNestedJsonlSync(dir, { strict = false } = {}) {
+function listNestedJsonlSync(dir, { strict = false, issues = null, maxDepth = MAX_NESTED_WALK_DEPTH } = {}) {
   const found = [];
   const chain = new Set();
   const walk = (current, depth) => {
-    if (depth > MAX_NESTED_WALK_DEPTH) return;
+    if (depth > maxDepth) {
+      noteIssue(issues, current, "depth-truncated");
+      if (strict) {
+        throw piInventoryIncomplete(current, new Error(`nested transcript depth limit (${maxDepth}) exceeded`));
+      }
+      return;
+    }
     const identity = dirIdentity(current);
     if (identity) {
       if (chain.has(identity)) return;
@@ -150,6 +177,7 @@ function listNestedJsonlSync(dir, { strict = false } = {}) {
       entries = fs.readdirSync(current, { withFileTypes: true });
     } catch (error) {
       if (error?.code === "ENOENT") return;
+      noteIssue(issues, current, `unreadable-${error?.code || "error"}`);
       if (strict) throw piInventoryIncomplete(current, error);
       return;
     }
@@ -193,50 +221,155 @@ function mainSessionStem(filePath) {
 // replayed entry ids. Path order alone could let a cross-project fork, which may
 // sort into a different `<cwd>` directory, consume its parent's messages and
 // leave the parent looking empty.
-// Returns a fixed-width digit key so a plain string compare is a time compare;
-// a name with no trustworthy start time (a hand-written fixture, a flat
-// `<id>.jsonl`) sorts last instead of first.
+// Returns a fixed-width digit key so a plain string compare is a time compare.
+// A name with no trustworthy start time sorts last, but "last" is only safe for a
+// session nobody descends from: a renamed or imported transcript named `<id>.jsonl`
+// can still be the parent of a timestamp-named fork, which would then sort first
+// and claim the replayed entries. `bySessionStartThenPath` therefore consults the
+// header ancestry as well and never sorts a transcript before one it descends from.
+const SENTINEL_START_KEY = "9".repeat(17);
+
 function sessionStartKey(filePath) {
   const base = path.basename(filePath);
   const split = base.indexOf("_");
   const prefix = split > 0 ? base.slice(0, split) : base;
   const digits = prefix.replace(/\D/g, "");
   // 17 digits = YYYYMMDDHHMMSSmmm.
-  return digits.length === 17 ? digits : "9".repeat(17);
+  return digits.length === 17 ? digits : SENTINEL_START_KEY;
 }
 
-function bySessionStartThenPath(a, b) {
-  const keyA = sessionStartKey(a);
-  const keyB = sessionStartKey(b);
-  if (keyA !== keyB) return keyA < keyB ? -1 : 1;
-  return a.localeCompare(b);
+function startKeyFromMs(value) {
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms <= 0) return SENTINEL_START_KEY;
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return SENTINEL_START_KEY;
+  const pad = (n, w = 2) => String(n).padStart(w, "0");
+  return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}${pad(d.getUTCMilliseconds(), 3)}`.replace(/\D/g, "");
+}
+
+// Read only the first record: the header is line 1 and carries `id`, `timestamp`
+// and, for a fork, `parentSession`. Cheap enough to do once per transcript per
+// rescan, and only the ordering pass needs it.
+function readSessionHeader(filePath) {
+  let fd;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buffer = Buffer.alloc(8192);
+    const read = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const line = buffer.subarray(0, read).toString("utf8").split("\n", 1)[0];
+    const entry = JSON.parse(line);
+    if (!entry || entry.type !== "session") return null;
+    return {
+      id: typeof entry.id === "string" ? entry.id.trim() : null,
+      parentSession: typeof entry.parentSession === "string" ? entry.parentSession.trim() : null,
+      startMs: Date.parse(entry.timestamp),
+    };
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* ignore */ } }
+  }
+}
+
+// Depth of a transcript in the fork chain *within this batch*: 0 for a root, 1 for
+// a fork of a root present here, and so on. Cycles and dangling parents collapse to
+// 0 so a broken transcript cannot reorder the whole batch.
+function buildAncestryRank(headers) {
+  const byId = new Map();
+  for (const [file, header] of headers) {
+    if (header?.id && !byId.has(header.id)) byId.set(header.id, file);
+  }
+  const rank = new Map();
+  const depthOf = (file, seen) => {
+    if (rank.has(file)) return rank.get(file);
+    if (seen.has(file)) return 0;
+    seen.add(file);
+    const parent = byId.get(headers.get(file)?.parentSession || "");
+    const depth = parent && parent !== file ? Math.min(64, depthOf(parent, seen) + 1) : 0;
+    rank.set(file, depth);
+    return depth;
+  };
+  for (const file of headers.keys()) depthOf(file, new Set());
+  return rank;
+}
+
+function makeSessionOrderComparator(headers) {
+  const rank = buildAncestryRank(headers);
+  const keyOf = (file) => {
+    const fromName = sessionStartKey(file);
+    if (fromName !== SENTINEL_START_KEY) return fromName;
+    return startKeyFromMs(headers.get(file)?.startMs);
+  };
+  return (a, b) => {
+    const rankA = rank.get(a) || 0;
+    const rankB = rank.get(b) || 0;
+    if (rankA !== rankB) return rankA < rankB ? -1 : 1;
+    const keyA = keyOf(a);
+    const keyB = keyOf(b);
+    if (keyA !== keyB) return keyA < keyB ? -1 : 1;
+    return a.localeCompare(b);
+  };
 }
 
 /**
  * Transcripts forked from one main session, found in the directory that shares
  * the main file's stem (pi and pi-subagents both use this layout).
  */
-function piSubagentFilesForMain(mainPath, { strict = false } = {}) {
+function piSubagentFilesForMain(mainPath, { strict = false, issues = null, maxDepth = MAX_NESTED_WALK_DEPTH } = {}) {
   const nestedDir = mainPath.replace(/\.jsonl$/i, "");
   if (!nestedDir || nestedDir === mainPath) return [];
+  // A stem that is itself a link is rejected before anything is walked: its
+  // targets belong to other sessions, and folding them in would attribute their
+  // usage here and let this session claim their entry ids. The link path is still
+  // returned as a dependency so a link appearing, changing target, or being
+  // removed moves the cache signature and forces a fresh look.
+  let link;
   try {
-    const st = fs.statSync(nestedDir);
-    if (!st.isDirectory()) return [];
+    link = fs.lstatSync(nestedDir);
   } catch (error) {
     if (error?.code === "ENOENT") return [];
     if (strict) throw piInventoryIncomplete(nestedDir, error);
+    noteIssue(issues, nestedDir, `unstatable-${error?.code || "error"}`);
+    return [nestedDir];
+  }
+  if (link.isSymbolicLink()) {
+    // Report it, but return no transcripts: the caller's return value is also the
+    // list of files to read, and a directory is not a transcript. `piSessionProbe`
+    // is what carries the stem into the cache signature, so the link still busts
+    // the cache when it appears, is re-pointed, or goes away.
+    noteIssue(issues, nestedDir, "stem-dir-symlink");
     return [];
   }
-  return listNestedJsonlSync(nestedDir, { strict });
+  if (!link.isDirectory()) return [];
+  return listNestedJsonlSync(nestedDir, { strict, issues, maxDepth });
+}
+
+// Dependencies for cache signatures: every transcript that contributes to a
+// session, plus the stem path itself whenever it is a directory, a rejected link,
+// or an unreadable dir. A directory's own mtime moves when its children appear or
+// disappear, so carrying the path is what makes a newly unreadable transcript —
+// one that cannot be listed, and so cannot be named in the list — bust the cache
+// instead of being reused as stale rows.
+function piSessionProbe(mainFiles, { maxDepth = MAX_NESTED_WALK_DEPTH } = {}) {
+  const issues = [];
+  const deps = new Set();
+  for (const file of mainFiles || []) {
+    if (!file) continue;
+    deps.add(file);
+    const stemDir = file.replace(/\.jsonl$/i, "");
+    if (stemDir && stemDir !== file) {
+      try {
+        const st = fs.lstatSync(stemDir);
+        if (st.isDirectory() || st.isSymbolicLink()) deps.add(stemDir);
+      } catch { /* no nested transcripts for this session */ }
+    }
+    for (const nested of piSubagentFilesForMain(file, { issues, maxDepth })) deps.add(nested);
+  }
+  return { deps: [...deps], issues };
 }
 
 function piSessionDependencies(mainFiles) {
-  const deps = new Set();
-  for (const file of mainFiles || []) {
-    deps.add(file);
-    for (const nested of piSubagentFilesForMain(file)) deps.add(nested);
-  }
-  return [...deps];
+  return piSessionProbe(mainFiles).deps;
 }
 
 /**
@@ -305,12 +438,25 @@ function toolNameFromBlock(block) {
   return typeof name === "string" ? name.trim().toLowerCase() : "";
 }
 
-async function readPiSessionFiles(mainFiles, { seenEntryIds = new Set() } = {}) {
+async function readPiSessionFiles(mainFiles, { seenEntryIds = new Set(), maxDepth = MAX_NESTED_WALK_DEPTH } = {}) {
   const rows = [];
-  const mains = [...new Set((mainFiles || []).filter(Boolean))].sort(bySessionStartThenPath);
+  const mains = [...new Set((mainFiles || []).filter(Boolean))];
+  // Ancestry only matters when something could sort without a trustworthy start
+  // time, so the header pass is skipped for the normal all-timestamped batch.
+  if (mains.some((file) => sessionStartKey(file) === SENTINEL_START_KEY)) {
+    const headers = new Map(mains.map((file) => [file, readSessionHeader(file)]));
+    mains.sort(makeSessionOrderComparator(headers));
+  } else {
+    mains.sort((a, b) => {
+      const keyA = sessionStartKey(a);
+      const keyB = sessionStartKey(b);
+      if (keyA !== keyB) return keyA < keyB ? -1 : 1;
+      return a.localeCompare(b);
+    });
+  }
 
   for (const mainPath of mains) {
-    const nested = piSubagentFilesForMain(mainPath, { strict: true });
+    const nested = piSubagentFilesForMain(mainPath, { strict: true, maxDepth });
     const files = [mainPath, ...nested];
     const tokens = emptyUsage();
     const modelUsage = new Map();
@@ -538,12 +684,15 @@ async function readPiSessionFiles(mainFiles, { seenEntryIds = new Set() } = {}) 
 async function readPiSessions(mainFiles, options = {}) {
   return readPiSessionFiles(mainFiles, {
     seenEntryIds: options.seenEntryIds instanceof Set ? options.seenEntryIds : new Set(),
+    maxDepth: Number.isInteger(options.maxDepth) && options.maxDepth > 0 ? options.maxDepth : MAX_NESTED_WALK_DEPTH,
   });
 }
 
 module.exports = {
   discoverPiSessionFiles,
+  digestIssues,
   piSessionDependencies,
+  piSessionProbe,
   piSubagentFilesForMain,
   readPiSessions,
 };
