@@ -246,6 +246,26 @@ test("index: Kimi K3.1 Pro and gemini-4-argon priced via public API", () => {
   assert.equal(argon.cache_read, 0.1);
 });
 
+test("index: Antigravity gemini-4-argon backend variants inherit the published Argon rate (#1072)", () => {
+  const pricing = require("../src/lib/pricing");
+  const expected = { input: 2, output: 10, cache_read: 0.1 };
+  // Backend telemetry suffixes (-b, -trial) and the dotted spelling are the
+  // same Gemini 4 Argon public list rate already curated on the base id.
+  // Do not invent a new SKU; match Cloud Edge's substring matcher.
+  for (const model of ["gemini-4-argon-b", "gemini-4-argon-trial", "gemini-4.argon-b"]) {
+    for (const source of [undefined, "antigravity", "cursor"]) {
+      const info = pricing.getModelPricingInfo(model, source ? { source } : {});
+      assert.equal(info.status, "priced", `${model} ${source || "no-source"}`);
+      assert.equal(info.input, expected.input, `${model} input`);
+      assert.equal(info.output, expected.output, `${model} output`);
+      assert.equal(info.cache_read, expected.cache_read, `${model} cache_read`);
+    }
+  }
+  const base = pricing.getModelPricingInfo("gemini-4-argon", { source: "antigravity" });
+  assert.equal(base.status, "priced");
+  assert.equal(base.input, 2);
+});
+
 test("index: Antigravity Gemini 3.6/3.7/3.8 Flash use published Standard promo rates (#1063)", () => {
   const pricing = require("../src/lib/pricing");
   const flash25 = { input: 0.3, output: 2.5, cache_read: 0.03 };
