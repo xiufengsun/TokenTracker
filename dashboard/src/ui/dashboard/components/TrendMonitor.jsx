@@ -478,15 +478,12 @@ export function TrendMonitor({
     () => (Array.isArray(rows) && rows.length ? rows : []),
     [rows],
   );
-  const hasPredictions = React.useMemo(
-    () => series.some((row) => row?.future || row?.missing),
-    [series],
-  );
-
   // rawValues: real observations (incl. 0) pass through; missing/future are null.
   // seriesValues: zero-padded view used for y-axis scaling so gaps don't skew the max.
   // interpolatedValues: per-index predicted height for missing/future gaps.
-  const { rawValues, seriesValues, scale, interpolatedValues } = React.useMemo(() => {
+  // A row count is not an observation: all-missing and all-future ranges have
+  // nothing to estimate, and interpolating them yields zeros that are not data.
+  const { rawValues, seriesValues, scale, interpolatedValues, hasObservations } = React.useMemo(() => {
     const raw = series.map(readRowValue);
     const padded = raw.map((v) => (v == null ? 0 : v));
     return {
@@ -494,8 +491,13 @@ export function TrendMonitor({
       seriesValues: padded,
       scale: getTrendMonitorScale(padded, { clipOutliers: period !== "total" }),
       interpolatedValues: computeInterpolatedSeries(raw),
+      hasObservations: raw.some((value) => value !== null),
     };
   }, [series, period]);
+  const hasPredictions = React.useMemo(
+    () => hasObservations && series.some((row) => row?.future || row?.missing),
+    [hasObservations, series],
+  );
 
   const { currency, rate } = useCurrency();
   const { formatTokens, formatTokensTooltip } = useTokenFormat();
@@ -668,7 +670,7 @@ export function TrendMonitor({
             className={cn("flex items-end gap-0.5 relative z-0", chartHeightClass)}
             onMouseLeave={handleChartMouseLeave}
           >
-            {seriesValues.length > 0 ? (
+            {hasObservations ? (
               seriesValues.map((value, index) => {
                 const row = series[index];
                 const isGap = row?.missing || row?.future;
@@ -704,7 +706,7 @@ export function TrendMonitor({
           </div>
         </div>
 
-        {isZoom && seriesValues.length > 0 && (
+        {isZoom && hasObservations && (
           <div className="flex gap-0.5 select-none">
             {series.map((row, index) => {
               const last = seriesValues.length - 1;
@@ -727,7 +729,7 @@ export function TrendMonitor({
 
         {hasPredictions && (
           <div
-            className="flex items-center justify-end gap-1.5 text-[10px] font-medium text-oai-gray-400 dark:text-oai-gray-500"
+            className="flex items-center justify-end gap-1.5 text-[10px] font-medium text-oai-gray-500 dark:text-oai-gray-500"
             data-trend-prediction-legend="true"
           >
             <span

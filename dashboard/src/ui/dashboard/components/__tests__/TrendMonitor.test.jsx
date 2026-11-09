@@ -111,6 +111,55 @@ describe("TrendMonitor", () => {
     expect(container.querySelector('[data-trend-prediction-legend="true"]')).toBeNull();
   });
 
+  it.each([
+    ["every row is missing", [{ missing: true }, { missing: true }]],
+    ["missing and future rows have no observation", [{ missing: true }, { future: true }]],
+  ])("shows the empty state when %s", (_label, rows) => {
+    const { container } = render(
+      <TrendMonitor rows={rows} showTimeZoneLabel={false} />,
+    );
+
+    expect(container.querySelector('[data-trend-bar="true"]')).toBeNull();
+    expect(container.querySelector('[data-trend-prediction-legend="true"]')).toBeNull();
+    expect(container.textContent).toContain("No data yet");
+    expect(container.textContent).not.toContain("~0");
+  });
+
+  it("treats a real zero as an observation and keeps its baseline", () => {
+    const { container } = render(
+      <TrendMonitor rows={[{ billable_total_tokens: 0 }]} showTimeZoneLabel={false} />,
+    );
+    const bars = Array.from(container.querySelectorAll('[data-trend-bar="true"]'));
+
+    expect(container.textContent).not.toContain("No data yet");
+    expect(bars).toHaveLength(1);
+    expect(bars[0]?.dataset.trendKind).toBe("real_zero");
+    expect(bars[0]?.parentElement?.style.height).toBe("2px");
+    expect(container.querySelector('[data-trend-prediction-legend="true"]')).toBeNull();
+  });
+
+  it("interpolates a gap between real observations and keeps the estimate legend readable", () => {
+    const rows = [
+      { billable_total_tokens: 100 },
+      { missing: true },
+      { billable_total_tokens: 300 },
+    ];
+    const { container } = render(
+      <TrendMonitor rows={rows} showTimeZoneLabel={false} />,
+    );
+    const bars = Array.from(container.querySelectorAll('[data-trend-bar="true"]'));
+    const legend = container.querySelector('[data-trend-prediction-legend="true"]');
+
+    expect(bars).toHaveLength(3);
+    expect(bars[1]?.dataset.trendKind).toBe("unsynced");
+    expect(bars[1]?.className?.split(/\s+/)).toContain("bg-oai-gray-500");
+    expect(bars[1]?.parentElement?.style.height).toMatch(/%$/);
+    expect(legend?.textContent).toContain("~ Estimated");
+    expect(legend?.className?.split(/\s+/)).toContain("text-oai-gray-500");
+    expect(legend?.className?.split(/\s+/)).toContain("dark:text-oai-gray-500");
+    expect(legend?.className?.split(/\s+/)).not.toContain("text-oai-gray-400");
+  });
+
   it("shows the estimate legend when the range only has missing rows", () => {
     const rows = [
       { billable_total_tokens: 100 },
