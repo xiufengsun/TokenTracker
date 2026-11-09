@@ -27,7 +27,7 @@ function CloudSettingsSection({ settings, active }) {
     <div className="space-y-4">
       <CloudMembershipCard showTitle={false} active={active}
         syncControl={settings.showLocalCloudSync ? <CloudSyncRow settings={settings} /> : null} />
-      <InstanceSectionCard />
+      <InstanceSectionCard signedIn={settings.signedIn} />
     </div>
   );
 }

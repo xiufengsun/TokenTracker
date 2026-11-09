@@ -1,16 +1,29 @@
 import React, { useEffect, useState } from "react";
-import { Loader2, Server } from "lucide-react";
-import { copy } from "../../lib/copy";
+import { BookOpen, Loader2, Server } from "lucide-react";
+import { copy, getCopyLocale } from "../../lib/copy";
 import { resetInsforgeClientForInstanceChange } from "../../lib/insforge-config";
 import { useInstanceSettings } from "../../hooks/use-instance-settings.js";
 import { SectionCard, SETTINGS_INPUT_CLASS } from "./Controls.jsx";
 import { Button } from "../../ui/components/Button.jsx";
+import { ConfirmModal } from "../../ui/components/ConfirmModal.jsx";
 
 const ERROR_COPY_KEYS = {
   invalid_instance_url: "settings.instance.error.url",
   instance_anon_key_required: "settings.instance.error.keyRequired",
   invalid_instance_anon_key: "settings.instance.error.keyInvalid",
 };
+
+const SELF_HOSTING_GUIDE = {
+  chinese: "https://github.com/xiufengsun/TokenTracker/blob/main/docs/self-hosting.zh-CN.md",
+  default: "https://github.com/xiufengsun/TokenTracker/blob/main/docs/self-hosting.md",
+};
+
+function selfHostingGuideUrl() {
+  const locale = getCopyLocale();
+  return locale === "zh-CN" || locale === "zh-TW"
+    ? SELF_HOSTING_GUIDE.chinese
+    : SELF_HOSTING_GUIDE.default;
+}
 
 function errorMessage(error) {
   const key = ERROR_COPY_KEYS[error?.message];
@@ -23,7 +36,7 @@ function errorMessage(error) {
  * dashboard server exposes the instance-config API — public deploys have
  * nothing to reconfigure.
  */
-export function InstanceSectionCard() {
+export function InstanceSectionCard({ signedIn = false } = {}) {
   const { available, loading, config, save, test } = useInstanceSettings();
   const [baseUrl, setBaseUrl] = useState("");
   const [anonKey, setAnonKey] = useState("");
@@ -33,6 +46,7 @@ export function InstanceSectionCard() {
   const [applied, setApplied] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [pendingSwitch, setPendingSwitch] = useState(null);
 
   useEffect(() => {
     if (!available) return;
@@ -71,6 +85,16 @@ export function InstanceSectionCard() {
       setError(errorMessage(reason));
       setBusy(false);
     }
+  };
+
+  // Switching servers drops the signed-in session: every server keeps its own
+  // accounts, so confirm first instead of silently signing the user out.
+  const request = (payload) => {
+    if (signedIn && payload.baseUrl !== config.baseUrl) {
+      setPendingSwitch(payload);
+      return;
+    }
+    persist(payload);
   };
 
   const runTest = async () => {
@@ -178,7 +202,7 @@ export function InstanceSectionCard() {
               size="sm"
               variant="primary"
               disabled={busy || applied || !baseUrl.trim()}
-              onClick={() => persist({ baseUrl: baseUrl.trim(), anonKey })}
+              onClick={() => request({ baseUrl: baseUrl.trim(), anonKey })}
             >
               {busy || applied ? (
                 <>
@@ -209,7 +233,7 @@ export function InstanceSectionCard() {
                 size="sm"
                 variant="secondary"
                 disabled={busy || applied}
-                onClick={() => persist({ baseUrl: config.officialUrl })}
+                onClick={() => request({ baseUrl: config.officialUrl })}
               >
                 {copy("settings.instance.action.restoreOfficial")}
               </Button>
@@ -229,6 +253,15 @@ export function InstanceSectionCard() {
               {copy("shared.action.cancel")}
             </Button>
           </div>
+          <a
+            href={selfHostingGuideUrl()}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-oai-gray-500 underline-offset-2 transition-colors hover:text-oai-black hover:underline dark:text-oai-gray-400 dark:hover:text-white"
+          >
+            <BookOpen className="h-3 w-3" aria-hidden />
+            {copy("settings.instance.guide")}
+          </a>
         </div>
       ) : null}
       {testResult ? (
@@ -259,6 +292,21 @@ export function InstanceSectionCard() {
           {copy("settings.instance.loading")}
         </p>
       ) : null}
+      <ConfirmModal
+        open={pendingSwitch !== null}
+        title={copy("settings.instance.confirm.title")}
+        description={copy("settings.instance.confirm.description")}
+        destructive
+        busy={busy}
+        confirmLabel={copy("settings.instance.confirm.confirm")}
+        cancelLabel={copy("shared.action.cancel")}
+        onConfirm={() => {
+          const payload = pendingSwitch;
+          setPendingSwitch(null);
+          persist(payload);
+        }}
+        onCancel={() => setPendingSwitch(null)}
+      />
     </SectionCard>
   );
 }
