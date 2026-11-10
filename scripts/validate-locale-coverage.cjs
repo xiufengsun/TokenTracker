@@ -28,6 +28,7 @@ const SOURCE_IDENTICAL_KEY_ALLOWLIST = [
   /^leaderboard[.]community[.]modal[.]platform[.]/,
   /^dashboard[.]install[.]cmd[.]/,
   /^settings[.]menubar[.]iconStyle[.](?:clawd|bot)$/,
+  /^settings[.]about[.]intro[.](?:licenseMit|github)$/, // License and brand names.
   /^settings[.]menubar[.]updates[.]footerCore$/,
   /^limits[.]provider[.]/,
   /^limits[.]zcode[.]region[.](?:zai|bigmodel)$/, // Region brand names.

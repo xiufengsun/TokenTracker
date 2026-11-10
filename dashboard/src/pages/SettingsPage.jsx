@@ -222,7 +222,7 @@ export function SettingsPage() {
       description: copy("settings.section.about.description"),
       group: SETTINGS_GROUP_IDS.APP,
       Icon: Info,
-      content: <AboutSection />,
+      content: <AboutSection active={activeSection === SETTINGS_SECTION_IDS.ABOUT} />,
     },
     {
       id: SETTINGS_SECTION_IDS.LABS,

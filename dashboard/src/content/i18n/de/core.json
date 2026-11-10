@@ -603,6 +603,8 @@
   "settings.about.intro.body": "Token Tracker ist ein kostenloses, offenes Dashboard, das Token-Nutzung und Kosten über deine AI-Coding-Tools hinweg misst. Parsen und Aggregieren laufen komplett lokal — ohne Cloud-Konto, ohne API-Keys, ohne Einrichtung.",
   "settings.about.intro.version": "Version",
   "settings.about.intro.license": "Lizenz",
+  "settings.about.intro.licenseMit": "MIT",
+  "settings.about.intro.github": "GitHub",
   "settings.about.intro.links": "Projekt",
   "settings.about.intro.website": "Website",
   "settings.about.contributors.title": "Mitwirkende",

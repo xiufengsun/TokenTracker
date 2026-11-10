@@ -7,7 +7,7 @@
   },
   "totals": {
     "colors": 404,
-    "rawText": 166
+    "rawText": 167
   },
   "files": {
     "dashboard/src/components/InsforgeUserHeaderControls.jsx": {
@@ -593,6 +593,13 @@
         "0; return (",
         "The Token Tracker",
         "→ tokentracker.cc"
+      ]
+    },
+    "dashboard/src/components/settings/AboutSection.jsx": {
+      "colors": 0,
+      "rawText": 1,
+      "rawTextTokens": [
+        "0 ? ("
       ]
     }
   }

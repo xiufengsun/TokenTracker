@@ -10,10 +10,11 @@ const CONTRIBUTORS_ENDPOINT = `https://api.github.com/repos/${GITHUB_REPO}/contr
 
 /**
  * About the project: what Token Tracker is, where it lives, and the people
- * who build it. Static information only — the section stays reachable
- * offline; contributors simply fall back to a plain GitHub link.
+ * who build it. Static information only — the contributors fall back to a
+ * plain GitHub link. Sections stay mounted while hidden, so the GitHub
+ * request is gated on `active` to keep other Settings pages from firing it.
  */
-export function AboutSection() {
+export function AboutSection({ active = true } = {}) {
   const version = import.meta.env.VITE_APP_VERSION;
   return (
     <div className="space-y-4">
@@ -36,7 +37,7 @@ export function AboutSection() {
           control={
             <span className="inline-flex items-center gap-1.5 text-sm font-medium text-oai-gray-700 dark:text-oai-gray-300">
               <Scale className="h-3.5 w-3.5 text-oai-gray-400" aria-hidden />
-              MIT
+              {copy("settings.about.intro.licenseMit")}
             </span>
           }
         />
@@ -51,7 +52,7 @@ export function AboutSection() {
                 className="inline-flex items-center gap-1.5 text-sm font-medium text-oai-gray-600 underline-offset-2 transition-colors hover:text-oai-black hover:underline dark:text-oai-gray-400 dark:hover:text-white"
               >
                 <GithubMark />
-                GitHub
+                {copy("settings.about.intro.github")}
               </a>
               <a
                 href={PROJECT_URL}
@@ -66,7 +67,7 @@ export function AboutSection() {
           }
         />
       </SectionCard>
-      <ContributorsCard />
+      <ContributorsCard active={active} />
     </div>
   );
 }
@@ -81,11 +82,11 @@ function GithubMark() {
 
 const IDLE = { status: "idle" };
 
-function useContributors() {
+function useContributors(active) {
   const [state, setState] = useState(IDLE);
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    let active = true;
+    if (!active || typeof window === "undefined") return;
+    let cancelled = false;
     setState({ status: "loading" });
     fetch(CONTRIBUTORS_ENDPOINT, { headers: { Accept: "application/vnd.github+json" } })
       .then((response) =>
@@ -94,7 +95,7 @@ function useContributors() {
           : Promise.reject(new Error(`GitHub API ${response.status}`)),
       )
       .then((entries) => {
-        if (!active || !Array.isArray(entries)) return;
+        if (cancelled || !Array.isArray(entries)) return;
         const contributors = entries
           .filter((entry) => entry && typeof entry.login === "string" && entry.type !== "Bot")
           .map((entry) => ({
@@ -103,20 +104,20 @@ function useContributors() {
             avatarUrl: entry.avatar_url,
             contributions: typeof entry.contributions === "number" ? entry.contributions : 0,
           }));
-        if (active) setState({ status: "ready", contributors });
+        if (!cancelled) setState({ status: "ready", contributors });
       })
       .catch(() => {
-        if (active) setState({ status: "error" });
+        if (!cancelled) setState({ status: "error" });
       });
     return () => {
-      active = false;
+      cancelled = true;
     };
-  }, []);
+  }, [active]);
   return state;
 }
 
-function ContributorsCard() {
-  const { status, contributors } = useContributors();
+function ContributorsCard({ active }) {
+  const { status, contributors } = useContributors(active);
   return (
     <SectionCard
       title={copy("settings.about.contributors.title")}

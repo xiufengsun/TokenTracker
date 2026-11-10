@@ -605,6 +605,8 @@
   "settings.about.intro.body": "Token Tracker は、AI コーディングツール全体のトークン使用量とコストを計測する無料のオープンソース ダッシュボードです。解析と集計はすべてローカルで実行されます。クラウドアカウントも API キーも設定も不要です。",
   "settings.about.intro.version": "バージョン",
   "settings.about.intro.license": "ライセンス",
+  "settings.about.intro.licenseMit": "MIT",
+  "settings.about.intro.github": "GitHub",
   "settings.about.intro.links": "プロジェクト",
   "settings.about.intro.website": "公式サイト",
   "settings.about.contributors.title": "コントリビューター",
