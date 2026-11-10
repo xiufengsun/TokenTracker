@@ -511,6 +511,8 @@ settings.section.about.description,ui,SettingsPage,AboutSection,sec_about_descri
 settings.about.intro.body,ui,SettingsPage,AboutSection,intro_body,"Token Tracker is a free, open-source dashboard that measures token usage and cost across your AI coding tools. All parsing and aggregation runs locally on your machine — no cloud account, no API keys, no setup.",,active
 settings.about.intro.version,ui,SettingsPage,AboutSection,intro_version,"Version",,active
 settings.about.intro.license,ui,SettingsPage,AboutSection,intro_license,"License",,active
+settings.about.intro.licenseMit,ui,SettingsPage,AboutSection,intro_license_mit,"MIT",,active
+settings.about.intro.github,ui,SettingsPage,AboutSection,intro_github,"GitHub",,active
 settings.about.intro.links,ui,SettingsPage,AboutSection,intro_links,"Project",,active
 settings.about.intro.website,ui,SettingsPage,AboutSection,intro_website,"Website",,active
 settings.about.contributors.title,ui,SettingsPage,AboutSection,contributors_title,"Contributors",,active

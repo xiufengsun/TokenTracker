@@ -641,6 +641,8 @@
   "settings.about.intro.body": "Token Tracker 是一個免費開源的儀表板，統計你在各 AI 編碼工具上的 Token 用量與成本。所有解析與聚合都在本機完成——無需雲端帳號、無需 API Key、無需設定。",
   "settings.about.intro.version": "版本",
   "settings.about.intro.license": "授權條款",
+  "settings.about.intro.licenseMit": "MIT",
+  "settings.about.intro.github": "GitHub",
   "settings.about.intro.links": "專案",
   "settings.about.intro.website": "官網",
   "settings.about.contributors.title": "貢獻者",
