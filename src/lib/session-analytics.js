@@ -2178,8 +2178,18 @@ async function discoverSessionFiles(home, env = process.env, deps = {}) {
     const piEnv = usingMachineHome ? { ...env, HOME: home } : { HOME: home };
     const piAgentDir = resolvePiAgentDir(piEnv);
     const ompAgentDir = resolveOmpAgentDir(ompEnv);
-    const collides = piAgentDir && ompAgentDir &&
-      path.resolve(piAgentDir) === path.resolve(ompAgentDir);
+    // Compare by filesystem identity so a symlinked override pointing at the
+    // other provider's directory counts as the same tree; fall back to the
+    // literal paths when either side cannot be resolved (a missing directory
+    // is not a collision).
+    let collides = false;
+    if (piAgentDir && ompAgentDir) {
+      try {
+        collides = fs.realpathSync(piAgentDir) === fs.realpathSync(ompAgentDir);
+      } catch {
+        collides = path.resolve(piAgentDir) === path.resolve(ompAgentDir);
+      }
+    }
     if (!collides) pi = discoverPiSessionFiles(piEnv, incomplete);
   } catch {
     pi = [];

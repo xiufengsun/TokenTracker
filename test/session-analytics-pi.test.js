@@ -193,3 +193,51 @@ test("a pi/omp directory collision is discovered once, as omp", async (t) => {
   assert.equal(discovered.omp.length, 1);
   assert.equal(discovered.pi.length, 0);
 });
+
+test("pi /name sessions surface their session_info name as the title", async (t) => {
+  const home = fixture(t);
+  const file = writeSession(home, `2026-10-10T12-00-00_${SESSION_ID}.jsonl`, [
+    header({ title: null }),
+    { type: "session_info", name: "collector refactor" },
+    user("u1"),
+    assistant({ id: "ffffffff", input: 10, output: 4, totalTokens: 14 }),
+    // A later rename wins, and an empty name clears it back to none.
+    { type: "session_info", name: "renamed once" },
+  ]);
+  const rows = await scanPiSessions([file]);
+  assert.equal(rows[0].title, "renamed once");
+
+  const cleared = writeSession(home, `2026-10-10T13-00-00_${SESSION_ID}-2.jsonl`, [
+    header({ id: `${SESSION_ID}-2`, title: null }),
+    { type: "session_info", name: "temporary" },
+    { type: "session_info", name: "" },
+    user("u9"),
+    assistant({ id: "abcdabcd", input: 3, output: 1, totalTokens: 4 }),
+  ]);
+  const clearedRows = await scanPiSessions([cleared]);
+  assert.equal(clearedRows[0].title, null);
+});
+
+test("a symlink cycle in the sessions tree cannot hang discovery", async (t) => {
+  const home = fixture(t);
+  const sessionsDir = path.join(home, ".pi", "agent", "sessions", "--loop--");
+  fs.mkdirSync(path.join(sessionsDir, "inner"), { recursive: true });
+  // loop -> parent creates a cycle; Windows needs a junction when symlink
+  // privilege is unavailable, so fall back to skipping the link entirely.
+  const link = path.join(sessionsDir, "inner", "loop");
+  try {
+    fs.symlinkSync(sessionsDir, link, "junction");
+  } catch {
+    t.skip("cannot create directory links on this host");
+    return;
+  }
+  fs.writeFileSync(path.join(sessionsDir, "real.jsonl"), [
+    header(),
+    assistant({ id: "deadbeef", input: 5, output: 2, totalTokens: 7 }),
+  ].map(JSON.stringify).join("\n") + "\n");
+
+  const { discoverPiSessionFiles } = require("../src/lib/pi-session");
+  const incomplete = [];
+  const files = discoverPiSessionFiles({ HOME: home }, incomplete);
+  assert.equal(files.filter((f) => f.endsWith("real.jsonl")).length, 1);
+});

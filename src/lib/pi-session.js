@@ -112,10 +112,21 @@ function piInventoryIncomplete(pathName, error) {
 }
 
 // pi nests transcripts under sessions/<dir>/… at arbitrary depth (the hourly
-// resolver walks recursively), so discovery walks recursively too.
+// resolver walks recursively), so discovery walks recursively too. Visited
+// directories are tracked by canonical path so a symlink cycle cannot turn
+// the walk into an unbounded traversal.
 function listJsonlRecursive(dir, incomplete = []) {
   const found = [];
+  const visited = new Set();
   const walk = (current) => {
+    let canonical;
+    try {
+      canonical = fs.realpathSync(current);
+    } catch {
+      return;
+    }
+    if (visited.has(canonical)) return;
+    visited.add(canonical);
     let entries;
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
@@ -251,6 +262,13 @@ async function readPiSessionFiles(mainFiles, { seenEntryIds = new Set() } = {}) 
 
         if (entry.type === "title_change" && typeof entry.title === "string" && entry.title.trim()) {
           title = entry.title.trim();
+          continue;
+        }
+
+        // pi's /name command persists the session name as session_info.name
+        // (latest wins, including an empty name that clears it).
+        if (entry.type === "session_info" && typeof entry.name === "string") {
+          title = entry.name.trim() || null;
           continue;
         }
 
