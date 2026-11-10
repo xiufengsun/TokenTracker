@@ -252,6 +252,70 @@ test("canonical pricing block retains regression-prone entries and matcher order
   // and glm-5.3 must precede glm-5, or flash rows bill at 6.7x.
   order('lower.includes("glm-5.3-flash")', 'lower.includes("glm-5.3")');
   order('lower.includes("glm-5.3")', 'lower.includes("glm-5")');
+  // Fable 5.2 ($8/$40) must beat the broad fable matcher (Fable 5, $10/$50),
+  // and the fast SKU must beat the 5.2 needle it starts with.
+  order('/fable-5[.-]2-fast(?:$|[^0-9])/', '/fable-5[.-]2(?:$|[^0-9])/');
+  order('/fable-5[.-]2(?:$|[^0-9])/', 'lower.includes("fable")');
+  order('claude-fable-latest', '/fable-5[.-]2(?:$|[^0-9])/');
+});
+
+test("Claude Fable 5.2 prices at $8/$40 locally and in all cloud paths, ahead of Fable 5", () => {
+  const { getModelPricing: localPricing, getModelPricingInfo } = require("../src/lib/pricing");
+  const standard = { input: 8, output: 40, cache_read: 0.2, cache_write: 10 };
+  const fast = { input: 16, output: 80, cache_read: 0.4, cache_write: 20 };
+  const norm = (o) => ({
+    input: o.input || 0,
+    output: o.output || 0,
+    cache_read: o.cache_read || 0,
+    cache_write: o.cache_write || 0,
+  });
+  const standardIds = [
+    "claude-fable-5-2",
+    "claude-fable-5.2",
+    "Claude Fable 5.2",
+    "Fable 5.2",
+    "anthropic/claude-fable-5.2",
+    "anthropic/claude-fable-5.2-20261109",
+    "anthropic/claude-fable-5-2",
+    "vertex_ai/claude-fable-5-2@default",
+    "github_copilot/claude-fable-5.2",
+  ];
+  const fastIds = ["claude-fable-5-2-fast", "claude-fable-5.2-fast", "azure_ai/claude-fable-5-2-fast"];
+  // Floating alias. Anthropic docs checked 2026-11-10 do not pin it to 5.2.
+  const unpriced = ["claude-fable-latest", "anthropic/claude-fable-latest", "bedrock/claude-fable-latest"];
+  for (const name of [CANONICAL, ...MIRRORS]) {
+    const { code } = transformSync(extractBlock(name), { loader: "ts", target: "es2020" });
+    const edgePricing = vm.runInNewContext(`${code}\ngetModelPricing;`);
+    for (const model of standardIds) {
+      assert.deepEqual(norm(JSON.parse(JSON.stringify(edgePricing(model)))), standard, `${name}: ${model}`);
+      const local = localPricing(model, { source: "claude" });
+      for (const field of Object.keys(standard)) {
+        assert.equal(local[field], standard[field], `local ${model}.${field}`);
+      }
+    }
+    for (const model of fastIds) {
+      assert.deepEqual(norm(JSON.parse(JSON.stringify(edgePricing(model)))), fast, `${name}: ${model}`);
+      assert.equal(localPricing(model).input, fast.input, `local ${model}`);
+    }
+    for (const model of unpriced) {
+      assert.deepEqual(
+        norm(JSON.parse(JSON.stringify(edgePricing(model)))),
+        { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+        `${name}: ${model} must not inherit a Fable rate`,
+      );
+      assert.equal(getModelPricingInfo(model, { source: "claude" }).status, "unpriced", `local ${model}`);
+    }
+    // Fable 5 keeps its own rate on both sides.
+    assert.equal(edgePricing("claude-fable-5").input, 10, `${name}: fable 5`);
+    assert.equal(localPricing("claude-fable-5").input, 10);
+    // Dated Fable 5 ids and fable-5-20 contain the digits of 5.2. They must
+    // not take the 5.2 rate; with no other match they fall through to Fable 5
+    // on the edge and stay unpriced locally (origin/main prices neither).
+    for (const model of ["claude-fable-5-20250901", "claude-fable-5-20261109", "fable-5-20", "claude-fable-5-20"]) {
+      assert.equal(edgePricing(model).input, 10, `${name}: ${model} must not bill at the 5.2 rate`);
+      assert.equal(getModelPricingInfo(model).status, "unpriced", `local ${model}`);
+    }
+  }
 });
 
 test("models promoted from LiteLLM-only coverage price identically locally and in all cloud paths (#929)", () => {

@@ -142,6 +142,21 @@ async function verifiedUserIdFromJwt(authHeader: string | null): Promise<string 
 // Keep this block byte-identical with leaderboard-refresh.ts; see feedback_model_pricing_sync.
 const MODEL_PRICING: Record<string, { input: number; output: number; cache_read: number; cache_write?: number }> = {
   // ── Anthropic Claude ──
+  // Fable 5.2 standard tier ($8/$40, cache hit $0.20, 5-minute cache write $10),
+  // verified 2026-11-10. Exact keys only: edge has no Claude normalizer, so the
+  // dotted id and the OpenRouter-qualified ids never reach claude-fable-5-2.
+  // The 1-hour cache write ($16) cannot fit cache_write. Fast mode is the
+  // separate $16/$80 SKU below; floating -latest aliases stay unmatched.
+  "claude-fable-5-2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "claude-fable-5.2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "anthropic/claude-fable-5.2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "anthropic/claude-fable-5.2-20261109": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "anthropic/claude-fable-5-2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  // Fast mode is 2x input/output. Cache dollars are not published; the pricing
+  // page says caching multipliers stack on fast pricing, so 0.025x and the
+  // 5-minute 1.25x are applied to the $16 fast input ($0.40 / $20).
+  "claude-fable-5-2-fast": { input: 16, output: 80, cache_read: 0.4, cache_write: 20 },
+  "claude-fable-5.2-fast": { input: 16, output: 80, cache_read: 0.4, cache_write: 20 },
   "claude-fable-5": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
   "claude-opus-5": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
   "claude-opus-5-fast": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
@@ -492,6 +507,17 @@ function getModelPricing(model: string, source = "") {
   // reports its own positive cost still wins earlier via
   // SOURCES_WITH_AUTHORITATIVE_COST.
   if (lower.includes("cline-free/") || lower.includes("cline-pass/")) return ZERO_PRICING;
+  // Fable 5.2 before the broad fable matcher, or claude-fable-5-2 bills at the
+  // Fable 5 $10/$50 rate. Fast before 5.2 (the "fable-5.2" needle is a prefix
+  // of "fable-5.2-fast"), and -latest never matches: it is a floating alias
+  // the Anthropic docs did not pin to 5.2 on 2026-11-10.
+  if (/(?:^|\/)claude-fable-latest(?:$|[^a-z0-9])/.test(lower)) return ZERO_PRICING;
+  const fableKey = lower.replace(/[^a-z0-9./]+/g, "-");
+  // The minor must end or be followed by a non-digit. Without that boundary
+  // the dated Fable 5 ids (claude-fable-5-20250901) and fable-5-20 contain
+  // "fable-5-2" / "fable-5.2" and bill at the 5.2 rate.
+  if (/fable-5[.-]2-fast(?:$|[^0-9])/.test(fableKey)) return MODEL_PRICING["claude-fable-5-2-fast"];
+  if (/fable-5[.-]2(?:$|[^0-9])/.test(fableKey)) return MODEL_PRICING["claude-fable-5-2"];
   if (lower.includes("fable")) return MODEL_PRICING["claude-fable-5"];
   // Opus 5 fast mode bills at 2x the standard Opus tier ($10/$50), so the
   // -fast matcher must precede both the opus-5 and the generic opus fallback.
