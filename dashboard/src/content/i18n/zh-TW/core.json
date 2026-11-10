@@ -654,6 +654,8 @@
   "settings.instance.error.keyRequired": "自訂伺服器還需要填寫 anon key。",
   "settings.instance.error.keyInvalid": "這個 key 不是自訂伺服器可用的 anon key。",
   "settings.instance.error.generic": "無法儲存伺服器設定。",
+  "settings.instance.error.invalidConfig": "已儲存的伺服器設定無效，請在下方重新設定。",
+  "settings.instance.field.anonKeyPlaceholder": "eyJhbGciOi…",
   "settings.section.labs.description": "提前體驗即將成為標準功能的實驗性洞察。",
   "limits.alert.blocked": "通知已關閉——請到系統設定允許",
   "limits.hover.resets_at": "{{time}} 重置",

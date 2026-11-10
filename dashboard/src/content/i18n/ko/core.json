@@ -619,6 +619,8 @@
   "settings.instance.error.keyRequired": "커스텀 서버에는 anon 키도 필요합니다.",
   "settings.instance.error.keyInvalid": "이 키는 커스텀 서버에서 사용할 수 있는 anon 키가 아닙니다.",
   "settings.instance.error.generic": "서버 설정을 저장할 수 없습니다.",
+  "settings.instance.error.invalidConfig": "저장된 서버 구성이 잘못되었습니다. 아래에서 다시 설정하세요.",
+  "settings.instance.field.anonKeyPlaceholder": "eyJhbGciOi…",
   "limits.alert.blocked": "알림이 꺼져 있음 — 시스템 설정에서 허용하세요",
   "settings.limits.showSubscriptions": "구독을 한도에 표시",
   "settings.limits.showSubscriptionsHint": "수동으로 등록한 구독 갱신 바를 한도와 함께 표시합니다.",

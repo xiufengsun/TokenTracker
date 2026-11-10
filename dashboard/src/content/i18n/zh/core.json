@@ -722,6 +722,8 @@
   "settings.instance.error.keyRequired": "自定义服务器还需要填写 anon key。",
   "settings.instance.error.keyInvalid": "这个 key 不是自定义服务器可用的 anon key。",
   "settings.instance.error.generic": "无法保存服务器配置。",
+  "settings.instance.error.invalidConfig": "已保存的服务器配置无效，请在下方重新设置。",
+  "settings.instance.field.anonKeyPlaceholder": "eyJhbGciOi…",
   "settings.section.labs.description": "提前体验即将成为标准功能的实验性洞察。",
   "limits.alert.blocked": "通知已关闭——去系统设置中允许",
   "limits.hover.resets_at": "{{time}} 重置",

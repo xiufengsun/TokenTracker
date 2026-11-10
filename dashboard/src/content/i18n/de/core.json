@@ -617,6 +617,8 @@
   "settings.instance.error.keyRequired": "Ein eigener Server braucht zusätzlich seinen Anon-Key.",
   "settings.instance.error.keyInvalid": "Dieser Key ist kein gültiger Anon-Key für einen eigenen Server.",
   "settings.instance.error.generic": "Die Serverkonfiguration konnte nicht gespeichert werden.",
+  "settings.instance.error.invalidConfig": "Die gespeicherte Serverkonfiguration ist ungültig — unten neu festlegen.",
+  "settings.instance.field.anonKeyPlaceholder": "eyJhbGciOi…",
   "limits.alert.blocked": "Benachrichtigungen sind aus – in den Systemeinstellungen erlauben",
   "settings.limits.showSubscriptions": "Abos in Limits anzeigen",
   "settings.limits.showSubscriptionsHint": "Zeige manuell eingetragene Abo-Verlängerungen zusammen mit den Limits an.",

@@ -1229,6 +1229,14 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
   const accountViewFailures = new Map();
   const accountViewInFlight = new Map();
   let accountUploadState = readAccountUploadState();
+  // Serializes config.json read-modify-write transactions across the proxy and
+  // instance save endpoints: overlapping saves both read the old config and
+  // the later write silently reverts the other's change.
+  let configWriteChain = null;
+  const withConfigLock = (task) => {
+    configWriteChain = (configWriteChain || Promise.resolve()).then(task, task);
+    return configWriteChain;
+  };
   const runtimeConfigPath = path.join(path.dirname(qp), "config.json");
   const instancePath = path.join(trackerDataDir, "runtime-instance.json");
   const issuedAccessTokenInstances = new Map();
@@ -3609,29 +3617,35 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           json(res, { ok: false, error: parsed.error }, 400);
           return true;
         }
-        const current = readConfig();
-        const prevProxy = current.proxy && typeof current.proxy === "object" && !Array.isArray(current.proxy)
-          ? current.proxy
-          : {};
-        current.proxy = {
-          ...prevProxy,
-          mode: parsed.value.mode,
-          protocol: parsed.value.protocol,
-          host: parsed.value.host,
-          port: parsed.value.port,
-        };
+        let proxyConfig;
         try {
-          await writeConfig(current);
+          // Read-modify-write under the shared config lock so a concurrent
+          // instance save cannot interleave and silently revert either change.
+          await withConfigLock(async () => {
+            const current = readConfig();
+            const prevProxy = current.proxy && typeof current.proxy === "object" && !Array.isArray(current.proxy)
+              ? current.proxy
+              : {};
+            current.proxy = {
+              ...prevProxy,
+              mode: parsed.value.mode,
+              protocol: parsed.value.protocol,
+              host: parsed.value.host,
+              port: parsed.value.port,
+            };
+            await writeConfig(current);
+            proxyConfig = current.proxy;
+          });
         } catch (error) {
           json(res, { ok: false, error: error?.message || "failed to save proxy config" }, 500);
           return true;
         }
         invalidateSystemProxyCache();
-        const applyResult = applyUndiciProxyIfNeeded({ proxyConfig: current.proxy });
+        const applyResult = applyUndiciProxyIfNeeded({ proxyConfig });
         json(res, {
           ok: applyResult?.ok !== false,
           unprotected: applyResult?.unprotected === true,
-          ...toResponse(current),
+          ...toResponse({ proxy: proxyConfig }),
         });
         return true;
       }
@@ -3705,7 +3719,11 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         }
       };
       const writeConfig = async (next) => {
-        await writeFileAtomic(configPath, JSON.stringify(next, null, 2));
+        // config.json carries the device token; keep the replacement private
+        // from creation instead of relying on the chmod below (a crash between
+        // write and chmod would otherwise leave it world-readable under a
+        // permissive umask).
+        await writeFileAtomic(configPath, JSON.stringify(next, null, 2), { mode: 0o600 });
         await chmod600IfPossible(configPath);
       };
       const describe = () => {
@@ -3744,14 +3762,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           return true;
         }
         const official = requested === normalizeInstance(DEFAULT_BASE_URL);
-        const current = readConfig();
-        if (official) {
-          // Back to the official cloud: drop the override so env/defaults
-          // resume control instead of pinning the previous custom values.
-          delete current.baseUrl;
-          delete current.anonKey;
-          delete current.dashboardUrl;
-        } else {
+        if (!official) {
           const anonKey = typeof body?.anonKey === "string" ? body.anonKey.trim() : "";
           if (!anonKey) {
             json(res, { ok: false, error: "instance_anon_key_required" }, 400);
@@ -3761,16 +3772,25 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
             json(res, { ok: false, error: "invalid_instance_anon_key" }, 400);
             return true;
           }
-          current.baseUrl = requested;
-          current.anonKey = anonKey;
-          current.dashboardUrl = requested;
         }
-        try {
+        // Read-modify-write under the shared config lock so a concurrent proxy
+        // save cannot interleave and silently revert either change.
+        await withConfigLock(async () => {
+          const current = readConfig();
+          if (official) {
+            // Persist the official selection explicitly: merely deleting the
+            // override would let a custom TOKENTRACKER_INSFORGE_BASE_URL in the
+            // environment become active again while the UI reports success.
+            current.baseUrl = DEFAULT_BASE_URL;
+            current.anonKey = DEFAULT_ANON_KEY;
+            delete current.dashboardUrl;
+          } else {
+            current.baseUrl = requested;
+            current.anonKey = typeof body?.anonKey === "string" ? body.anonKey.trim() : "";
+            current.dashboardUrl = requested;
+          }
           await writeConfig(current);
-        } catch (error) {
-          json(res, { ok: false, error: error?.message || "failed to save instance config" }, 500);
-          return true;
-        }
+        });
         json(res, { ok: true, ...describe() });
         return true;
       }

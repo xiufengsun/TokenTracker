@@ -13,7 +13,11 @@ const DEFAULT_CONFIG = {
 };
 
 function normalizeLoaded(data) {
-  if (!data || typeof data.baseUrl !== "string" || !data.baseUrl) return null;
+  // An invalid persisted URL yields an empty baseUrl plus a configurationError
+  // descriptor; that state must still surface so the card can offer repair
+  // controls instead of hiding itself.
+  if (!data || typeof data.baseUrl !== "string") return null;
+  if (!data.baseUrl && !data.officialUrl && !data.configurationError) return null;
   return {
     baseUrl: data.baseUrl,
     officialUrl: typeof data.officialUrl === "string" ? data.officialUrl : "",
