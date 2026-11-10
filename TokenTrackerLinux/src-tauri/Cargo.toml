@@ -1,6 +1,6 @@
 [package]
 name = "tokentracker-linux"
-version = "1.5.16"
+version = "1.5.17"
 description = "TokenTracker Linux desktop client"
 authors = ["TokenTracker"]
 edition = "2021"
