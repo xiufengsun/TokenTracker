@@ -309,9 +309,6 @@ export function SettingsPage() {
 
             <div className="min-w-0">
               {sections.map(({ id, label, content }) => (
-                // Keep the Cloud type scale inside its own panel so the shared
-                // page title, subtitle and section nav stay the same size on
-                // every settings sub-page.
                 <section
                   key={id}
                   id={`settings-panel-${id}`}
