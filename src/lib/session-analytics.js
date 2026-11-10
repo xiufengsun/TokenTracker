@@ -96,7 +96,9 @@ const {
 // v28 records per-minute usage buckets for Claude and Grok, so date ranges
 // recompute in-range tokens/cost instead of falling back to lifetime totals.
 // v29 adds DSH request timing and first-response samples from step/stream metadata.
-const SIDECAR_VERSION = 29;
+// v30 drops DSH v1 failed-finish chunks (error/aborted) from request samples.
+// v29 cached those retries as clean timings; unchanged logs must be rebuilt.
+const SIDECAR_VERSION = 30;
 // Invalidate only Codex token summaries; other sources keep their cached rows.
 const CODEX_USAGE_VERSION = 1;
 const EDIT_TOOLS = new Set([

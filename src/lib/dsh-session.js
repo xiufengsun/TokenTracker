@@ -341,10 +341,21 @@ async function parseDshTranscript(filePath) {
           ? { turn: data.turn, step: data.step, ts: eventTimestampMs(entry), failed: false } : null;
         break;
       }
-      case "assistant/attempt": {
+      case "assistant/attempt":
+      case "assistant/chunk": {
         // A retry's step time includes failed work/backoff, so it cannot be a
         // clean request sample even if the eventual message reports usage.
-        if (openStep && openStep.turn === data?.turn && openStep.step === data?.step) openStep.failed = true;
+        // v4 records the failed try as assistant/attempt. v1 has no attempt
+        // event: the failed try ends as a top-level assistant/chunk whose
+        // chunk is a finish with an error or aborted reason.
+        const chunk = data?.chunk;
+        const failedFinish = entry.type === "assistant/chunk"
+          && chunk?.type === "finish"
+          && ["error", "aborted"].includes(chunk.reason?.kind);
+        if ((entry.type === "assistant/attempt" || failedFinish)
+          && openStep && openStep.turn === data?.turn && openStep.step === data?.step) {
+          openStep.failed = true;
+        }
         break;
       }
       case "step/end":
