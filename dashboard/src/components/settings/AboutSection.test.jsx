@@ -56,12 +56,22 @@ describe("AboutSection", () => {
 
     expect(screen.getByText("settings.about.intro.body")).toBeTruthy();
     expect(screen.getByText("settings.about.intro.version")).toBeTruthy();
-    expect(screen.getByText("MIT")).toBeTruthy();
+    expect(screen.getByText("settings.about.intro.licenseMit")).toBeTruthy();
 
-    const repo = screen.getByRole("link", { name: /github/i });
+    const repo = screen.getByRole("link", { name: /settings.about.intro.github|github\.com/i });
     expect(repo.getAttribute("href")).toBe("https://github.com/xiufengsun/TokenTracker");
     const site = screen.getByRole("link", { name: "settings.about.intro.website" });
     expect(site.getAttribute("href")).toBe("https://www.tokentracker.cc");
+  });
+
+  it("defers the contributors request until the section is active", async () => {
+    const { rerender } = render(<AboutSection active={false} />);
+    await act(async () => {});
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    rerender(<AboutSection active />);
+    await act(async () => {});
+    expect(fetchMock).toHaveBeenCalled();
   });
 
   it("loads contributors from the GitHub API and hides bot accounts", async () => {
