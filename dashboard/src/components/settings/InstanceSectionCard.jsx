@@ -38,6 +38,20 @@ export function InstanceSectionCard() {
     setAnonKey("");
   }, [available, config.baseUrl, config.custom]);
 
+  // A pending availability check is not the same as an unavailable API: show
+  // the card's loading line while the probe is in flight so Settings does not
+  // silently omit the Server section, and only hide it once the local API is
+  // known to be absent (public deploys, older embedded servers).
+  if (!available && loading) {
+    return (
+      <SectionCard title={copy("settings.instance.title")} subtitle={copy("settings.instance.subtitle")}>
+        <p role="status" className="py-3 text-xs text-oai-gray-500 dark:text-oai-gray-400">
+          <Loader2 size={12} className="mr-1 inline motion-safe:animate-spin" aria-hidden />
+          {copy("settings.instance.loading")}
+        </p>
+      </SectionCard>
+    );
+  }
   if (!available) return null;
 
   const persist = async (payload) => {
@@ -67,6 +81,11 @@ export function InstanceSectionCard() {
           <span className="min-w-0 break-all text-sm text-oai-gray-700 dark:text-oai-gray-300">
             {config.custom ? config.baseUrl : copy("settings.instance.official")}
           </span>
+          {config.configurationError ? (
+            <span className="shrink-0 text-xs text-red-600 dark:text-red-400">
+              {copy("settings.instance.error.invalidConfig")}
+            </span>
+          ) : null}
           <span
             className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
               config.custom
@@ -120,7 +139,7 @@ export function InstanceSectionCard() {
               type="text"
               value={anonKey}
               onChange={(event) => setAnonKey(event.target.value)}
-              placeholder="eyJhbGciOi…"
+              placeholder={copy("settings.instance.field.anonKeyPlaceholder")}
               spellCheck={false}
               autoComplete="off"
               aria-describedby="settings-instance-anon-key-hint"

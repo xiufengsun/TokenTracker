@@ -619,6 +619,8 @@
   "settings.instance.error.keyRequired": "カスタムサーバーには anon キーも必要です。",
   "settings.instance.error.keyInvalid": "このキーはカスタムサーバーで使える anon キーではありません。",
   "settings.instance.error.generic": "サーバー設定を保存できませんでした。",
+  "settings.instance.error.invalidConfig": "保存されたサーバー設定が無効です。下で再設定してください。",
+  "settings.instance.field.anonKeyPlaceholder": "eyJhbGciOi…",
   "limits.alert.blocked": "通知がオフです — システム設定で許可してください",
   "settings.limits.showSubscriptions": "サブスクを制限表示に表示",
   "settings.limits.showSubscriptionsHint": "手動登録した更新日バーを制限と一緒に表示します。",

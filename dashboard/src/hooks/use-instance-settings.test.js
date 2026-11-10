@@ -110,6 +110,26 @@ describe("useInstanceSettings", () => {
     expect(result.current.config.custom).toBe(true);
   });
 
+  it("keeps the card available when the persisted URL is invalid", async () => {
+    setHostname("localhost");
+    const fetchMock = vi.fn(async () =>
+      jsonResponse(200, {
+        baseUrl: "",
+        officialUrl: OFFICIAL,
+        custom: false,
+        dashboardUrl: "",
+        anonKeySet: false,
+        configurationError: "invalid_insforge_base_url",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useInstanceSettings());
+    await waitFor(() => expect(result.current.available).toBe(true));
+    expect(result.current.config.baseUrl).toBe("");
+    expect(result.current.config.configurationError).toBe("invalid_insforge_base_url");
+  });
+
   it("surfaces server rejections after the retry", async () => {
     setHostname("localhost");
     const fetchMock = vi.fn(async (url, init) => {

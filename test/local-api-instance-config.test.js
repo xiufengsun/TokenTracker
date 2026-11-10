@@ -201,7 +201,7 @@ test("POST instance-config accepts plain-http loopback deployments", async () =>
   assert.equal(saved.json().baseUrl, "http://127.0.0.1:8787");
 });
 
-test("POST instance-config restores the official cloud by dropping the override", async () => {
+test("POST instance-config restores the official cloud by persisting the official selection", async () => {
   const queuePath = setupQueue();
   const handler = freshHandler(queuePath);
   const token = await authToken(handler);
@@ -222,8 +222,32 @@ test("POST instance-config restores the official cloud by dropping the override"
   assert.equal(restored.json().ok, true);
   assert.equal(restored.json().custom, false);
 
+  // The official selection is persisted explicitly (not merely un-set), so a
+  // custom TOKENTRACKER_INSFORGE_BASE_URL in the environment cannot quietly
+  // become active again after the UI reports a successful restore.
   const persisted = JSON.parse(fs.readFileSync(configPath(), "utf-8"));
-  assert.equal("baseUrl" in persisted, false);
-  assert.equal("anonKey" in persisted, false);
+  assert.equal(persisted.baseUrl, "https://srctyff5.us-east.insforge.app");
+  assert.equal(typeof persisted.anonKey, "string");
+  assert.ok(persisted.anonKey.length > 0);
   assert.equal("dashboardUrl" in persisted, false);
+});
+
+test("restoring the official cloud overrides a custom environment base URL", async () => {
+  const queuePath = setupQueue();
+  const handler = freshHandler(queuePath);
+  const token = await authToken(handler);
+  process.env.TOKENTRACKER_INSFORGE_BASE_URL = SELF_HOSTED_URL;
+  try {
+    const restored = await call(handler, {
+      method: "POST",
+      endpoint: "/functions/tokentracker-instance-config",
+      headers: { "content-type": "application/json", "x-tokentracker-local-auth": token },
+      body: JSON.stringify({ baseUrl: "https://srctyff5.us-east.insforge.app" }),
+    });
+    assert.equal(restored.statusCode, 200);
+    assert.equal(restored.json().custom, false);
+    assert.equal(restored.json().baseUrl, "https://srctyff5.us-east.insforge.app");
+  } finally {
+    delete process.env.TOKENTRACKER_INSFORGE_BASE_URL;
+  }
 });
