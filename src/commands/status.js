@@ -710,6 +710,7 @@ async function cmdStatus(argv = []) {
     const dirs = [
       path.join(geminiPaths.native, "antigravity", "brain"),
       path.join(geminiPaths.native, "antigravity-ide", "brain"),
+      path.join(geminiPaths.native, "antigravity-insiders", "brain"),
       path.join(geminiPaths.native, "antigravity-cli", "brain"),
     ];
     if (dirs.some(d => { try { return fssync.existsSync(d); } catch (_) { return false; } })) {
@@ -720,6 +721,7 @@ async function cmdStatus(argv = []) {
     const dirs = [
       path.join(geminiPaths.wsl, "antigravity", "brain"),
       path.join(geminiPaths.wsl, "antigravity-ide", "brain"),
+      path.join(geminiPaths.wsl, "antigravity-insiders", "brain"),
       path.join(geminiPaths.wsl, "antigravity-cli", "brain"),
     ];
     if (dirs.some(d => { try { return fssync.existsSync(d); } catch (_) { return false; } })) {

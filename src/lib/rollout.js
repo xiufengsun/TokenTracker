@@ -22133,6 +22133,7 @@ function resolveAntigravityBrainDirs(geminiHome) {
   return [
     path.join(geminiHome, "antigravity", "brain"),
     path.join(geminiHome, "antigravity-ide", "brain"),
+    path.join(geminiHome, "antigravity-insiders", "brain"),
     path.join(geminiHome, "antigravity-cli", "brain"),
   ];
 }
