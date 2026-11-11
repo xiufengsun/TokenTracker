@@ -728,6 +728,7 @@
   "settings.instance.testing": "正在测试…",
   "settings.instance.test.ok": "服务器可连接（HTTP {{status}}）。",
   "settings.instance.test.unreachable": "无法连接到该服务器，请检查地址后重试。",
+  "settings.instance.test.certificate": "服务器的证书不受信任——请检查证书而不是地址。",
   "settings.section.labs.description": "提前体验即将成为标准功能的实验性洞察。",
   "limits.alert.blocked": "通知已关闭——去系统设置中允许",
   "limits.hover.resets_at": "{{time}} 重置",

@@ -3829,6 +3829,11 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       let httpStatus = null;
       let errorCode = "unreachable";
       try {
+        // Deliberate server-side fetch of a loopback-validated, local-auth'd
+        // user-provided address on a loopback-only server (this is the whole
+        // point of the probe: the browser cannot fetch it through CORS), so
+        // the URL is untrusted input only in the CodeQL sense.
+        // codeql[js/server-side-request-forgery]
         const response = await fetch(target, {
           method: "GET",
           redirect: "manual",
@@ -3836,9 +3841,18 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         });
         reachable = true;
         httpStatus = response.status;
+        // Release the socket promptly: a slow/streaming body would otherwise
+        // keep the connection alive after the status line has been captured.
+        response.body?.cancel?.().catch?.(() => {});
       } catch (error) {
         if (error?.name === "TimeoutError") errorCode = "timeout";
         else if (error?.name === "AbortError") errorCode = "timeout";
+        // Distinguish TLS failures (untrusted/self-signed cert on the target)
+        // from routing failures so the hint points at the certificate, not
+        // the address.
+        else if (/CERT|SELF_?SIGNED|UNABLE_TO_VERIFY/i.test(String(error?.cause?.code || error?.code || ""))) {
+          errorCode = "certificate";
+        }
       }
       json(res, { ok: true, reachable, status: httpStatus, error: reachable ? null : errorCode });
       return true;

@@ -625,6 +625,7 @@
   "settings.instance.testing": "테스트 중…",
   "settings.instance.test.ok": "서버에 연결할 수 있습니다(HTTP {{status}}).",
   "settings.instance.test.unreachable": "이 서버에 연결할 수 없습니다. 주소를 확인하고 다시 시도하세요.",
+  "settings.instance.test.certificate": "서버 인증서를 신뢰할 수 없습니다. 주소가 아닌 인증서를 확인하세요.",
   "limits.alert.blocked": "알림이 꺼져 있음 — 시스템 설정에서 허용하세요",
   "settings.limits.showSubscriptions": "구독을 한도에 표시",
   "settings.limits.showSubscriptionsHint": "수동으로 등록한 구독 갱신 바를 한도와 함께 표시합니다.",

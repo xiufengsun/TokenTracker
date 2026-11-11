@@ -660,6 +660,7 @@
   "settings.instance.testing": "正在測試…",
   "settings.instance.test.ok": "伺服器可連線（HTTP {{status}}）。",
   "settings.instance.test.unreachable": "無法連線到該伺服器，請檢查位址後重試。",
+  "settings.instance.test.certificate": "伺服器的憑證不受信任——請檢查憑證而不是位址。",
   "settings.section.labs.description": "提前體驗即將成為標準功能的實驗性洞察。",
   "limits.alert.blocked": "通知已關閉——請到系統設定允許",
   "limits.hover.resets_at": "{{time}} 重置",

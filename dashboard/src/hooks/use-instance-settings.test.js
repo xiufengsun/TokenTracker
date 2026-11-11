@@ -122,6 +122,14 @@ describe("useInstanceSettings", () => {
         configurationError: "invalid_insforge_base_url",
       }),
     );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useInstanceSettings());
+    await waitFor(() => expect(result.current.available).toBe(true));
+    expect(result.current.config.baseUrl).toBe("");
+    expect(result.current.config.configurationError).toBe("invalid_insforge_base_url");
+  });
+
   it("probes a candidate address through the server-side test endpoint", async () => {
     setHostname("localhost");
     const fetchMock = vi.fn(async (url, init) => {
@@ -134,8 +142,7 @@ describe("useInstanceSettings", () => {
 
     const { result } = renderHook(() => useInstanceSettings());
     await waitFor(() => expect(result.current.available).toBe(true));
-    expect(result.current.config.baseUrl).toBe("");
-    expect(result.current.config.configurationError).toBe("invalid_insforge_base_url");
+
     let outcome;
     await act(async () => {
       outcome = await result.current.test(SELF_HOSTED);
