@@ -1653,6 +1653,30 @@ describe("UsageLimitsPanel", () => {
     expect(container.querySelector('img[src="/brand-logos/muse.svg"]')).not.toBeNull();
   });
 
+  it("renders idle Muse Code 5h window cleanly when secondary_window is null", () => {
+    render(
+      <UsageLimitsPanel
+        muse={{
+          configured: true,
+          error: null,
+          plan_label: "Power",
+          primary_window: {
+            used_percent: 0,
+            reset_at: null,
+            limit_window_seconds: 18000,
+          },
+          secondary_window: null,
+        }}
+        order={["muse"]}
+      />,
+    );
+
+    expect(screen.getByText("Muse Code Power")).toBeInTheDocument();
+    expect(screen.getByText("5h")).toBeInTheDocument();
+    expect(screen.getByText("0%")).toBeInTheDocument();
+    expect(screen.queryByText("Weekly")).toBeNull();
+  });
+
   it("shows the Muse Code CLI setup hint when not connected", () => {
     render(
       <UsageLimitsPanel muse={{ configured: false }} order={["muse"]} />,
@@ -1662,5 +1686,6 @@ describe("UsageLimitsPanel", () => {
     expect(screen.getByText("Not connected")).toBeInTheDocument();
     expect(screen.getByText("Connect Muse Code")).toBeInTheDocument();
     expect(screen.getByText("muse login")).toBeInTheDocument();
+    expect(screen.getByText(/Click "Refresh limits" above after signing in\./)).toBeInTheDocument();
   });
 });

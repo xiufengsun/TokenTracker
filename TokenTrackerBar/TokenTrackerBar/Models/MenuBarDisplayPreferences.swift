@@ -216,7 +216,6 @@ private extension UsageLimitsResponse {
         case "commandCode": return (commandCode?.configured == true) && (commandCode?.error == nil)
         case "qoder": return (qoder?.configured == true) && (qoder?.error == nil)
         case "devin": return (devin?.configured == true) && (devin?.error == nil)
-        case "muse": return (muse?.configured == true) && (muse?.error == nil)
         default: return false
         }
     }

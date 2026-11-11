@@ -857,6 +857,6 @@
   "limits.muse.setupHint.title": "連接 Muse Code",
   "limits.muse.setupHint.subtitle": "透過本機的官方 Muse CLI 讀取你的 Muse Code 訂閱額度。",
   "limits.muse.setupHint.step1": "安裝 Muse Code 並執行下方命令登入，TokenTracker 自動沿用登入，無需重新啟動。",
-  "limits.muse.setupHint.note": "登入後重新整理此頁即可。TokenTracker 透過本機 muse usage --json 讀取額度視窗。",
+  "limits.muse.setupHint.note": "登入後點選上方「重新整理限額」按鈕即可。TokenTracker 透過本機 muse usage --json 讀取額度視窗。",
   "limits.muse.setupHint.snippet_login": "muse login   # 登入 Muse Code"
 }

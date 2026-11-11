@@ -146,4 +146,21 @@ test("GNOME extension maps Muse Code 5h and 7d quota windows with display name",
   assert.equal(rows[1].name, "Muse Code");
   assert.equal(rows[1].label, "7d");
   assert.equal(rows[1].percent, 9);
+
+  const idleRows = limitRows({
+    muse: {
+      configured: true,
+      error: null,
+      plan_label: "Power",
+      primary_window: {
+        used_percent: 0,
+        reset_at: null,
+        limit_window_seconds: 18000,
+      },
+      secondary_window: null,
+    },
+  });
+  assert.deepEqual(idleRows, [
+    { name: "Muse Code", label: "5h", percent: 0, reset: null },
+  ]);
 });

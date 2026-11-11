@@ -2190,5 +2190,5 @@ limits.label.muse_weekly,ui,LimitsPage,UsageLimitsPanel,muse_weekly,"Weekly",,ac
 limits.muse.setupHint.title,ui,LimitsPage,UsageLimitsPanel,muse_hint_title,"Connect Muse Code",,active
 limits.muse.setupHint.subtitle,ui,LimitsPage,UsageLimitsPanel,muse_hint_subtitle,"Reads your Muse Code subscription quota from the official Muse CLI on this machine.",,active
 limits.muse.setupHint.step1,ui,LimitsPage,UsageLimitsPanel,muse_hint_step1,"Install Muse Code and sign in with the command below — TokenTracker picks it up with no restart.",,active
-limits.muse.setupHint.note,ui,LimitsPage,UsageLimitsPanel,muse_hint_note,"Refresh this page after signing in. TokenTracker reads quota windows locally via muse usage --json.",,active
+limits.muse.setupHint.note,ui,LimitsPage,UsageLimitsPanel,muse_hint_note,"Click ""Refresh limits"" above after signing in. TokenTracker reads quota windows locally via muse usage --json.",,active
 limits.muse.setupHint.snippet_login,ui,LimitsPage,UsageLimitsPanel,muse_hint_snippet_login,"muse login",,active

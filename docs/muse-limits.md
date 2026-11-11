@@ -12,8 +12,11 @@ arguments and renders two windows: the rolling **5-hour** window
 (`allowance.window`) and the **weekly** window (`allowance.weekly`). Each
 carries `usedPercent` (clamped to 0–100) and `resetsAtMs`. The plan badge comes
 from `allowance.tier` (`power` → `Power`, `muse_pro` → `Pro`, and so on).
-TokenTracker never reads, refreshes or transmits Muse OAuth tokens; the CLI
-uses its own session.
+`readMuseAuthMetadata` reads `~/.config/muse/auth.json` (or `MUSE_AUTH_PATH`)
+locally only to extract non-secret `providers.meta.user_email` / `user_id` (for
+the scrypt cache-partition key) and `subs_active`; TokenTracker never selects,
+returns, logs, refreshes, or transmits OAuth token fields — the `muse` CLI uses
+its own session.
 
 ## Binary discovery
 
@@ -40,16 +43,16 @@ Finder-launched macOS app still finds the binary's runtime.
 | CLI result | Rendered as |
 |---|---|
 | `allowance` with a usable window | Live 5h + weekly bars; written to the disk cache |
-| `allowance: null`, `reason: "server_sent_no_usage"` | Idle 0% bars with undated resets (the server omits usage headers until the first prompt of a fresh window). Plan label carried over from the cache. If `auth.json` has `subs_active: false`, treated as no subscription instead |
+| `allowance: null`, `reason: "server_sent_no_usage"` | Idle 0% 5h bar (`reset_at: null`), because the server omits usage headers until a prompt is sent in the active 5h session/window; preserves the current account's cached weekly bar while its `reset_at` is still in the future, otherwise `secondary_window: null` (unknown). Plan label carried over from the matching account's cache. If `auth.json` has `subs_active: false`, treated as no subscription instead |
 | `reason: "no_allowance"` / subscription-required text | "subscription required" error; disk cache cleared so stale bars cannot reappear |
 | `reason: "credential_rejected"` / not-logged-in text | Reauth error (`auth_action_required: "reauth"`); never masked by the cache |
-| Non-zero exit, timeout, invalid JSON | Last-good disk cache when present, otherwise the trimmed CLI error |
+| Non-zero exit, timeout, invalid JSON | Last-good disk cache for the signed-in account when present, otherwise the trimmed CLI error |
 
 ## Disk cache
 
-`muse-limits-cache.json` lives in the tracker directory and uses the shared
-`createLimitsCache` helper (7-day max age, 12-hour TTL for undated resets).
-Entries are partitioned by account: the cache stores a scrypt fingerprint of
-`providers.meta.user_email` (or `user_id`) from `auth.json`, never the raw
-value, and the fingerprint is re-read at fallback time so an account switch
-during a slow CLI call cannot serve the previous account's bars.
+`muse-limits-cache.json` lives in the active tracker directory (`~/.tokentracker/tracker` by default, or a custom `trackerDir` via `dirOverride: "trackerDir"`) and uses the shared `createLimitsCache` helper (7-day max age, 12-hour TTL for undated resets, `identityRequired: true`).
+
+Entries are strictly bound to the signed-in account:
+- Cache reads, writes, and cached `plan_label` lookups require a non-empty scrypt fingerprint of `providers.meta.user_email` (or `user_id`) from `auth.json` and fail closed (`null`) when `auth.json` is missing, unreadable, or lacks an account identifier (for example after sign-out).
+- `fetchMuseLimits` snapshots `readMuseAuthMetadata` before and after `muse usage --json`. If `auth.json` presence or account identity changes while the CLI is in flight, the pre-switch response is neither returned for the new session nor written to the disk cache; fallback re-reads only the post-spawn account's own cache.
+- Internal `profile_identity` metadata is stripped from both live and cached fallback public records.

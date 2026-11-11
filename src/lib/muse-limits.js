@@ -61,6 +61,7 @@ const MUSE_TIER_LABELS = Object.freeze({
 const MUSE_IDENTITY_SALT = "tokentracker/muse-limits-cache/v1";
 let identityMemo = null;
 
+/** Derive an opaque scrypt fingerprint for partitioning cache entries by account. */
 function fingerprintMuseAccount(rawAccount) {
   const normalized = typeof rawAccount === "string" ? rawAccount.trim().toLowerCase() : "";
   if (!normalized) return null;
@@ -70,6 +71,7 @@ function fingerprintMuseAccount(rawAccount) {
   return hex;
 }
 
+/** Clamp a numeric percentage into `[0, 100]`, or return `null` when non-numeric. */
 function clampPercent(value) {
   if (value === null || value === undefined || value === "") return null;
   const num = Number(value);
@@ -77,6 +79,7 @@ function clampPercent(value) {
   return Math.max(0, Math.min(100, num));
 }
 
+/** Normalize an epoch (seconds or ms) or ISO-8601 reset timestamp into an ISO string. */
 function normalizeResetAt(value) {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "number" || /^\d+(?:\.\d+)?$/.test(String(value).trim())) {
@@ -90,6 +93,7 @@ function normalizeResetAt(value) {
   return Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp).toISOString() : null;
 }
 
+/** Map a raw Muse Code subscription tier identifier to its human-readable plan badge. */
 function deriveMusePlanLabel(tier) {
   if (typeof tier !== "string") return null;
   const cleaned = tier
@@ -106,6 +110,7 @@ function deriveMusePlanLabel(tier) {
     .join(" ");
 }
 
+/** Normalize one raw Muse Code allowance window into TokenTracker's window shape. */
 function normalizeMuseWindow(rawWindow, windowSeconds) {
   if (!rawWindow || typeof rawWindow !== "object") return null;
   const pct = clampPercent(
@@ -121,6 +126,7 @@ function normalizeMuseWindow(rawWindow, windowSeconds) {
   };
 }
 
+/** Return `true` when `filePath` exists and is a regular file. */
 function isFile(filePath) {
   try {
     return fs.statSync(filePath).isFile();
@@ -129,6 +135,7 @@ function isFile(filePath) {
   }
 }
 
+/** Return `true` when `dirPath` exists and is a directory. */
 function isDirectory(dirPath) {
   try {
     return fs.statSync(dirPath).isDirectory();
@@ -137,6 +144,7 @@ function isDirectory(dirPath) {
   }
 }
 
+/** Expand a leading `~` segment against `home`, trimming surrounding whitespace. */
 function expandHomeDir(rawPath, home) {
   if (typeof rawPath !== "string") return "";
   const trimmed = rawPath.trim();
@@ -148,6 +156,7 @@ function expandHomeDir(rawPath, home) {
   return trimmed;
 }
 
+/** Resolve the Muse Code configuration directory (`XDG_CONFIG_HOME/muse` or `~/.config/muse`). */
 function resolveMuseConfigDir({ home = os.homedir(), env = process.env } = {}) {
   const xdgConfig =
     env && typeof env === "object" && typeof env.XDG_CONFIG_HOME === "string"
@@ -156,6 +165,7 @@ function resolveMuseConfigDir({ home = os.homedir(), env = process.env } = {}) {
   return xdgConfig ? path.join(xdgConfig, "muse") : path.join(home, ".config", "muse");
 }
 
+/** Resolve the Muse Code `auth.json` file path, honoring `MUSE_AUTH_PATH`. */
 function resolveMuseAuthPath({ home = os.homedir(), env = process.env } = {}) {
   const explicitAuth =
     env && typeof env === "object" && typeof env.MUSE_AUTH_PATH === "string"
@@ -164,6 +174,7 @@ function resolveMuseAuthPath({ home = os.homedir(), env = process.env } = {}) {
   return explicitAuth || path.join(resolveMuseConfigDir({ home, env }), "auth.json");
 }
 
+/** Resolve the Muse Code local data directory (`TOKENTRACKER_MUSE_HOME`, `XDG_DATA_HOME/muse`, or `~/.local/share/muse`). */
 function resolveMuseDataDir({ home = os.homedir(), env = process.env } = {}) {
   const explicitHome =
     env && typeof env === "object" && typeof env.TOKENTRACKER_MUSE_HOME === "string"
@@ -177,6 +188,7 @@ function resolveMuseDataDir({ home = os.homedir(), env = process.env } = {}) {
   return xdgData ? path.join(xdgData, "muse") : path.join(home, ".local", "share", "muse");
 }
 
+/** Resolve the platform-specific Muse Code binary installation directory. */
 function resolveMuseInstallDir({
   home = os.homedir(),
   platform = process.platform,
@@ -197,10 +209,12 @@ function resolveMuseInstallDir({
   return path.join(home, ".local", "bin");
 }
 
+/** Resolve the default Windows Muse Code installation directory (`%LOCALAPPDATA%\Programs\muse`). */
 function resolveWindowsMuseInstallDir({ home = os.homedir(), env = process.env } = {}) {
   return resolveMuseInstallDir({ home, platform: "win32", env });
 }
 
+/** Check filesystem-only indicators that Muse Code has been installed or configured on this machine. */
 function hasMuseInstallEvidence({
   home = os.homedir(),
   platform = process.platform,
@@ -226,8 +240,9 @@ function hasMuseInstallEvidence({
 
 /**
  * Read non-secret account metadata from `~/.config/muse/auth.json` (or `MUSE_AUTH_PATH`).
- * Never returns or logs tokens; only derives an opaque account-partition key
- * and checks whether `subs_active` explicitly marks a non-subscription login.
+ * Never selects, returns, logs, refreshes, or transmits OAuth token fields; only
+ * derives an opaque scrypt account-partition key from `user_email`/`user_id` and
+ * checks whether `subs_active` explicitly marks a non-subscription login.
  */
 function readMuseAuthMetadata({ home = os.homedir(), env = process.env } = {}) {
   const authPath = resolveMuseAuthPath({ home, env });
@@ -237,6 +252,9 @@ function readMuseAuthMetadata({ home = os.homedir(), env = process.env } = {}) {
   } catch (_error) {
     return { present: false, identity: null, subsActive: null };
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { present: false, identity: null, subsActive: null };
+  }
   const meta = parsed?.providers?.meta;
   if (!meta || typeof meta !== "object") {
     return { present: true, identity: null, subsActive: null };
@@ -244,6 +262,7 @@ function readMuseAuthMetadata({ home = os.homedir(), env = process.env } = {}) {
   const rawIdentity =
     (typeof meta.user_email === "string" && meta.user_email.trim()) ||
     (typeof meta.user_id === "string" && meta.user_id.trim()) ||
+    (typeof meta.user_id === "number" && Number.isFinite(meta.user_id) ? String(meta.user_id) : null) ||
     null;
   const subsActive = typeof meta.subs_active === "boolean" ? meta.subs_active : null;
   return {
@@ -253,6 +272,7 @@ function readMuseAuthMetadata({ home = os.homedir(), env = process.env } = {}) {
   };
 }
 
+/** Parse a `muse-bin-<semver>[-R<build>.<patch>]` filename into a sortable numeric tuple. */
 function parseMuseBinaryVersion(filename, { platform = process.platform } = {}) {
   const pattern =
     platform === "win32"
@@ -270,6 +290,7 @@ function parseMuseBinaryVersion(filename, { platform = process.platform } = {}) 
   ];
 }
 
+/** Resolve the preferred Muse Code executable inside `installDir` (pinned `.muse-version`, newest `muse-bin-*`, or shim). */
 function resolveMuseInstallExecutable(installDir, { platform = process.platform } = {}) {
   if (!isDirectory(installDir)) return null;
   const ext = platform === "win32" ? ".exe" : "";
@@ -323,10 +344,12 @@ function resolveMuseInstallExecutable(installDir, { platform = process.platform 
   return null;
 }
 
+/** Resolve the preferred Windows Muse Code executable inside `installDir`. */
 function resolveWindowsMuseExecutable(installDir) {
   return resolveMuseInstallExecutable(installDir, { platform: "win32" });
 }
 
+/** Upgrade a Unix `muse` launcher or symlink to a sibling native `muse-bin-*` binary when present. */
 function upgradeUnixLauncherToNativeBinary(candidatePath, { platform = process.platform } = {}) {
   if (!candidatePath || platform === "win32") return null;
   let realCandidate = candidatePath;
@@ -341,6 +364,7 @@ function upgradeUnixLauncherToNativeBinary(candidatePath, { platform = process.p
   return { binaryPath: candidatePath, useShell: false };
 }
 
+/** Discover the local `muse` CLI binary without spawning unless install evidence exists. */
 async function resolveMuseCommand({
   commandRunner,
   home = os.homedir(),
@@ -413,12 +437,13 @@ async function resolveMuseCommand({
 const museLimitsCache = createLimitsCache({
   file: MUSE_LIMITS_CACHE_FILE,
   key: null,
+  dirOverride: "trackerDir",
   maxAgeMs: MUSE_LIMITS_CACHE_MAX_AGE_MS,
   unknownResetTtlMs: MUSE_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS,
   fields: { plan_label: "string", profile_identity: "string" },
   windowKeys: ["primary_window", "secondary_window"],
   identityField: "profile_identity",
-  identityRequired: false,
+  identityRequired: true,
   writeGuard: (record) =>
     Boolean(record?.configured) &&
     !record.error &&
@@ -428,10 +453,12 @@ const museLimitsCache = createLimitsCache({
   source: { const: "disk-cache" },
 });
 
+/** Resolve the path to `muse-limits-cache.json`, honoring custom `trackerDir` overrides. */
 function museLimitsCachePath({ home = os.homedir(), trackerDir } = {}) {
   return museLimitsCache.path({ home, trackerDir });
 }
 
+/** Read the bounded Muse Code disk cache for `profileIdentity` (fails closed when identity is missing). */
 function readMuseLimitsCache({
   home = os.homedir(),
   trackerDir,
@@ -441,25 +468,34 @@ function readMuseLimitsCache({
   return museLimitsCache.read({ home, trackerDir, nowMs, identity: profileIdentity });
 }
 
-function writeMuseLimitsCache(limits, { home = os.homedir(), trackerDir, nowMs = Date.now() } = {}) {
-  museLimitsCache.write(limits, { home, trackerDir, nowMs });
+/** Persist a live Muse Code quota snapshot partitioned by `profileIdentity` (no-op when identity is missing). */
+function writeMuseLimitsCache(
+  limits,
+  { home = os.homedir(), trackerDir, nowMs = Date.now(), profileIdentity = null } = {},
+) {
+  const resolvedIdentity =
+    (typeof profileIdentity === "string" && profileIdentity.trim()) ||
+    (typeof limits?.profile_identity === "string" && limits.profile_identity.trim()) ||
+    null;
+  if (!resolvedIdentity) return;
+  museLimitsCache.write(
+    { ...limits, profile_identity: resolvedIdentity },
+    { home, trackerDir, nowMs, identity: resolvedIdentity },
+  );
 }
 
+/** Remove `muse-limits-cache.json` from the active tracker directory. */
 function clearMuseLimitsCache({ home = os.homedir(), trackerDir } = {}) {
-  try {
-    fs.unlinkSync(museLimitsCachePath({ home, trackerDir }));
-  } catch (_error) {}
+  museLimitsCache.clear({ home, trackerDir });
 }
 
+/** Read the cached `plan_label` only when `profileIdentity` is non-empty and matches `raw.profile_identity`. */
 function readCachedMusePlanLabel({ home = os.homedir(), trackerDir, profileIdentity = null } = {}) {
+  const expectedIdentity = typeof profileIdentity === "string" ? profileIdentity.trim() : "";
+  if (!expectedIdentity) return null;
   const raw = readCacheJson(museLimitsCachePath({ home, trackerDir }));
   if (!raw || typeof raw !== "object") return null;
-  if (
-    profileIdentity &&
-    typeof raw.profile_identity === "string" &&
-    raw.profile_identity &&
-    raw.profile_identity !== profileIdentity
-  ) {
+  if (typeof raw.profile_identity !== "string" || raw.profile_identity !== expectedIdentity) {
     return null;
   }
   return typeof raw.plan_label === "string" && raw.plan_label.trim()
@@ -467,6 +503,7 @@ function readCachedMusePlanLabel({ home = os.homedir(), trackerDir, profileIdent
     : null;
 }
 
+/** Detect authentication / expired-session messages in Muse CLI output. */
 function isMuseAuthErrorText(text) {
   if (typeof text !== "string" || !text.trim()) return false;
   return /not logged in|run [`']?muse login[`']?|authentication required|unauthorized|credential_rejected|invalid[_\s-]?token|token expired|please log in/i.test(
@@ -474,11 +511,13 @@ function isMuseAuthErrorText(text) {
   );
 }
 
+/** Detect missing-subscription / pay-as-you-go messages in Muse CLI output. */
 function isMuseSubscriptionRequiredText(text) {
   if (typeof text !== "string" || !text.trim()) return false;
   return /payment_subscription_required|no_allowance|subscription required/i.test(text);
 }
 
+/** Bound CLI stderr/stdout snippets included in fallback error messages. */
 function trimStderr(stderr) {
   const text = String(stderr || "").trim();
   if (!text) return null;
@@ -492,8 +531,8 @@ function trimStderr(stderr) {
  *
  * Returns:
  * - `{ kind: "ok", record }` when live quota windows are available (including
- *   an unstarted rolling window where `reason === "server_sent_no_usage"` on
- *   an active subscription),
+ *   an idle 5h rolling window where `reason === "server_sent_no_usage"` on an
+ *   active subscription, preserving an unexpired cached weekly window when present),
  * - `{ kind: "reauth", record }` when credentials are missing or rejected,
  * - `{ kind: "no_subscription", record }` when the account has no Muse Code
  *   subscription allowance (API-key / pay-as-you-go),
@@ -502,7 +541,13 @@ function trimStderr(stderr) {
  */
 function normalizeMuseUsageResponse(
   body,
-  { profileIdentity = null, subsActive = null, fallbackPlanLabel = null, nowMs = Date.now() } = {},
+  {
+    profileIdentity = null,
+    subsActive = null,
+    fallbackPlanLabel = null,
+    fallbackSecondaryWindow = null,
+    nowMs = Date.now(),
+  } = {},
 ) {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw new Error("Muse Code usage response is not an object.");
@@ -570,9 +615,22 @@ function normalizeMuseUsageResponse(
         },
       };
     }
-    // Muse Code's server omits X-Muse-Usage headers until the first prompt in
-    // a fresh rolling window. Surface idle 0% windows with undated resets so
-    // the card renders cleanly instead of erroring before the first turn.
+    // Muse Code's server omits X-Muse-Usage headers until a prompt is sent in
+    // the active 5h session/window, so `primary_window` is idle 0%. Weekly
+    // usage may still be non-zero across the 7-day cycle: preserve the current
+    // account's cached `secondary_window` while its `reset_at` lies in the
+    // future, otherwise leave `secondary_window: null` (unknown).
+    const candidateSecondary = normalizeMuseWindow(
+      fallbackSecondaryWindow,
+      MUSE_WEEKLY_WINDOW_SECONDS,
+    );
+    const secondaryResetMs = candidateSecondary?.reset_at
+      ? Date.parse(candidateSecondary.reset_at)
+      : NaN;
+    const preservedSecondaryWindow =
+      Number.isFinite(secondaryResetMs) && secondaryResetMs > nowMs
+        ? candidateSecondary
+        : null;
     return {
       kind: "ok",
       record: {
@@ -584,11 +642,7 @@ function normalizeMuseUsageResponse(
           reset_at: null,
           limit_window_seconds: MUSE_FIVE_HOUR_WINDOW_SECONDS,
         },
-        secondary_window: {
-          used_percent: 0,
-          reset_at: null,
-          limit_window_seconds: MUSE_WEEKLY_WINDOW_SECONDS,
-        },
+        secondary_window: preservedSecondaryWindow,
         stale: false,
         cached_at: new Date(nowMs).toISOString(),
         source: "provider-api",
@@ -602,18 +656,29 @@ function normalizeMuseUsageResponse(
   );
 }
 
-async function fetchMuseLimits({
-  commandRunner,
-  home = os.homedir(),
-  trackerDir,
-  env = process.env,
-  nowMs = Date.now(),
-  injectedNowMs = null,
-  platform = process.platform,
-  signal,
-  globalBinDirs,
-  providerTimeoutMs = MUSE_PROVIDER_TIMEOUT_MS,
-} = {}) {
+/** Fetch Muse Code rolling 5h and weekly quota windows from the local `muse` CLI with account-bound disk caching. */
+async function fetchMuseLimits(options = {}) {
+  const {
+    commandRunner,
+    home = os.homedir(),
+    trackerDir,
+    env = process.env,
+    platform = process.platform,
+    signal,
+    globalBinDirs,
+    providerTimeoutMs = MUSE_PROVIDER_TIMEOUT_MS,
+  } = options;
+  const hasInjectedNowOption = Object.prototype.hasOwnProperty.call(options, "injectedNowMs");
+  const hasNowOption = Object.prototype.hasOwnProperty.call(options, "nowMs");
+  const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+  const sampleNowMs = () => {
+    if (Number.isFinite(options.injectedNowMs)) return options.injectedNowMs;
+    if (!hasInjectedNowOption && hasNowOption && Number.isFinite(options.nowMs)) {
+      return options.nowMs;
+    }
+    return Date.now();
+  };
+
   const startedAtMs = performance.now();
   const budgetedTimeoutMs = (fullTimeoutMs) => {
     if (!Number.isFinite(providerTimeoutMs) || providerTimeoutMs <= 0) return fullTimeoutMs;
@@ -643,6 +708,7 @@ async function fetchMuseLimits({
     return { configured: true, error: "Muse Code provider timed out before muse could run." };
   }
 
+  const preSpawnAuth = readMuseAuthMetadata({ home, env });
   const commandEnv = {
     ...resolvedCliEnvironment(museCmd.binaryPath, { env, platform }),
     MUSE_NO_AUTO_UPDATE: "1",
@@ -661,20 +727,30 @@ async function fetchMuseLimits({
     },
   );
 
-  const failWithCache = (message) => {
+  const failWithCache = (message, fallbackAuth = readMuseAuthMetadata({ home, env })) => {
     // Re-read current local auth identity at fallback time so an account switch
-    // during a slow/failing CLI call cannot match the previous account's cache.
-    const currentAuth = readMuseAuthMetadata({ home, env });
-    const effectiveNowMs = injectedNowMs ?? Date.now();
+    // or sign-out during a slow/failing CLI call cannot serve another account's cache.
+    const effectiveNowMs = sampleNowMs();
     const cached = readMuseLimitsCache({
       home,
       trackerDir,
       nowMs: effectiveNowMs,
-      profileIdentity: currentAuth.identity,
+      profileIdentity: fallbackAuth.identity,
     });
-    if (cached) return cached;
+    if (cached) {
+      const { profile_identity: _identity, ...publicRecord } = cached;
+      return publicRecord;
+    }
     return { configured: true, error: message };
   };
+
+  const postSpawnAuth = readMuseAuthMetadata({ home, env });
+  if (
+    preSpawnAuth.present !== postSpawnAuth.present ||
+    preSpawnAuth.identity !== postSpawnAuth.identity
+  ) {
+    return failWithCache("Muse Code account changed while reading usage limits.", postSpawnAuth);
+  }
 
   const stdoutText = String(result?.stdout || "").trim();
   const stderrText = String(result?.stderr || "").trim();
@@ -704,7 +780,7 @@ async function fetchMuseLimits({
         : "muse usage failed");
     const stderr = trimStderr(stderrText || stdoutText);
     const message = stderr && stderr !== baseDetail ? `${baseDetail}: ${stderr}` : baseDetail;
-    return failWithCache(message);
+    return failWithCache(message, postSpawnAuth);
   }
 
   let body;
@@ -718,26 +794,37 @@ async function fetchMuseLimits({
         auth_action_required: "reauth",
       };
     }
-    return failWithCache("muse usage --json returned invalid JSON.");
+    return failWithCache("muse usage --json returned invalid JSON.", postSpawnAuth);
   }
 
-  const currentAuth = readMuseAuthMetadata({ home, env });
+  const boundIdentity = preSpawnAuth.identity;
+  const effectiveNowMs = sampleNowMs();
   const fallbackPlanLabel = readCachedMusePlanLabel({
     home,
     trackerDir,
-    profileIdentity: currentAuth.identity,
+    profileIdentity: boundIdentity,
   });
+  const cachedSnapshot =
+    body && typeof body === "object" && body.allowance && typeof body.allowance === "object"
+      ? null
+      : readMuseLimitsCache({
+          home,
+          trackerDir,
+          nowMs: effectiveNowMs,
+          profileIdentity: boundIdentity,
+        });
 
   let outcome;
   try {
     outcome = normalizeMuseUsageResponse(body, {
-      profileIdentity: currentAuth.identity,
-      subsActive: currentAuth.subsActive,
+      profileIdentity: boundIdentity,
+      subsActive: postSpawnAuth.subsActive,
       fallbackPlanLabel,
-      nowMs,
+      fallbackSecondaryWindow: cachedSnapshot?.secondary_window ?? null,
+      nowMs: effectiveNowMs,
     });
   } catch (error) {
-    return failWithCache(error?.message || "Muse Code response could not be parsed.");
+    return failWithCache(error?.message || "Muse Code response could not be parsed.", postSpawnAuth);
   }
 
   if (outcome.kind === "no_subscription") {
@@ -748,8 +835,17 @@ async function fetchMuseLimits({
     return outcome.record;
   }
 
-  writeMuseLimitsCache(outcome.record, { home, trackerDir, nowMs });
-  const { profile_identity: _identity, ...publicRecord } = outcome.record;
+  const stampedRecord = {
+    ...outcome.record,
+    cached_at: new Date(nowMs).toISOString(),
+  };
+  writeMuseLimitsCache(stampedRecord, {
+    home,
+    trackerDir,
+    nowMs,
+    profileIdentity: boundIdentity,
+  });
+  const { profile_identity: _identity, ...publicRecord } = stampedRecord;
   return publicRecord;
 }
 
@@ -766,8 +862,10 @@ module.exports = {
   resolveWindowsMuseExecutable,
   resolveMuseCommand,
   normalizeMuseUsageResponse,
+  museLimitsCachePath,
   readMuseLimitsCache,
   writeMuseLimitsCache,
   clearMuseLimitsCache,
+  readCachedMusePlanLabel,
   fetchMuseLimits,
 };

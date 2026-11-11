@@ -12,8 +12,13 @@ const {
   MUSE_SUBSCRIPTION_REQUIRED_MESSAGE,
   MUSE_AUTH_EXPIRED_MESSAGE,
   deriveMusePlanLabel,
+  fingerprintMuseAccount,
   resolveMuseCommand,
   normalizeMuseUsageResponse,
+  museLimitsCachePath,
+  readMuseLimitsCache,
+  clearMuseLimitsCache,
+  readCachedMusePlanLabel,
   fetchMuseLimits,
 } = require("../src/lib/muse-limits");
 const {
@@ -226,15 +231,17 @@ describe("muse-limits", () => {
     });
   });
 
-  it("surfaces idle 0% windows on server_sent_no_usage for active subscribers and preserves cached plan_label", async (t) => {
+  it("preserves unexpired cached weekly quota on server_sent_no_usage and returns secondary_window: null when unknown", async (t) => {
     const home = makeTempHome(t);
     writeUnixMuseBinary(home);
     writeMuseAuth(home, { email: "user@example.com", subsActive: true });
 
     const nowMs = Date.parse("2026-11-11T08:00:00.000Z");
+    const weeklyResetMs = nowMs + 86400_000;
 
-    // Seed disk cache with a live Power reading first.
-    const live = await fetchMuseLimits({
+    // Cold-start server_sent_no_usage before any cached snapshot exists:
+    // 5h is idle 0%, weekly is unknown (null) rather than fabricated 0%.
+    const coldIdle = await fetchMuseLimits({
       home,
       env: {},
       platform: "linux",
@@ -244,10 +251,39 @@ describe("muse-limits", () => {
         return {
           status: 0,
           stdout: JSON.stringify({
+            allowance: null,
+            reason: "server_sent_no_usage",
+          }),
+          stderr: "",
+        };
+      },
+    });
+    assert.equal(coldIdle.configured, true);
+    assert.equal(coldIdle.error, null);
+    assert.equal(coldIdle.plan_label, null);
+    assert.equal("profile_identity" in coldIdle, false);
+    assert.deepEqual(coldIdle.primary_window, {
+      used_percent: 0,
+      reset_at: null,
+      limit_window_seconds: MUSE_FIVE_HOUR_WINDOW_SECONDS,
+    });
+    assert.equal(coldIdle.secondary_window, null);
+
+    // Seed disk cache with a live Power reading carrying non-zero weekly usage.
+    const live = await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs: nowMs + 60_000,
+      injectedNowMs: nowMs + 60_000,
+      commandRunner() {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
             allowance: {
               tier: "power",
               window: { usedPercent: 28, resetsAtMs: nowMs + 3600_000 },
-              weekly: { usedPercent: 12, resetsAtMs: nowMs + 86400_000 },
+              weekly: { usedPercent: 12, resetsAtMs: weeklyResetMs },
             },
           }),
           stderr: "",
@@ -256,8 +292,9 @@ describe("muse-limits", () => {
     });
     assert.equal(live.plan_label, "Power");
     assert.equal(live.primary_window.used_percent, 28);
+    assert.equal("profile_identity" in live, false);
 
-    // After the window rolls over idle, Muse CLI reports server_sent_no_usage.
+    // After the 5h window rolls over idle, weekly is still unexpired -> preserve 12%.
     const idle = await fetchMuseLimits({
       home,
       env: {},
@@ -279,10 +316,40 @@ describe("muse-limits", () => {
     assert.equal(idle.configured, true);
     assert.equal(idle.error, null);
     assert.equal(idle.plan_label, "Power");
-    assert.equal(idle.primary_window.used_percent, 0);
-    assert.equal(idle.primary_window.reset_at, null);
-    assert.equal(idle.secondary_window.used_percent, 0);
-    assert.equal(idle.secondary_window.reset_at, null);
+    assert.equal("profile_identity" in idle, false);
+    assert.deepEqual(idle.primary_window, {
+      used_percent: 0,
+      reset_at: null,
+      limit_window_seconds: MUSE_FIVE_HOUR_WINDOW_SECONDS,
+    });
+    assert.deepEqual(idle.secondary_window, {
+      used_percent: 12,
+      reset_at: new Date(weeklyResetMs).toISOString(),
+      limit_window_seconds: MUSE_WEEKLY_WINDOW_SECONDS,
+    });
+
+    // Once the weekly reset has also elapsed, secondary_window drops to null (unknown).
+    const afterWeeklyReset = await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs: weeklyResetMs + 60_000,
+      injectedNowMs: weeklyResetMs + 60_000,
+      commandRunner() {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            allowance: null,
+            reason: "server_sent_no_usage",
+          }),
+          stderr: "",
+        };
+      },
+    });
+    assert.equal(afterWeeklyReset.plan_label, "Power");
+    assert.equal(afterWeeklyReset.primary_window.used_percent, 0);
+    assert.equal(afterWeeklyReset.primary_window.reset_at, null);
+    assert.equal(afterWeeklyReset.secondary_window, null);
   });
 
   it("clears disk cache and reports subscription required on no_allowance or subs_active=false", async (t) => {
@@ -312,7 +379,7 @@ describe("muse-limits", () => {
       },
     });
 
-    // Positive control: transient failure serves the warm disk cache.
+    // Positive control: transient failure serves the warm disk cache and strips profile_identity.
     const warm = await fetchMuseLimits({
       home,
       env: {},
@@ -324,6 +391,7 @@ describe("muse-limits", () => {
       },
     });
     assert.equal(warm.cached, true);
+    assert.equal("profile_identity" in warm, false);
     assert.equal(warm.primary_window.used_percent, 45);
 
     // Explicit no_allowance retires the cached subscription.
@@ -357,6 +425,221 @@ describe("muse-limits", () => {
     });
     assert.equal(afterRetire.cached, undefined);
     assert.match(afterRetire.error, /network timeout/);
+  });
+
+  it("isolates cache reads, writes, and clears across custom trackerDir directories", async (t) => {
+    const home = makeTempHome(t);
+    writeUnixMuseBinary(home);
+    writeMuseAuth(home, { email: "isolated@example.com", subsActive: true });
+    const nowMs = Date.parse("2026-11-11T08:00:00.000Z");
+
+    const trackerDirA = path.join(home, "tracker-a");
+    const trackerDirB = path.join(home, "tracker-b");
+
+    assert.equal(
+      museLimitsCachePath({ home, trackerDir: trackerDirA }),
+      path.join(trackerDirA, "muse-limits-cache.json"),
+    );
+    assert.equal(
+      museLimitsCachePath({ home, trackerDir: trackerDirB }),
+      path.join(trackerDirB, "muse-limits-cache.json"),
+    );
+
+    await fetchMuseLimits({
+      home,
+      trackerDir: trackerDirA,
+      env: {},
+      platform: "linux",
+      nowMs,
+      injectedNowMs: nowMs,
+      commandRunner() {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            allowance: {
+              tier: "power",
+              window: { usedPercent: 31, resetsAtMs: nowMs + 7200_000 },
+              weekly: { usedPercent: 11, resetsAtMs: nowMs + 86400_000 },
+            },
+          }),
+          stderr: "",
+        };
+      },
+    });
+
+    assert.equal(fs.existsSync(path.join(home, ".tokentracker", "tracker", "muse-limits-cache.json")), false);
+
+    // trackerDirB has no cache entry yet, so a transient failure misses cleanly.
+    const missB = await fetchMuseLimits({
+      home,
+      trackerDir: trackerDirB,
+      env: {},
+      platform: "linux",
+      nowMs: nowMs + 10_000,
+      injectedNowMs: nowMs + 10_000,
+      commandRunner() {
+        return { status: 1, stdout: "", stderr: "temporary outage" };
+      },
+    });
+    assert.equal(missB.cached, undefined);
+    assert.match(missB.error, /temporary outage/);
+
+    // Populate trackerDirB with distinct values.
+    await fetchMuseLimits({
+      home,
+      trackerDir: trackerDirB,
+      env: {},
+      platform: "linux",
+      nowMs: nowMs + 20_000,
+      injectedNowMs: nowMs + 20_000,
+      commandRunner() {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            allowance: {
+              tier: "pro",
+              window: { usedPercent: 74, resetsAtMs: nowMs + 7200_000 },
+              weekly: { usedPercent: 52, resetsAtMs: nowMs + 86400_000 },
+            },
+          }),
+          stderr: "",
+        };
+      },
+    });
+
+    const warmA = await fetchMuseLimits({
+      home,
+      trackerDir: trackerDirA,
+      env: {},
+      platform: "linux",
+      nowMs: nowMs + 30_000,
+      injectedNowMs: nowMs + 30_000,
+      commandRunner() {
+        return { status: 1, stdout: "", stderr: "rate-limited" };
+      },
+    });
+    const warmB = await fetchMuseLimits({
+      home,
+      trackerDir: trackerDirB,
+      env: {},
+      platform: "linux",
+      nowMs: nowMs + 30_000,
+      injectedNowMs: nowMs + 30_000,
+      commandRunner() {
+        return { status: 1, stdout: "", stderr: "rate-limited" };
+      },
+    });
+    assert.equal(warmA.plan_label, "Power");
+    assert.equal(warmA.primary_window.used_percent, 31);
+    assert.equal(warmB.plan_label, "Pro");
+    assert.equal(warmB.primary_window.used_percent, 74);
+
+    // Clearing trackerDirA leaves trackerDirB intact.
+    clearMuseLimitsCache({ home, trackerDir: trackerDirA });
+    const clearedA = await fetchMuseLimits({
+      home,
+      trackerDir: trackerDirA,
+      env: {},
+      platform: "linux",
+      nowMs: nowMs + 40_000,
+      injectedNowMs: nowMs + 40_000,
+      commandRunner() {
+        return { status: 1, stdout: "", stderr: "rate-limited" };
+      },
+    });
+    const survivingB = await fetchMuseLimits({
+      home,
+      trackerDir: trackerDirB,
+      env: {},
+      platform: "linux",
+      nowMs: nowMs + 40_000,
+      injectedNowMs: nowMs + 40_000,
+      commandRunner() {
+        return { status: 1, stdout: "", stderr: "rate-limited" };
+      },
+    });
+    assert.equal(clearedA.cached, undefined);
+    assert.equal(survivingB.cached, true);
+    assert.equal(survivingB.primary_window.used_percent, 74);
+  });
+
+  it("fails closed when auth.json is missing or lacks identity after sign-out", async (t) => {
+    const home = makeTempHome(t);
+    writeUnixMuseBinary(home);
+    writeMuseAuth(home, { email: "alice@example.com", subsActive: true });
+    const nowMs = Date.parse("2026-11-11T08:00:00.000Z");
+
+    await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs,
+      injectedNowMs: nowMs,
+      commandRunner() {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            allowance: {
+              tier: "power",
+              window: { usedPercent: 58, resetsAtMs: nowMs + 7200_000 },
+              weekly: { usedPercent: 29, resetsAtMs: nowMs + 86400_000 },
+            },
+          }),
+          stderr: "",
+        };
+      },
+    });
+
+    assert.equal(
+      readCachedMusePlanLabel({
+        home,
+        profileIdentity: fingerprintMuseAccount("alice@example.com"),
+      }),
+      "Power",
+    );
+    assert.equal(readCachedMusePlanLabel({ home, profileIdentity: null }), null);
+    assert.equal(
+      readCachedMusePlanLabel({
+        home,
+        profileIdentity: fingerprintMuseAccount("bob@example.com"),
+      }),
+      null,
+    );
+    assert.equal(readMuseLimitsCache({ home, nowMs: nowMs + 10_000, profileIdentity: null }), null);
+
+    // Simulate sign-out by removing auth.json: neither transient fallback nor
+    // server_sent_no_usage may leak Alice's cached quota or plan_label.
+    fs.unlinkSync(path.join(home, ".config", "muse", "auth.json"));
+
+    const signedOutFallback = await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs: nowMs + 30_000,
+      injectedNowMs: nowMs + 30_000,
+      commandRunner() {
+        return { status: 1, stdout: "", stderr: "network unreachable" };
+      },
+    });
+    assert.equal(signedOutFallback.cached, undefined);
+    assert.match(signedOutFallback.error, /network unreachable/);
+
+    const identitylessIdle = await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs: nowMs + 60_000,
+      injectedNowMs: nowMs + 60_000,
+      commandRunner() {
+        return {
+          status: 0,
+          stdout: JSON.stringify({ allowance: null, reason: "server_sent_no_usage" }),
+          stderr: "",
+        };
+      },
+    });
+    assert.equal(identitylessIdle.plan_label, null);
+    assert.equal(identitylessIdle.secondary_window, null);
   });
 
   it("never masks credential_rejected behind stale cache and partitions cache by account", async (t) => {
@@ -417,6 +700,7 @@ describe("muse-limits", () => {
       },
     });
     assert.equal(aliceCached.cached, true);
+    assert.equal("profile_identity" in aliceCached, false);
     assert.equal(aliceCached.primary_window.used_percent, 61);
 
     // Switching local auth to Bob refuses Alice's cached bars.
@@ -433,6 +717,142 @@ describe("muse-limits", () => {
     });
     assert.equal(bobFallback.cached, undefined);
     assert.match(bobFallback.error, /rate-limited/);
+  });
+
+  it("withholds live quota and skips cache write when auth.json switches accounts or signs out mid-command", async (t) => {
+    const home = makeTempHome(t);
+    writeUnixMuseBinary(home);
+    writeMuseAuth(home, { email: "alice@example.com", subsActive: true });
+    const nowMs = Date.parse("2026-11-11T08:00:00.000Z");
+
+    // Alice starts `muse usage --json`, and while the CLI is running the user
+    // logs in as Bob. Alice's 77% quota must neither be returned for Bob nor
+    // written into Bob's disk cache.
+    const racedSwitch = await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs,
+      injectedNowMs: nowMs,
+      commandRunner() {
+        writeMuseAuth(home, { email: "bob@example.com", subsActive: true });
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            allowance: {
+              tier: "power",
+              window: { usedPercent: 77, resetsAtMs: nowMs + 7200_000 },
+              weekly: { usedPercent: 41, resetsAtMs: nowMs + 86400_000 },
+            },
+          }),
+          stderr: "",
+        };
+      },
+    });
+    assert.equal(racedSwitch.configured, true);
+    assert.equal(racedSwitch.primary_window, undefined);
+    assert.equal(racedSwitch.cached, undefined);
+    assert.match(racedSwitch.error, /account changed/i);
+
+    // Verify Bob's cache was NOT poisoned by Alice's in-flight response.
+    const bobAfterRace = await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs: nowMs + 15_000,
+      injectedNowMs: nowMs + 15_000,
+      commandRunner() {
+        return { status: 1, stdout: "", stderr: "rate-limited" };
+      },
+    });
+    assert.equal(bobAfterRace.cached, undefined);
+    assert.match(bobAfterRace.error, /rate-limited/);
+    assert.equal(
+      readMuseLimitsCache({
+        home,
+        nowMs: nowMs + 15_000,
+        profileIdentity: fingerprintMuseAccount("bob@example.com"),
+      }),
+      null,
+    );
+
+    // Seed Bob's legitimate cache (22%), switch to Alice before a poll, then
+    // switch back to Bob mid-command: fallback serves Bob's 22% (without
+    // profile_identity), never Alice's 88%.
+    await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs: nowMs + 30_000,
+      injectedNowMs: nowMs + 30_000,
+      commandRunner() {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            allowance: {
+              tier: "pro",
+              window: { usedPercent: 22, resetsAtMs: nowMs + 7200_000 },
+              weekly: { usedPercent: 9, resetsAtMs: nowMs + 86400_000 },
+            },
+          }),
+          stderr: "",
+        };
+      },
+    });
+
+    writeMuseAuth(home, { email: "alice@example.com", subsActive: true });
+    const racedBackToBob = await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs: nowMs + 45_000,
+      injectedNowMs: nowMs + 45_000,
+      commandRunner() {
+        writeMuseAuth(home, { email: "bob@example.com", subsActive: true });
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            allowance: {
+              tier: "power",
+              window: { usedPercent: 88, resetsAtMs: nowMs + 7200_000 },
+              weekly: { usedPercent: 64, resetsAtMs: nowMs + 86400_000 },
+            },
+          }),
+          stderr: "",
+        };
+      },
+    });
+    assert.equal(racedBackToBob.cached, true);
+    assert.equal("profile_identity" in racedBackToBob, false);
+    assert.equal(racedBackToBob.plan_label, "Pro");
+    assert.equal(racedBackToBob.primary_window.used_percent, 22);
+
+    // Mid-command sign-out (auth.json deleted while Bob's CLI call is running)
+    // must also withhold Bob's live response and Bob's warm cache.
+    const racedSignOut = await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs: nowMs + 60_000,
+      injectedNowMs: nowMs + 60_000,
+      commandRunner() {
+        fs.unlinkSync(path.join(home, ".config", "muse", "auth.json"));
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            allowance: {
+              tier: "pro",
+              window: { usedPercent: 25, resetsAtMs: nowMs + 7200_000 },
+              weekly: { usedPercent: 10, resetsAtMs: nowMs + 86400_000 },
+            },
+          }),
+          stderr: "",
+        };
+      },
+    });
+    assert.equal(racedSignOut.cached, undefined);
+    assert.equal(racedSignOut.primary_window, undefined);
+    assert.match(racedSignOut.error, /account changed/i);
   });
 
   it("wires muse into getUsageLimits with official provenance and respects hiddenProviders", async (t) => {

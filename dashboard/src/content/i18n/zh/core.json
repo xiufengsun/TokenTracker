@@ -916,6 +916,6 @@
   "limits.muse.setupHint.title": "连接 Muse Code",
   "limits.muse.setupHint.subtitle": "通过本机的官方 Muse CLI 读取你的 Muse Code 订阅额度。",
   "limits.muse.setupHint.step1": "安装 Muse Code 并运行下方命令登录，TokenTracker 自动复用登录，无需重启。",
-  "limits.muse.setupHint.note": "登录后刷新此页即可。TokenTracker 通过本机 muse usage --json 读取额度窗口。",
+  "limits.muse.setupHint.note": "登录后点击上方“刷新限额”按钮即可。TokenTracker 通过本机 muse usage --json 读取额度窗口。",
   "limits.muse.setupHint.snippet_login": "muse login   # 登录 Muse Code"
 }
