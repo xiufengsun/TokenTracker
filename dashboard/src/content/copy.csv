@@ -531,6 +531,7 @@ settings.instance.action.test,ui,SettingsPage,InstanceSectionCard,inst_action_te
 settings.instance.testing,ui,SettingsPage,InstanceSectionCard,inst_testing,"Testing…",,active
 settings.instance.test.ok,ui,SettingsPage,InstanceSectionCard,inst_test_ok,"Server reachable (HTTP {{status}}).",,active
 settings.instance.test.unreachable,ui,SettingsPage,InstanceSectionCard,inst_test_unreachable,"Could not reach this server. Check the address and try again.",,active
+settings.instance.test.certificate,ui,SettingsPage,InstanceSectionCard,inst_test_certificate,"The server responded with an untrusted certificate — check the certificate, not the address.",,active
 qpd.card.title,ui,DashboardView,QualityPerDollarCard,title,"Quality & Avg Cost/PR",,active
 qpd.card.badge,ui,DashboardView,QualityPerDollarCard,badge,"BETA",,active
 qpd.card.subtitle,ui,DashboardView,QualityPerDollarCard,subtitle,"Avg token cost per delivery, from merged PRs and AI-attributed commits.",,active

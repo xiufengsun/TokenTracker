@@ -625,6 +625,7 @@
   "settings.instance.testing": "テスト中…",
   "settings.instance.test.ok": "サーバーに到達できました（HTTP {{status}}）。",
   "settings.instance.test.unreachable": "このサーバーには到達できません。アドレスを確認して再試行してください。",
+  "settings.instance.test.certificate": "サーバーの証明書が信頼されていません。アドレスではなく証明書を確認してください。",
   "limits.alert.blocked": "通知がオフです — システム設定で許可してください",
   "settings.limits.showSubscriptions": "サブスクを制限表示に表示",
   "settings.limits.showSubscriptionsHint": "手動登録した更新日バーを制限と一緒に表示します。",

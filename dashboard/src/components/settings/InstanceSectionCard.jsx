@@ -74,14 +74,17 @@ export function InstanceSectionCard() {
   };
 
   const runTest = async () => {
+    const target = baseUrl.trim() || config.officialUrl;
     setTesting(true);
     setTestResult(null);
     setError(null);
     try {
-      const result = await test(baseUrl.trim() || config.officialUrl);
-      setTestResult(result);
+      const result = await test(target);
+      // Discard a result that no longer matches the field: a slow probe for a
+      // previous address must not read as validation for the current one.
+      if ((baseUrl.trim() || config.officialUrl) === target) setTestResult(result);
     } catch (reason) {
-      setError(errorMessage(reason));
+      if ((baseUrl.trim() || config.officialUrl) === target) setError(errorMessage(reason));
     } finally {
       setTesting(false);
     }
@@ -141,7 +144,11 @@ export function InstanceSectionCard() {
             <input
               type="url"
               value={baseUrl}
-              onChange={(event) => setBaseUrl(event.target.value)}
+              onChange={(event) => {
+                setBaseUrl(event.target.value);
+                // An edited address invalidates any earlier probe result.
+                setTestResult(null);
+              }}
               placeholder={config.officialUrl}
               spellCheck={false}
               autoComplete="off"
@@ -214,6 +221,7 @@ export function InstanceSectionCard() {
               onClick={() => {
                 setEditing(false);
                 setError(null);
+                setTestResult(null);
                 setBaseUrl(config.custom ? config.baseUrl : "");
                 setAnonKey("");
               }}
@@ -230,7 +238,9 @@ export function InstanceSectionCard() {
         >
           {testResult.reachable
             ? copy("settings.instance.test.ok", { status: testResult.status ?? "—" })
-            : copy("settings.instance.test.unreachable")}
+            : testResult.error === "certificate"
+              ? copy("settings.instance.test.certificate")
+              : copy("settings.instance.test.unreachable")}
         </p>
       ) : null}
       {applied ? (
