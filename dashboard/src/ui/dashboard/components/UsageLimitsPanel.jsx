@@ -48,6 +48,7 @@ function devinLoginSnippet() {
   return copy("limits.devin.setupHint.snippet_login");
 }
 
+/** Return the CLI sign-in command shown in Muse Code setup and reauth hints. */
 function museLoginSnippet() {
   return copy("limits.muse.setupHint.snippet_login");
 }
@@ -1079,6 +1080,7 @@ function renderUnlinkedProvider(id, statusNodes, expanded, onToggle, subscriptio
   );
 }
 
+/** Render a single provider group across unlinked, error, reauth, stale, and healthy quota states. */
 function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = null, now = Date.now(), onKeySaved = null) {
   if (!PROVIDER_LIMIT_SPECS[id]) return null;
   const connectionActions = id === "cursor"
@@ -1520,6 +1522,7 @@ function DevinSetupHint() {
   );
 }
 
+/** Render setup instructions for connecting a local Muse Code CLI subscription. */
 function MuseSetupHint() {
   const loginSnippet = museLoginSnippet();
 
@@ -1706,6 +1709,7 @@ function useWidestLabelWidth(containerRef) {
   return labelWidth;
 }
 
+/** Render all visible provider quota groups and manual subscription rows in user-selected order. */
 export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi, deepseek, muse, order, visibility, displayMode, subscriptions = [], showSubscriptions = true, onProviderKeySaved = null }) {
   const dataById = { claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi, deepseek, muse };
   const containerRef = useRef(null);

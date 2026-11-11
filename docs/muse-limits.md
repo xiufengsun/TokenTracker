@@ -43,7 +43,7 @@ Finder-launched macOS app still finds the binary's runtime.
 | CLI result | Rendered as |
 |---|---|
 | `allowance` with a usable window | Live 5h + weekly bars; written to the disk cache |
-| `allowance: null`, `reason: "server_sent_no_usage"` | Idle 0% 5h bar (`reset_at: null`), because the server omits usage headers until a prompt is sent in the active 5h session/window; preserves the current account's cached weekly bar while its `reset_at` is still in the future, otherwise `secondary_window: null` (unknown). Plan label carried over from the matching account's cache. If `auth.json` has `subs_active: false`, treated as no subscription instead |
+| `allowance: null`, `reason: "server_sent_no_usage"` | Idle 0% 5h bar (`reset_at: null`), because the server omits usage headers until a prompt is sent in the active 5h session/window; preserves the current account's cached weekly bar (retaining its original `cached_at` timestamp and `disk-cache` / `stale: true` provenance) while its `reset_at` is still in the future, otherwise `secondary_window: null` (unknown). Plan label carried over from the matching account's cache. If `auth.json` has `subs_active: false`, treated as no subscription instead |
 | `reason: "no_allowance"` / subscription-required text | "subscription required" error; disk cache cleared so stale bars cannot reappear |
 | `reason: "credential_rejected"` / not-logged-in text | Reauth error (`auth_action_required: "reauth"`); never masked by the cache |
 | Non-zero exit, timeout, invalid JSON | Last-good disk cache for the signed-in account when present, otherwise the trimmed CLI error |

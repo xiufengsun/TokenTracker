@@ -644,6 +644,7 @@ struct UsageLimitsView: View {
         return s
     }
 
+    /// Builds the 5h and Weekly window rows for a configured Muse Code subscription.
     private func museSpecs(_ m: MuseLimits) -> [LimitWindowSpec] {
         var s: [LimitWindowSpec] = []
         if let w = m.primaryWindow { s.append(makeSpec("5h", w.usedPercent, windowSeconds: w.limitWindowSeconds ?? 5 * 3600, iso: w.resetAt)) }
@@ -1250,6 +1251,7 @@ struct UsageLimitsView: View {
         return min(100, max(0, remaining / total * 100))
     }
 
+    /// Renders a provider brand mark from bundled SVGs or falls back to the asset catalog.
     @ViewBuilder
     private func brandIcon(_ name: String) -> some View {
         switch name {

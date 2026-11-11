@@ -434,6 +434,15 @@ async function resolveMuseCommand({
   }
 }
 
+/** Check whether a normalized Muse Code record carries usable quota data worth persisting to disk. */
+function isCacheableMuseRecord(record) {
+  return (
+    Boolean(record?.configured) &&
+    !record.error &&
+    Boolean(record.primary_window || record.secondary_window)
+  );
+}
+
 const museLimitsCache = createLimitsCache({
   file: MUSE_LIMITS_CACHE_FILE,
   key: null,
@@ -444,10 +453,7 @@ const museLimitsCache = createLimitsCache({
   windowKeys: ["primary_window", "secondary_window"],
   identityField: "profile_identity",
   identityRequired: true,
-  writeGuard: (record) =>
-    Boolean(record?.configured) &&
-    !record.error &&
-    Boolean(record.primary_window || record.secondary_window),
+  writeGuard: isCacheableMuseRecord,
   cachedFlag: true,
   stale: true,
   source: { const: "disk-cache" },
@@ -546,6 +552,7 @@ function normalizeMuseUsageResponse(
     subsActive = null,
     fallbackPlanLabel = null,
     fallbackSecondaryWindow = null,
+    fallbackCapturedAt = null,
     nowMs = Date.now(),
   } = {},
 ) {
@@ -631,6 +638,35 @@ function normalizeMuseUsageResponse(
       Number.isFinite(secondaryResetMs) && secondaryResetMs > nowMs
         ? candidateSecondary
         : null;
+    if (preservedSecondaryWindow) {
+      const parsedFallbackCapturedMs =
+        typeof fallbackCapturedAt === "string" && fallbackCapturedAt.trim()
+          ? Date.parse(fallbackCapturedAt)
+          : NaN;
+      const capturedAtMs = Number.isFinite(parsedFallbackCapturedMs)
+        ? parsedFallbackCapturedMs
+        : nowMs;
+      return {
+        kind: "ok",
+        preservedCapturedAtMs: capturedAtMs,
+        record: {
+          configured: true,
+          error: null,
+          plan_label: fallbackPlanLabel || null,
+          primary_window: {
+            used_percent: 0,
+            reset_at: null,
+            limit_window_seconds: MUSE_FIVE_HOUR_WINDOW_SECONDS,
+          },
+          secondary_window: preservedSecondaryWindow,
+          cached: true,
+          stale: true,
+          cached_at: new Date(capturedAtMs).toISOString(),
+          source: "disk-cache",
+          profile_identity: profileIdentity || null,
+        },
+      };
+    }
     return {
       kind: "ok",
       record: {
@@ -642,7 +678,7 @@ function normalizeMuseUsageResponse(
           reset_at: null,
           limit_window_seconds: MUSE_FIVE_HOUR_WINDOW_SECONDS,
         },
-        secondary_window: preservedSecondaryWindow,
+        secondary_window: null,
         stale: false,
         cached_at: new Date(nowMs).toISOString(),
         source: "provider-api",
@@ -671,6 +707,7 @@ async function fetchMuseLimits(options = {}) {
   const hasInjectedNowOption = Object.prototype.hasOwnProperty.call(options, "injectedNowMs");
   const hasNowOption = Object.prototype.hasOwnProperty.call(options, "nowMs");
   const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+  /** Sample the current timestamp, honoring deterministic test clocks when supplied. */
   const sampleNowMs = () => {
     if (Number.isFinite(options.injectedNowMs)) return options.injectedNowMs;
     if (!hasInjectedNowOption && hasNowOption && Number.isFinite(options.nowMs)) {
@@ -680,6 +717,7 @@ async function fetchMuseLimits(options = {}) {
   };
 
   const startedAtMs = performance.now();
+  /** Clamp `fullTimeoutMs` to the remaining provider budget minus a small guard margin. */
   const budgetedTimeoutMs = (fullTimeoutMs) => {
     if (!Number.isFinite(providerTimeoutMs) || providerTimeoutMs <= 0) return fullTimeoutMs;
     const remainingMs = providerTimeoutMs - (performance.now() - startedAtMs);
@@ -727,6 +765,7 @@ async function fetchMuseLimits(options = {}) {
     },
   );
 
+  /** Fall back to the signed-in account's disk cache on transient CLI errors, stripping `profile_identity`. */
   const failWithCache = (message, fallbackAuth = readMuseAuthMetadata({ home, env })) => {
     // Re-read current local auth identity at fallback time so an account switch
     // or sign-out during a slow/failing CLI call cannot serve another account's cache.
@@ -821,6 +860,7 @@ async function fetchMuseLimits(options = {}) {
       subsActive: postSpawnAuth.subsActive,
       fallbackPlanLabel,
       fallbackSecondaryWindow: cachedSnapshot?.secondary_window ?? null,
+      fallbackCapturedAt: cachedSnapshot?.cached_at ?? null,
       nowMs: effectiveNowMs,
     });
   } catch (error) {
@@ -835,14 +875,17 @@ async function fetchMuseLimits(options = {}) {
     return outcome.record;
   }
 
+  const recordTimestampMs = Number.isFinite(outcome.preservedCapturedAtMs)
+    ? outcome.preservedCapturedAtMs
+    : nowMs;
   const stampedRecord = {
     ...outcome.record,
-    cached_at: new Date(nowMs).toISOString(),
+    cached_at: new Date(recordTimestampMs).toISOString(),
   };
   writeMuseLimitsCache(stampedRecord, {
     home,
     trackerDir,
-    nowMs,
+    nowMs: recordTimestampMs,
     profileIdentity: boundIdentity,
   });
   const { profile_identity: _identity, ...publicRecord } = stampedRecord;

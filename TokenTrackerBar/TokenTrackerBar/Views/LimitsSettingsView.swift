@@ -144,6 +144,7 @@ struct LimitsSettingsView: View {
 
     // MARK: - Provider Icon (handles both asset catalog and bundled SVG)
 
+    /// Renders either a bundled brand-logo SVG or an asset-catalog icon for the given provider identifier.
     @ViewBuilder
     private func providerIcon(id: String) -> some View {
         switch id {

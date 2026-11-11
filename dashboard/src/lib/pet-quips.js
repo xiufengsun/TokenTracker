@@ -389,6 +389,7 @@ function grokProductPetLabel(entry) {
   return typeof entry?.label === "string" ? entry.label.trim() : "";
 }
 
+/** Collect normalized, healthy provider quota windows sorted by highest utilization and earliest reset. */
 function collectPetLimitRows(limits) {
   if (!limits || typeof limits !== "object") return [];
 

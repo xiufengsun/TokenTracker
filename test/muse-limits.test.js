@@ -262,6 +262,10 @@ describe("muse-limits", () => {
     assert.equal(coldIdle.error, null);
     assert.equal(coldIdle.plan_label, null);
     assert.equal("profile_identity" in coldIdle, false);
+    assert.equal(coldIdle.cached, undefined);
+    assert.equal(coldIdle.stale, false);
+    assert.equal(coldIdle.source, "provider-api");
+    assert.equal(coldIdle.cached_at, new Date(nowMs).toISOString());
     assert.deepEqual(coldIdle.primary_window, {
       used_percent: 0,
       reset_at: null,
@@ -270,12 +274,13 @@ describe("muse-limits", () => {
     assert.equal(coldIdle.secondary_window, null);
 
     // Seed disk cache with a live Power reading carrying non-zero weekly usage.
+    const liveCapturedAtMs = nowMs + 60_000;
     const live = await fetchMuseLimits({
       home,
       env: {},
       platform: "linux",
-      nowMs: nowMs + 60_000,
-      injectedNowMs: nowMs + 60_000,
+      nowMs: liveCapturedAtMs,
+      injectedNowMs: liveCapturedAtMs,
       commandRunner() {
         return {
           status: 0,
@@ -292,9 +297,11 @@ describe("muse-limits", () => {
     });
     assert.equal(live.plan_label, "Power");
     assert.equal(live.primary_window.used_percent, 28);
+    assert.equal(live.cached_at, new Date(liveCapturedAtMs).toISOString());
     assert.equal("profile_identity" in live, false);
 
-    // After the 5h window rolls over idle, weekly is still unexpired -> preserve 12%.
+    // After the 5h window rolls over idle, weekly is still unexpired -> preserve 12%
+    // AND preserve the weekly snapshot's original capture time + disk-cache provenance.
     const idle = await fetchMuseLimits({
       home,
       env: {},
@@ -317,6 +324,10 @@ describe("muse-limits", () => {
     assert.equal(idle.error, null);
     assert.equal(idle.plan_label, "Power");
     assert.equal("profile_identity" in idle, false);
+    assert.equal(idle.cached, true);
+    assert.equal(idle.stale, true);
+    assert.equal(idle.source, "disk-cache");
+    assert.equal(idle.cached_at, live.cached_at);
     assert.deepEqual(idle.primary_window, {
       used_percent: 0,
       reset_at: null,
@@ -328,13 +339,47 @@ describe("muse-limits", () => {
       limit_window_seconds: MUSE_WEEKLY_WINDOW_SECONDS,
     });
 
-    // Once the weekly reset has also elapsed, secondary_window drops to null (unknown).
+    // Repeated idle polls must not launder the preserved weekly snapshot's age,
+    // and getUsageLimits must surface disk-cache / observed stale provenance.
+    resetUsageLimitsCache({ invalidateInFlight: true });
+    const otherProviders = USAGE_LIMITS_PROVIDER_IDS.filter((id) => id !== "muse");
+    const aggregatedIdle = await getUsageLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs: nowMs + 14400_000,
+      forceRefresh: true,
+      hiddenProviders: otherProviders,
+      commandRunner(_cmd, args) {
+        if (Array.isArray(args) && args[0] === "usage") {
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              allowance: null,
+              reason: "server_sent_no_usage",
+            }),
+            stderr: "",
+          };
+        }
+        return { status: 1, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(aggregatedIdle.muse.secondary_window.used_percent, 12);
+    assert.equal(aggregatedIdle.muse.cached_at, live.cached_at);
+    assert.equal(aggregatedIdle.muse.provenance.source, "disk-cache");
+    assert.equal(aggregatedIdle.muse.provenance.confidence, "observed");
+    assert.equal(aggregatedIdle.muse.provenance.stale, true);
+    assert.equal(aggregatedIdle.muse.provenance.captured_at, live.cached_at);
+
+    // Once the weekly reset has also elapsed, secondary_window drops to null (unknown)
+    // and the idle response returns to fresh provider-api provenance.
+    const afterWeeklyResetMs = weeklyResetMs + 60_000;
     const afterWeeklyReset = await fetchMuseLimits({
       home,
       env: {},
       platform: "linux",
-      nowMs: weeklyResetMs + 60_000,
-      injectedNowMs: weeklyResetMs + 60_000,
+      nowMs: afterWeeklyResetMs,
+      injectedNowMs: afterWeeklyResetMs,
       commandRunner() {
         return {
           status: 0,
@@ -350,6 +395,10 @@ describe("muse-limits", () => {
     assert.equal(afterWeeklyReset.primary_window.used_percent, 0);
     assert.equal(afterWeeklyReset.primary_window.reset_at, null);
     assert.equal(afterWeeklyReset.secondary_window, null);
+    assert.equal(afterWeeklyReset.cached, undefined);
+    assert.equal(afterWeeklyReset.stale, false);
+    assert.equal(afterWeeklyReset.source, "provider-api");
+    assert.equal(afterWeeklyReset.cached_at, new Date(afterWeeklyResetMs).toISOString());
   });
 
   it("clears disk cache and reports subscription required on no_allowance or subs_active=false", async (t) => {
