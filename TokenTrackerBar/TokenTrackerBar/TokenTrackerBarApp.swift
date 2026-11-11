@@ -175,10 +175,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             loginItemRegistered = false
         }
+        let launchedWithStartupArgument = ProcessInfo.processInfo.arguments.contains("--startup")
         if LoginLaunchPresentationPolicy.shouldOpenDashboardOnLaunch(
             launchAppleEventPresent: launchEvent != nil,
             launchedAsLoginItem: launchedAsLoginItem,
-            loginItemRegistered: loginItemRegistered
+            loginItemRegistered: loginItemRegistered,
+            launchedWithStartupArgument: launchedWithStartupArgument
         ) {
             DashboardPresentationCoordinator.shared.showDashboard()
         }

@@ -47,4 +47,24 @@ final class LoginLaunchPresentationPolicyTests: XCTestCase {
             )
         )
     }
+
+    func testUpdateRelaunchWithStartupArgumentStaysQuiet() {
+        // `open -n` after a silent update still delivers a launch Apple Event.
+        XCTAssertFalse(
+            LoginLaunchPresentationPolicy.shouldOpenDashboardOnLaunch(
+                launchAppleEventPresent: true,
+                launchedAsLoginItem: false,
+                loginItemRegistered: false,
+                launchedWithStartupArgument: true
+            )
+        )
+        XCTAssertFalse(
+            LoginLaunchPresentationPolicy.shouldOpenDashboardOnLaunch(
+                launchAppleEventPresent: true,
+                launchedAsLoginItem: false,
+                loginItemRegistered: true,
+                launchedWithStartupArgument: true
+            )
+        )
+    }
 }
