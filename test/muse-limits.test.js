@@ -401,6 +401,132 @@ describe("muse-limits", () => {
     assert.equal(afterWeeklyReset.cached_at, new Date(afterWeeklyResetMs).toISOString());
   });
 
+  it("keeps a fresh idle 5h window cacheable when the carried weekly snapshot is older than 12h", async (t) => {
+    const home = makeTempHome(t);
+    writeUnixMuseBinary(home);
+    writeMuseAuth(home, { email: "split@example.com", subsActive: true });
+
+    const liveMs = Date.parse("2026-11-11T08:00:00.000Z");
+    const weeklyResetMs = liveMs + 3 * 86400_000;
+    const idleRunner = () => ({
+      status: 0,
+      stdout: JSON.stringify({ allowance: null, reason: "server_sent_no_usage" }),
+      stderr: "",
+    });
+    const failingRunner = () => ({ status: 1, stdout: "", stderr: "temporary outage" });
+
+    const live = await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs: liveMs,
+      injectedNowMs: liveMs,
+      commandRunner() {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            allowance: {
+              tier: "power",
+              window: { usedPercent: 40, resetsAtMs: liveMs + 3600_000 },
+              weekly: { usedPercent: 33, resetsAtMs: weeklyResetMs },
+            },
+          }),
+          stderr: "",
+        };
+      },
+    });
+    const liveCapturedAt = new Date(liveMs).toISOString();
+    assert.equal(live.cached_at, liveCapturedAt);
+
+    // 13h later (past the 12h undated-window TTL): idle poll carries weekly forward.
+    const idleMs = liveMs + 13 * 3600_000;
+    const idle = await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs: idleMs,
+      injectedNowMs: idleMs,
+      commandRunner: idleRunner,
+    });
+    assert.equal(idle.secondary_window.used_percent, 33);
+    assert.equal(idle.primary_window.used_percent, 0);
+    assert.equal(idle.cached_at, liveCapturedAt);
+    assert.equal(idle.stale, true);
+    assert.equal(idle.source, "disk-cache");
+    assert.equal("secondary_captured_at" in idle, false);
+    assert.equal("profile_identity" in idle, false);
+
+    // On disk the entry is stamped with the idle poll time; the weekly window
+    // keeps its original capture time separately.
+    const raw = JSON.parse(fs.readFileSync(museLimitsCachePath({ home }), "utf8"));
+    assert.equal(raw.cached_at, new Date(idleMs).toISOString());
+    assert.equal(raw.secondary_captured_at, liveCapturedAt);
+
+    // A transient CLI failure right after the idle poll still serves BOTH windows,
+    // reporting the weekly snapshot's (older) capture time.
+    const fallback = await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs: idleMs + 60_000,
+      injectedNowMs: idleMs + 60_000,
+      commandRunner: failingRunner,
+    });
+    assert.equal(fallback.cached, true);
+    assert.equal(fallback.stale, true);
+    assert.deepEqual(fallback.primary_window, {
+      used_percent: 0,
+      reset_at: null,
+      limit_window_seconds: MUSE_FIVE_HOUR_WINDOW_SECONDS,
+    });
+    assert.equal(fallback.secondary_window.used_percent, 33);
+    assert.equal(fallback.cached_at, liveCapturedAt);
+    assert.equal("secondary_captured_at" in fallback, false);
+    assert.equal("profile_identity" in fallback, false);
+
+    // A later idle poll must not launder the weekly capture time.
+    const laterIdleMs = idleMs + 3600_000;
+    const laterIdle = await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs: laterIdleMs,
+      injectedNowMs: laterIdleMs,
+      commandRunner: idleRunner,
+    });
+    assert.equal(laterIdle.secondary_window.used_percent, 33);
+    assert.equal(laterIdle.cached_at, liveCapturedAt);
+    const rawLater = JSON.parse(fs.readFileSync(museLimitsCachePath({ home }), "utf8"));
+    assert.equal(rawLater.cached_at, new Date(laterIdleMs).toISOString());
+    assert.equal(rawLater.secondary_captured_at, liveCapturedAt);
+
+    // A fresh live allowance clears the carried-weekly marker.
+    const relive = await fetchMuseLimits({
+      home,
+      env: {},
+      platform: "linux",
+      nowMs: laterIdleMs + 60_000,
+      injectedNowMs: laterIdleMs + 60_000,
+      commandRunner() {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            allowance: {
+              tier: "power",
+              window: { usedPercent: 5, resetsAtMs: laterIdleMs + 3600_000 },
+              weekly: { usedPercent: 35, resetsAtMs: weeklyResetMs },
+            },
+          }),
+          stderr: "",
+        };
+      },
+    });
+    assert.equal(relive.stale, false);
+    assert.equal(relive.cached_at, new Date(laterIdleMs + 60_000).toISOString());
+    const rawRelive = JSON.parse(fs.readFileSync(museLimitsCachePath({ home }), "utf8"));
+    assert.equal(rawRelive.secondary_captured_at, null);
+  });
+
   it("clears disk cache and reports subscription required on no_allowance or subs_active=false", async (t) => {
     const home = makeTempHome(t);
     writeUnixMuseBinary(home);

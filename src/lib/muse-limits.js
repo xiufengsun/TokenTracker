@@ -449,7 +449,10 @@ const museLimitsCache = createLimitsCache({
   dirOverride: "trackerDir",
   maxAgeMs: MUSE_LIMITS_CACHE_MAX_AGE_MS,
   unknownResetTtlMs: MUSE_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS,
-  fields: { plan_label: "string", profile_identity: "string" },
+  // `secondary_captured_at` records when a carried-forward weekly window was
+  // originally observed. The entry's own `cached_at` stays the poll time so a
+  // freshly observed idle 5h window (no `reset_at`) keeps its full undated TTL.
+  fields: { plan_label: "string", profile_identity: "string", secondary_captured_at: "string" },
   windowKeys: ["primary_window", "secondary_window"],
   identityField: "profile_identity",
   identityRequired: true,
@@ -488,6 +491,23 @@ function writeMuseLimitsCache(
     { ...limits, profile_identity: resolvedIdentity },
     { home, trackerDir, nowMs, identity: resolvedIdentity },
   );
+}
+
+/**
+ * Convert an internal Muse Code record into its public shape: strip internal
+ * cache metadata (`profile_identity`, `secondary_captured_at`) and report the
+ * oldest capture time of any window still carried, so a weekly window observed
+ * earlier never inherits a newer poll's freshness.
+ */
+function toPublicMuseRecord(record) {
+  const { profile_identity: _identity, secondary_captured_at: secondaryCapturedAt, ...publicRecord } = record;
+  if (!publicRecord.secondary_window || typeof secondaryCapturedAt !== "string") return publicRecord;
+  const secondaryMs = Date.parse(secondaryCapturedAt);
+  const recordMs = Date.parse(publicRecord.cached_at || "");
+  if (Number.isFinite(secondaryMs) && (!Number.isFinite(recordMs) || secondaryMs < recordMs)) {
+    publicRecord.cached_at = new Date(secondaryMs).toISOString();
+  }
+  return publicRecord;
 }
 
 /** Remove `muse-limits-cache.json` from the active tracker directory. */
@@ -646,9 +666,9 @@ function normalizeMuseUsageResponse(
       const capturedAtMs = Number.isFinite(parsedFallbackCapturedMs)
         ? parsedFallbackCapturedMs
         : nowMs;
+      const capturedAtIso = new Date(capturedAtMs).toISOString();
       return {
         kind: "ok",
-        preservedCapturedAtMs: capturedAtMs,
         record: {
           configured: true,
           error: null,
@@ -661,7 +681,8 @@ function normalizeMuseUsageResponse(
           secondary_window: preservedSecondaryWindow,
           cached: true,
           stale: true,
-          cached_at: new Date(capturedAtMs).toISOString(),
+          cached_at: capturedAtIso,
+          secondary_captured_at: capturedAtIso,
           source: "disk-cache",
           profile_identity: profileIdentity || null,
         },
@@ -776,10 +797,7 @@ async function fetchMuseLimits(options = {}) {
       nowMs: effectiveNowMs,
       profileIdentity: fallbackAuth.identity,
     });
-    if (cached) {
-      const { profile_identity: _identity, ...publicRecord } = cached;
-      return publicRecord;
-    }
+    if (cached) return toPublicMuseRecord(cached);
     return { configured: true, error: message };
   };
 
@@ -860,7 +878,7 @@ async function fetchMuseLimits(options = {}) {
       subsActive: postSpawnAuth.subsActive,
       fallbackPlanLabel,
       fallbackSecondaryWindow: cachedSnapshot?.secondary_window ?? null,
-      fallbackCapturedAt: cachedSnapshot?.cached_at ?? null,
+      fallbackCapturedAt: cachedSnapshot?.secondary_captured_at || cachedSnapshot?.cached_at || null,
       nowMs: effectiveNowMs,
     });
   } catch (error) {
@@ -875,21 +893,20 @@ async function fetchMuseLimits(options = {}) {
     return outcome.record;
   }
 
-  const recordTimestampMs = Number.isFinite(outcome.preservedCapturedAtMs)
-    ? outcome.preservedCapturedAtMs
-    : nowMs;
+  // The disk entry is always stamped with this poll's time so a freshly observed
+  // idle 5h window keeps its full undated TTL; a carried-forward weekly window
+  // keeps its original capture time in `secondary_captured_at` instead.
   const stampedRecord = {
     ...outcome.record,
-    cached_at: new Date(recordTimestampMs).toISOString(),
+    cached_at: new Date(nowMs).toISOString(),
   };
   writeMuseLimitsCache(stampedRecord, {
     home,
     trackerDir,
-    nowMs: recordTimestampMs,
+    nowMs,
     profileIdentity: boundIdentity,
   });
-  const { profile_identity: _identity, ...publicRecord } = stampedRecord;
-  return publicRecord;
+  return toPublicMuseRecord(stampedRecord);
 }
 
 module.exports = {

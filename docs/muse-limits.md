@@ -43,7 +43,7 @@ Finder-launched macOS app still finds the binary's runtime.
 | CLI result | Rendered as |
 |---|---|
 | `allowance` with a usable window | Live 5h + weekly bars; written to the disk cache |
-| `allowance: null`, `reason: "server_sent_no_usage"` | Idle 0% 5h bar (`reset_at: null`), because the server omits usage headers until a prompt is sent in the active 5h session/window; preserves the current account's cached weekly bar (retaining its original `cached_at` timestamp and `disk-cache` / `stale: true` provenance) while its `reset_at` is still in the future, otherwise `secondary_window: null` (unknown). Plan label carried over from the matching account's cache. If `auth.json` has `subs_active: false`, treated as no subscription instead |
+| `allowance: null`, `reason: "server_sent_no_usage"` | Idle 0% 5h bar (`reset_at: null`), because the server omits usage headers until a prompt is sent in the active 5h session/window; preserves the current account's cached weekly bar (reported with its original capture time and `disk-cache` / `stale: true` provenance) while its `reset_at` is still in the future, otherwise `secondary_window: null` (unknown). Plan label carried over from the matching account's cache. If `auth.json` has `subs_active: false`, treated as no subscription instead |
 | `reason: "no_allowance"` / subscription-required text | "subscription required" error; disk cache cleared so stale bars cannot reappear |
 | `reason: "credential_rejected"` / not-logged-in text | Reauth error (`auth_action_required: "reauth"`); never masked by the cache |
 | Non-zero exit, timeout, invalid JSON | Last-good disk cache for the signed-in account when present, otherwise the trimmed CLI error |
@@ -56,3 +56,5 @@ Entries are strictly bound to the signed-in account:
 - Cache reads, writes, and cached `plan_label` lookups require a non-empty scrypt fingerprint of `providers.meta.user_email` (or `user_id`) from `auth.json` and fail closed (`null`) when `auth.json` is missing, unreadable, or lacks an account identifier (for example after sign-out).
 - `fetchMuseLimits` snapshots `readMuseAuthMetadata` before and after `muse usage --json`. If `auth.json` presence or account identity changes while the CLI is in flight, the pre-switch response is neither returned for the new session nor written to the disk cache; fallback re-reads only the post-spawn account's own cache.
 - Internal `profile_identity` metadata is stripped from both live and cached fallback public records.
+
+The entry's `cached_at` is always the time of the poll that wrote it, so a freshly observed idle 5h window (which has no `reset_at`) keeps the full 12-hour undated TTL. When an idle poll carries a weekly window forward, that window's original capture time is stored separately in `secondary_captured_at`; public records (live and cached fallback) report the older of the two as `cached_at`, and the internal field is stripped.
