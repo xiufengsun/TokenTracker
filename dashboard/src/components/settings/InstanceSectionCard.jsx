@@ -87,10 +87,20 @@ export function InstanceSectionCard({ signedIn = false } = {}) {
     }
   };
 
-  // Switching servers drops the signed-in session: every server keeps its own
-  // accounts, so confirm first instead of silently signing the user out.
+  // Trailing-slash-equivalent addresses are the same server server-side
+  // (normalizeInstanceBaseUrl strips them), so compare normalized values.
+  const sameServer = (a, b) =>
+    String(a || "").trim().replace(/\/+$/, "") === String(b || "").trim().replace(/\/+$/, "");
+
+  // Switching servers — or changing the anon key on the current one — drops
+  // the signed-in session: every server keeps its own accounts, and a new key
+  // invalidates the session material. Confirm before either save; anything
+  // else applies immediately.
   const request = (payload) => {
-    if (signedIn && payload.baseUrl !== config.baseUrl) {
+    if (
+      signedIn &&
+      (!sameServer(payload.baseUrl, config.baseUrl) || payload.anonKey)
+    ) {
       setPendingSwitch(payload);
       return;
     }
