@@ -643,5 +643,8 @@
   "cloud.free.device_scope": "現在のデバイスの使用量のみを集計",
   "cloud.plan.includes_local": "無料版のすべてのローカル機能を含む",
   "cloud.plan.device_sync": "デバイス台数の制限なし、使用量をまとめて同期",
-  "cloud.plan.device_fair_use": "通常の個人利用ではデバイス台数の制限や台数ごとの追加料金はありません。大量または異常なデバイス接続には同期保護が適用される場合があります。"
+  "cloud.plan.device_fair_use": "通常の個人利用ではデバイス台数の制限や台数ごとの追加料金はありません。大量または異常なデバイス接続には同期保護が適用される場合があります。",
+  "settings.labs.island_expand_on_hover.label": "ホバーで直接展開",
+  "settings.labs.island_expand_on_hover.hint": "ホバー時にダイナミックアイランドのパネルをすぐ展開します。オフの場合はホバーで端を少し広げ、クリックで展開して誤作動を防ぎます。",
+  "settings.labs.island_expand_on_hover.aria": "ダイナミックアイランドのホバー直接展開の切り替え"
 }
