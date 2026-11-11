@@ -61,6 +61,15 @@ describe("formatProviderDisplayName", () => {
     expect(formatProviderDisplayName("OMP")).toBe("oh-my-pi");
   });
 
+  it("formats pi as Pi without swallowing the routed pi-<provider> sources", () => {
+    expect(formatProviderDisplayName("pi")).toBe("Pi");
+    expect(formatProviderDisplayName("PI")).toBe("Pi");
+    // Router sources must keep naming the backend, or the pi filter would read
+    // as one provider on the leaderboard.
+    expect(formatProviderDisplayName("pi-anthropic")).toBe("Pi · Anthropic");
+    expect(formatProviderDisplayName("pi-github-copilot")).not.toBe(formatProviderDisplayName("pi"));
+  });
+
   it("formats omo as OmO without colliding with omp", () => {
     expect(formatProviderDisplayName("omo")).toBe("OmO");
     expect(formatProviderDisplayName("OMO")).toBe("OmO");
