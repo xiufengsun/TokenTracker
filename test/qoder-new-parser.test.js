@@ -1002,3 +1002,182 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
     assert.equal(row.total_cost_usd, 0, "Qoder must not invent cost");
   }
 });
+
+test("parseQoderNewIncremental attributes auto usage to the session runtime-config model (#1092)", async (t) => {
+  const tmp = tempDir();
+  const { dir, queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const sessionFile = path.join(tmp, "proj", "sess-auto.jsonl");
+  writeJsonl(sessionFile, [
+    {
+      type: "runtime-config",
+      sessionId: "example-session",
+      model: "dfmodel",
+      timestamp: 1794298683378,
+    },
+    {
+      type: "assistant",
+      uuid: "example-uuid",
+      sessionId: "example-session",
+      timestamp: "2026-11-10T08:18:10.068Z",
+      message: {
+        id: "example-message",
+        role: "assistant",
+        model: "auto",
+        usage: { input_tokens: 10, output_tokens: 2, billable: true },
+      },
+    },
+  ]);
+  const cursors = {};
+  const res = await parseQoderNewIncremental({
+    sessionFiles: [sessionFile],
+    cursors,
+    queuePath,
+    sourceKey: "qoder",
+    cursorKey: "qoderNew",
+  });
+  assert.equal(res.messagesProcessed, 1);
+  const rows = queueRows(queuePath);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].model, "dfmodel");
+  assert.equal(rows[0].total_tokens, 12);
+  assert.equal(cursors.qoderNew.messages["jsonl:example-session|example-message"].model, "dfmodel");
+});
+
+test("parseQoderNewIncremental keeps explicit assistant models and later runtime-config changes (#1092)", async (t) => {
+  const tmp = tempDir();
+  const { dir, queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const sessionFile = path.join(tmp, "proj", "sess-switch.jsonl");
+  writeJsonl(sessionFile, [
+    {
+      type: "runtime-config",
+      sessionId: "sess-switch",
+      model: "dfmodel",
+      timestamp: "2026-11-10T08:00:00.000Z",
+    },
+    {
+      type: "assistant",
+      uuid: "m-auto-1",
+      sessionId: "sess-switch",
+      timestamp: "2026-11-10T08:01:00.000Z",
+      message: {
+        id: "m-auto-1",
+        role: "assistant",
+        model: "auto",
+        usage: { input_tokens: 4, output_tokens: 1, billable: true },
+      },
+    },
+    {
+      type: "assistant",
+      uuid: "m-explicit",
+      sessionId: "sess-switch",
+      timestamp: "2026-11-10T08:02:00.000Z",
+      message: {
+        id: "m-explicit",
+        role: "assistant",
+        model: "qmodel_38max",
+        usage: { input_tokens: 8, output_tokens: 2, billable: true },
+      },
+    },
+    {
+      type: "runtime-config",
+      sessionId: "sess-switch",
+      model: "qmodel_38max",
+      timestamp: "2026-11-10T08:03:00.000Z",
+    },
+    {
+      type: "assistant",
+      uuid: "m-auto-2",
+      sessionId: "sess-switch",
+      timestamp: "2026-11-10T08:04:00.000Z",
+      message: {
+        id: "m-auto-2",
+        role: "assistant",
+        model: "auto",
+        usage: { input_tokens: 6, output_tokens: 3, billable: true },
+      },
+    },
+  ]);
+  const cursors = {};
+  await parseQoderNewIncremental({
+    sessionFiles: [sessionFile],
+    cursors,
+    queuePath,
+    sourceKey: "qoder",
+    cursorKey: "qoderNew",
+  });
+  const byModel = new Map(queueRows(queuePath).map((row) => [row.model, row]));
+  assert.equal(byModel.get("dfmodel")?.total_tokens, 5);
+  assert.equal(byModel.get("qmodel_38max")?.total_tokens, 19);
+  assert.equal(cursors.qoderNew.messages["jsonl:sess-switch|m-auto-1"].model, "dfmodel");
+  assert.equal(cursors.qoderNew.messages["jsonl:sess-switch|m-explicit"].model, "qmodel_38max");
+  assert.equal(cursors.qoderNew.messages["jsonl:sess-switch|m-auto-2"].model, "qmodel_38max");
+});
+
+test("parseQoderNewIncremental leaves a true Auto session as auto and reclassifies on rescan (#1092)", async (t) => {
+  const tmp = tempDir();
+  const { dir, queuePath } = tempQueue();
+  t.after(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const sessionFile = path.join(tmp, "proj", "sess-reparse.jsonl");
+  const assistant = {
+    type: "assistant",
+    uuid: "m-reparse",
+    sessionId: "sess-reparse",
+    timestamp: "2026-11-10T08:18:10.068Z",
+    message: {
+      id: "m-reparse",
+      role: "assistant",
+      model: "auto",
+      usage: { input_tokens: 10, output_tokens: 2, billable: true },
+    },
+  };
+  writeJsonl(sessionFile, [assistant]);
+  const cursors = {};
+  await parseQoderNewIncremental({
+    sessionFiles: [sessionFile],
+    cursors,
+    queuePath,
+    sourceKey: "qoder",
+    cursorKey: "qoderNew",
+  });
+  const first = queueRows(queuePath);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].model, "auto");
+  assert.equal(first[0].total_tokens, 12);
+
+  writeJsonl(sessionFile, [
+    {
+      type: "runtime-config",
+      sessionId: "sess-reparse",
+      model: "dfmodel",
+      timestamp: "2026-11-10T08:18:00.000Z",
+    },
+    assistant,
+  ]);
+  const second = await parseQoderNewIncremental({
+    sessionFiles: [sessionFile],
+    cursors,
+    queuePath,
+    sourceKey: "qoder",
+    cursorKey: "qoderNew",
+  });
+  assert.ok(second.eventsAggregated >= 1);
+  const rows = queueRows(queuePath);
+  const lastAuto = [...rows].reverse().find((row) => row.model === "auto");
+  const lastDf = [...rows].reverse().find((row) => row.model === "dfmodel");
+  // Reparse subtracts the auto bucket and adds dfmodel.
+  assert.equal(lastAuto?.total_tokens, 0);
+  assert.equal(lastDf?.total_tokens, 12);
+  assert.equal(cursors.qoderNew.messages["jsonl:sess-reparse|m-reparse"].model, "dfmodel");
+});
+
