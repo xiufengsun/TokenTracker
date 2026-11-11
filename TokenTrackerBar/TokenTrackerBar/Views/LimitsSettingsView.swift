@@ -147,7 +147,7 @@ struct LimitsSettingsView: View {
     @ViewBuilder
     private func providerIcon(id: String) -> some View {
         switch id {
-        case "cursor", "kimi", "kiro", "grok", "copilot", "zcode", "opencodeGo", "commandCode", "qoder", "qoderCn", "codingPlan", "agentPlan", "devin", "workbuddy", "workbuddyAi", "deepseek":
+        case "cursor", "kimi", "kiro", "grok", "copilot", "zcode", "opencodeGo", "commandCode", "qoder", "qoderCn", "codingPlan", "agentPlan", "devin", "workbuddy", "workbuddyAi", "deepseek", "muse":
             let filename: String = {
                 switch id {
                 case "cursor": return "cursor.svg"
@@ -165,6 +165,7 @@ struct LimitsSettingsView: View {
                 case "workbuddy": return "codebuddy.svg"
                 case "workbuddyAi": return "codebuddy.svg"
                 case "deepseek": return "deepseek.svg"
+                case "muse": return "muse.svg"
                 default: return "copilot.svg"
                 }
             }()

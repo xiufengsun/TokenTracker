@@ -75,6 +75,7 @@ struct UsageLimitsView: View {
         "workbuddy": "CodeBuddyLogo",
         "workbuddyAi": "CodeBuddyLogo",
         "deepseek": "DeepseekLogo",
+        "muse": "MuseLogo",
     ]
 
     var body: some View {
@@ -242,6 +243,10 @@ struct UsageLimitsView: View {
             // the section renders balance rows via the dedicated extra (#960).
             if let deepseek = limits.deepseek, deepseek.configured, deepseek.error == nil {
                 return toolSection(id: id, title: "DeepSeek", assetName: "DeepseekLogo", toolName: "DeepSeek", specs: [], deepseekBalance: deepseek, updatedAtISO: deepseek.cachedAt, isStale: deepseek.stale ?? false)
+            }
+        case "muse":
+            if let muse = limits.muse, muse.configured, muse.error == nil {
+                return toolSection(id: id, title: planTitle("Muse Code", muse.planLabel), assetName: "MuseLogo", toolName: "Muse Code", specs: museSpecs(muse), updatedAtISO: muse.cachedAt, isStale: muse.stale ?? false)
             }
         default:
             break
@@ -636,6 +641,13 @@ struct UsageLimitsView: View {
         var s: [LimitWindowSpec] = []
         if let w = d.primaryWindow { s.append(makeSpec("Daily", w.usedPercent, windowSeconds: w.limitWindowSeconds ?? 86400, iso: w.resetAt)) }
         if let w = d.secondaryWindow { s.append(makeSpec("Weekly", w.usedPercent, windowSeconds: w.limitWindowSeconds ?? 7 * 86400, iso: w.resetAt)) }
+        return s
+    }
+
+    private func museSpecs(_ m: MuseLimits) -> [LimitWindowSpec] {
+        var s: [LimitWindowSpec] = []
+        if let w = m.primaryWindow { s.append(makeSpec("5h", w.usedPercent, windowSeconds: w.limitWindowSeconds ?? 5 * 3600, iso: w.resetAt)) }
+        if let w = m.secondaryWindow { s.append(makeSpec("Weekly", w.usedPercent, windowSeconds: w.limitWindowSeconds ?? 7 * 86400, iso: w.resetAt)) }
         return s
     }
 
@@ -1241,7 +1253,7 @@ struct UsageLimitsView: View {
     @ViewBuilder
     private func brandIcon(_ name: String) -> some View {
         switch name {
-        case "CursorLogo", "KimiLogo", "KiroLogo", "GrokLogo", "CopilotLogo", "ZcodeLogo", "OpenCodeLogo", "CommandCodeLogo", "QoderLogo", "QoderCnLogo", "VolcanoArkLogo", "DevinLogo", "CodeBuddyLogo", "DeepseekLogo":
+        case "CursorLogo", "KimiLogo", "KiroLogo", "GrokLogo", "CopilotLogo", "ZcodeLogo", "OpenCodeLogo", "CommandCodeLogo", "QoderLogo", "QoderCnLogo", "VolcanoArkLogo", "DevinLogo", "CodeBuddyLogo", "DeepseekLogo", "MuseLogo":
             let filename: String = {
                 switch name {
                 case "CursorLogo": return "cursor.svg"
@@ -1257,6 +1269,7 @@ struct UsageLimitsView: View {
                 case "DevinLogo": return "devin.svg"
                 case "CodeBuddyLogo": return "codebuddy.svg"
                 case "DeepseekLogo": return "deepseek.svg"
+                case "MuseLogo": return "muse.svg"
                 default: return "copilot.svg"
                 }
             }()

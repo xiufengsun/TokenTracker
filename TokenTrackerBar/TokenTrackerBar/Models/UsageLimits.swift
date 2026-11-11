@@ -22,13 +22,14 @@ struct UsageLimitsResponse: Codable, Equatable {
     let workbuddy: WorkbuddyLimits?
     let workbuddyAi: WorkbuddyLimits?
     let deepseek: DeepseekLimits?
+    let muse: MuseLimits?
 
     enum CodingKeys: String, CodingKey {
         case fetchedAt = "fetched_at"
         case claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi
         case opencodeGo = "opencodeGo"
         case commandCode = "commandCode"
-        case deepseek
+        case deepseek, muse
     }
 }
 
@@ -805,6 +806,28 @@ struct DeepseekBalance: Codable, Equatable {
     }
 }
 
+/// Muse Code (Meta AI): rolling 5h + weekly subscription quota windows read
+/// from the local `muse usage --json` command.
+struct MuseLimits: Codable, Equatable {
+    let configured: Bool
+    let error: String?
+    let planLabel: String?
+    let primaryWindow: GenericLimitWindow?
+    let secondaryWindow: GenericLimitWindow?
+    let cachedAt: String?
+    let stale: Bool?
+    let authActionRequired: String?
+
+    enum CodingKeys: String, CodingKey {
+        case configured, error, stale
+        case planLabel = "plan_label"
+        case primaryWindow = "primary_window"
+        case secondaryWindow = "secondary_window"
+        case cachedAt = "cached_at"
+        case authActionRequired = "auth_action_required"
+    }
+}
+
 struct AntigravityLimits: Codable, Equatable {
     let configured: Bool
     let error: String?
@@ -855,6 +878,7 @@ extension UsageLimitsResponse {
             (workbuddy?.configured ?? false, workbuddy?.error),
             (workbuddyAi?.configured ?? false, workbuddyAi?.error),
             (deepseek?.configured ?? false, deepseek?.error),
+            (muse?.configured ?? false, muse?.error),
         ]
         return providers.contains { $0.0 && $0.1 == nil }
     }
@@ -896,7 +920,8 @@ extension UsageLimitsResponse {
             devin: .unconfigured,
             workbuddy: workbuddy,
             workbuddyAi: workbuddyAi,
-            deepseek: deepseek
+            deepseek: deepseek,
+            muse: muse
         )
     }
 }

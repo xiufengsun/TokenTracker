@@ -389,6 +389,7 @@ final class WeeklyLimitResetDetectorTests: XCTestCase {
         XCTAssertEqual(LimitResetProviderIconCatalog.svgFilename(for: "kimi"), "kimi.svg")
         XCTAssertEqual(LimitResetProviderIconCatalog.svgFilename(for: "opencodeGo"), "opencode.svg")
         XCTAssertEqual(LimitResetProviderIconCatalog.svgFilename(for: "qoder"), "qoder.svg")
+        XCTAssertEqual(LimitResetProviderIconCatalog.svgFilename(for: "muse"), "muse.svg")
         XCTAssertNil(LimitResetProviderIconCatalog.assetName(for: "unknown"))
         XCTAssertNil(LimitResetProviderIconCatalog.svgFilename(for: "unknown"))
     }

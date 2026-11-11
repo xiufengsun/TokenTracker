@@ -909,5 +909,13 @@
   "settings.local_data.error.too_many_devices": "已达到导入数据上限，请先移除不再需要的来源。",
   "settings.local_data.error.unknown_device": "这个导入来源已不存在。",
   "settings.local_data.error.transfer_failed": "操作失败，请检查文件和本地应用后重试。",
-  "settings.local_data.local_history_only": "离线快照不含会话记录。上下文分解需选择“本机”查看；项目、会话和效果分析始终只包含本机记录。"
+  "settings.local_data.local_history_only": "离线快照不含会话记录。上下文分解需选择“本机”查看；项目、会话和效果分析始终只包含本机记录。",
+  "limits.provider.muse": "Muse Code",
+  "limits.label.muse_5h": "5h",
+  "limits.label.muse_weekly": "每周",
+  "limits.muse.setupHint.title": "连接 Muse Code",
+  "limits.muse.setupHint.subtitle": "通过本机的官方 Muse CLI 读取你的 Muse Code 订阅额度。",
+  "limits.muse.setupHint.step1": "安装 Muse Code 并运行下方命令登录，TokenTracker 自动复用登录，无需重启。",
+  "limits.muse.setupHint.note": "登录后刷新此页即可。TokenTracker 通过本机 muse usage --json 读取额度窗口。",
+  "limits.muse.setupHint.snippet_login": "muse login   # 登录 Muse Code"
 }

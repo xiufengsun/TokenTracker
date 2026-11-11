@@ -44,6 +44,7 @@ const { fetchArkCodingPlanLimits } = require("./ark-coding-plan-limits");
 const { fetchArkAgentPlanLimits } = require("./ark-agent-plan-limits");
 const { fetchWorkbuddyLimits, fetchWorkbuddyAiLimits } = require("./workbuddy-limits");
 const { fetchDeepseekLimits } = require("./deepseek-limits");
+const { fetchMuseLimits } = require("./muse-limits");
 const { fetchProviderServiceStatus } = require("./provider-status");
 const { resolveKimiProfile } = require("./kimi-profile");
 const { readSqliteJsonRows, readSqliteJsonRowsAsync } = require("./sqlite-reader");
@@ -79,7 +80,7 @@ const USAGE_LIMITS_PROVIDER_IDS = Object.freeze([
   "claude", "codex", "cursor", "gemini", "kimi", "kiro", "grok",
   "copilot", "antigravity", "zcode", "opencodeGo", "commandCode",
   "qoder", "qoderCn", "codingPlan", "agentPlan", "devin",
-  "workbuddy", "workbuddyAi", "deepseek",
+  "workbuddy", "workbuddyAi", "deepseek", "muse",
 ]);
 
 // Normalize a caller-supplied hidden-provider list (array, Set, or
@@ -4592,7 +4593,7 @@ async function fetchUsageLimitsUncached({
   // (#956).
   const hiddenSentinel = Promise.resolve({ configured: false });
   const hiddenSettled = Promise.resolve({ status: "fulfilled", value: { configured: false } });
-  const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, devinRaw, workbuddy, workbuddyAi, deepseek, claudeServiceStatus] = await Promise.all([
+  const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, devinRaw, workbuddy, workbuddyAi, deepseek, muse, claudeServiceStatus] = await Promise.all([
     claudeToken && !freshClaudeCache && !claudeRetryAtMs
       ? withProviderTimeout(fetchClaudeUsageLimits(claudeToken, { fetchImpl: providerFetch, maxAttempts: 1 }), "Claude", providerTimeoutMs).then(
           (value) => ({ status: "fulfilled", value }),
@@ -4744,6 +4745,24 @@ async function fetchUsageLimitsUncached({
         persistCache: cacheGeneration === usageLimitsCacheGeneration,
       }),
       "DeepSeek",
+      providerTimeoutMs,
+    ).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
+    // Muse Code (Meta AI): rolling 5h + weekly subscription quota via the
+    // user's own local `muse` binary (`muse usage --json`). Spawn-free when
+    // Muse Code is not installed; disk-cache fallback lives in muse-limits.js.
+    hiddenSet.has("muse") ? hiddenSentinel : withAbortableProviderTimeout(
+      (signal) => fetchMuseLimits({
+        commandRunner,
+        home,
+        trackerDir,
+        env,
+        nowMs,
+        injectedNowMs,
+        platform,
+        signal,
+        providerTimeoutMs,
+      }),
+      "Muse Code",
       providerTimeoutMs,
     ).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
     // Public status-page probe (fail-soft, own 5-min cache in provider-status.js).
@@ -5264,6 +5283,7 @@ async function fetchUsageLimitsUncached({
     // stamps cached_at/stale on both its live and last-good paths, so pass it
     // through verbatim like grok.
     deepseek,
+    muse: withPlanLabel(muse, muse?.plan_label, "Muse Code"),
   };
 
   for (const [providerName, provider] of Object.entries(data)) {
@@ -5395,5 +5415,6 @@ module.exports = {
   fetchQoderCnLimits,
   fetchWorkbuddyLimits,
   fetchWorkbuddyAiLimits,
+  fetchMuseLimits,
   withWorkbuddyProviderTimeout,
 };

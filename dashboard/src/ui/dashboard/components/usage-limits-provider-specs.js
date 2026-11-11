@@ -307,6 +307,17 @@ export const PROVIDER_LIMIT_SPECS = {
       return [];
     },
   },
+  // Muse Code subscription quota (muse usage --json): rolling 5-hour window
+  // plus weekly window, with server-supplied reset instants and fixed window
+  // lengths (18000 / 604800) for pace projection.
+  muse: {
+    windows(data) {
+      return [
+        { key: "5h", labelKey: "limits.label.muse_5h", window: data.primary_window, windowSecondsField: "limit_window_seconds" },
+        { key: "weekly", labelKey: "limits.label.muse_weekly", window: data.secondary_window, windowSecondsField: "limit_window_seconds" },
+      ];
+    },
+  },
 };
 
 const GROK_PRODUCT_LABEL_KEYS = {
@@ -404,5 +415,7 @@ export function usageLimitsLabelCopyAnchor() {
     copy("limits.label.devin_weekly"),
     copy("limits.label.workbuddy_plan"),
     copy("limits.label.workbuddy_addon"),
+    copy("limits.label.muse_5h"),
+    copy("limits.label.muse_weekly"),
   ];
 }

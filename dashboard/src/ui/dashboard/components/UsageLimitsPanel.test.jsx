@@ -1622,4 +1622,45 @@ describe("UsageLimitsPanel", () => {
     expect(screen.getByText("Connect Devin")).toBeInTheDocument();
     expect(screen.getByText("devin auth login")).toBeInTheDocument();
   });
+
+  it("renders Muse Code 5h and Weekly windows with the plan label and brand icon", () => {
+    const { container } = render(
+      <UsageLimitsPanel
+        muse={{
+          configured: true,
+          error: null,
+          plan_label: "Power",
+          primary_window: {
+            used_percent: 32,
+            reset_at: "2026-11-11T12:00:00.000Z",
+            limit_window_seconds: 18000,
+          },
+          secondary_window: {
+            used_percent: 14,
+            reset_at: "2026-11-18T00:00:00.000Z",
+            limit_window_seconds: 604800,
+          },
+        }}
+        order={["muse"]}
+      />,
+    );
+
+    expect(screen.getByText("Muse Code Power")).toBeInTheDocument();
+    expect(screen.getByText("5h")).toBeInTheDocument();
+    expect(screen.getByText("Weekly")).toBeInTheDocument();
+    expect(screen.getByText("32%")).toBeInTheDocument();
+    expect(screen.getByText("14%")).toBeInTheDocument();
+    expect(container.querySelector('img[src="/brand-logos/muse.svg"]')).not.toBeNull();
+  });
+
+  it("shows the Muse Code CLI setup hint when not connected", () => {
+    render(
+      <UsageLimitsPanel muse={{ configured: false }} order={["muse"]} />,
+    );
+
+    expect(screen.getByText("Muse Code")).toBeInTheDocument();
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
+    expect(screen.getByText("Connect Muse Code")).toBeInTheDocument();
+    expect(screen.getByText("muse login")).toBeInTheDocument();
+  });
 });

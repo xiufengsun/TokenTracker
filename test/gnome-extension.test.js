@@ -101,3 +101,49 @@ test("GNOME extension treats a reply from another service on its port as offline
     );
   }
 });
+
+function loadLimitRows() {
+  const source = fs.readFileSync(path.join(extensionDir, "extension.js"), "utf8").replace(/\r\n/g, "\n");
+  const namesStart = source.indexOf("const PROVIDER_NAMES = {");
+  const windowEnd = source.indexOf("};", source.indexOf("const WINDOW_NAMES = {")) + 2;
+  const helpersStart = source.indexOf("function formatDuration(");
+  const helpersEnd = source.indexOf("\n}\n", source.indexOf("function percentOf(")) + 2;
+  const rowsStart = source.indexOf("function limitRows(");
+  const rowsEnd = source.indexOf("\n}\n", rowsStart) + 2;
+  assert.ok(
+    namesStart >= 0 && windowEnd > namesStart && helpersStart >= 0 && rowsStart >= 0,
+    "limitRows helpers not found in extension.js",
+  );
+  return new Function(
+    `${source.slice(namesStart, windowEnd)}\n${source.slice(helpersStart, helpersEnd)}\n${source.slice(rowsStart, rowsEnd)}\nreturn { PROVIDER_NAMES, limitRows };`,
+  )();
+}
+
+test("GNOME extension maps Muse Code 5h and 7d quota windows with display name", () => {
+  const { PROVIDER_NAMES, limitRows } = loadLimitRows();
+  assert.equal(PROVIDER_NAMES.muse, "Muse Code");
+  const rows = limitRows({
+    muse: {
+      configured: true,
+      error: null,
+      plan_label: "Power",
+      primary_window: {
+        used_percent: 24,
+        reset_at: "2026-11-11T12:00:00.000Z",
+        limit_window_seconds: 18000,
+      },
+      secondary_window: {
+        used_percent: 9,
+        reset_at: "2026-11-17T00:00:00.000Z",
+        limit_window_seconds: 604800,
+      },
+    },
+  });
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].name, "Muse Code");
+  assert.equal(rows[0].label, "5h");
+  assert.equal(rows[0].percent, 24);
+  assert.equal(rows[1].name, "Muse Code");
+  assert.equal(rows[1].label, "7d");
+  assert.equal(rows[1].percent, 9);
+});
