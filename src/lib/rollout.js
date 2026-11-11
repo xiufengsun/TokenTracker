@@ -1061,6 +1061,8 @@ async function parseClaudeIncremental({
   onProgress,
   source,
   publicRepoResolver,
+  omoResponseIds,
+  env,
 }) {
   await ensureDir(path.dirname(queuePath));
   let filesProcessed = 0;
@@ -1121,6 +1123,21 @@ async function parseClaudeIncremental({
 
   if (!cursors.files || typeof cursors.files !== "object") {
     cursors.files = {};
+  }
+
+  const skipOmoIds = omoResponseIds instanceof Set
+    ? omoResponseIds
+    : collectOmoClaudeResponseIds(env);
+  // One-time rewind so Claude lines previously dropped by the #788 sdk-ts
+  // filter are reconsidered under the positive-match rule. Already-counted
+  // rows stay deduped by claudeHashes; matched OmO mirrors stay skipped.
+  if (!cursors.claudeOmoPositiveMatchRescanAt) {
+    for (const entry of files) {
+      const filePath = typeof entry === "string" ? entry : entry?.path;
+      if (!filePath || !cursors.files[filePath]) continue;
+      cursors.files[filePath] = { ...cursors.files[filePath], offset: 0 };
+    }
+    cursors.claudeOmoPositiveMatchRescanAt = new Date().toISOString();
   }
 
   // Cross-environment file dedup (#307): when the scan list mixes native and
@@ -1294,6 +1311,7 @@ async function parseClaudeIncremental({
       seenMessageHashes,
       forkAliases,
       backendResolver: fileSource === "claude" ? createBackendResolver(filePath, path.dirname(queuePath)) : null,
+      omoResponseIds: skipOmoIds,
     });
 
     cursors.files[key] = {
@@ -3142,6 +3160,7 @@ async function parseClaudeFile({
   seenMessageHashes,
   forkAliases,
   backendResolver,
+  omoResponseIds,
 }) {
   const st = fileStat || (await fs.stat(filePath).catch(() => null));
   if (!st || !st.isFile()) return { endOffset: startOffset, eventsAggregated: 0 };
@@ -3201,7 +3220,7 @@ async function parseClaudeFile({
       continue;
     }
 
-    if (isOmOClaudeSdkMirror(obj)) continue;
+    if (isOmOClaudeSdkMirror(obj, omoResponseIds)) continue;
 
     const usage = obj?.message?.usage || obj?.usage;
     if (!usage || typeof usage !== "object") continue;
@@ -5421,11 +5440,46 @@ function normalizeUsage(u) {
 // cursors.claudeHashes (msgId strings don't contain `:`, so the two formats
 // share the same Set without collision).
 // OmO Native routes Anthropic-subscription turns through the Claude Agent SDK,
-// which mirrors the same usage into ~/.claude/projects with entrypoint "sdk-ts"
-// and userType "external". OmO's passive reader already counts those turns
-// under source=omo — skip the mirrored Claude transcript copy (#726).
-function isOmOClaudeSdkMirror(obj) {
-  return obj?.entrypoint === "sdk-ts" && obj?.userType === "external";
+// which also writes the turn to ~/.claude/projects. Since senpi 2026.10.19-1,
+// OmO stores the Anthropic message id as message.responseId, which equals the
+// Claude transcript's message.id (#1083). Skip only on that positive match —
+// entrypoint "sdk-ts" + userType "external" are generic Agent SDK markers and
+// would drop non-OmO hosts such as Orca (#788 was too broad). Pre-senpi OmO
+// rows without responseId cannot be matched and are left alone.
+function isOmOClaudeSdkMirror(obj, omoResponseIds) {
+  const msgId = typeof obj?.message?.id === "string" ? obj.message.id.trim() : "";
+  return Boolean(msgId && omoResponseIds && omoResponseIds.has(msgId));
+}
+
+function collectOmoClaudeResponseIds(env = process.env) {
+  const ids = new Set();
+  const files = [
+    ...resolveOmoSessionFiles(env),
+    ...resolveOmoSubagentFiles(env),
+  ];
+  for (const filePath of files) {
+    let raw;
+    try {
+      raw = fssync.readFileSync(filePath, "utf8");
+    } catch (_e) {
+      continue;
+    }
+    if (!raw.includes("responseId")) continue;
+    for (const line of raw.split("\n")) {
+      if (!line.includes("responseId")) continue;
+      let obj;
+      try {
+        obj = JSON.parse(line);
+      } catch (_e) {
+        continue;
+      }
+      const responseId = typeof obj?.message?.responseId === "string"
+        ? obj.message.responseId.trim()
+        : "";
+      if (responseId) ids.add(responseId);
+    }
+  }
+  return ids;
 }
 
 function claudeMessageDedupKey(obj) {
@@ -26522,6 +26576,7 @@ module.exports = {
   resolveOmoSessionFiles,
   resolveOmoSubagentFiles,
   resolveOmoDefaultModel,
+  collectOmoClaudeResponseIds,
   parseOmoIncremental,
   resolveKilocodeRoots,
   resolveKilocodeTaskFiles,
