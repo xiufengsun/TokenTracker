@@ -7083,6 +7083,11 @@ function readQoderNominalCredits(usage) {
   return max >= MIN_QODER_CREDIT_ACTIVITY ? max : 0;
 }
 
+function isQoderCacheInclusiveUsage(usage) {
+  const ratio = usage?.context_usage_ratio;
+  return typeof ratio === "number" && Number.isFinite(ratio);
+}
+
 function normalizeQoderNewTokens(usage) {
   if (!usage || typeof usage !== "object") return null;
   const credits = readQoderNominalCredits(usage);
@@ -7103,14 +7108,24 @@ function normalizeQoderNewTokens(usage) {
     const cach = Math.max(0, Math.trunc(cached));
     const out = Math.max(0, Math.trunc(output));
     const cc = Math.max(0, Math.trunc(cacheCreation));
+    // Qoder's remote-chat route (CLI 1.1.8x, agent 1.1.79+) copies Chat
+    // Completions prompt_tokens straight into input_tokens, so it already
+    // includes the cache counts — same contract as legacy normalizeQoderTokens.
+    // Those records also carry context_usage_ratio (= input_tokens / context
+    // window), which is only meaningful for a cache-inclusive prompt count.
+    // Rows without it (older Anthropic-shaped CN/BYOK transcripts) or whose
+    // cache counts exceed input stay disjoint.
+    const inclusive = isQoderCacheInclusiveUsage(usage) && cach + cc <= inp;
+    const ordinary = inclusive ? inp - cach - cc : inp;
+    const total = ordinary + cach + cc + out;
     return {
-      input_tokens: inp,
+      input_tokens: ordinary,
       cached_input_tokens: cach,
       cache_creation_input_tokens: cc,
       output_tokens: out,
       reasoning_output_tokens: 0,
-      total_tokens: inp + cach + cc + out,
-      billable_total_tokens: inp + cach + cc + out,
+      total_tokens: total,
+      billable_total_tokens: total,
       credits: Number.isFinite(credits) && credits > 0 ? credits : 0,
       // `credits` dies at the totals boundary — parseQoderNewIncremental never
       // copies it into bucket totals or the cursor, and must not start: there
