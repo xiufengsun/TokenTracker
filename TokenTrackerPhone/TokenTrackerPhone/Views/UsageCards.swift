@@ -141,6 +141,16 @@ struct TrendCard: View {
         }
     }
 
+    /// The endpoint omits days without usage, so pin the axis to the requested
+    /// window instead of letting the chart shrink to the days it was given.
+    private var domain: ClosedRange<Date> {
+        let calendar = Calendar.localGregorian
+        let end = DayFormat.date(daily.to) ?? calendar.startOfDay(for: Date())
+        let start = DayFormat.date(daily.from)
+            ?? calendar.date(byAdding: .day, value: -(DashboardModel.trendDays - 1), to: end) ?? end
+        return start...(calendar.date(byAdding: .day, value: 1, to: end) ?? end)
+    }
+
     var body: some View {
         Card(title: "Last \(DashboardModel.trendDays) days") {
             if points.allSatisfy({ $0.tokens == 0 }) {
@@ -165,6 +175,7 @@ struct TrendCard: View {
                         AxisValueLabel(format: .dateTime.month(.abbreviated).day())
                     }
                 }
+                .chartXScale(domain: domain)
                 .frame(height: 170)
             }
         }
@@ -188,8 +199,9 @@ struct TopModelsCard: View {
                         ShareRow(
                             color: .modelDot(index: index),
                             title: model.name,
-                            subtitle: model.sources.map { RankedSource(source: $0, tokens: 0, costUsd: 0).displayName }.joined(separator: ", "),
+                            subtitle: model.sources.map(RankedSource.displayName).joined(separator: ", "),
                             tokens: model.tokens,
+                            conversations: model.conversations,
                             costUsd: model.costUsd,
                             share: Double(model.tokens) / Double(total)
                         )
@@ -214,6 +226,7 @@ struct SourcesCard: View {
                             title: source.displayName,
                             subtitle: nil,
                             tokens: source.tokens,
+                            conversations: source.conversations,
                             costUsd: source.costUsd,
                             share: Double(source.tokens) / Double(total)
                         )
@@ -229,8 +242,16 @@ private struct ShareRow: View {
     let title: String
     let subtitle: String?
     let tokens: Int
+    let conversations: Int
     let costUsd: Double
     let share: Double
+
+    /// Request-only entries report no tokens, only a request count.
+    private var amount: String {
+        tokens == 0 && conversations > 0
+            ? "\(conversations.formatted()) req"
+            : TokenFormatter.formatCompact(tokens)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -244,7 +265,7 @@ private struct ShareRow: View {
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text(TokenFormatter.formatCompact(tokens)).font(.subheadline.weight(.semibold)).monospacedDigit()
+                    Text(amount).font(.subheadline.weight(.semibold)).monospacedDigit()
                     Text(TokenFormatter.formatCost(costUsd)).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
                 }
             }
@@ -264,6 +285,13 @@ private struct ShareRow: View {
 struct HeatmapCard: View {
     let heatmap: HeatmapResponse
 
+    private var streak: Int { heatmap.currentStreak(today: DayFormat.string(Date())) }
+
+    private func accessibilityLabel(for cell: HeatmapCell) -> String {
+        let date = DayFormat.date(cell.day)?.formatted(date: .abbreviated, time: .omitted) ?? cell.day
+        return cell.totalTokens > 0 ? "\(date): \(TokenFormatter.formatCompact(cell.totalTokens)) tokens" : "\(date): no usage"
+    }
+
     var body: some View {
         Card(title: "Activity") {
             GeometryReader { geo in
@@ -278,6 +306,9 @@ struct HeatmapCard: View {
                                 RoundedRectangle(cornerRadius: 3, style: .continuous)
                                     .fill(cell.map { Color.heatmapLevels[min(max($0.level, 0), 4)] } ?? .clear)
                                     .frame(width: size, height: size)
+                                    .accessibilityElement()
+                                    .accessibilityLabel(cell.map(accessibilityLabel(for:)) ?? "")
+                                    .accessibilityHidden(cell == nil)
                             }
                         }
                     }
@@ -287,7 +318,7 @@ struct HeatmapCard: View {
             .frame(height: 7 * 18 + 6 * 3)
 
             HStack {
-                Label("\(heatmap.streakDays)-day streak", systemImage: "flame")
+                Label("\(streak)-day streak", systemImage: "flame")
                 Spacer()
                 Text("\(heatmap.activeDays) active days")
             }

@@ -70,8 +70,7 @@ final class UsageSnapshotTests: XCTestCase {
         ]}
         """
         let breakdown = try JSONDecoder().decode(ModelBreakdownResponse.self, from: Data(json.utf8))
-        let snapshot = UsageSnapshot(period: .week, summary: UsageSummaryResponse(), daily: DailyUsageResponse(),
-                                     breakdown: breakdown, heatmap: HeatmapResponse(), fetchedAt: Date())
+        let snapshot = UsageSnapshot(period: .week, summary: UsageSummaryResponse(), breakdown: breakdown, fetchedAt: Date())
         XCTAssertEqual(snapshot.topModels.map(\.name), ["opus", "gpt"])
         XCTAssertEqual(snapshot.topModels.first?.tokens, 400)
         XCTAssertEqual(snapshot.topModels.first?.sources, ["claude", "opencode"])
@@ -87,5 +86,48 @@ final class UsageSnapshotTests: XCTestCase {
         let range = UsagePeriod.week.range(now: now, calendar: calendar)
         XCTAssertEqual(range.from, "2026-11-09")
         XCTAssertEqual(range.to, "2026-11-15")
+    }
+}
+
+final class RefreshFailureTests: XCTestCase {
+    func testOnlyRejectedRefreshTokensEndTheSession() {
+        XCTAssertTrue(SessionStore.isRejectedRefresh(.signedOut))
+        XCTAssertTrue(SessionStore.isRejectedRefresh(.server(status: 401, code: nil, message: nil)))
+        XCTAssertTrue(SessionStore.isRejectedRefresh(.server(status: 400, code: "INVALID_REFRESH_TOKEN", message: nil)))
+        XCTAssertFalse(SessionStore.isRejectedRefresh(.server(status: 429, code: nil, message: nil)))
+        XCTAssertFalse(SessionStore.isRejectedRefresh(.server(status: 503, code: nil, message: nil)))
+        XCTAssertFalse(SessionStore.isRejectedRefresh(.transport("offline")))
+        XCTAssertFalse(SessionStore.isRejectedRefresh(.invalidResponse))
+    }
+}
+
+final class RequestOnlyAndStreakTests: XCTestCase {
+    func testRequestOnlySourcesStayRanked() throws {
+        let json = """
+        {"sources":[
+          {"source":"claude","totals":{"billable_total_tokens":300},
+           "models":[{"model":"opus","model_id":"opus","totals":{"billable_total_tokens":300}}]},
+          {"source":"qoder","totals":{"conversation_count":7},
+           "models":[{"model":"auto","model_id":"auto","totals":{"conversation_count":7}}]}
+        ]}
+        """
+        let breakdown = try JSONDecoder().decode(ModelBreakdownResponse.self, from: Data(json.utf8))
+        let snapshot = UsageSnapshot(period: .day, summary: UsageSummaryResponse(), breakdown: breakdown, fetchedAt: Date())
+        XCTAssertEqual(snapshot.sources.map(\.source), ["claude", "qoder"])
+        XCTAssertEqual(snapshot.topModels.last?.name, "auto")
+        XCTAssertEqual(snapshot.topModels.last?.conversations, 7)
+    }
+
+    func testCurrentStreakCountsBackFromTodayOrYesterday() {
+        func cell(_ day: String, _ tokens: Int) -> HeatmapCell? {
+            HeatmapCell(day: day, totalTokens: tokens, billableTotalTokens: tokens, level: tokens > 0 ? 2 : 0)
+        }
+        let heatmap = HeatmapResponse(weeks: [[
+            cell("2026-11-08", 5), cell("2026-11-09", 0), cell("2026-11-10", 9),
+            cell("2026-11-11", 4), cell("2026-11-12", 0), nil, nil,
+        ]])
+        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-12"), 2, "today empty: count from yesterday")
+        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-11"), 2)
+        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-14"), 0)
     }
 }

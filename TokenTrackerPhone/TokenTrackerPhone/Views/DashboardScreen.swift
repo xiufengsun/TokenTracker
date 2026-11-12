@@ -42,10 +42,12 @@ struct DashboardScreen: View {
 
                     if let snapshot = model.snapshot {
                         SummaryCard(snapshot: snapshot)
-                        TrendCard(daily: snapshot.daily)
-                        TopModelsCard(models: snapshot.topModels)
-                        SourcesCard(sources: snapshot.sources)
-                        HeatmapCard(heatmap: snapshot.heatmap)
+                        if let daily = snapshot.daily { TrendCard(daily: daily) }
+                        if snapshot.breakdown != nil {
+                            TopModelsCard(models: snapshot.topModels)
+                            SourcesCard(sources: snapshot.sources)
+                        }
+                        if let heatmap = snapshot.heatmap { HeatmapCard(heatmap: heatmap) }
                         Text("Updated \(snapshot.fetchedAt, style: .relative) ago")
                             .font(.caption)
                             .foregroundStyle(.secondary)

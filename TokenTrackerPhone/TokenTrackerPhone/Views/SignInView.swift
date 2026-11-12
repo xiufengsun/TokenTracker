@@ -31,7 +31,7 @@ struct SignInView: View {
                     }
                 }
 
-                divider
+                if !providers.isEmpty { divider }
 
                 VStack(spacing: 12) {
                     TextField("Email", text: $email)
@@ -53,6 +53,13 @@ struct SignInView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
                 .disabled(email.isEmpty || password.isEmpty)
+
+                if let warning = sessions.signOutError {
+                    Text(warning)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                }
 
                 if let errorMessage {
                     Text(errorMessage)
@@ -100,10 +107,11 @@ struct SignInView: View {
 
     // MARK: - Actions
 
+    /// The server's list wins, even when empty. GitHub + Google is only the
+    /// fallback for when the config can't be fetched.
     private func loadProviders() async {
         guard let config = try? await auth.publicConfig() else { return }
-        let supported = config.oAuthProviders.filter { ["github", "google"].contains($0.lowercased()) }
-        if !supported.isEmpty { providers = supported }
+        providers = config.oAuthProviders.filter { ["github", "google"].contains($0.lowercased()) }
     }
 
     private func signInWithOAuth(_ provider: String) async {
@@ -123,7 +131,7 @@ struct SignInView: View {
                 let reason = items.first(where: { $0.name == "error_description" || $0.name == "error" })?.value
                 throw CloudError.server(status: 400, code: nil, message: reason ?? "Sign-in was not completed.")
             }
-            try sessions.adopt(try await auth.exchangeOAuthCode(code, pkce: pkce))
+            try sessions.signIn(with: try await auth.exchangeOAuthCode(code, pkce: pkce))
         } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
             return
         } catch {
@@ -138,7 +146,7 @@ struct SignInView: View {
         defer { busy = false }
         do {
             let response = try await auth.signIn(email: email.trimmingCharacters(in: .whitespaces), password: password)
-            try sessions.adopt(response)
+            try sessions.signIn(with: response)
             password = ""
         } catch {
             errorMessage = error.localizedDescription
