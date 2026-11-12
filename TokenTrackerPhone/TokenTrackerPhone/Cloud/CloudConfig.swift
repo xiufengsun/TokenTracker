@@ -13,7 +13,6 @@ enum CloudConfig {
     static let oauthCallbackScheme = "tokentracker"
     static let oauthRedirectURI = "tokentracker://auth/callback"
 
-    static let cloudPlansURL = URL(string: "https://www.tokentracker.cc/cloud")!
     static let webDashboardURL = URL(string: "https://www.tokentracker.cc/dashboard")!
 
     /// The functions host serves `/<slug>`; the API host keeps a legacy

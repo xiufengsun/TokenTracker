@@ -65,14 +65,14 @@ final class UsageSnapshotTests: XCTestCase {
           {"source":"claude","totals":{"billable_total_tokens":300,"total_cost_usd":"3"},
            "models":[{"model":"opus","model_id":"opus","totals":{"billable_total_tokens":300,"total_cost_usd":"3"}}]},
           {"source":"opencode","totals":{"billable_total_tokens":500,"total_cost_usd":"2"},
-           "models":[{"model":"opus","model_id":"opus","totals":{"billable_total_tokens":100,"total_cost_usd":"1"}},
+           "models":[{"model":"opus","model_id":"opus","totals":{"billable_total_tokens":150,"total_cost_usd":"1"}},
                      {"model":"gpt","model_id":"gpt","totals":{"total_tokens":400,"total_cost_usd":"1"}}]}
         ]}
         """
         let breakdown = try JSONDecoder().decode(ModelBreakdownResponse.self, from: Data(json.utf8))
         let snapshot = UsageSnapshot(period: .week, summary: UsageSummaryResponse(), breakdown: breakdown, fetchedAt: Date())
         XCTAssertEqual(snapshot.topModels.map(\.name), ["opus", "gpt"])
-        XCTAssertEqual(snapshot.topModels.first?.tokens, 400)
+        XCTAssertEqual(snapshot.topModels.first?.tokens, 450)
         XCTAssertEqual(snapshot.topModels.first?.sources, ["claude", "opencode"])
         XCTAssertEqual(snapshot.topModels.first?.costUsd ?? 0, 4, accuracy: 0.0001)
         XCTAssertEqual(snapshot.sources.map(\.source), ["opencode", "claude"])
@@ -129,5 +129,18 @@ final class RequestOnlyAndStreakTests: XCTestCase {
         XCTAssertEqual(heatmap.currentStreak(today: "2026-11-12"), 2, "today empty: count from yesterday")
         XCTAssertEqual(heatmap.currentStreak(today: "2026-11-11"), 2)
         XCTAssertEqual(heatmap.currentStreak(today: "2026-11-14"), 0)
+    }
+}
+
+final class RankingTieTests: XCTestCase {
+    func testEqualTotalsSortByName() throws {
+        let json = """
+        {"sources":[{"source":"codex","totals":{"billable_total_tokens":200},"models":[
+          {"model":"zeta","model_id":"zeta","totals":{"billable_total_tokens":100}},
+          {"model":"alpha","model_id":"alpha","totals":{"billable_total_tokens":100}}]}]}
+        """
+        let breakdown = try JSONDecoder().decode(ModelBreakdownResponse.self, from: Data(json.utf8))
+        let snapshot = UsageSnapshot(period: .day, summary: UsageSummaryResponse(), breakdown: breakdown, fetchedAt: Date())
+        for _ in 0..<20 { XCTAssertEqual(snapshot.topModels.map(\.name), ["alpha", "zeta"]) }
     }
 }

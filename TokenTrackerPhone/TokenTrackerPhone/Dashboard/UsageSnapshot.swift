@@ -13,8 +13,9 @@ struct UsageSnapshot: Equatable {
     var totalCostUsd: Double { Double(summary.totals.totalCostUsd ?? "") ?? 0 }
 
     /// Models merged across sources (the same model can run in several CLIs),
-    /// largest first. Request-only models (credit-billed sources that report no
-    /// tokens, #990) stay in the list by their request count.
+    /// largest first, ties by name so the order is stable. Request-only models
+    /// (credit-billed sources that report no tokens, #990) stay in the list by
+    /// their request count.
     var topModels: [RankedModel] {
         var byName: [String: RankedModel] = [:]
         for source in breakdown?.sources ?? [] {
@@ -30,7 +31,7 @@ struct UsageSnapshot: Equatable {
         }
         return byName.values
             .filter { $0.tokens > 0 || $0.conversations > 0 }
-            .sorted { ($0.tokens, $0.conversations) > ($1.tokens, $1.conversations) }
+            .sorted { ($0.tokens, $0.conversations, $1.name) > ($1.tokens, $1.conversations, $0.name) }
     }
 
     var sources: [RankedSource] {
@@ -39,7 +40,7 @@ struct UsageSnapshot: Equatable {
                                 conversations: $0.totals.conversationCount,
                                 costUsd: Double($0.totals.totalCostUsd ?? "") ?? 0) }
             .filter { $0.tokens > 0 || $0.conversations > 0 }
-            .sorted { ($0.tokens, $0.conversations) > ($1.tokens, $1.conversations) }
+            .sorted { ($0.tokens, $0.conversations, $1.source) > ($1.tokens, $1.conversations, $0.source) }
     }
 }
 

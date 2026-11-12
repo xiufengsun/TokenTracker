@@ -110,7 +110,6 @@ private struct ErrorBanner: View {
 
 struct CloudAccessRequiredView: View {
     @EnvironmentObject private var sessions: SessionStore
-    @Environment(\.openURL) private var openURL
     let code: String
     let retry: () -> Void
 
@@ -120,9 +119,10 @@ struct CloudAccessRequiredView: View {
         } description: {
             Text(description)
         } actions: {
-            Button("View Cloud plans") { openURL(CloudConfig.cloudPlansURL) }
-                .buttonStyle(.borderedProminent)
+            // No purchase link here: App Store guideline 3.1.3(f) bars companion
+            // apps from pointing to purchases made outside the app.
             Button("Check again", action: retry)
+                .buttonStyle(.borderedProminent)
             Button("Sign out", role: .destructive) { Task { await sessions.signOut() } }
         }
     }
@@ -130,7 +130,7 @@ struct CloudAccessRequiredView: View {
     private var description: String {
         switch code {
         case "cloud_read_only_expired":
-            return "This account's Cloud access has ended, so its synced history can no longer be read. Renew Cloud to see your usage here."
+            return "This account's Cloud access has ended, so its synced history can no longer be read here."
         default:
             return "The iPhone app reads the usage your computers sync to TokenTracker Cloud. This account doesn't have an active Cloud membership or trial."
         }
