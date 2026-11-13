@@ -10,7 +10,7 @@ struct LimitsPacingView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                AtmosphericGlassCanvas()
+                AppBackground()
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
@@ -72,31 +72,13 @@ struct LimitsPacingView: View {
 
     private var headerControlBar: some View {
         HStack(spacing: 10) {
-            GlassEffectContainer(spacing: 6) {
-                HStack(spacing: 6) {
-                    ForEach(WindowMeterStyle.allCases) { mode in
-                        let selected = prefs.windowMeterStyle == mode
-                        Button {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                prefs.windowMeterStyle = mode
-                            }
-                        } label: {
-                            Text(mode.label)
-                                .font(.subheadline.weight(selected ? .semibold : .medium))
-                                .foregroundStyle(selected ? Color.primary : Color.secondary)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                        }
-                        .buttonStyle(.plain)
-                        .glassEffect(
-                            selected
-                                ? .regular.tint(BrandPalette.emerald.opacity(0.28)).interactive()
-                                : .regular.interactive(),
-                            in: .capsule
-                        )
-                    }
-                }
-            }
+            GlassSegmentedControl(
+                items: WindowMeterStyle.allCases,
+                selection: $prefs.windowMeterStyle,
+                label: \.label,
+                identifierPrefix: "limits.meter",
+                fillsWidth: false
+            )
 
             Spacer()
 
@@ -213,9 +195,9 @@ struct LimitsPacingView: View {
 
                 if prefs.dailySpendTargetUsd > 0 {
                     HStack(spacing: 6) {
-                        Circle()
-                            .fill(BrandPalette.emerald)
-                            .frame(width: 6, height: 6)
+                        Rectangle()
+                            .fill(Color.primary)
+                            .frame(width: 2, height: 9)
                         Text("The notch on target bars marks even-burn pace through the window.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
@@ -253,7 +235,7 @@ struct LimitsPacingView: View {
     ) -> some View {
         let clampedUsed = min(max(fraction, 0), 1)
         let displayPercent = remainingMode ? (1 - clampedUsed) * 100 : clampedUsed * 100
-        let fillColor = isTargetBased ? BrandPalette.paceColor(fraction: fraction) : BrandPalette.emerald.opacity(0.82)
+        let fillColor = isTargetBased ? Palette.paceColor(fraction: fraction) : Color.primary.opacity(0.45)
 
         var paceResult: LimitPace.Result? = nil
         if isTargetBased, let windowSeconds, let resetDate {
@@ -276,7 +258,7 @@ struct LimitsPacingView: View {
                     let pctInt = Int((remainingMode ? max(0, (1 - fraction) * 100) : fraction * 100).rounded())
                     Text("· \(pctInt)% \(remainingMode ? "left" : "used")")
                         .font(.caption.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(BrandPalette.paceColor(fraction: fraction))
+                        .foregroundStyle(Palette.paceColor(fraction: fraction))
                 }
             }
 
@@ -297,7 +279,7 @@ struct LimitsPacingView: View {
                     if let eta = paceResult.runsOutEta {
                         Text("Hits target in ~\(eta) at current pace")
                             .font(.caption2.weight(.medium))
-                            .foregroundStyle(BrandPalette.coral)
+                            .foregroundStyle(Palette.critical)
                     } else if let projected = paceResult.projectedEnd {
                         Text("Projected \(projected)% by reset")
                             .font(.caption2)
@@ -361,7 +343,7 @@ struct LimitsPacingView: View {
                                 if let cycle = budget?.billingCycle, budget?.nextRenewalISO != nil {
                                     Image(systemName: budget?.autoRenew == false ? "clock" : "infinity")
                                         .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(BrandPalette.emerald)
+                                        .foregroundStyle(.secondary)
                                         .accessibilityLabel(cycle)
                                 }
                             }
@@ -412,9 +394,9 @@ struct LimitsPacingView: View {
                                 Spacer()
                                 Text("\(Int((remaining ? max(0, (1 - frac) * 100) : frac * 100).rounded()))% \(remaining ? "left" : "used")")
                                     .font(.caption2.weight(.semibold).monospacedDigit())
-                                    .foregroundStyle(BrandPalette.paceColor(fraction: frac))
+                                    .foregroundStyle(Palette.paceColor(fraction: frac))
                             }
-                            PaceMeterBar(percent: pct, fillColor: BrandPalette.paceColor(fraction: frac), height: 6)
+                            PaceMeterBar(percent: pct, fillColor: Palette.paceColor(fraction: frac), height: 6)
                         }
                     }
 
@@ -429,9 +411,9 @@ struct LimitsPacingView: View {
                                 Spacer()
                                 Text("\(Int((remaining ? max(0, (1 - frac) * 100) : frac * 100).rounded()))% \(remaining ? "left" : "used")")
                                     .font(.caption2.weight(.semibold).monospacedDigit())
-                                    .foregroundStyle(BrandPalette.paceColor(fraction: frac))
+                                    .foregroundStyle(Palette.paceColor(fraction: frac))
                             }
-                            PaceMeterBar(percent: pct, fillColor: BrandPalette.paceColor(fraction: frac), height: 6)
+                            PaceMeterBar(percent: pct, fillColor: Palette.paceColor(fraction: frac), height: 6)
                         }
                     }
 
@@ -454,7 +436,7 @@ struct LimitsPacingView: View {
                             }
                             PaceMeterBar(
                                 percent: displayPct,
-                                fillColor: secondsLeft <= 3 * 86_400 ? BrandPalette.amber : .blue,
+                                fillColor: secondsLeft <= 3 * 86_400 ? Palette.warning : Color.primary.opacity(0.45),
                                 height: 6
                             )
                         }
@@ -489,9 +471,9 @@ struct LimitsPacingView: View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "lock.laptopcomputer")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(BrandPalette.emerald)
+                    .foregroundStyle(.primary)
                     .frame(width: 32, height: 32)
-                    .background(BrandPalette.emerald.opacity(0.14), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Why Live Provider Rate Caps Stay on Desktop")

@@ -1,53 +1,60 @@
 import SwiftUI
 
-// MARK: - Brand Palette & Ambient Canvas
+// MARK: - Monochrome Palette
 
-enum BrandPalette {
-    static let emerald = Color.accentColor
-    static let amber = Color(.sRGB, red: 0.94, green: 0.62, blue: 0.14, opacity: 1.0)
-    static let coral = Color(.sRGB, red: 0.92, green: 0.34, blue: 0.32, opacity: 1.0)
+/// Token Tracker on iPhone is black and white. Ink is the system label color,
+/// so it flips with Light / Dark Mode. Color appears only when it means
+/// something: orange when a target is close, red when it is reached or an
+/// action failed.
+enum Palette {
+    static let ink = Color.primary
+    static let warning = Color.orange
+    static let critical = Color.red
 
+    /// Fill for a target meter: ink until 72%, then orange, then red at 90%.
     static func paceColor(fraction: Double) -> Color {
-        if fraction >= 0.90 { return coral }
-        if fraction >= 0.72 { return amber }
-        return emerald
+        if fraction >= 0.90 { return critical }
+        if fraction >= 0.72 { return warning }
+        return ink
+    }
+
+    /// Grayscale steps for stacked data (token composition, heatmap levels).
+    static func step(_ index: Int) -> Color {
+        let opacities: [Double] = [0.88, 0.58, 0.34, 0.18]
+        return ink.opacity(opacities[min(max(index, 0), opacities.count - 1)])
     }
 }
 
-/// Atmospheric background with subtle emerald/slate depth so native iOS 26
-/// Liquid Glass lenses have genuine optical depth to refract without neon clutter.
-struct AtmosphericGlassCanvas: View {
-    @Environment(\.colorScheme) private var colorScheme
+/// Plain grouped background. Liquid Glass controls float above it.
+struct AppBackground: View {
+    var body: some View {
+        Color(.systemGroupedBackground)
+            .ignoresSafeArea()
+    }
+}
+
+// MARK: - Product Mark
+
+/// The real Token Tracker mark (black rounded square, white bolt), shipped as
+/// the `TokenTrackerMark` asset copied from the app icon artwork. Never redraw it.
+struct TokenTrackerMark: View {
+    var size: CGFloat = 56
 
     var body: some View {
-        ZStack {
-            Color(.systemGroupedBackground)
-                .ignoresSafeArea()
-
-            GeometryReader { geo in
-                Circle()
-                    .fill(BrandPalette.emerald.opacity(colorScheme == .dark ? 0.14 : 0.09))
-                    .frame(width: geo.size.width * 0.95, height: geo.size.width * 0.95)
-                    .blur(radius: 75)
-                    .offset(x: -geo.size.width * 0.25, y: -geo.size.height * 0.12)
-
-                Circle()
-                    .fill(Color.cyan.opacity(colorScheme == .dark ? 0.08 : 0.05))
-                    .frame(width: geo.size.width * 0.75, height: geo.size.width * 0.75)
-                    .blur(radius: 85)
-                    .offset(x: geo.size.width * 0.38, y: geo.size.height * 0.28)
-            }
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
-        }
+        Image("TokenTrackerMark")
+            .resizable()
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
+            .frame(width: size, height: size)
+            .shadow(color: .black.opacity(0.18), radius: size * 0.08, y: size * 0.03)
+            .accessibilityLabel("Token Tracker")
     }
 }
 
-// MARK: - Surface Panels (Data Content vs Floating Liquid Glass Controls)
+// MARK: - Surface Panels
 
-/// Content surface for dense telemetry, charts, and grouped rows.
-/// Uses semantic system grouped surfaces with subtle rim definition so Liquid Glass
-/// floating controls (tab bar, period/scope capsules, action pills) read distinctly above content.
+/// Content surface for dense numbers, charts, and grouped rows. Glass stays on
+/// controls; data sits on an opaque grouped surface for contrast.
 struct TelemetrySurface<Content: View>: View {
     var padding: CGFloat = 16
     @ViewBuilder var content: Content
@@ -58,7 +65,7 @@ struct TelemetrySurface<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(Color(.secondarySystemGroupedBackground).opacity(0.92))
+                    .fill(Color(.secondarySystemGroupedBackground))
                     .overlay {
                         RoundedRectangle(cornerRadius: 22, style: .continuous)
                             .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.75)
@@ -67,46 +74,99 @@ struct TelemetrySurface<Content: View>: View {
     }
 }
 
-/// Interactive Liquid Glass capsule chip using iOS 26 `.glassEffect`.
-struct LiquidGlassPill<Content: View>: View {
-    var isSelected: Bool = false
-    var tint: Color? = nil
-    @ViewBuilder var content: Content
+/// Neutral Liquid Glass segmented control (horizon, meter mode).
+struct GlassSegmentedControl<Item: Hashable & Identifiable>: View {
+    let items: [Item]
+    @Binding var selection: Item
+    let label: (Item) -> String
+    var identifierPrefix: String = "segment"
+    var fillsWidth: Bool = true
+
+    @Namespace private var namespace
 
     var body: some View {
-        content
-            .padding(.horizontal, 13)
-            .padding(.vertical, 8)
-            .glassEffect(
-                isSelected
-                    ? .regular.tint(tint ?? BrandPalette.emerald).interactive()
-                    : .regular.interactive(),
-                in: .capsule
-            )
+        GlassEffectContainer(spacing: 6) {
+            HStack(spacing: 6) {
+                ForEach(items) { item in
+                    let selected = selection == item
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) { selection = item }
+                    } label: {
+                        Text(label(item))
+                            .font(.subheadline.weight(selected ? .semibold : .regular))
+                            .foregroundStyle(selected ? Color(.systemBackground) : Color.primary)
+                            .lineLimit(1)
+                            .frame(maxWidth: fillsWidth ? .infinity : nil)
+                            .padding(.horizontal, fillsWidth ? 4 : 16)
+                            .padding(.vertical, 8)
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(
+                        selected ? .regular.tint(.primary).interactive() : .regular.interactive(),
+                        in: .capsule
+                    )
+                    .glassEffectID(item.id, in: namespace)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityIdentifier("\(identifierPrefix).\(item.id)")
+                }
+            }
+        }
     }
 }
 
 // MARK: - Provider Emblem
 
+/// A provider's real brand mark, resolved exactly like the dashboard's
+/// `ProviderIcon` (see `ProviderMarkCatalog.generated.swift`). Unknown sources
+/// get the dashboard's dashed placeholder circle, never a stand-in glyph.
 struct ProviderEmblem: View {
     let source: String
     var size: CGFloat = 28
 
     var body: some View {
-        let tint = ProviderIdentity.tint(source)
-        Image(systemName: ProviderIdentity.symbol(source))
-            .font(.system(size: size * 0.46, weight: .semibold))
-            .foregroundStyle(tint)
+        mark
+            .frame(width: size * 0.62, height: size * 0.62)
             .frame(width: size, height: size)
-            .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: size * 0.30, style: .continuous))
+            .background(
+                Color.primary.opacity(0.06),
+                in: RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
+            )
             .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var mark: some View {
+        if let entry = ProviderMarks.entry(for: source) {
+            Image(entry.asset)
+                .resizable()
+                .renderingMode(entry.isTemplate ? .template : .original)
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+                .foregroundStyle(.primary)
+        } else {
+            Circle()
+                .strokeBorder(style: StrokeStyle(lineWidth: 1.2, dash: [2.6, 2.6]))
+                .foregroundStyle(.tertiary)
+                .padding(size * 0.04)
+        }
     }
 }
 
-// MARK: - CodexBar-Style Pace Progress Bar (Adapted for iPhone Dynamic Type & Touch)
+enum ProviderMarks {
+    /// `piAwareLogoKey()` + `PROVIDER_ICON_MAP` lookup from ProviderIcon.jsx.
+    static func entry(for source: String) -> ProviderMarkCatalog.Entry? {
+        let key = source.uppercased()
+        if let hit = ProviderMarkCatalog.entries[key] { return hit }
+        if key.hasPrefix("PI-") { return ProviderMarkCatalog.entries["PI"] }
+        return nil
+    }
+}
 
-/// Precision Core Graphics bar that renders window fill + CodexBar-style punched
-/// even-burn pace notch when a target & window duration exist.
+// MARK: - Pace Meter Bar
+
+/// Fill bar with an optional even-burn pace notch (the macOS menu bar's
+/// CodexBar-style punch-out) when a target and window duration exist.
 struct PaceMeterBar: View, Animatable {
     var percent: Double
     let fillColor: Color
@@ -174,7 +234,7 @@ struct PaceMeterBar: View, Animatable {
                 )
                 context.fill(
                     Path(stripe),
-                    with: .color(paceOver ? BrandPalette.coral : BrandPalette.emerald)
+                    with: .color(paceOver ? Palette.critical : Color.primary)
                 )
             }
         }
@@ -187,7 +247,7 @@ struct PaceMeterBar: View, Animatable {
 
 struct InlineNoticeBanner: View {
     let icon: String
-    let tint: Color
+    var tint: Color = .secondary
     let message: String
     var actionTitle: String? = nil
     var action: (() -> Void)? = nil
@@ -201,6 +261,7 @@ struct InlineNoticeBanner: View {
                 .font(.footnote)
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
                     .font(.footnote.weight(.semibold))
@@ -209,6 +270,19 @@ struct InlineNoticeBanner: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
-        .glassEffect(.regular.tint(tint.opacity(0.16)), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+// MARK: - Buttons
+
+extension View {
+    /// Prominent Liquid Glass button inked black in Light Mode and white in
+    /// Dark Mode, with the label drawn in the opposite color.
+    func primaryGlassButton() -> some View {
+        self
+            .buttonStyle(.glassProminent)
+            .tint(Color.primary)
+            .foregroundStyle(Color(.systemBackground))
     }
 }

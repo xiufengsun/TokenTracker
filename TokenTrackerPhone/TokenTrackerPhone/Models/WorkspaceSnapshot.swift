@@ -1,5 +1,4 @@
 import Foundation
-import SwiftUI
 
 // MARK: - Usage Scope & Time Horizon
 
@@ -87,7 +86,7 @@ extension Calendar {
     }
 }
 
-// MARK: - Provider Catalog & Colors
+// MARK: - Provider Catalog
 
 enum ProviderIdentity {
     static func displayName(_ source: String) -> String {
@@ -130,37 +129,6 @@ enum ProviderIdentity {
         case "copilot", "pi-copilot", "pi-github-copilot": return "Copilot"
         case "muse": return "Muse"
         default: return displayName(source)
-        }
-    }
-
-    static func symbol(_ source: String) -> String {
-        switch source.lowercased() {
-        case "claude": return "sparkles"
-        case "codex": return "terminal"
-        case "cursor": return "cursorarrow.rays"
-        case "gemini": return "diamond.fill"
-        case "kimi": return "moon.stars.fill"
-        case "muse": return "wand.and.stars"
-        case "grok": return "bolt.horizontal.fill"
-        case "copilot", "pi-copilot", "pi-github-copilot": return "chevron.left.forwardslash.chevron.right"
-        case "deepseek": return "waveform.path.ecg"
-        case "devin": return "cpu"
-        default: return "cube.transparent"
-        }
-    }
-
-    static func tint(_ source: String) -> Color {
-        switch source.lowercased() {
-        case "claude": return Color(.sRGB, red: 0.85, green: 0.47, blue: 0.34, opacity: 1)
-        case "codex": return Color(.sRGB, red: 0.06, green: 0.68, blue: 0.48, opacity: 1)
-        case "cursor": return Color(.sRGB, red: 0.24, green: 0.54, blue: 0.96, opacity: 1)
-        case "gemini": return Color(.sRGB, red: 0.34, green: 0.48, blue: 0.95, opacity: 1)
-        case "muse": return Color(.sRGB, red: 0.58, green: 0.40, blue: 0.92, opacity: 1)
-        case "kimi": return Color(.sRGB, red: 0.16, green: 0.68, blue: 0.78, opacity: 1)
-        case "grok": return Color(.sRGB, red: 0.92, green: 0.58, blue: 0.20, opacity: 1)
-        case "deepseek": return Color(.sRGB, red: 0.25, green: 0.44, blue: 0.90, opacity: 1)
-        case "opencode", "opencodego", "opencode-go": return Color(.sRGB, red: 0.90, green: 0.46, blue: 0.22, opacity: 1)
-        default: return Color(.sRGB, red: 0.45, green: 0.52, blue: 0.58, opacity: 1)
         }
     }
 

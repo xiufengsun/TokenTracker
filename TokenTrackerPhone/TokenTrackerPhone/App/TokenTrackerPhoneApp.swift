@@ -35,7 +35,7 @@ struct TokenTrackerPhoneApp: App {
                 .environmentObject(sessions)
                 .environmentObject(preferences)
                 .preferredColorScheme(preferences.appearance.colorScheme)
-                .tint(BrandPalette.emerald)
+                .tint(.primary)
         }
     }
 }
@@ -48,6 +48,7 @@ struct RootContainerView: View {
 
     @State private var showPairCLISheet = false
     @State private var isLocked = false
+    @State private var isAuthenticating = false
 
     var body: some View {
         ZStack {
@@ -67,6 +68,13 @@ struct RootContainerView: View {
         .sheet(isPresented: $showPairCLISheet) {
             PairCLIDeviceSheet(workspace: workspace)
         }
+        .task {
+            // A cold launch must honor the lock too, not only a return from background.
+            if sessions.isSignedIn && prefs.requireBiometricUnlock {
+                isLocked = true
+                await unlock()
+            }
+        }
         .onChange(of: sessions.session?.user.id) { _, newId in
             if newId == nil {
                 workspace.reset()
@@ -82,17 +90,21 @@ struct RootContainerView: View {
             }
             if newPhase == .active {
                 if isLocked {
-                    Task {
-                        if await prefs.authenticateWithBiometrics() {
-                            isLocked = false
-                        }
-                    }
+                    Task { await unlock() }
                 }
                 if oldPhase == .background {
                     Task { await workspace.refresh() }
                 }
             }
         }
+    }
+
+    /// One Face ID / passcode prompt at a time; launch and foreground can race.
+    private func unlock() async {
+        guard isLocked, !isAuthenticating else { return }
+        isAuthenticating = true
+        defer { isAuthenticating = false }
+        if await prefs.authenticateWithBiometrics() { isLocked = false }
     }
 
     @ViewBuilder
@@ -148,32 +160,26 @@ struct RootContainerView: View {
 
     private var privacyOverlay: some View {
         ZStack {
-            AtmosphericGlassCanvas()
+            AppBackground()
             Rectangle()
                 .fill(.ultraThinMaterial)
                 .ignoresSafeArea()
 
             VStack(spacing: 18) {
-                BoltIcon(size: 32, color: BrandPalette.emerald)
-                    .frame(width: 68, height: 68)
-                    .glassEffect(.regular.tint(BrandPalette.emerald.opacity(0.22)), in: Circle())
+                TokenTrackerMark(size: 72)
 
-                Text("TokenTracker Locked")
+                Text(isLocked ? "Token Tracker is locked" : "Token Tracker")
                     .font(.title3.weight(.bold))
 
                 if isLocked {
                     Button {
-                        Task {
-                            if await prefs.authenticateWithBiometrics() {
-                                isLocked = false
-                            }
-                        }
+                        Task { await unlock() }
                     } label: {
-                        Label("Unlock with Face ID", systemImage: "faceid")
+                        Label("Unlock", systemImage: "faceid")
                             .fontWeight(.semibold)
                             .padding(.horizontal, 12)
                     }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.glass)
                     .controlSize(.large)
                 }
             }

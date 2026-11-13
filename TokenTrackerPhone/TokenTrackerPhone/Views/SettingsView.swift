@@ -93,9 +93,9 @@ struct SettingsView: View {
                 HStack(spacing: 14) {
                     Text(initials(for: user))
                         .font(.headline.weight(.bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color(.systemBackground))
                         .frame(width: 46, height: 46)
-                        .background(BrandPalette.emerald.gradient, in: Circle())
+                        .background(Color.primary, in: Circle())
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text(workspace.publicProfile?.displayName ?? user.name ?? user.email ?? "TokenTracker User")
@@ -126,7 +126,7 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                         Image(systemName: copiedUserId ? "checkmark.circle.fill" : "doc.on.doc")
                             .font(.footnote)
-                            .foregroundStyle(copiedUserId ? BrandPalette.emerald : .secondary)
+                            .foregroundStyle(copiedUserId ? Color.primary : Color.secondary)
                     }
                 }
             }
@@ -134,12 +134,12 @@ struct SettingsView: View {
             if let actionNotice {
                 Label(actionNotice, systemImage: "checkmark.circle.fill")
                     .font(.footnote)
-                    .foregroundStyle(BrandPalette.emerald)
+                    .foregroundStyle(.secondary)
             }
             if let actionError {
                 Label(actionError, systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote)
-                    .foregroundStyle(BrandPalette.coral)
+                    .foregroundStyle(Palette.critical)
             }
         } header: {
             Text("Account")
@@ -156,7 +156,7 @@ struct SettingsView: View {
                 Spacer()
                 Text(membership?.displayStatusTitle ?? "Cloud Connected")
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(membership?.canReadCloud == false ? BrandPalette.amber : BrandPalette.emerald)
+                    .foregroundStyle(membership?.canReadCloud == false ? Palette.warning : Color.secondary)
             }
 
             if let endISO = membership?.relevantEndDateISO,
@@ -203,7 +203,7 @@ struct SettingsView: View {
                     HStack(spacing: 12) {
                         Image(systemName: machine.platformSymbol)
                             .font(.body.weight(.medium))
-                            .foregroundStyle(machine.isPaused ? .secondary : BrandPalette.emerald)
+                            .foregroundStyle(machine.isPaused ? Color.secondary : Color.primary)
                             .frame(width: 26)
 
                         VStack(alignment: .leading, spacing: 2) {
@@ -217,7 +217,7 @@ struct SettingsView: View {
                                 }
                                 if machine.isPaused {
                                     Text("· Paused")
-                                        .foregroundStyle(BrandPalette.amber)
+                                        .foregroundStyle(Palette.warning)
                                 }
                             }
                             .font(.caption)
@@ -295,7 +295,7 @@ struct SettingsView: View {
                     editingProfileSheet = true
                 } label: {
                     HStack {
-                        Label("Public Leaderboard Profile", systemImage: "globe")
+                        Label("Public Leaderboard Profile", systemImage: "trophy")
                             .foregroundStyle(.primary)
                         Spacer()
                         Text(profile.enabled ? (profile.anonymous ? "Anonymous" : "Public") : "Private")
@@ -380,10 +380,6 @@ struct SettingsView: View {
                 Label("Auto-Refresh", systemImage: "arrow.triangle.2.circlepath")
             }
 
-            if let expiry = sessions.session?.accessTokenExpiry {
-                LabeledContent("Token Renewal", value: expiry.formatted(date: .omitted, time: .shortened))
-            }
-
             Button {
                 Task {
                     await workspace.refresh()
@@ -422,7 +418,11 @@ struct SettingsView: View {
             Button {
                 openURL(CloudConfig.githubRepoURL)
             } label: {
-                Label("Open-Source CLI & Desktop Repo", systemImage: "chevron.left.forwardslash.chevron.right")
+                Label {
+                    Text("Source Code on GitHub")
+                } icon: {
+                    BrandProviderIcon(provider: "github", size: 20)
+                }
             }
         }
     }
@@ -559,7 +559,7 @@ private struct PublicProfileEditorSheet: View {
                     Section {
                         Text(errorMessage)
                             .font(.footnote)
-                            .foregroundStyle(BrandPalette.coral)
+                            .foregroundStyle(Palette.critical)
                     }
                 }
             }
@@ -641,7 +641,7 @@ struct PairCLIDeviceSheet: View {
                 if approved {
                     Section {
                         Label("Computer authorized! Your terminal will finish linking within a few seconds.", systemImage: "checkmark.seal.fill")
-                            .foregroundStyle(BrandPalette.emerald)
+                            .foregroundStyle(.primary)
                             .font(.subheadline)
                     }
                 }
@@ -649,7 +649,7 @@ struct PairCLIDeviceSheet: View {
                 if let errorMessage {
                     Section {
                         Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(BrandPalette.coral)
+                            .foregroundStyle(Palette.critical)
                             .font(.footnote)
                     }
                 }

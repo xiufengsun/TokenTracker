@@ -11,19 +11,20 @@ struct CloudAccessBlockedView: View {
 
     var body: some View {
         ZStack {
-            AtmosphericGlassCanvas()
+            AppBackground()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     VStack(alignment: .leading, spacing: 14) {
-                        Image(systemName: iconName)
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(BrandPalette.amber)
-                            .frame(width: 60, height: 60)
-                            .glassEffect(
-                                .regular.tint(BrandPalette.amber.opacity(0.20)),
-                                in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            )
+                        TokenTrackerMark(size: 60)
+                            .overlay(alignment: .bottomTrailing) {
+                                Image(systemName: iconName)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(.primary)
+                                    .frame(width: 30, height: 30)
+                                    .glassEffect(.regular, in: Circle())
+                                    .offset(x: 8, y: 8)
+                            }
 
                         Text(headline)
                             .font(.title.weight(.bold))
@@ -82,10 +83,10 @@ struct CloudAccessBlockedView: View {
                                 Spacer()
                                 Text(statusBadge)
                                     .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(BrandPalette.amber)
+                                    .foregroundStyle(.secondary)
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 4)
-                                    .background(BrandPalette.amber.opacity(0.14), in: Capsule())
+                                    .background(Color.primary.opacity(0.07), in: Capsule())
                             }
                         }
                     }
@@ -106,7 +107,7 @@ struct CloudAccessBlockedView: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 6)
                             }
-                            .buttonStyle(.glassProminent)
+                            .primaryGlassButton()
                             .controlSize(.large)
                             .disabled(isBusy)
 
@@ -172,9 +173,9 @@ struct CloudAccessBlockedView: View {
         HStack(alignment: .top, spacing: 12) {
             Text(number)
                 .font(.caption.weight(.bold).monospacedDigit())
-                .foregroundStyle(BrandPalette.emerald)
+                .foregroundStyle(.primary)
                 .frame(width: 24, height: 24)
-                .background(BrandPalette.emerald.opacity(0.14), in: Circle())
+                .background(Color.primary.opacity(0.08), in: Circle())
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -200,9 +201,9 @@ struct EmptySyncedDataCard: View {
                 HStack(spacing: 12) {
                     Image(systemName: "laptopcomputer.and.iphone")
                         .font(.title2.weight(.semibold))
-                        .foregroundStyle(BrandPalette.emerald)
+                        .foregroundStyle(.primary)
                         .frame(width: 46, height: 46)
-                        .background(BrandPalette.emerald.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Waiting for Your First Sync")
@@ -232,11 +233,11 @@ struct EmptySyncedDataCard: View {
 
                 HStack(spacing: 10) {
                     Button(action: onPairCLI) {
-                        Label("Approve CLI Code", systemImage: "qrcode.viewfinder")
+                        Label("Approve CLI Code", systemImage: "terminal")
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.glassProminent)
+                    .primaryGlassButton()
 
                     Button(action: onRefresh) {
                         Label("Refresh", systemImage: "arrow.clockwise")
@@ -263,9 +264,9 @@ struct WorkspaceFailureView: View {
 
             Image(systemName: "wifi.exclamationmark")
                 .font(.system(size: 32, weight: .semibold))
-                .foregroundStyle(BrandPalette.amber)
+                .foregroundStyle(.primary)
                 .frame(width: 68, height: 68)
-                .glassEffect(.regular.tint(BrandPalette.amber.opacity(0.18)), in: Circle())
+                .glassEffect(.regular, in: Circle())
 
             VStack(spacing: 8) {
                 Text("Couldn't Reach TokenTracker Cloud")
@@ -289,7 +290,7 @@ struct WorkspaceFailureView: View {
                         }
                         .padding(.horizontal, 10)
                     }
-                    .buttonStyle(.glassProminent)
+                    .primaryGlassButton()
                     .controlSize(.large)
                     .disabled(isBusy)
 

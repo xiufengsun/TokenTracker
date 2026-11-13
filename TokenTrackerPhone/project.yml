@@ -31,8 +31,6 @@ targets:
         group: Shared
       - path: ../TokenTrackerBar/TokenTrackerBar/Utilities/TokenFormatter.swift
         group: Shared
-      - path: ../TokenTrackerBar/TokenTrackerBar/Views/BoltShape.swift
-        group: Shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(TT_BUNDLE_PREFIX).tokentracker.phone

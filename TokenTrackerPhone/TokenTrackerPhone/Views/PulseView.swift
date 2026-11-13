@@ -6,13 +6,12 @@ struct PulseView: View {
     @ObservedObject var workspace: WorkspaceModel
     let onPairCLI: () -> Void
 
-    @Namespace private var horizonNamespace
     @State private var selectedProvider: RankedProviderItem?
 
     var body: some View {
         NavigationStack {
             ZStack {
-                AtmosphericGlassCanvas()
+                AppBackground()
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
@@ -21,7 +20,7 @@ struct PulseView: View {
                         if let warning = workspace.warningBanner {
                             InlineNoticeBanner(
                                 icon: "exclamationmark.triangle.fill",
-                                tint: BrandPalette.amber,
+                                tint: Palette.warning,
                                 message: warning,
                                 actionTitle: "Retry"
                             ) {
@@ -78,33 +77,12 @@ struct PulseView: View {
     // MARK: - Top Liquid Glass Control Strip
 
     private var controlStrip: some View {
-        GlassEffectContainer(spacing: 8) {
-            HStack(spacing: 8) {
-                ForEach(UsageHorizon.allCases) { item in
-                    let selected = workspace.horizon == item
-                    Button {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            workspace.horizon = item
-                        }
-                    } label: {
-                        Text(item.label)
-                            .font(.subheadline.weight(selected ? .semibold : .medium))
-                            .foregroundStyle(selected ? Color.primary : Color.secondary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(
-                        selected
-                            ? .regular.tint(BrandPalette.emerald.opacity(0.28)).interactive()
-                            : .regular.interactive(),
-                        in: .capsule
-                    )
-                    .glassEffectID(item.id, in: horizonNamespace)
-                    .accessibilityIdentifier("pulse.horizon.\(item.rawValue)")
-                }
-            }
-        }
+        GlassSegmentedControl(
+            items: UsageHorizon.allCases,
+            selection: $workspace.horizon,
+            label: \.label,
+            identifierPrefix: "pulse.horizon"
+        )
     }
 
     private var deviceScopeMenu: some View {
@@ -144,7 +122,7 @@ struct PulseView: View {
             HStack(spacing: 5) {
                 Image(systemName: activeDevice == nil ? "laptopcomputer.and.iphone" : "desktopcomputer")
                     .font(.footnote.weight(.semibold))
-                Text(activeDevice?.displayName ?? "All Macs & PCs")
+                Text(activeDevice?.displayName ?? "All Computers")
                     .font(.footnote.weight(.medium))
                     .lineLimit(1)
             }
@@ -173,13 +151,10 @@ struct PulseView: View {
                             : "\(Int((ratio * 100).rounded()))% of 30d avg"
                         Text(deltaText)
                             .font(.caption.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(ratio >= 1.35 ? BrandPalette.amber : BrandPalette.emerald)
+                            .foregroundStyle(.secondary)
                             .padding(.horizontal, 9)
                             .padding(.vertical, 4)
-                            .background(
-                                (ratio >= 1.35 ? BrandPalette.amber : BrandPalette.emerald).opacity(0.14),
-                                in: Capsule()
-                            )
+                            .background(Color.primary.opacity(0.07), in: Capsule())
                     } else if let count = snapshot.cloudAccount?.machineCount, count > 0, workspace.selectedDeviceId == nil {
                         Text("\(count) \(count == 1 ? "computer" : "computers")")
                             .font(.caption.weight(.medium))
@@ -240,12 +215,12 @@ struct PulseView: View {
                                  ? "\(Int(max(0, (1 - fraction) * 100).rounded()))% left"
                                  : "\(Int((fraction * 100).rounded()))% used")
                                 .font(.caption.weight(.semibold).monospacedDigit())
-                                .foregroundStyle(BrandPalette.paceColor(fraction: fraction))
+                                .foregroundStyle(Palette.paceColor(fraction: fraction))
                         }
 
                         PaceMeterBar(
                             percent: barPct,
-                            fillColor: BrandPalette.paceColor(fraction: fraction),
+                            fillColor: Palette.paceColor(fraction: fraction),
                             pacePercent: pace.pacePercent,
                             paceOver: pace.paceOver,
                             height: 7
@@ -271,11 +246,17 @@ struct PulseView: View {
                 workspace.selectedTab = .limits
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "gauge.with.dots.needle.67percent")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(hottestColor(hottest))
-                        .frame(width: 34, height: 34)
-                        .background(hottestColor(hottest).opacity(0.15), in: Circle())
+                    Group {
+                        if let hottest, hottest.hottestBudgetFraction != nil {
+                            ProviderEmblem(source: hottest.source, size: 34)
+                        } else {
+                            Image(systemName: "gauge.with.dots.needle.67percent")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .frame(width: 34, height: 34)
+                                .background(Color.primary.opacity(0.06), in: Circle())
+                        }
+                    }
 
                     VStack(alignment: .leading, spacing: 2) {
                         if let hottest, let frac = hottest.hottestBudgetFraction {
@@ -311,11 +292,6 @@ struct PulseView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("pulse.pacingBridge")
         }
-    }
-
-    private func hottestColor(_ profile: ProviderPacingProfile?) -> Color {
-        guard let frac = profile?.hottestBudgetFraction else { return BrandPalette.emerald }
-        return BrandPalette.paceColor(fraction: frac)
     }
 
     private func pacingSubtitle(snapshot: PhoneWorkspaceSnapshot, burst5h: Int) -> String {
@@ -448,48 +424,68 @@ private struct TokenCompositionStrip: View {
     let totals: TokenTotals
     let prefs: PhonePreferences
 
-    private var segments: [(String, Int, Color)] {
+    private struct Segment: Identifiable {
+        let id: String
+        let tokens: Int
+        let shade: Color
+    }
+
+    private var segments: [Segment] {
         [
-            ("Input", totals.inputTokens, Color.blue),
-            ("Output", totals.outputTokens, Color.indigo),
-            ("Cache read", totals.cachedInputTokens, BrandPalette.emerald),
-            ("Cache write", totals.cacheCreationInputTokens, BrandPalette.amber),
-        ].filter { $0.1 > 0 }
+            Segment(id: "Input", tokens: totals.inputTokens, shade: Palette.step(0)),
+            Segment(id: "Output", tokens: totals.outputTokens, shade: Palette.step(1)),
+            Segment(id: "Cache read", tokens: totals.cachedInputTokens, shade: Palette.step(2)),
+            Segment(id: "Cache write", tokens: totals.cacheCreationInputTokens, shade: Palette.step(3)),
+        ].filter { $0.tokens > 0 }
     }
 
     var body: some View {
         if !segments.isEmpty {
-            let sum = max(segments.reduce(0) { $0 + $1.1 }, 1)
-            VStack(alignment: .leading, spacing: 8) {
+            let sum = max(segments.reduce(0) { $0 + $1.tokens }, 1)
+            VStack(alignment: .leading, spacing: 10) {
                 GeometryReader { geo in
+                    let gaps = CGFloat(segments.count - 1) * 2
                     HStack(spacing: 2) {
-                        ForEach(segments, id: \.0) { seg in
-                            seg.2
-                                .frame(width: max(3, geo.size.width * CGFloat(seg.1) / CGFloat(sum) - 2))
+                        ForEach(segments) { seg in
+                            seg.shade
+                                .frame(width: max(3, (geo.size.width - gaps) * CGFloat(seg.tokens) / CGFloat(sum)))
                         }
                     }
                     .clipShape(Capsule())
                 }
                 .frame(height: 6)
 
-                HStack(spacing: 12) {
-                    ForEach(segments.prefix(3), id: \.0) { seg in
-                        HStack(spacing: 5) {
-                            Circle().fill(seg.2).frame(width: 6, height: 6)
-                            Text(seg.0)
+                // Two fixed columns; labels never shrink below their natural width.
+                LazyVGrid(
+                    columns: [GridItem(.flexible(), spacing: 16, alignment: .leading),
+                              GridItem(.flexible(), spacing: 16, alignment: .leading)],
+                    alignment: .leading,
+                    spacing: 6
+                ) {
+                    ForEach(segments) { seg in
+                        HStack(spacing: 6) {
+                            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                .fill(seg.shade)
+                                .frame(width: 8, height: 8)
+                            Text(seg.id)
                                 .foregroundStyle(.secondary)
-                            Text(prefs.formatTokens(seg.1))
+                                .lineLimit(1)
+                                .fixedSize()
+                            Spacer(minLength: 4)
+                            Text(prefs.formatTokens(seg.tokens))
                                 .fontWeight(.medium)
                                 .monospacedDigit()
+                                .lineLimit(1)
                         }
-                        .font(.caption2)
+                        .font(.caption)
                     }
-                    Spacer(minLength: 0)
-                    if totals.cacheHitRatio > 0.05 {
-                        Text("\(Int((totals.cacheHitRatio * 100).rounded()))% cached")
-                            .font(.caption2.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(BrandPalette.emerald)
-                    }
+                }
+
+                if totals.cacheHitRatio > 0.05 {
+                    Text("\(Int((totals.cacheHitRatio * 100).rounded()))% of input served from cache")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
             }
         }
@@ -500,6 +496,10 @@ private struct HourlyPulseChartCard: View {
     let hourly: PhoneHourlyUsageResponse
     let now: Date
     let prefs: PhonePreferences
+
+    private var currentHour: Int {
+        Calendar.localGregorian.component(.hour, from: now)
+    }
 
     private struct HourBucketPoint: Identifiable {
         let id: Int
@@ -537,7 +537,7 @@ private struct HourlyPulseChartCard: View {
                         x: .value("Hour", point.hour),
                         y: .value("Tokens", point.tokens)
                     )
-                    .foregroundStyle(BrandPalette.emerald.gradient)
+                    .foregroundStyle(Color.primary.opacity(point.hour == currentHour ? 1 : 0.72))
                     .cornerRadius(3)
                 }
                 .chartXScale(domain: 0...23)
@@ -627,14 +627,14 @@ private struct DailyTrendChartCard: View {
                                 x: .value("Day", pt.date, unit: .day),
                                 y: .value("Cost", pt.cost * prefs.currency.defaultRate)
                             )
-                            .foregroundStyle(BrandPalette.emerald.gradient)
+                            .foregroundStyle(Color.primary.opacity(0.8))
                             .cornerRadius(2.5)
                         } else {
                             BarMark(
                                 x: .value("Day", pt.date, unit: .day),
                                 y: .value("Tokens", pt.tokens)
                             )
-                            .foregroundStyle(Color.indigo.gradient)
+                            .foregroundStyle(Color.primary.opacity(0.8))
                             .cornerRadius(2.5)
                         }
                     }
@@ -714,7 +714,7 @@ private struct ProviderShareRow: View {
 
             PaceMeterBar(
                 percent: share * 100,
-                fillColor: ProviderIdentity.tint(provider.source),
+                fillColor: Color.primary.opacity(0.75),
                 height: 5
             )
         }
@@ -727,17 +727,13 @@ private struct ModelShareRow: View {
     let share: Double
     let prefs: PhonePreferences
 
-    private static let palette: [Color] = [
-        BrandPalette.emerald, .blue, .indigo, .teal, .orange, .purple
-    ]
-
     var body: some View {
-        let tint = Self.palette[rankIndex % Self.palette.count]
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
-                Circle()
-                    .fill(tint)
-                    .frame(width: 8, height: 8)
+                Text("\(rankIndex + 1)")
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(model.name)
@@ -762,7 +758,7 @@ private struct ModelShareRow: View {
                 }
             }
 
-            PaceMeterBar(percent: share * 100, fillColor: tint.opacity(0.85), height: 4)
+            PaceMeterBar(percent: share * 100, fillColor: Color.primary.opacity(0.7), height: 4)
         }
     }
 }
@@ -779,10 +775,10 @@ private struct HeatmapSurfaceCard: View {
     private func levelColor(_ level: Int) -> Color {
         switch min(max(level, 0), 4) {
         case 0: return Color.primary.opacity(0.06)
-        case 1: return BrandPalette.emerald.opacity(0.28)
-        case 2: return BrandPalette.emerald.opacity(0.50)
-        case 3: return BrandPalette.emerald.opacity(0.75)
-        default: return BrandPalette.emerald
+        case 1: return Color.primary.opacity(0.22)
+        case 2: return Color.primary.opacity(0.42)
+        case 3: return Color.primary.opacity(0.66)
+        default: return Color.primary.opacity(0.92)
         }
     }
 
@@ -795,7 +791,7 @@ private struct HeatmapSurfaceCard: View {
                     Spacer()
                     Label(streak.displayLabel, systemImage: "flame.fill")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(streak.days > 0 ? BrandPalette.emerald : .secondary)
+                        .foregroundStyle(streak.days > 0 ? Color.primary : Color.secondary)
                 }
 
                 GeometryReader { geo in

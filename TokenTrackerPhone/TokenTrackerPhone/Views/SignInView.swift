@@ -17,7 +17,7 @@ struct SignInView: View {
 
     var body: some View {
         ZStack {
-            AtmosphericGlassCanvas()
+            AppBackground()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
@@ -31,7 +31,7 @@ struct SignInView: View {
                     if let warning = sessions.signOutError {
                         InlineNoticeBanner(
                             icon: "exclamationmark.triangle.fill",
-                            tint: BrandPalette.amber,
+                            tint: Palette.warning,
                             message: warning
                         )
                     }
@@ -39,7 +39,7 @@ struct SignInView: View {
                     if let errorMessage {
                         InlineNoticeBanner(
                             icon: "xmark.octagon.fill",
-                            tint: BrandPalette.coral,
+                            tint: Palette.critical,
                             message: errorMessage
                         )
                     }
@@ -69,16 +69,14 @@ struct SignInView: View {
 
     private var brandHeader: some View {
         VStack(alignment: .leading, spacing: 16) {
-            BoltIcon(size: 30, color: BrandPalette.emerald)
-                .frame(width: 60, height: 60)
-                .glassEffect(.regular.tint(BrandPalette.emerald.opacity(0.22)), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            TokenTrackerMark(size: 64)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("TokenTracker")
+                Text("Token Tracker")
                     .font(.largeTitle.weight(.bold))
                     .tracking(-0.6)
 
-                Text("Your AI coding usage, spend velocity, and rolling windows — synced from your computers.")
+                Text("Your AI coding usage and spend, synced from your computers to TokenTracker Cloud.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -90,40 +88,37 @@ struct SignInView: View {
         TelemetrySurface(padding: 18) {
             VStack(alignment: .leading, spacing: 16) {
                 pillarRow(
-                    symbol: "chart.xyaxis.line",
-                    tint: BrandPalette.emerald,
-                    title: "Today's Spend & Token Pulse",
-                    detail: "See cross-device costs, cache efficiency, and active coding sessions across Claude, Codex, Cursor, Muse, and more."
+                    symbol: "chart.bar.xaxis",
+                    title: "Usage across every computer",
+                    detail: "Estimated cost, tokens, and sessions from Claude Code, Codex, Cursor, Muse Code, and more."
                 )
 
                 Divider()
 
                 pillarRow(
                     symbol: "gauge.with.dots.needle.67percent",
-                    tint: BrandPalette.amber,
-                    title: "Rolling Windows & Burn Pace",
-                    detail: "Track 5-hour bursts, 7-day rolling windows, and personal spend targets before hitting rate caps."
+                    title: "Pace against your own targets",
+                    detail: "Rolling 5-hour, 7-day, and 30-day windows, compared with spend targets you set on this iPhone."
                 )
 
                 Divider()
 
                 pillarRow(
                     symbol: "lock.shield",
-                    tint: .teal,
-                    title: "Privacy-First Companion",
-                    detail: "Token counts only — prompts, code, and local API keys never leave your computers."
+                    title: "Token counts only",
+                    detail: "Prompts, code, and provider keys never leave your computers."
                 )
             }
         }
     }
 
-    private func pillarRow(symbol: String, tint: Color, title: String, detail: String) -> some View {
+    private func pillarRow(symbol: String, title: String, detail: String) -> some View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: symbol)
-                .font(.body.weight(.semibold))
-                .foregroundStyle(tint)
+                .font(.body.weight(.medium))
+                .foregroundStyle(.primary)
                 .frame(width: 34, height: 34)
-                .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
@@ -143,15 +138,13 @@ struct SignInView: View {
                     Button {
                         Task { await signInWithOAuth(provider) }
                     } label: {
-                        HStack(spacing: 10) {
-                            BrandProviderIcon(provider: provider)
-                            Text("Continue with \(providerLabel(provider))")
-                                .font(.body.weight(.semibold))
+                        signInLabel {
+                            BrandProviderIcon(provider: provider, size: 20)
+                        } title: {
+                            "Continue with \(providerLabel(provider))"
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
                     }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.glass)
                     .controlSize(.large)
                     .accessibilityIdentifier("signin.oauth.\(provider.lowercased())")
                 }
@@ -160,20 +153,33 @@ struct SignInView: View {
                     errorMessage = nil
                     showEmailSheet = true
                 } label: {
-                    HStack(spacing: 10) {
+                    signInLabel {
                         Image(systemName: "envelope")
                             .font(.body.weight(.medium))
-                        Text("Sign in with Email")
-                            .font(.body.weight(.medium))
+                            .frame(width: 20, height: 20)
+                    } title: {
+                        "Continue with Email"
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
                 }
                 .buttonStyle(.glass)
                 .controlSize(.large)
                 .accessibilityIdentifier("signin.email")
             }
         }
+    }
+
+    /// Icon + title centered together, label ink, same height for every provider.
+    private func signInLabel<Icon: View>(
+        @ViewBuilder icon: () -> Icon,
+        title: () -> String
+    ) -> some View {
+        HStack(spacing: 10) {
+            icon()
+            Text(title())
+                .font(.body.weight(.semibold))
+        }
+        .foregroundStyle(.primary)
+        .frame(maxWidth: .infinity, minHeight: 30)
     }
 
     private var privacyFooter: some View {
@@ -216,7 +222,7 @@ struct SignInView: View {
                 if let errorMessage {
                     Section {
                         Label(errorMessage, systemImage: "exclamationmark.circle.fill")
-                            .foregroundStyle(BrandPalette.coral)
+                            .foregroundStyle(Palette.critical)
                             .font(.footnote)
                     }
                 }
