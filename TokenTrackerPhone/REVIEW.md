@@ -1,6 +1,6 @@
 # iPhone app review
 
-Branch `feat/ios-product-redesign`, reviewed on top of `5e382d0c`. Three review rounds, committed locally as `87c39d03`, `81a0f027` and the commit that adds this file. Nothing was pushed.
+Branch `feat/ios-product-redesign`, reviewed on top of `5e382d0c`. Three review rounds, committed locally as `87c39d03`, `81a0f027` and `f44931c5`. Nothing was pushed.
 
 ## What I found
 
@@ -44,7 +44,7 @@ Round 2, data honesty (`81a0f027`):
 - `TrackedToolBudget.upcomingRenewal` rolls auto-renewing plans forward by whole cycles.
 - I rewrote `DESIGN.md` for the monochrome system and the real data sources.
 
-Round 3, Cloud actions and polish (`81a0f027` and the final commit):
+Round 3, Cloud actions and polish (`81a0f027`, `f44931c5`):
 
 - Pause now asks for confirmation, in wording that matches the dashboard. Resume runs with one tap.
 - Synced Computers shows one row per machine, plus slot usage ("2 of 99 slots") and an over-limit footer. Rename is a swipe or context action, offered only when exactly one `account-devices` row matches the machine name.
