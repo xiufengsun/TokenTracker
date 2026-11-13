@@ -22,6 +22,7 @@ struct LimitsPacingView: View {
                             providerWindowsSection(snapshot)
                                 .id("tools")
                             cloudArchitectureBoundaryCard
+                                .id("footer")
                         } else if case .failed(let message) = workspace.phase {
                             WorkspaceFailureView(
                                 message: message,
@@ -40,6 +41,7 @@ struct LimitsPacingView: View {
                 .refreshable {
                     await workspace.refresh()
                 }
+                .scrollEdgeEffectStyle(.hard, for: .bottom)
                 .scenarioScrollAnchor(proxy)
                 }
             }
@@ -101,20 +103,13 @@ struct LimitsPacingView: View {
 
         return TelemetrySurface(padding: 18) {
             VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Account Windows")
-                        .font(.headline)
-                    Text("Estimated spend synced from all your computers")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text("Account")
+                    .font(.headline)
 
                 windowRow(
                     title: "Last 5 hours",
                     value: prefs.formatTokens(snapshot.trailingFiveHourTokens),
-                    detail: snapshot.trailingFiveHourTokens > 0
-                        ? "tokens · this hour and the 4 before it"
-                        : "No activity in the last 5 hours",
+                    detail: snapshot.trailingFiveHourTokens > 0 ? "Tokens · this hour + previous 4" : "No activity",
                     target: nil,
                     used: 0,
                     pace: nil,
@@ -126,7 +121,7 @@ struct LimitsPacingView: View {
                 windowRow(
                     title: "Today",
                     value: prefs.formatCost(snapshot.todayCostUsd),
-                    detail: "\(prefs.formatTokens(snapshot.todaySummary.totals.displayTokens)) tokens · resets at midnight",
+                    detail: "\(prefs.formatTokens(snapshot.todaySummary.totals.displayTokens)) tokens · resets midnight",
                     target: prefs.dailySpendTargetUsd,
                     used: snapshot.todayCostUsd,
                     pace: (window: 86_400, reset: endOfToday, now: snapshot.now),
@@ -138,7 +133,7 @@ struct LimitsPacingView: View {
                 windowRow(
                     title: "Last 7 days",
                     value: prefs.formatCost(snapshot.sevenDayCostUsd),
-                    detail: "\(prefs.formatTokens(rolling.last7d.totals.billableTotalTokens)) tokens · \(rolling.last7d.activeDays) of 7 days active",
+                    detail: "\(prefs.formatTokens(rolling.last7d.totals.billableTotalTokens)) tokens · \(rolling.last7d.activeDays)/7 days active",
                     target: prefs.weeklySpendTargetUsd,
                     used: snapshot.sevenDayCostUsd,
                     pace: nil,
@@ -150,7 +145,7 @@ struct LimitsPacingView: View {
                 windowRow(
                     title: "Last 30 days",
                     value: prefs.formatCost(snapshot.thirtyDayCostUsd),
-                    detail: "\(prefs.formatCost(snapshot.averageDailyCost30d)) per active day · \(rolling.last30d.activeDays) active",
+                    detail: "\(prefs.formatCost(snapshot.averageDailyCost30d))/active day · \(rolling.last30d.activeDays)/30 days active",
                     target: prefs.monthlySpendTargetUsd,
                     used: snapshot.thirtyDayCostUsd,
                     pace: nil,
@@ -161,21 +156,12 @@ struct LimitsPacingView: View {
                     Button {
                         showAccountTargetSheet = true
                     } label: {
-                        Label("Set spend targets", systemImage: "target")
+                        Label("Set Targets", systemImage: "target")
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 4)
                     }
                     .buttonStyle(.glass)
-                } else if prefs.dailySpendTargetUsd > 0 {
-                    HStack(spacing: 6) {
-                        Rectangle()
-                            .fill(Color.primary)
-                            .frame(width: 2, height: 9)
-                        Text("The notch on today's bar marks even pace until midnight.")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
                 }
             }
         }
@@ -226,16 +212,10 @@ struct LimitsPacingView: View {
                     height: 8
                 )
 
-                ViewThatFits(in: .horizontal) {
-                    HStack {
-                        targetCaption(target: target, fraction: fraction, remainingMode: remainingMode)
-                        Spacer(minLength: 8)
-                        paceCaption(paceResult)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        targetCaption(target: target, fraction: fraction, remainingMode: remainingMode)
-                        paceCaption(paceResult)
-                    }
+                HStack(alignment: .firstTextBaseline) {
+                    targetCaption(target: target, fraction: fraction, remainingMode: remainingMode)
+                    Spacer(minLength: 8)
+                    paceCaption(paceResult)
                 }
             }
 
@@ -258,12 +238,12 @@ struct LimitsPacingView: View {
     private func paceCaption(_ result: LimitPace.Result?) -> some View {
         if let result {
             if let eta = result.runsOutEta {
-                Text("Reaches target in ~\(eta) at this pace")
+                Text("Target in ~\(eta)")
                     .font(.caption)
                     .foregroundStyle(Palette.critical)
                     .lineLimit(1)
             } else if let projected = result.projectedEnd {
-                Text("On pace for \(projected)% by midnight")
+                Text("\(projected)% by midnight")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -276,25 +256,15 @@ struct LimitsPacingView: View {
     private func providerWindowsSection(_ snapshot: PhoneWorkspaceSnapshot) -> some View {
         let profiles = snapshot.providerPacingProfiles(budgets: prefs.toolBudgets)
         return VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Coding Tools")
-                    .font(.headline)
-                Text("Tap a tool to set a spend cap or plan renewal date.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 4)
+            Text("Coding Tools")
+                .font(.headline)
+                .padding(.horizontal, 4)
 
             if profiles.isEmpty {
                 TelemetrySurface(padding: 18) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("No tool activity in the last 30 days")
-                            .font(.subheadline.weight(.semibold))
-                        Text("When Claude Code, Codex, Cursor, Muse Code, or another tool syncs usage to Cloud, it appears here.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    Text("No tool activity in the last 30 days")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
             } else {
                 ForEach(profiles) { profile in
@@ -424,28 +394,13 @@ struct LimitsPacingView: View {
         }
     }
 
-    // MARK: - 3. Honest Architecture Disclosure (Local Credentials vs Cloud Sync)
+    // MARK: - 3. Where provider rate limits live
 
     private var cloudArchitectureBoundaryCard: some View {
-        TelemetrySurface(padding: 16) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "lock.laptopcomputer")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 32, height: 32)
-                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Provider rate limits stay on your computer")
-                        .font(.footnote.weight(.semibold))
-
-                    Text("Claude, Codex, Cursor, and other plan limits are read with sign-in credentials stored on your computer. Those credentials and limit readings are never uploaded, so the menu bar app and desktop dashboard show them, not this iPhone. Here you see Cloud-synced spend against targets you set.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
+        Label("Provider rate limits show on your computer.", systemImage: "lock.laptopcomputer")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
     }
 }
 
@@ -463,18 +418,18 @@ private struct AccountSpendTargetsSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    targetField(title: "Daily Target (USD)", placeholder: "Off (e.g. 25)", text: $dailyText)
-                    targetField(title: "7-Day Target (USD)", placeholder: "Off (e.g. 120)", text: $weeklyText)
-                    targetField(title: "30-Day Target (USD)", placeholder: "Off (e.g. 400)", text: $monthlyText)
+                    targetField(title: "Daily (USD)", placeholder: "Off", text: $dailyText)
+                    targetField(title: "7 Days (USD)", placeholder: "Off", text: $weeklyText)
+                    targetField(title: "30 Days (USD)", placeholder: "Off", text: $monthlyText)
                 } header: {
-                    Text("Account Spend Targets")
+                    Text("Account")
                 } footer: {
-                    Text("Targets are stored privately on this iPhone and compared against your Cloud-synced estimated USD spend. Leave blank or 0 to disable a bar.")
+                    Text("Stored on this iPhone. Leave blank to turn off.")
                 }
 
                 if prefs.dailySpendTargetUsd > 0 || prefs.weeklySpendTargetUsd > 0 || prefs.monthlySpendTargetUsd > 0 {
                     Section {
-                        Button("Clear All Account Targets", role: .destructive) {
+                        Button("Clear Targets", role: .destructive) {
                             prefs.dailySpendTargetUsd = 0
                             prefs.weeklySpendTargetUsd = 0
                             prefs.monthlySpendTargetUsd = 0
@@ -537,7 +492,7 @@ private struct ToolBudgetEditorSheet: View {
             Form {
                 Section {
                     HStack {
-                        Text("7-Day Spend Cap (USD)")
+                        Text("7-Day Cap (USD)")
                         Spacer()
                         TextField("Optional", text: $weeklyUsd)
                             .keyboardType(.decimalPad)
@@ -545,7 +500,7 @@ private struct ToolBudgetEditorSheet: View {
                             .frame(width: 110)
                     }
                     HStack {
-                        Text("30-Day Spend Cap (USD)")
+                        Text("30-Day Cap (USD)")
                         Spacer()
                         TextField("Optional", text: $monthlyUsd)
                             .keyboardType(.decimalPad)
@@ -553,13 +508,11 @@ private struct ToolBudgetEditorSheet: View {
                             .frame(width: 110)
                     }
                 } header: {
-                    Text("\(ProviderIdentity.displayName(source)) Spend Caps")
-                } footer: {
-                    Text("Evaluated against Cloud-synced estimated model spend for \(ProviderIdentity.displayName(source)).")
+                    Text("Spend Caps")
                 }
 
                 Section {
-                    Toggle("Track Subscription Renewal", isOn: $trackRenewal)
+                    Toggle("Track Renewal", isOn: $trackRenewal)
                     if trackRenewal {
                         Picker("Billing Cycle", selection: $billingCycle) {
                             Text("Monthly").tag("monthly")
@@ -574,7 +527,7 @@ private struct ToolBudgetEditorSheet: View {
 
                 if prefs.toolBudgets[source.lowercased()] != nil {
                     Section {
-                        Button("Remove \(ProviderIdentity.shortName(source)) Rules", role: .destructive) {
+                        Button("Remove Caps and Renewal", role: .destructive) {
                             prefs.updateToolBudget(TrackedToolBudget(source: source))
                             dismiss()
                         }

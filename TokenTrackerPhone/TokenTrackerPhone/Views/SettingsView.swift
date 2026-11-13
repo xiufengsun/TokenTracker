@@ -38,6 +38,7 @@ struct SettingsView: View {
                 signOutSection
             }
             .listStyle(.insetGrouped)
+            .scrollEdgeEffectStyle(.hard, for: .bottom)
             .scenarioScrollAnchor(proxy)
             }
             .navigationTitle("Settings")
@@ -70,8 +71,6 @@ struct SettingsView: View {
                         }
                     }
                 }
-            } message: {
-                Text("The new name shows on every device signed in to this account.")
             }
             .confirmationDialog(
                 "Sign out of TokenTracker?",
@@ -84,7 +83,7 @@ struct SettingsView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Removes your Cloud session token from this iPhone's Keychain. Synced Cloud history stays intact on your account.")
+                Text("Your Cloud history stays on your account.")
             }
         }
     }
@@ -173,20 +172,20 @@ struct SettingsView: View {
 
             if let membership {
                 let mins = max(1, membership.syncIntervalSeconds / 60)
-                LabeledContent("Cloud Sync Cadence", value: membership.syncIntervalSeconds == 0 ? "Instant" : "Every \(mins) min")
+                LabeledContent("Sync", value: membership.syncIntervalSeconds == 0 ? "Instant" : "Every \(mins) min")
                 if let hourlyDays = membership.hourlyHistoryDays, let dailyMonths = membership.dailyHistoryMonths {
-                    LabeledContent("Cloud Retention", value: "\(hourlyDays)d hourly · \(dailyMonths)m daily")
+                    LabeledContent("Retention", value: "\(hourlyDays)d hourly · \(dailyMonths)m daily")
                 }
             }
 
             Button(action: onPairCLI) {
-                Label("Approve CLI Pairing Code…", systemImage: "terminal")
+                Label("Approve CLI Code", systemImage: "terminal")
             }
             .accessibilityIdentifier("settings.pairCLI")
         } header: {
             Text("TokenTracker Cloud")
         } footer: {
-            Text("TokenTracker on iPhone reads usage synced from your computers. No prompts, code, or provider keys are uploaded to Cloud.")
+            Text("Token counts only. Prompts, code, and keys stay on your computers.")
         }
     }
 
@@ -204,7 +203,7 @@ struct SettingsView: View {
 
         Section {
             if machines.isEmpty {
-                Text(deviceRows.isEmpty ? "No computers are syncing to Cloud yet." : "Cloud sync slots couldn't load. Pull down on Pulse to refresh.")
+                Text(deviceRows.isEmpty ? "No computers syncing yet" : "Couldn't load computers")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
@@ -225,9 +224,9 @@ struct SettingsView: View {
                 }
             }
         } footer: {
-            Text(machineList?.overMachineLimit == true
-                 ? "This account has more computers than sync slots. Pause one so the others can keep syncing."
-                 : "Pausing frees the computer's sync slot and stops new uploads. Its history stays in Cloud, and you can resume it here.")
+            if machineList?.overMachineLimit == true {
+                Text("More computers than sync slots. Pause one to keep the others syncing.")
+            }
         }
         .id("computers")
         .confirmationDialog(
@@ -239,7 +238,7 @@ struct SettingsView: View {
             Button("Pause Sync", role: .destructive) { toggleMachine(machine) }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text("New uploads stop and its sync slot is freed. Local data and Cloud history stay. The computer signs in again after you resume it.")
+            Text("Its sync slot is freed and new uploads stop. Local data and Cloud history stay. Resume it here before syncing again.")
         }
     }
 
@@ -327,7 +326,7 @@ struct SettingsView: View {
             .id("privacy")
 
             Toggle(isOn: $prefs.hideSwitcherSnapshot) {
-                Label("Privacy Blur in App Switcher", systemImage: "rectangle.portrait.slash")
+                Label("Blur in App Switcher", systemImage: "rectangle.portrait.slash")
             }
 
             Toggle(isOn: $prefs.requireBiometricUnlock) {
@@ -339,7 +338,7 @@ struct SettingsView: View {
                     editingProfileSheet = true
                 } label: {
                     HStack {
-                        Label("Public Leaderboard Profile", systemImage: "trophy")
+                        Label("Leaderboard Profile", systemImage: "trophy")
                             .foregroundStyle(.primary)
                         Spacer()
                         Text(profile.enabled ? (profile.anonymous ? "Anonymous" : "Public") : "Private")
@@ -354,7 +353,7 @@ struct SettingsView: View {
         } header: {
             Text("Privacy & Security")
         } footer: {
-            Text("Mask Cost Figures hides dollar totals when checking usage in public. Leaderboard visibility syncs directly with your TokenTracker account.")
+            Text("Mask Cost Figures also hides cost on share cards.")
         }
     }
 
@@ -375,7 +374,7 @@ struct SettingsView: View {
                     Text(curr.displayLabel).tag(curr)
                 }
             } label: {
-                Label("Display Currency", systemImage: "dollarsign.circle")
+                Label("Currency", systemImage: "dollarsign.circle")
             }
 
             Picker(selection: $prefs.tokenNumberFormat) {
@@ -401,13 +400,13 @@ struct SettingsView: View {
                     Text(style.label).tag(style)
                 }
             } label: {
-                Label("Limit & Target Bars", systemImage: "chart.bar.xaxis")
+                Label("Target Bars", systemImage: "chart.bar.xaxis")
             }
         } header: {
             Text("Appearance & Units")
         } footer: {
             if prefs.currency != .usd {
-                Text("Converted from USD estimates at 1 USD = \(String(format: "%.2f", prefs.currency.defaultRate)) \(prefs.currency.rawValue).")
+                Text("1 USD = \(String(format: "%.2f", prefs.currency.defaultRate)) \(prefs.currency.rawValue)")
             }
         }
     }
@@ -434,7 +433,7 @@ struct SettingsView: View {
                 }
             } label: {
                 HStack {
-                    Label("Refresh Cloud Data Now", systemImage: "arrow.clockwise")
+                    Label("Refresh Now", systemImage: "arrow.clockwise")
                     Spacer()
                     if workspace.isRefreshing {
                         ProgressView()
@@ -443,7 +442,7 @@ struct SettingsView: View {
             }
             .disabled(workspace.isRefreshing)
         } header: {
-            Text("Session & Sync")
+            Text("Sync")
         }
     }
 
@@ -466,7 +465,7 @@ struct SettingsView: View {
                 openURL(CloudConfig.githubRepoURL)
             } label: {
                 Label {
-                    Text("Source Code on GitHub")
+                    Text("Source Code")
                 } icon: {
                     BrandProviderIcon(provider: "github", size: 20)
                 }
@@ -490,6 +489,7 @@ struct SettingsView: View {
             }
             .accessibilityIdentifier("settings.signOut")
         }
+        .id("signout")
     }
 
     // MARK: - Helpers
@@ -503,7 +503,7 @@ struct SettingsView: View {
             do {
                 try await workspace.setMachinePaused(machine.machineId, paused: !machine.isPaused)
                 actionNotice = machine.isPaused
-                    ? "Resumed \(machine.displayName). It reconnects on its next sync."
+                    ? "Resumed \(machine.displayName)."
                     : "Paused \(machine.displayName)."
             } catch {
                 actionError = error.localizedDescription
@@ -582,12 +582,12 @@ private struct PublicProfileEditorSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Toggle("Appear on Public Leaderboard", isOn: $enabled)
+                    Toggle("Show on Leaderboard", isOn: $enabled)
                     if enabled {
-                        Toggle("Hide Identity (Anonymous Handle)", isOn: $anonymous)
+                        Toggle("Anonymous", isOn: $anonymous)
                     }
                 } footer: {
-                    Text("When off, your token usage and profile page are completely private.")
+                    Text("Off keeps your usage and profile private.")
                 }
 
                 if enabled && !anonymous {
@@ -680,14 +680,14 @@ struct PairCLIDeviceSheet: View {
                             }
                         }
                 } header: {
-                    Text("8-Character Pairing Code")
+                    Text("Code")
                 } footer: {
-                    Text("Run `npx tokentracker@latest login` on a Mac, Linux, or Windows terminal and enter the code shown there to link that computer to your Cloud account.")
+                    Text("From `npx tokentracker@latest login` on your computer.")
                 }
 
                 if approved {
                     Section {
-                        Label("Computer authorized! Your terminal will finish linking within a few seconds.", systemImage: "checkmark.seal.fill")
+                        Label("Approved. Your terminal finishes in a few seconds.", systemImage: "checkmark.seal.fill")
                             .foregroundStyle(.primary)
                             .font(.subheadline)
                     }
@@ -710,7 +710,7 @@ struct PairCLIDeviceSheet: View {
                             if isSubmitting {
                                 ProgressView()
                             } else {
-                                Text(approved ? "Done" : "Authorize Computer")
+                                Text(approved ? "Done" : "Approve")
                                     .fontWeight(.semibold)
                             }
                             Spacer()
@@ -719,7 +719,7 @@ struct PairCLIDeviceSheet: View {
                     .disabled(isSubmitting || (!approved && CloudAPIClient.normalizeCLICode(code).count != 9))
                 }
             }
-            .navigationTitle("Approve CLI Login")
+            .navigationTitle("Approve CLI Code")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

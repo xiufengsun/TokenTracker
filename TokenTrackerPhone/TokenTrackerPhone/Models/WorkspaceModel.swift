@@ -96,6 +96,20 @@ final class WorkspaceModel: ObservableObject {
         await refresh()
     }
 
+    /// Year heatmap for the share card, the same 52 weeks the dashboard's share
+    /// flow uses. Falls back to the Pulse heatmap if Cloud can't serve it.
+    func shareHeatmap() async -> HeatmapResponse? {
+        guard let snapshot else { return nil }
+        let year = try? await client.heatmap(
+            weeks: Self.shareHeatmapWeeks,
+            to: DayKey.string(snapshot.now),
+            deviceId: snapshot.selectedDeviceId
+        )
+        return year ?? snapshot.heatmap
+    }
+
+    static let shareHeatmapWeeks = 52
+
     func authorizeCLIDevice(code: String) async throws {
         try await client.authorizeCLIDevice(userCode: code)
         if var snap = snapshot {

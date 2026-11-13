@@ -15,13 +15,14 @@ Anything that needs local credentials (provider rate limits, launch at login, po
 ```
 RootContainerView
 ├── Signed out ─► SignInView
-│                  GitHub / Google (PKCE via ASWebAuthenticationSession), email + password sheet
+│                  Logo, title, one line; GitHub / Google (PKCE via ASWebAuthenticationSession),
+│                  email + password sheet; one footer line
 └── Signed in (Keychain session, single-flight refresh)
     ├── No Cloud read access ─► CloudAccessBlockedView
-    │     Explains computer → Cloud → iPhone, shows the account, offers
-    │     Check Again / Approve CLI Code / Sign Out. No prices, upgrade prompts or purchase links.
+    │     Logo, short title, two sentences max, the account, then
+    │     Check Access / Approve CLI Code / Switch Account. No prices, upgrade prompts or purchase links.
     └── TabView (Liquid Glass tab bar, minimizes on scroll)
-        ├── Pulse     horizon (Today · Week · Month · 24M), computer filter, cost + tokens,
+        ├── Pulse     toolbar: computer filter + Share. Horizon (Today · Week · Month · 24M), cost + tokens,
         │             token composition, daily-target bar, link to Pacing, hourly / 30-day chart,
         │             coding tools (tap for models), top models, 18-week heatmap
         ├── Pacing    Used / Remaining toggle, account windows (last 5 hours, today, 7 days,
@@ -55,13 +56,26 @@ Targets, caps and renewal dates are stored only on the phone (`UserDefaults`).
 - Sign-in: official GitHub Mark (template, label color) and four-color Google G (original colors) from `LoginCard.jsx`; email uses the system envelope.
 - Type: San Francisco Dynamic Type styles, rounded bold for the hero cost, `.monospacedDigit()` on every number. Labels that must not break (token composition, window captions) use `fixedSize` / `lineLimit(1)` with `ViewThatFits` fallbacks instead of wrapping mid-word.
 
-## 5. States
+- Copy: labels, numbers and actions. No feature explainers, no "tap to…" hints, no paragraphs about how the app works. A footer appears only when it carries a fact the screen cannot show (for example "Mask Cost Figures also hides cost on share cards").
+- Scroll content ends above the floating tab bar: every tab scroll view uses `scrollEdgeEffectStyle(.hard, for: .bottom)` and the system bottom inset, so the last row is reachable and readable.
+
+## 5. Share
+
+The phone reuses the dashboard's share card, not a new format. Source: `dashboard/src/ui/share/`.
+
+- Entry: Share button in the Pulse toolbar, next to the computer filter. It is disabled until the current period has loaded with usage, so Share never produces a card for an empty, blocked or offline state.
+- Data: `ShareCardData.build` ports `build-share-card-data.ts` and `buildTopModels`. Tokens and cost come from the current period's `account-summary`, top models from that period's `account-model-breakdown`, the heatmap from a 52-week `account-heatmap` call (the dashboard's share heatmap), falling back to the Pulse heatmap. Handle follows the dashboard's identity rule (name with non `[A-Za-z0-9._-]` replaced, "Anonymous" for email-like or empty names). There is no rank: the phone does not read the leaderboard, so Broadsheet prints the dashboard's "№ —".
+- Mask Cost Figures sets the card cost to nil before rendering; the poster shows `$•••`.
+- Styles: `NeonShareCard` (style id `annual-report`, 1080 × 1865, `neon_bg.png`, month heatmap, two stats, two facts, product mark footer, `tokentracker.cc`) and `BroadsheetShareCard` (1200 × 1630, ivory / ink / vermillion from the card's oklch literals, Times New Roman from the card's own serif fallback stack). CSS backdrop blur is approximated with the same translucent fill and an inset hairline.
+- Output: `ImageRenderer` at 2× (the dashboard's capture pixel ratio) to PNG, handed to `ShareLink` with the `dashboard.screenshot.twitter_text` caption and `https://www.tokentracker.cc/u/{userId}?ref=share`. Generated on the device, never uploaded.
+
+## 6. States
 
 | State | Where | Behavior |
 |---|---|---|
 | Signed out | SignInView | OAuth providers from `/api/auth/public-config`, email sheet |
 | No Cloud read access / read window ended | CloudAccessBlockedView | Distinct copy per server code, retry, approve CLI code, sign out |
-| Cloud active, nothing synced | Pulse empty card | `npx tokentracker@latest init`, approve CLI code, refresh |
+| Cloud active, nothing synced | Pulse empty card | `npx tokentracker@latest init`, approve CLI code, refresh; Share disabled |
 | Network or server failure, no cached data | WorkspaceFailureView | Message, Try Again, Settings |
 | Partial failure with data | Pulse banner | "Some details couldn't load", Retry |
 | Locked | Privacy overlay | Product mark, Face ID / passcode unlock; also covers the app switcher |

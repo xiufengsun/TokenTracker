@@ -3,10 +3,13 @@ import SwiftUI
 
 struct PulseView: View {
     @EnvironmentObject private var prefs: PhonePreferences
+    @EnvironmentObject private var sessions: SessionStore
     @ObservedObject var workspace: WorkspaceModel
     let onPairCLI: () -> Void
 
     @State private var selectedProvider: RankedProviderItem?
+    @State private var shareRequest: ShareRequest?
+    @State private var preparingShare = false
 
     var body: some View {
         NavigationStack {
@@ -44,6 +47,7 @@ struct PulseView: View {
                                     .id("models")
                                 consistencyHeatmapSection(snapshot)
                                 syncFootnote(snapshot)
+                                    .id("footer")
                             }
                         } else if case .failed(let message) = workspace.phase {
                             WorkspaceFailureView(
@@ -63,6 +67,7 @@ struct PulseView: View {
                 .refreshable {
                     await workspace.refresh()
                 }
+                .scrollEdgeEffectStyle(.hard, for: .bottom)
                 .scenarioScrollAnchor(proxy)
                 }
             }
@@ -72,11 +77,81 @@ struct PulseView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     deviceScopeMenu
                 }
+                ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                ToolbarItem(placement: .topBarTrailing) {
+                    shareButton
+                }
             }
             .sheet(item: $selectedProvider) { provider in
                 ProviderDetailSheet(provider: provider, horizonTitle: workspace.horizon.fullTitle)
             }
+            .sheet(item: $shareRequest) { request in
+                ShareCardSheet(
+                    data: request.data,
+                    caption: request.caption,
+                    profileURL: request.url,
+                    initialVariant: request.variant
+                )
+            }
+            #if DEBUG
+            .task(id: workspace.visibleSnapshot?.now) {
+                guard let variant = SimulatorLaunchScenario.shareVariant, shareRequest == nil,
+                      workspace.visibleSnapshot != nil else { return }
+                await openShare(variant: variant)
+            }
+            #endif
         }
+    }
+
+    // MARK: - Share (dashboard ShareModal)
+
+    struct ShareRequest: Identifiable {
+        let id = UUID()
+        let data: ShareCardData
+        let caption: String
+        let url: URL
+        let variant: ShareCardVariant
+    }
+
+    /// Nothing to share until the current period has loaded with usage.
+    private var shareableSnapshot: PhoneWorkspaceSnapshot? {
+        guard let snapshot = workspace.visibleSnapshot, !isCompletelyEmpty(snapshot) else { return nil }
+        return snapshot
+    }
+
+    private var shareButton: some View {
+        Button {
+            Task { await openShare(variant: .neon) }
+        } label: {
+            if preparingShare {
+                ProgressView()
+            } else {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+        }
+        .disabled(shareableSnapshot == nil || preparingShare)
+        .accessibilityIdentifier("pulse.share")
+    }
+
+    private func openShare(variant: ShareCardVariant) async {
+        guard let snapshot = shareableSnapshot else { return }
+        preparingShare = true
+        defer { preparingShare = false }
+        let heatmap = await workspace.shareHeatmap()
+        let data = ShareCardData.build(
+            snapshot: snapshot,
+            heatmap: heatmap,
+            userName: sessions.session?.user.name,
+            currency: prefs.currency,
+            masksCost: prefs.discreteAmounts
+        )
+        guard data.isShareable else { return }
+        shareRequest = ShareRequest(
+            data: data,
+            caption: ShareCaption.text(summaryTokens: data.totalTokens, breakdown: snapshot.periodBreakdown),
+            url: ShareCaption.profileURL(userId: sessions.session?.user.id),
+            variant: variant
+        )
     }
 
     // MARK: - Top Liquid Glass Control Strip
@@ -121,7 +196,7 @@ struct PulseView: View {
             Divider()
 
             Button(action: onPairCLI) {
-                Label("Approve CLI Code…", systemImage: "terminal")
+                Label("Approve CLI Code", systemImage: "terminal")
             }
         } label: {
             HStack(spacing: 5) {
@@ -212,7 +287,7 @@ struct PulseView: View {
 
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text("Daily target (\(prefs.formatCost(prefs.dailySpendTargetUsd, masked: false)))")
+                            Text("Daily target \(prefs.formatCost(prefs.dailySpendTargetUsd, masked: false))")
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.secondary)
                             Spacer()
@@ -268,10 +343,12 @@ struct PulseView: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
                             .fixedSize(horizontal: false, vertical: true)
-                        Text(pacingSubtitle(snapshot: snapshot, hottest: hottest))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        if let subtitle = pacingSubtitle(snapshot: snapshot, hottest: hottest, burst5h: burst5h) {
+                            Text(subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
                     }
 
                     Spacer(minLength: 6)
@@ -291,19 +368,19 @@ struct PulseView: View {
 
     private func pacingHeadline(snapshot: PhoneWorkspaceSnapshot, hottest: ProviderPacingProfile?, burst5h: Int) -> String {
         if let hottest, let frac = hottest.hottestBudgetFraction {
-            return "\(hottest.displayName) at \(Int((frac * 100).rounded()))% of its cap"
+            return "\(hottest.displayName) · \(Int((frac * 100).rounded()))% of cap"
         }
         if burst5h > 0 {
-            return "\(prefs.formatTokens(burst5h)) tokens in the last 5 hours"
+            return "\(prefs.formatTokens(burst5h)) tokens · last 5h"
         }
-        return "\(prefs.formatCost(snapshot.sevenDayCostUsd)) in the last 7 days"
+        return "\(prefs.formatCost(snapshot.sevenDayCostUsd)) · last 7 days"
     }
 
-    private func pacingSubtitle(snapshot: PhoneWorkspaceSnapshot, hottest: ProviderPacingProfile?) -> String {
-        if hottest?.hottestBudgetFraction != nil {
-            return "\(prefs.formatCost(snapshot.sevenDayCostUsd)) across all tools in 7 days"
+    private func pacingSubtitle(snapshot: PhoneWorkspaceSnapshot, hottest: ProviderPacingProfile?, burst5h: Int) -> String? {
+        if hottest?.hottestBudgetFraction != nil || burst5h > 0 {
+            return "\(prefs.formatCost(snapshot.sevenDayCostUsd)) · last 7 days"
         }
-        return "Rolling windows and targets in Pacing"
+        return nil
     }
 
     // MARK: - 3. Intraday / 30-Day Timeline Chart
@@ -400,7 +477,7 @@ struct PulseView: View {
         HStack {
             Image(systemName: "checkmark.icloud")
                 .font(.caption2)
-            Text("Synced from Cloud · \(snapshot.now, style: .time)")
+            Text("Updated \(snapshot.now, style: .time)")
                 .font(.caption)
             Spacer()
             if workspace.selectedDeviceId != nil {
@@ -489,7 +566,7 @@ private struct TokenCompositionStrip: View {
                 }
 
                 if totals.cacheHitRatio > 0.05 {
-                    Text("\(Int((totals.cacheHitRatio * 100).rounded()))% of input served from cache")
+                    Text("Cache hit \(Int((totals.cacheHitRatio * 100).rounded()))%")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -610,7 +687,7 @@ private struct DailyTrendChartCard: View {
         TelemetrySurface(padding: 18) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("30-Day Velocity")
+                    Text("Last 30 Days")
                         .font(.headline)
                     Spacer()
                     Picker("Metric", selection: $metricMode) {
@@ -623,7 +700,7 @@ private struct DailyTrendChartCard: View {
                 }
 
                 if points.allSatisfy({ $0.tokens == 0 && $0.cost == 0 }) {
-                    Text("No recorded activity in the last 30 days.")
+                    Text("No activity")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .padding(.vertical, 20)
@@ -793,7 +870,7 @@ private struct HeatmapSurfaceCard: View {
         TelemetrySurface(padding: 18) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Consistency")
+                    Text("Activity")
                         .font(.headline)
                     Spacer()
                     Label(streak.displayLabel, systemImage: "flame.fill")
@@ -822,7 +899,7 @@ private struct HeatmapSurfaceCard: View {
                 .frame(height: 7 * 16 + 6 * 3)
 
                 HStack {
-                    Text("\(heatmap.activeDays) active days in \(heatmap.weeks.count) weeks")
+                    Text("\(heatmap.activeDays) active days")
                     Spacer()
                     HStack(spacing: 3) {
                         Text("Less")
@@ -867,11 +944,11 @@ private struct ProviderDetailSheet: View {
                         .monospacedDigit()
                     LabeledContent("Total Tokens", value: prefs.formatTokens(provider.tokens))
                         .monospacedDigit()
-                    LabeledContent("Coding Sessions", value: provider.conversations.formatted())
+                    LabeledContent("Sessions", value: provider.conversations.formatted())
                         .monospacedDigit()
                 }
 
-                Section("Models Used in \(provider.displayName)") {
+                Section("Models") {
                     ForEach(provider.models) { model in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {

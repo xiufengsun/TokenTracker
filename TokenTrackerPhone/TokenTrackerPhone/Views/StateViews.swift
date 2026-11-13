@@ -34,36 +34,7 @@ struct CloudAccessBlockedView: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    .padding(.top, 20)
-
-                    TelemetrySurface(padding: 18) {
-                        VStack(alignment: .leading, spacing: 14) {
-                            Text("How TokenTracker on iPhone Works")
-                                .font(.subheadline.weight(.semibold))
-
-                            stepRow(
-                                number: "1",
-                                title: "Computers Track Locally",
-                                body: "TokenTracker CLI or the desktop app parses token usage on macOS, Windows, or Linux."
-                            )
-
-                            Divider()
-
-                            stepRow(
-                                number: "2",
-                                title: "Cloud Sync Aggregates Devices",
-                                body: "Accounts with active Cloud access sync hourly token and model summaries across machines."
-                            )
-
-                            Divider()
-
-                            stepRow(
-                                number: "3",
-                                title: "iPhone Reads Your Synced Ledger",
-                                body: "Sign in with an enabled Cloud account—or switch accounts below—to view usage and pacing here."
-                            )
-                        }
-                    }
+                    .padding(.top, 48)
 
                     if let user = sessions.session?.user {
                         TelemetrySurface(padding: 14) {
@@ -101,7 +72,7 @@ struct CloudAccessBlockedView: View {
                                     } else {
                                         Image(systemName: "arrow.clockwise")
                                     }
-                                    Text("Check Access Again")
+                                    Text("Check Access")
                                         .fontWeight(.semibold)
                                 }
                                 .frame(maxWidth: .infinity)
@@ -113,7 +84,7 @@ struct CloudAccessBlockedView: View {
 
                             if let onPairCLI {
                                 Button(action: onPairCLI) {
-                                    Label("Authorize a CLI Pairing Code", systemImage: "terminal")
+                                    Label("Approve CLI Code", systemImage: "terminal")
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 5)
                                 }
@@ -124,7 +95,7 @@ struct CloudAccessBlockedView: View {
                             Button(role: .destructive) {
                                 Task { await sessions.signOut() }
                             } label: {
-                                Label("Sign Out or Switch Account", systemImage: "rectangle.portrait.and.arrow.right")
+                                Label("Switch Account", systemImage: "rectangle.portrait.and.arrow.right")
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 5)
                             }
@@ -146,11 +117,11 @@ struct CloudAccessBlockedView: View {
     private var headline: String {
         switch code {
         case "cloud_read_only_expired":
-            return "Cloud Read Window Ended"
+            return "Cloud Access Ended"
         case "cloud_history_window_exceeded":
-            return "Outside History Window"
+            return "Outside History"
         default:
-            return "Cloud Sync Access Required"
+            return "Cloud Access Required"
         }
     }
 
@@ -161,30 +132,11 @@ struct CloudAccessBlockedView: View {
     private var explanation: String {
         switch code {
         case "cloud_read_only_expired":
-            return "This account's Cloud read-only retention window has ended, so synced usage history is not currently readable on iPhone."
+            return "This account's Cloud read window has ended."
         case "cloud_history_window_exceeded":
-            return "The selected date range precedes your account's readable Cloud history window."
+            return "This range is older than your Cloud history."
         default:
-            return "TokenTracker for iPhone is a Cloud companion and does not collect data on this device. This account does not currently have active TokenTracker Cloud read access."
-        }
-    }
-
-    private func stepRow(number: String, title: String, body: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text(number)
-                .font(.caption.weight(.bold).monospacedDigit())
-                .foregroundStyle(.primary)
-                .frame(width: 24, height: 24)
-                .background(Color.primary.opacity(0.08), in: Circle())
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.subheadline.weight(.medium))
-                Text(body)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            return "This account has no Cloud read access. Token Tracker on iPhone shows usage synced from your computers."
         }
     }
 }
@@ -206,29 +158,22 @@ struct EmptySyncedDataCard: View {
                         .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Waiting for Your First Sync")
+                        Text("No Usage Synced Yet")
                             .font(.headline)
-                        Text("Your Cloud account is ready, with no coding usage uploaded in this window yet.")
+                        Text("Run this on your computer:")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("On your Mac, Windows, or Linux machine:")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-
                     Text("npx tokentracker@latest init")
                         .font(.footnote.monospaced())
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                    Text("Enable Cloud Sync in the desktop app or run `tokentracker login` in your terminal, then approve the 8-character code right from this phone.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
 
                 HStack(spacing: 10) {

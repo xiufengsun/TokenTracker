@@ -25,6 +25,17 @@ enum SimulatorLaunchScenario: String {
         return nil
     }
 
+    /// Optional `--share neon|broadsheet`: opens the share preview from Pulse.
+    static var shareVariant: ShareCardVariant? {
+        let args = ProcessInfo.processInfo.arguments
+        guard let idx = args.firstIndex(of: "--share"), idx + 1 < args.count else { return nil }
+        switch args[idx + 1] {
+        case "neon": return .neon
+        case "broadsheet": return .broadsheet
+        default: return nil
+        }
+    }
+
     /// Optional `--scroll <anchor>` used by scripts/capture-screenshots.sh.
     static var scrollAnchor: String? {
         let args = ProcessInfo.processInfo.arguments

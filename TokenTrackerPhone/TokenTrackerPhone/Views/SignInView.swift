@@ -20,11 +20,9 @@ struct SignInView: View {
             AppBackground()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
+                VStack(alignment: .leading, spacing: 32) {
                     brandHeader
-                        .padding(.top, 28)
-
-                    valuePillars
+                        .padding(.top, 72)
 
                     authActionsSection
 
@@ -76,57 +74,9 @@ struct SignInView: View {
                     .font(.largeTitle.weight(.bold))
                     .tracking(-0.6)
 
-                Text("Your AI coding usage and spend, synced from your computers to TokenTracker Cloud.")
+                Text("AI coding usage across your computers.")
                     .font(.body)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private var valuePillars: some View {
-        TelemetrySurface(padding: 18) {
-            VStack(alignment: .leading, spacing: 16) {
-                pillarRow(
-                    symbol: "chart.bar.xaxis",
-                    title: "Usage across every computer",
-                    detail: "Estimated cost, tokens, and sessions from Claude Code, Codex, Cursor, Muse Code, and more."
-                )
-
-                Divider()
-
-                pillarRow(
-                    symbol: "gauge.with.dots.needle.67percent",
-                    title: "Pace against your own targets",
-                    detail: "Rolling 5-hour, 7-day, and 30-day windows, compared with spend targets you set on this iPhone."
-                )
-
-                Divider()
-
-                pillarRow(
-                    symbol: "lock.shield",
-                    title: "Token counts only",
-                    detail: "Prompts, code, and provider keys never leave your computers."
-                )
-            }
-        }
-    }
-
-    private func pillarRow(symbol: String, title: String, detail: String) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: symbol)
-                .font(.body.weight(.medium))
-                .foregroundStyle(.primary)
-                .frame(width: 34, height: 34)
-                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                Text(detail)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -184,9 +134,10 @@ struct SignInView: View {
 
     private var privacyFooter: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Requires an account with synced TokenTracker Cloud data from macOS, Windows, Linux, or the CLI.")
+            Text("Requires a TokenTracker Cloud account. Prompts, code, and keys stay on your computers.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Button {
                 openURL(CloudConfig.privacyPolicyURL)
@@ -215,8 +166,6 @@ struct SignInView: View {
                         .onSubmit {
                             Task { await signInWithPassword() }
                         }
-                } footer: {
-                    Text("Use the same email and password registered with your TokenTracker account.")
                 }
 
                 if let errorMessage {
@@ -245,7 +194,7 @@ struct SignInView: View {
                     .disabled(busy || email.trimmingCharacters(in: .whitespaces).isEmpty || password.isEmpty)
                 }
             }
-            .navigationTitle("Email Sign-In")
+            .navigationTitle("Sign In")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

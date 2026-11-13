@@ -69,3 +69,26 @@ Round 3, Cloud actions and polish (`81a0f027`, `f44931c5`):
 - `device_id` values that are not UUIDs fall back to account-wide data on the server without an error. The app only sends ids returned by `account-devices`, so this does not happen in practice.
 - Screenshots come from the Debug-only `SimulatorLaunchScenario` fixtures. I did not test against a live Cloud account in this session, and OAuth / Keychain behavior was not re-run on a device.
 - Currency conversion uses the dashboard's fixed default rates.
+
+## Round 4: concise UI and Share
+
+The owner's review of the round 3 screenshots: the screens read like a product pitch, and Share was missing.
+
+Copy and layout:
+
+- Sign-in keeps the logo, "Token Tracker", one line, the three sign-in buttons and one footer line. The three feature cards are gone.
+- Pulse: the pacing bridge reads "Claude Code · 86% of cap" over "$91.37 · last 7 days". "Cache hit 74%", "Updated 16:20", "Activity", "Last 30 Days" replace the longer captions.
+- Pacing: removed the "Estimated spend synced…" subtitle, the pace-notch footnote and "Tap a tool to…". Window captions are "Tokens · this hour + previous 4" and "Target in ~5h". The rate-limit card is one line. Target and cap sheets lost their footers.
+- Settings: "Approve CLI Code", one-line Cloud footer, the synced-computers footer only when over the slot limit, shorter labels throughout.
+- Cloud access required: logo, title, two sentences, the account, Check Access / Approve CLI Code / Switch Account. The three-step tutorial is gone. Empty first sync: title, "Run this on your computer:", the command, two buttons.
+- Tab bar: Pulse, Pacing and Settings use `scrollEdgeEffectStyle(.hard, for: .bottom)`. `02d`, `04c` and `06c` show each tab scrolled to the end with the last row (sync time, rate-limit note, Sign Out) above the bar.
+
+Share:
+
+- Share sits in the Pulse toolbar next to the computer filter. It stays disabled until the current period has loaded with usage, so empty, blocked and offline states can't produce a card.
+- `ShareCardData` ports `build-share-card-data.ts` and `buildTopModels`: period from the Pulse horizon, the period's summary tokens and cost, top 3 models with `provider/model` folding and one-decimal shares, a 52-week heatmap, and the dashboard's handle rule. Rank is not fetched, so Broadsheet prints the dashboard's "№ —". Mask Cost Figures drops the amount before rendering.
+- `NeonShareCard` and `BroadsheetShareCard` follow the JSX layouts at their canvas sizes, with `neon_bg.png`, the official mark, the dashboard palettes and copy. `ImageRenderer` produces a 2× PNG for `ShareLink`, with the `dashboard.screenshot.twitter_text` caption and `/u/{userId}?ref=share`.
+
+Verification: `xcodebuild … test` on the iPhone 18 Pro Simulator ran 36 tests with 0 failures. 12 are new, covering period mapping, summary-only totals, cost masking, cost formatting, top models, handle, heatmap counts, hook priority, profile URL, caption, and PNG rendering of both variants. `capture-screenshots.sh` produced 23 PNGs, including `11-share-neon-preview` and `11b-share-broadsheet-preview`. A grep for green / emerald / mint / `bolt.fill` in the Swift sources finds nothing. `TokenTrackerMark.png` and `neon_bg.png` are byte-identical to their dashboard / macOS sources.
+
+Limits: the screenshots stop at the preview sheet. I did not drive the system share sheet itself or post to X. Broadsheet uses Times New Roman, the next entry in the card's own serif stack, because Instrument Serif isn't on iOS. Neon's CSS backdrop blur is approximated with a translucent fill and hairline.
