@@ -5426,7 +5426,7 @@ test("parseRolloutIncremental recomputes every-code alignment on codex-only upda
   }
 });
 
-test("parseClaudeIncremental skips OmO-mirrored sdk-ts external Claude SDK usage", async () => {
+test("parseClaudeIncremental counts sdk-ts external usage unless an OmO responseId matches (#1083)", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-claude-omo-"));
   try {
     const claudePath = path.join(tmp, "agent-claude.jsonl");
@@ -5441,7 +5441,7 @@ test("parseClaudeIncremental skips OmO-mirrored sdk-ts external Claude SDK usage
         model,
         entrypoint: "sdk-ts",
         userType: "external",
-        msgId: "msg-omo-mirror",
+        msgId: "msg-orca-unmatched",
       }),
       buildClaudeUsageLine({
         ts: "2026-09-27T06:35:00.000Z",
@@ -5457,11 +5457,172 @@ test("parseClaudeIncremental skips OmO-mirrored sdk-ts external Claude SDK usage
       projectFiles: [{ path: claudePath, source: "claude" }],
       cursors,
       queuePath,
+      omoResponseIds: new Set(),
+    });
+    assert.equal(res.eventsAggregated, 2);
+    const queued = await readJsonLines(queuePath);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].input_tokens, 1200);
+    assert.equal(queued[0].output_tokens, 550);
+    assert.ok(cursors.claudeOmoPositiveMatchRescanAt);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseClaudeIncremental skips Claude lines whose message.id equals an OmO responseId (#1083)", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-claude-omo-match-"));
+  try {
+    const claudePath = path.join(tmp, "agent-claude.jsonl");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+    const model = "claude-sonnet-5-5";
+    const sharedId = "msg_011CgtWuw7z2kbsvfAScBji1";
+    const lines = [
+      buildClaudeUsageLine({
+        ts: "2026-11-10T03:12:32.659Z",
+        input: 2,
+        output: 543,
+        cacheRead: 27859,
+        cacheCreation: 3981,
+        model,
+        entrypoint: "sdk-ts",
+        userType: "external",
+        msgId: sharedId,
+      }),
+      buildClaudeUsageLine({
+        ts: "2026-11-10T03:13:00.000Z",
+        input: 10,
+        output: 5,
+        model,
+        entrypoint: "cli",
+        msgId: "msg-real-claude",
+      }),
+    ];
+    await fs.writeFile(claudePath, lines.join("\n") + "\n", "utf8");
+    const res = await parseClaudeIncremental({
+      projectFiles: [{ path: claudePath, source: "claude" }],
+      cursors,
+      queuePath,
+      omoResponseIds: new Set([sharedId]),
     });
     assert.equal(res.eventsAggregated, 1);
     const queued = await readJsonLines(queuePath);
     assert.equal(queued.length, 1);
-    assert.equal(queued[0].input_tokens, 200);
+    assert.equal(queued[0].input_tokens, 10);
+    assert.equal(queued[0].output_tokens, 5);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseClaudeIncremental one-time rescan recovers sdk-ts lines skipped by the old filter (#1083)", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-claude-omo-rescan-"));
+  try {
+    const claudePath = path.join(tmp, "agent-claude.jsonl");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const model = "claude-opus-5-5";
+    const lines = [
+      buildClaudeUsageLine({
+        ts: "2026-11-09T07:04:34.641Z",
+        input: 2,
+        output: 281,
+        cacheCreation: 44101,
+        model,
+        entrypoint: "sdk-ts",
+        userType: "external",
+        msgId: "msg_011CgrvoXTKEQ48Vwjsr4uJA",
+      }),
+    ];
+    const raw = lines.join("\n") + "\n";
+    await fs.writeFile(claudePath, raw, "utf8");
+    const cursors = {
+      version: 1,
+      files: {
+        [claudePath]: { inode: (await fs.stat(claudePath)).ino, offset: Buffer.byteLength(raw), updatedAt: "2026-11-10T00:00:00.000Z" },
+      },
+      claudeHashes: [],
+      updatedAt: null,
+    };
+    const res = await parseClaudeIncremental({
+      projectFiles: [{ path: claudePath, source: "claude" }],
+      cursors,
+      queuePath,
+      omoResponseIds: new Set(),
+    });
+    assert.equal(res.eventsAggregated, 1);
+    const queued = await readJsonLines(queuePath);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].output_tokens, 281);
+    assert.ok(cursors.claudeOmoPositiveMatchRescanAt);
+    const secondQueue = path.join(tmp, "queue-2.jsonl");
+    const second = await parseClaudeIncremental({
+      projectFiles: [{ path: claudePath, source: "claude" }],
+      cursors,
+      queuePath: secondQueue,
+      omoResponseIds: new Set(),
+    });
+    assert.equal(second.eventsAggregated, 0);
+    assert.equal((await readJsonLines(secondQueue)).length, 0);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseClaudeIncremental reads OmO responseId from session files when not injected (#1083)", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-claude-omo-files-"));
+  try {
+    const omoDir = path.join(tmp, "omo-agent");
+    const omoSession = path.join(omoDir, "sessions", "proj", "sess.jsonl");
+    await fs.mkdir(path.dirname(omoSession), { recursive: true });
+    const sharedId = "msg_011CgtWuw7z2kbsvfAScBji1";
+    await fs.writeFile(omoSession, JSON.stringify({
+      id: "afef511e",
+      type: "message",
+      timestamp: "2026-11-10T03:12:32.673Z",
+      message: {
+        api: "claude-sdk-oauth",
+        provider: "anthropic-subscription",
+        model: "claude-sonnet-5-5",
+        role: "assistant",
+        responseId: sharedId,
+        usage: { input: 2, output: 543, cacheRead: 27859, cacheWrite: 3981, totalTokens: 32385 },
+      },
+    }) + "\n", "utf8");
+    const claudePath = path.join(tmp, "agent-claude.jsonl");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const model = "claude-sonnet-5-5";
+    await fs.writeFile(claudePath, [
+      buildClaudeUsageLine({
+        ts: "2026-11-10T03:12:32.659Z",
+        input: 2,
+        output: 543,
+        cacheRead: 27859,
+        cacheCreation: 3981,
+        model,
+        entrypoint: "sdk-ts",
+        userType: "external",
+        msgId: sharedId,
+      }),
+      buildClaudeUsageLine({
+        ts: "2026-11-10T03:13:00.000Z",
+        input: 10,
+        output: 5,
+        model,
+        entrypoint: "cli",
+        msgId: "msg-real-claude",
+      }),
+    ].join("\n") + "\n", "utf8");
+    const res = await parseClaudeIncremental({
+      projectFiles: [{ path: claudePath, source: "claude" }],
+      cursors: { version: 1, files: {}, updatedAt: null },
+      queuePath,
+      env: { ...process.env, HOME: tmp, TOKENTRACKER_OMO_AGENT_DIR: omoDir },
+    });
+    assert.equal(res.eventsAggregated, 1);
+    const queued = await readJsonLines(queuePath);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].input_tokens, 10);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
