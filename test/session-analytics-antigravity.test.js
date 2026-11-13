@@ -306,16 +306,20 @@ test("an empty transcript keeps sibling database usage instead of zeroing the le
   assert.equal(JSON.stringify(switched.rows).includes(SECRET), false);
 });
 
+function shiftStep(blob, step) {
+  const marker = Buffer.from(bytes(20, Buffer.concat([
+    bytes(1, "last_step_index"), bytes(2, "0"),
+  ]))).toString("hex");
+  return blob.toString("hex").replace(marker, Buffer.from(bytes(20, Buffer.concat([
+    bytes(1, "last_step_index"), bytes(2, String(step)),
+  ]))).toString("hex"));
+}
+
 test("a transcript bills uncovered sibling generations once and does not rebill covered steps", async (t) => {
   const { home, db, file } = fixture(t, { transcript: true });
   const covered = generation();
   const uncovered = generation(40, "response-b");
-  const stepMarker = Buffer.from(bytes(20, Buffer.concat([
-    bytes(1, "last_step_index"), bytes(2, "0"),
-  ]))).toString("hex");
-  const shifted = uncovered.toString("hex").replace(stepMarker, Buffer.from(bytes(20, Buffer.concat([
-    bytes(1, "last_step_index"), bytes(2, "4"),
-  ]))).toString("hex"));
+  const shifted = shiftStep(uncovered, 4);
   runSql(db, "DELETE FROM gen_metadata; INSERT INTO gen_metadata VALUES (0, X'" + covered.toString("hex")
     + "'), (1, X'" + shifted + "')");
   const cursors = {};
@@ -329,6 +333,40 @@ test("a transcript bills uncovered sibling generations once and does not rebill 
   assert.equal(session.model_calls, 2);
   assert.equal(session.usage_precision, "reported");
   assert.equal(JSON.stringify(session).includes(SECRET), false);
+});
+
+test("a malformed record stops coverage at the cursor instead of hiding later native usage", async (t) => {
+  const { home, db, file } = fixture(t, { transcript: true });
+  runSql(db, "DELETE FROM gen_metadata; INSERT INTO gen_metadata VALUES (0, X'" + generation().toString("hex")
+    + "'), (1, X'" + shiftStep(generation(40, "response-b"), 4) + "')");
+  fs.appendFileSync(file, "{broken\n" + JSON.stringify({
+    type: "PLANNER_RESPONSE", step_index: 5, created_at: AT, content: SECRET,
+  }) + "\n");
+  const cursors = {};
+  const usage = await hourly(home, [file], cursors);
+  assert.equal(usage.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335 + 275);
+  const [session] = await readAntigravitySessions([file]);
+  assert.equal(session.tokens.total_tokens, 335 + 275);
+  assert.equal(session.turns, 1);
+});
+
+test("appending a planner response retracts the usage previously supplemented for that step", async (t) => {
+  const { home, db, file } = fixture(t, { transcript: true });
+  runSql(db, "DELETE FROM gen_metadata; INSERT INTO gen_metadata VALUES (0, X'" + generation().toString("hex")
+    + "'), (1, X'" + shiftStep(generation(40, "response-b"), 4) + "')");
+  const cursors = {};
+  const first = await hourly(home, [file], cursors);
+  assert.equal(first.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335 + 275);
+  const before = fs.statSync(db).mtimeMs;
+  fs.appendFileSync(file, JSON.stringify({
+    type: "PLANNER_RESPONSE", step_index: 5, created_at: AT, content: SECRET,
+  }) + "\n");
+  assert.equal(fs.statSync(db).mtimeMs, before);
+  const appended = await hourly(home, [file], cursors);
+  assert.equal(appended.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335 + 275);
+  const saved = fs.readFileSync(first.queuePath, "utf8");
+  await hourly(home, [file], cursors);
+  assert.equal(fs.readFileSync(first.queuePath, "utf8"), saved);
 });
 
 test("a previously scanned Antigravity directory stays incomplete on a temporary ENOENT", async (t) => {

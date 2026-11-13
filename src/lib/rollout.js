@@ -22238,6 +22238,34 @@ const ANTIGRAVITY_CURSOR_VERSION = 2;
 const ANTIGRAVITY_EXTRACTOR_REVISION = 2;
 const ANTIGRAVITY_MAX_CONTRIBUTIONS = 4096;
 
+function antigravityPlannerSteps(buffer, cutoff = Infinity) {
+  const steps = new Set();
+  if (!Buffer.isBuffer(buffer)) return steps;
+  const lines = buffer.toString("utf8").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (let i = 0; i < lines.length && i < cutoff; i++) {
+    try {
+      const event = JSON.parse(lines[i]);
+      if (event?.type === "PLANNER_RESPONSE" && Number.isFinite(event.step_index)) steps.add(event.step_index);
+    } catch {
+      break;
+    }
+  }
+  return steps;
+}
+
+// True when an append adds a planner step the previous transcript did not cover.
+// That step may already have been billed from the sibling database.
+function antigravityCoverageChanged(buffer, previous, dbPath) {
+  if (!Buffer.isBuffer(buffer) || !previous || !(Number(previous.size) > 0) || !dbPath) return false;
+  const before = antigravityPlannerSteps(buffer.subarray(0, Number(previous.size)));
+  // The appended planner step sits past the stored cursor, so the whole readable
+  // prefix is compared, not only the lines the previous pass billed.
+  for (const step of antigravityPlannerSteps(buffer)) {
+    if (!before.has(step)) return true;
+  }
+  return false;
+}
+
 function hashAntigravityTranscript(buffer) {
   if (!Buffer.isBuffer(buffer)) return null;
   return crypto.createHash("sha256").update(buffer).digest("hex");
@@ -22623,7 +22651,11 @@ async function parseAntigravityIncremental({
     // cannot be mistaken for an append. A cursor without this hash is treated
     // conservatively and gets one reconciliation pass.
     const transcriptReadRequired =
-      !sameTranscriptStats || !currentVersion || !prev?.transcriptHash || needsFullRebuild;
+      !sameTranscriptStats || !currentVersion || !prev?.transcriptHash || needsFullRebuild ||
+      // Coverage can only be compared against the bytes. A cursor that billed
+      // uncovered generations must be read again so a later planner step retracts
+      // that supplement instead of being merged on top of it.
+      Boolean(prev?.supplementedSteps);
     if (transcriptReadRequired) {
       transcriptBytes = await readAntigravityTranscriptBytes(filePath);
       const afterReadStat = await fs.stat(filePath).catch(() => null);
@@ -22765,7 +22797,11 @@ async function parseAntigravityIncremental({
         staleExtractor ||
         !sameSource ||
         projectChanged ||
-        (!sameTranscriptContent && !transcriptCanAppend));
+        (!sameTranscriptContent && !transcriptCanAppend) ||
+        // A pure append can turn a previously supplemented generation into a
+        // transcript PLANNER_RESPONSE. The cursor stores no per-step identity,
+        // so the whole ledger is reconciled instead of merging the step twice.
+        (transcriptCanAppend && antigravityCoverageChanged(transcriptBytes, prev, dbPath)));
 
     // Reconciliation reparses the complete transcript. Even when stat metadata
     // looked unchanged, project/SQLite changes can select this path; obtain a
@@ -22968,6 +23004,9 @@ async function parseAntigravityIncremental({
       lastPlannerModel: result.lastPlannerModel,
       usageSource: result.usageSource,
       dbReadOk: result.dbReadOk !== false,
+      // Only a cursor that supplemented uncovered generations needs its transcript
+      // reread on an unchanged stat. Drop the marker once the transcript catches up.
+      ...(result.supplementedSteps ? { supplementedSteps: result.supplementedSteps } : {}),
       contributions: contributionState.contributions,
       contributionsComplete: contributionState.complete,
       updatedAt: new Date().toISOString(),
@@ -23162,6 +23201,7 @@ async function parseAntigravityFile({
       typeof initialLastPlannerModel === "string" ? initialLastPlannerModel : cachedModel;
   }
   let lastCompletedLine = Math.min(Number.isFinite(lastLine) ? lastLine : 0, lines.length);
+  let supplementedSteps = null;
 
   for (let i = scanStart; i < lines.length; i++) {
     const line = lines[i];
@@ -23342,15 +23382,21 @@ async function parseAntigravityFile({
   // already holds the uncovered generations in its ledger.
   if (!nativeSession && (supplementUncovered || !(Number(lastLine) > 0)) && stepMap && stepMap.size > 0 && fssync.existsSync(dbPath)) {
     const coveredSteps = new Set();
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
       try {
-        const event = JSON.parse(line);
+        const event = JSON.parse(lines[i]);
         if (event?.type === "PLANNER_RESPONSE" && Number.isFinite(event.step_index)) {
           coveredSteps.add(event.step_index);
         }
-      } catch { /* the prefix walk already stopped at this record */ }
+      } catch {
+        // A malformed record before the cursor did not stop the prefix walk.
+        // One at or after the cursor did, so later planner steps were never
+        // billed and must stay eligible for the supplemental pass.
+        if (i >= lastLine) break;
+      }
     }
     const uncovered = [...stepMap.entries()].filter(([step, info]) => info?.hasUsageMetadata && !coveredSteps.has(step));
+    supplementedSteps = uncovered.map(([step]) => step);
     if (uncovered.length) {
       const nativeEvents = await require("./antigravity-native").readAntigravityNativeSession(dbPath);
       const byStep = new Map((nativeEvents?.events || []).map((event) => [event.step_index, event]));
@@ -23422,6 +23468,7 @@ async function parseAntigravityFile({
     lastPlannerModel,
     usageSource: hasSqliteMetadata ? "sqlite" : "estimated",
     dbReadOk: !dbPath || stepMap !== null,
+    ...(supplementedSteps ? { supplementedSteps } : {}),
     contributions,
   };
 }
