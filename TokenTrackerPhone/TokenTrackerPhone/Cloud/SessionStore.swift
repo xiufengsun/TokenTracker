@@ -8,14 +8,21 @@ final class SessionStore: ObservableObject {
     @Published private(set) var signOutError: String?
 
     private let auth: CloudAuthClient
+    private let persistsToKeychain: Bool
     private var refreshTask: Task<CloudSession, Error>?
     /// Bumped on every sign-in and sign-out, so a refresh started for an
     /// earlier session can never apply its result to (or clear) a newer one.
     private var generation = 0
 
-    init(auth: CloudAuthClient = CloudAuthClient(), restore: Bool = true) {
+    init(auth: CloudAuthClient = CloudAuthClient(), restore: Bool = true, initialSession: CloudSession? = nil) {
         self.auth = auth
-        self.session = restore ? KeychainStore.load() : nil
+        if let initialSession {
+            self.persistsToKeychain = false
+            self.session = initialSession
+        } else {
+            self.persistsToKeychain = restore
+            self.session = restore ? KeychainStore.load() : nil
+        }
     }
 
     var isSignedIn: Bool { session != nil }
@@ -24,7 +31,9 @@ final class SessionStore: ObservableObject {
     func signIn(with response: AuthResponse) throws {
         guard let user = response.user else { throw CloudError.invalidResponse }
         let next = CloudSession(accessToken: response.accessToken, refreshToken: response.refreshToken, user: user)
-        try KeychainStore.save(next)
+        if persistsToKeychain {
+            try KeychainStore.save(next)
+        }
         invalidateInFlightRefresh()
         signOutError = nil
         session = next
@@ -44,17 +53,19 @@ final class SessionStore: ObservableObject {
             throw CloudError.signedOut
         }
         let owner = generation
+        let shouldPersist = persistsToKeychain
         let task = Task<CloudSession, Error> { @MainActor [auth] in
             do {
                 let response = try await auth.refresh(refreshToken: refreshToken)
-                // Signed out or switched accounts while this was in flight.
                 guard self.generation == owner else { throw CloudError.signedOut }
                 let next = CloudSession(
                     accessToken: response.accessToken,
                     refreshToken: response.refreshToken ?? refreshToken,
                     user: response.user ?? current.user
                 )
-                try KeychainStore.save(next)
+                if shouldPersist {
+                    try KeychainStore.save(next)
+                }
                 self.session = next
                 return next
             } catch let error as CloudError where Self.isRejectedRefresh(error) {
@@ -83,13 +94,18 @@ final class SessionStore: ObservableObject {
 
     func signOut() async {
         let token = session?.accessToken
+        let shouldNotifyServer = persistsToKeychain
         signOutLocally()
-        if let token { await auth.signOut(accessToken: token) }
+        if shouldNotifyServer, let token { await auth.signOut(accessToken: token) }
     }
 
     func signOutLocally() {
         invalidateInFlightRefresh()
         session = nil
+        guard persistsToKeychain else {
+            signOutError = nil
+            return
+        }
         do {
             try KeychainStore.clear()
             signOutError = nil

@@ -1,17 +1,15 @@
 name: TokenTrackerPhone
 options:
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "26.0"
   xcodeVersion: "16.0"
   generateEmptyDirectories: true
 
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
 
-# Response models are shared with the macOS app so the phone decodes the
-# cloud `account-*` payloads exactly the way the menu bar decodes them.
 targets:
   TokenTrackerPhone:
     type: application
@@ -25,21 +23,21 @@ targets:
         group: Shared
       - path: ../TokenTrackerBar/TokenTrackerBar/Models/UsageSummary.swift
         group: Shared
-      - path: ../TokenTrackerBar/TokenTrackerBar/Models/DailyUsage.swift
-        group: Shared
       - path: ../TokenTrackerBar/TokenTrackerBar/Models/ModelBreakdown.swift
         group: Shared
       - path: ../TokenTrackerBar/TokenTrackerBar/Models/HeatmapData.swift
         group: Shared
+      - path: ../TokenTrackerBar/TokenTrackerBar/Models/LimitPace.swift
+        group: Shared
       - path: ../TokenTrackerBar/TokenTrackerBar/Utilities/TokenFormatter.swift
         group: Shared
-      - path: ../TokenTrackerBar/TokenTrackerBar/Utilities/Colors.swift
+      - path: ../TokenTrackerBar/TokenTrackerBar/Views/BoltShape.swift
         group: Shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(TT_BUNDLE_PREFIX).tokentracker.phone
         PRODUCT_NAME: TokenTracker
-        MARKETING_VERSION: "0.1.0"
+        MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
@@ -58,6 +56,12 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         ITSAppUsesNonExemptEncryption: false
+        NSFaceIDUsageDescription: "Lock TokenTracker with Face ID to keep your AI spend and usage private on your iPhone."
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: tokentracker.oauth
+            CFBundleURLSchemes:
+              - tokentracker
 
   TokenTrackerPhoneTests:
     type: bundle.unit-test

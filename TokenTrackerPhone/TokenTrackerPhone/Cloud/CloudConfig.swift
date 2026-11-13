@@ -13,10 +13,11 @@ enum CloudConfig {
     static let oauthCallbackScheme = "tokentracker"
     static let oauthRedirectURI = "tokentracker://auth/callback"
 
-    static let webDashboardURL = URL(string: "https://www.tokentracker.cc/dashboard")!
+    static let privacyPolicyURL = URL(string: "https://www.tokentracker.cc/privacy.html")!
+    static let githubRepoURL = URL(string: "https://github.com/xiufengsun/TokenTracker")!
 
     /// The functions host serves `/<slug>`; the API host keeps a legacy
-    /// `/functions/<slug>` route that `fetchFunctionResponse` falls back to on 404.
+    /// `/functions/<slug>` route that `CloudAPIClient` falls back to on 404.
     static func functionURL(_ slug: String) -> URL {
         functionsBaseURL.appendingPathComponent(slug)
     }

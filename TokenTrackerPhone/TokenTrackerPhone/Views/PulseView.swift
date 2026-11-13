@@ -1,0 +1,910 @@
+import Charts
+import SwiftUI
+
+struct PulseView: View {
+    @EnvironmentObject private var prefs: PhonePreferences
+    @ObservedObject var workspace: WorkspaceModel
+    let onPairCLI: () -> Void
+
+    @Namespace private var horizonNamespace
+    @State private var selectedProvider: RankedProviderItem?
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AtmosphericGlassCanvas()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        controlStrip
+
+                        if let warning = workspace.warningBanner {
+                            InlineNoticeBanner(
+                                icon: "exclamationmark.triangle.fill",
+                                tint: BrandPalette.amber,
+                                message: warning,
+                                actionTitle: "Retry"
+                            ) {
+                                Task { await workspace.refresh() }
+                            }
+                        }
+
+                        if let snapshot = workspace.visibleSnapshot {
+                            if isCompletelyEmpty(snapshot) {
+                                EmptySyncedDataCard(onPairCLI: onPairCLI) {
+                                    Task { await workspace.refresh() }
+                                }
+                            } else {
+                                spendLedgerSection(snapshot)
+                                pacingGlanceBridge(snapshot)
+                                timelineChartSection(snapshot)
+                                providerLedgerSection(snapshot)
+                                modelBreakdownSection(snapshot)
+                                consistencyHeatmapSection(snapshot)
+                                syncFootnote(snapshot)
+                            }
+                        } else if case .failed(let message) = workspace.phase {
+                            WorkspaceFailureView(
+                                message: message,
+                                isBusy: workspace.isRefreshing,
+                                onRetry: { Task { await workspace.refresh() } },
+                                onOpenSettings: { workspace.selectedTab = .settings }
+                            )
+                        } else {
+                            WorkspaceSkeletonView()
+                        }
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 6)
+                    .padding(.bottom, 28)
+                }
+                .refreshable {
+                    await workspace.refresh()
+                }
+            }
+            .navigationTitle("Pulse")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    deviceScopeMenu
+                }
+            }
+            .sheet(item: $selectedProvider) { provider in
+                ProviderDetailSheet(provider: provider, horizonTitle: workspace.horizon.fullTitle)
+            }
+        }
+    }
+
+    // MARK: - Top Liquid Glass Control Strip
+
+    private var controlStrip: some View {
+        GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 8) {
+                ForEach(UsageHorizon.allCases) { item in
+                    let selected = workspace.horizon == item
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            workspace.horizon = item
+                        }
+                    } label: {
+                        Text(item.label)
+                            .font(.subheadline.weight(selected ? .semibold : .medium))
+                            .foregroundStyle(selected ? Color.primary : Color.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(
+                        selected
+                            ? .regular.tint(BrandPalette.emerald.opacity(0.28)).interactive()
+                            : .regular.interactive(),
+                        in: .capsule
+                    )
+                    .glassEffectID(item.id, in: horizonNamespace)
+                    .accessibilityIdentifier("pulse.horizon.\(item.rawValue)")
+                }
+            }
+        }
+    }
+
+    private var deviceScopeMenu: some View {
+        let devices = workspace.visibleSnapshot?.accountDevices?.devices ?? workspace.snapshot?.accountDevices?.devices ?? []
+        let activeDevice = devices.first(where: { $0.id == workspace.selectedDeviceId })
+        return Menu {
+            Button {
+                workspace.selectedDeviceId = nil
+            } label: {
+                Label(
+                    "All Computers",
+                    systemImage: workspace.selectedDeviceId == nil ? "checkmark.circle.fill" : "laptopcomputer.and.iphone"
+                )
+            }
+
+            if !devices.isEmpty {
+                Section("Filter by Computer") {
+                    ForEach(devices) { device in
+                        Button {
+                            workspace.selectedDeviceId = device.id
+                        } label: {
+                            Label(
+                                "\(device.displayName) (\(prefs.formatTokens(device.totalTokens)))",
+                                systemImage: workspace.selectedDeviceId == device.id ? "checkmark.circle.fill" : "desktopcomputer"
+                            )
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Button(action: onPairCLI) {
+                Label("Approve CLI Code…", systemImage: "terminal")
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: activeDevice == nil ? "laptopcomputer.and.iphone" : "desktopcomputer")
+                    .font(.footnote.weight(.semibold))
+                Text(activeDevice?.displayName ?? "All Macs & PCs")
+                    .font(.footnote.weight(.medium))
+                    .lineLimit(1)
+            }
+            .accessibilityIdentifier("pulse.deviceMenu")
+        }
+    }
+
+    // MARK: - 1. Spend & Token Ledger
+
+    private func spendLedgerSection(_ snapshot: PhoneWorkspaceSnapshot) -> some View {
+        let totals = snapshot.periodSummary.totals
+        let cost = snapshot.periodCostUsd
+        let dailyAvg = snapshot.averageDailyCost30d
+        let showTodayVsAvg = workspace.horizon == .today && dailyAvg > 0.01 && cost > 0
+
+        return TelemetrySurface(padding: 20) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(workspace.horizon.fullTitle)
+                        .font(.headline)
+                    Spacer()
+                    if showTodayVsAvg {
+                        let ratio = cost / dailyAvg
+                        let deltaText = ratio >= 1.05
+                            ? "\(String(format: "%.1f×", ratio)) 30d avg"
+                            : "\(Int((ratio * 100).rounded()))% of 30d avg"
+                        Text(deltaText)
+                            .font(.caption.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(ratio >= 1.35 ? BrandPalette.amber : BrandPalette.emerald)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 4)
+                            .background(
+                                (ratio >= 1.35 ? BrandPalette.amber : BrandPalette.emerald).opacity(0.14),
+                                in: Capsule()
+                            )
+                    } else if let count = snapshot.cloudAccount?.machineCount, count > 0, workspace.selectedDeviceId == nil {
+                        Text("\(count) \(count == 1 ? "computer" : "computers")")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                HStack(alignment: .lastTextBaseline, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(prefs.formatCost(cost))
+                            .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                            .monospacedDigit()
+                            .contentTransition(.numericText())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                        Text("Estimated cost")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text(prefs.formatTokens(totals.displayTokens))
+                            .font(.title2.weight(.semibold))
+                            .monospacedDigit()
+                            .contentTransition(.numericText())
+                        Text("\(totals.conversationCount.formatted()) sessions")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+
+                if workspace.horizon == .today && prefs.dailySpendTargetUsd > 0 {
+                    let fraction = cost / prefs.dailySpendTargetUsd
+                    let remaining = prefs.windowMeterStyle == .remaining
+                    let barPct = remaining ? max(0, (1 - fraction) * 100) : min(100, fraction * 100)
+                    let endOfDay = Calendar.localGregorian.date(
+                        byAdding: .day,
+                        value: 1,
+                        to: Calendar.localGregorian.startOfDay(for: snapshot.now)
+                    ) ?? snapshot.now
+                    let pace = LimitPace.compute(
+                        usedFraction: min(max(fraction, 0), 1),
+                        windowSeconds: 86_400,
+                        secondsUntilReset: max(0, endOfDay.timeIntervalSince(snapshot.now)),
+                        remainingMode: remaining
+                    )
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Daily target (\(prefs.formatCost(prefs.dailySpendTargetUsd, masked: false)))")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(remaining
+                                 ? "\(Int(max(0, (1 - fraction) * 100).rounded()))% left"
+                                 : "\(Int((fraction * 100).rounded()))% used")
+                                .font(.caption.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(BrandPalette.paceColor(fraction: fraction))
+                        }
+
+                        PaceMeterBar(
+                            percent: barPct,
+                            fillColor: BrandPalette.paceColor(fraction: fraction),
+                            pacePercent: pace.pacePercent,
+                            paceOver: pace.paceOver,
+                            height: 7
+                        )
+                    }
+                }
+
+                TokenCompositionStrip(totals: totals, prefs: prefs)
+            }
+        }
+    }
+
+    // MARK: - 2. Coherent Usage ↔ Pacing Bridge
+
+    @ViewBuilder
+    private func pacingGlanceBridge(_ snapshot: PhoneWorkspaceSnapshot) -> some View {
+        let profiles = snapshot.providerPacingProfiles(budgets: prefs.toolBudgets)
+        let hottest = profiles.first(where: { $0.hottestBudgetFraction != nil })
+        let burst5h = snapshot.trailingFiveHourTokens
+
+        if burst5h > 0 || hottest != nil || snapshot.sevenDayCostUsd > 0 {
+            Button {
+                workspace.selectedTab = .limits
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "gauge.with.dots.needle.67percent")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(hottestColor(hottest))
+                        .frame(width: 34, height: 34)
+                        .background(hottestColor(hottest).opacity(0.15), in: Circle())
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let hottest, let frac = hottest.hottestBudgetFraction {
+                            Text("\(hottest.displayName) at \(Int((frac * 100).rounded()))% of target")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                        } else if burst5h > 0 {
+                            Text("\(prefs.formatTokens(burst5h)) in trailing 5h window")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                        } else {
+                            Text("7d rolling spend · \(prefs.formatCost(snapshot.sevenDayCostUsd))")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                        }
+
+                        Text(pacingSubtitle(snapshot: snapshot, burst5h: burst5h))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 6)
+
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 13)
+                .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("pulse.pacingBridge")
+        }
+    }
+
+    private func hottestColor(_ profile: ProviderPacingProfile?) -> Color {
+        guard let frac = profile?.hottestBudgetFraction else { return BrandPalette.emerald }
+        return BrandPalette.paceColor(fraction: frac)
+    }
+
+    private func pacingSubtitle(snapshot: PhoneWorkspaceSnapshot, burst5h: Int) -> String {
+        if burst5h > 0, let reset = snapshot.trailingFiveHourWindowReset {
+            let secs = max(0, reset.timeIntervalSince(snapshot.now))
+            return "5h window rolls over in \(LimitPace.durationString(secs)) · Inspect Pacing"
+        }
+        return "\(snapshot.todaySummary.rolling.last7d.activeDays)/7 active days · Open Pacing & Windows"
+    }
+
+    // MARK: - 3. Intraday / 30-Day Timeline Chart
+
+    @ViewBuilder
+    private func timelineChartSection(_ snapshot: PhoneWorkspaceSnapshot) -> some View {
+        if workspace.horizon == .today, let hourly = snapshot.todayHourly, !hourly.data.isEmpty {
+            HourlyPulseChartCard(hourly: hourly, now: snapshot.now, prefs: prefs)
+        } else if let daily = snapshot.daily30d {
+            DailyTrendChartCard(daily: daily, prefs: prefs)
+        }
+    }
+
+    // MARK: - 4. Ranked Tools (Tap to Drill Into Provider Models)
+
+    @ViewBuilder
+    private func providerLedgerSection(_ snapshot: PhoneWorkspaceSnapshot) -> some View {
+        let providers = snapshot.rankedProviders
+        if !providers.isEmpty {
+            TelemetrySurface(padding: 18) {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        Text("Coding Tools")
+                            .font(.headline)
+                        Spacer()
+                        Text("\(providers.count) active")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    let maxTokens = max(providers.map(\.tokens).max() ?? 1, 1)
+                    VStack(spacing: 14) {
+                        ForEach(providers) { provider in
+                            Button {
+                                selectedProvider = provider
+                            } label: {
+                                ProviderShareRow(
+                                    provider: provider,
+                                    share: provider.tokens > 0 ? Double(provider.tokens) / Double(maxTokens) : 0.08,
+                                    prefs: prefs
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - 5. Top Models
+
+    @ViewBuilder
+    private func modelBreakdownSection(_ snapshot: PhoneWorkspaceSnapshot) -> some View {
+        let models = snapshot.rankedModels
+        if !models.isEmpty {
+            TelemetrySurface(padding: 18) {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        Text("Top Models")
+                            .font(.headline)
+                        Spacer()
+                        Text("\(models.count) total")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    let totalTokens = max(models.reduce(0) { $0 + $1.tokens }, 1)
+                    VStack(spacing: 13) {
+                        ForEach(Array(models.prefix(6).enumerated()), id: \.element.id) { index, model in
+                            ModelShareRow(
+                                model: model,
+                                rankIndex: index,
+                                share: Double(model.tokens) / Double(totalTokens),
+                                prefs: prefs
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - 6. Activity Consistency Heatmap
+
+    @ViewBuilder
+    private func consistencyHeatmapSection(_ snapshot: PhoneWorkspaceSnapshot) -> some View {
+        if let heatmap = snapshot.heatmap, !heatmap.weeks.isEmpty {
+            HeatmapSurfaceCard(heatmap: heatmap, now: snapshot.now, prefs: prefs)
+        }
+    }
+
+    private func syncFootnote(_ snapshot: PhoneWorkspaceSnapshot) -> some View {
+        HStack {
+            Image(systemName: "checkmark.icloud")
+                .font(.caption2)
+            Text("Synced from Cloud · \(snapshot.now, style: .time)")
+                .font(.caption)
+            Spacer()
+            if workspace.selectedDeviceId != nil {
+                Button("Clear Filter") {
+                    workspace.selectedDeviceId = nil
+                }
+                .font(.caption.weight(.semibold))
+            }
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 4)
+    }
+
+    private func isCompletelyEmpty(_ snapshot: PhoneWorkspaceSnapshot) -> Bool {
+        snapshot.periodSummary.totals.displayTokens == 0
+            && snapshot.periodSummary.totals.conversationCount == 0
+            && snapshot.todaySummary.rolling.last30d.totals.billableTotalTokens == 0
+            && (snapshot.rankedProviders.isEmpty)
+    }
+}
+
+// MARK: - Subviews
+
+private struct TokenCompositionStrip: View {
+    let totals: TokenTotals
+    let prefs: PhonePreferences
+
+    private var segments: [(String, Int, Color)] {
+        [
+            ("Input", totals.inputTokens, Color.blue),
+            ("Output", totals.outputTokens, Color.indigo),
+            ("Cache read", totals.cachedInputTokens, BrandPalette.emerald),
+            ("Cache write", totals.cacheCreationInputTokens, BrandPalette.amber),
+        ].filter { $0.1 > 0 }
+    }
+
+    var body: some View {
+        if !segments.isEmpty {
+            let sum = max(segments.reduce(0) { $0 + $1.1 }, 1)
+            VStack(alignment: .leading, spacing: 8) {
+                GeometryReader { geo in
+                    HStack(spacing: 2) {
+                        ForEach(segments, id: \.0) { seg in
+                            seg.2
+                                .frame(width: max(3, geo.size.width * CGFloat(seg.1) / CGFloat(sum) - 2))
+                        }
+                    }
+                    .clipShape(Capsule())
+                }
+                .frame(height: 6)
+
+                HStack(spacing: 12) {
+                    ForEach(segments.prefix(3), id: \.0) { seg in
+                        HStack(spacing: 5) {
+                            Circle().fill(seg.2).frame(width: 6, height: 6)
+                            Text(seg.0)
+                                .foregroundStyle(.secondary)
+                            Text(prefs.formatTokens(seg.1))
+                                .fontWeight(.medium)
+                                .monospacedDigit()
+                        }
+                        .font(.caption2)
+                    }
+                    Spacer(minLength: 0)
+                    if totals.cacheHitRatio > 0.05 {
+                        Text("\(Int((totals.cacheHitRatio * 100).rounded()))% cached")
+                            .font(.caption2.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(BrandPalette.emerald)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct HourlyPulseChartCard: View {
+    let hourly: PhoneHourlyUsageResponse
+    let now: Date
+    let prefs: PhonePreferences
+
+    private struct HourBucketPoint: Identifiable {
+        let id: Int
+        let hour: Int
+        let tokens: Int
+    }
+
+    private var points: [HourBucketPoint] {
+        var map: [Int: Int] = [:]
+        for item in hourly.data {
+            if let hourPart = item.hour.split(separator: "T").last?.prefix(2),
+               let hr = Int(hourPart) {
+                map[hr, default: 0] += item.totalTokens
+            }
+        }
+        return (0..<24).map { HourBucketPoint(id: $0, hour: $0, tokens: map[$0] ?? 0) }
+    }
+
+    var body: some View {
+        TelemetrySurface(padding: 18) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Today by Hour")
+                        .font(.headline)
+                    Spacer()
+                    if let peak = points.max(by: { $0.tokens < $1.tokens }), peak.tokens > 0 {
+                        Text("Peak \(String(format: "%02d:00", peak.hour)) · \(prefs.formatTokens(peak.tokens))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Chart(points) { point in
+                    BarMark(
+                        x: .value("Hour", point.hour),
+                        y: .value("Tokens", point.tokens)
+                    )
+                    .foregroundStyle(BrandPalette.emerald.gradient)
+                    .cornerRadius(3)
+                }
+                .chartXScale(domain: 0...23)
+                .chartXAxis {
+                    AxisMarks(values: [0, 6, 12, 18, 23]) { value in
+                        AxisGridLine()
+                        AxisValueLabel {
+                            if let hr = value.as(Int.self) {
+                                Text("\(hr)h")
+                            }
+                        }
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
+                        AxisGridLine()
+                        AxisValueLabel {
+                            if let v = value.as(Int.self) {
+                                Text(prefs.formatTokens(v))
+                            }
+                        }
+                    }
+                }
+                .frame(height: 155)
+            }
+        }
+    }
+}
+
+private struct DailyTrendChartCard: View {
+    let daily: PhoneDailyUsageResponse
+    let prefs: PhonePreferences
+    @State private var metricMode: TrendMetric = .cost
+
+    private enum TrendMetric: String, CaseIterable {
+        case cost = "Cost"
+        case tokens = "Tokens"
+    }
+
+    private struct DayPoint: Identifiable {
+        let id: String
+        let date: Date
+        let tokens: Int
+        let cost: Double
+    }
+
+    private var points: [DayPoint] {
+        daily.data.compactMap { row in
+            DayKey.date(row.day).map {
+                DayPoint(id: row.day, date: $0, tokens: row.totalTokens, cost: row.totalCostUsd)
+            }
+        }
+    }
+
+    private var domain: ClosedRange<Date> {
+        let cal = Calendar.localGregorian
+        let end = DayKey.date(daily.to) ?? cal.startOfDay(for: Date())
+        let start = DayKey.date(daily.from) ?? cal.date(byAdding: .day, value: -29, to: end) ?? end
+        return start...(cal.date(byAdding: .day, value: 1, to: end) ?? end)
+    }
+
+    var body: some View {
+        TelemetrySurface(padding: 18) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("30-Day Velocity")
+                        .font(.headline)
+                    Spacer()
+                    Picker("Metric", selection: $metricMode) {
+                        ForEach(TrendMetric.allCases, id: \.self) { m in
+                            Text(m.rawValue).tag(m)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 136)
+                }
+
+                if points.allSatisfy({ $0.tokens == 0 && $0.cost == 0 }) {
+                    Text("No recorded activity in the last 30 days.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 20)
+                } else {
+                    Chart(points) { pt in
+                        if metricMode == .cost {
+                            BarMark(
+                                x: .value("Day", pt.date, unit: .day),
+                                y: .value("Cost", pt.cost * prefs.currency.defaultRate)
+                            )
+                            .foregroundStyle(BrandPalette.emerald.gradient)
+                            .cornerRadius(2.5)
+                        } else {
+                            BarMark(
+                                x: .value("Day", pt.date, unit: .day),
+                                y: .value("Tokens", pt.tokens)
+                            )
+                            .foregroundStyle(Color.indigo.gradient)
+                            .cornerRadius(2.5)
+                        }
+                    }
+                    .chartXScale(domain: domain)
+                    .chartXAxis {
+                        AxisMarks(values: .stride(by: .day, count: 7)) { _ in
+                            AxisGridLine()
+                            AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                        }
+                    }
+                    .chartYAxis {
+                        AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
+                            AxisGridLine()
+                            AxisValueLabel {
+                                if metricMode == .cost, let d = value.as(Double.self) {
+                                    Text(prefs.discreteAmounts ? "••" : "\(prefs.currency.symbol)\(Int(d.rounded()))")
+                                } else if let v = value.as(Int.self) {
+                                    Text(prefs.formatTokens(v))
+                                }
+                            }
+                        }
+                    }
+                    .frame(height: 165)
+                }
+            }
+        }
+    }
+}
+
+private struct ProviderShareRow: View {
+    let provider: RankedProviderItem
+    let share: Double
+    let prefs: PhonePreferences
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 10) {
+                ProviderEmblem(source: provider.source, size: 32)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(provider.displayName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        if ProviderIdentity.isAccountLevelSource(provider.source) {
+                            Text("Account")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color.primary.opacity(0.06), in: Capsule())
+                        }
+                    }
+                    Text(provider.topModel ?? "\(provider.conversations) sessions")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(prefs.formatCost(provider.costUsd))
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.primary)
+                    Text(provider.tokens == 0 && provider.conversations > 0
+                         ? "\(provider.conversations) req"
+                         : prefs.formatTokens(provider.tokens))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+
+            PaceMeterBar(
+                percent: share * 100,
+                fillColor: ProviderIdentity.tint(provider.source),
+                height: 5
+            )
+        }
+    }
+}
+
+private struct ModelShareRow: View {
+    let model: RankedModelItem
+    let rankIndex: Int
+    let share: Double
+    let prefs: PhonePreferences
+
+    private static let palette: [Color] = [
+        BrandPalette.emerald, .blue, .indigo, .teal, .orange, .purple
+    ]
+
+    var body: some View {
+        let tint = Self.palette[rankIndex % Self.palette.count]
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Circle()
+                    .fill(tint)
+                    .frame(width: 8, height: 8)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(model.name)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                    Text(model.sources.map(ProviderIdentity.shortName).joined(separator: " · "))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(model.tokens == 0 && model.conversations > 0
+                         ? "\(model.conversations) req"
+                         : prefs.formatTokens(model.tokens))
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                    Text(prefs.formatCost(model.costUsd))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            PaceMeterBar(percent: share * 100, fillColor: tint.opacity(0.85), height: 4)
+        }
+    }
+}
+
+private struct HeatmapSurfaceCard: View {
+    let heatmap: HeatmapResponse
+    let now: Date
+    let prefs: PhonePreferences
+
+    private var streak: ActivityStreak {
+        heatmap.currentStreak(today: DayKey.string(now))
+    }
+
+    private func levelColor(_ level: Int) -> Color {
+        switch min(max(level, 0), 4) {
+        case 0: return Color.primary.opacity(0.06)
+        case 1: return BrandPalette.emerald.opacity(0.28)
+        case 2: return BrandPalette.emerald.opacity(0.50)
+        case 3: return BrandPalette.emerald.opacity(0.75)
+        default: return BrandPalette.emerald
+        }
+    }
+
+    var body: some View {
+        TelemetrySurface(padding: 18) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Consistency")
+                        .font(.headline)
+                    Spacer()
+                    Label(streak.displayLabel, systemImage: "flame.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(streak.days > 0 ? BrandPalette.emerald : .secondary)
+                }
+
+                GeometryReader { geo in
+                    let cols = max(heatmap.weeks.count, 1)
+                    let gap: CGFloat = 3
+                    let cellSize = min(17, (geo.size.width - gap * CGFloat(cols - 1)) / CGFloat(cols))
+                    HStack(alignment: .top, spacing: gap) {
+                        ForEach(Array(heatmap.weeks.enumerated()), id: \.offset) { _, week in
+                            VStack(spacing: gap) {
+                                ForEach(0..<7, id: \.self) { row in
+                                    let cell = row < week.count ? week[row] : nil
+                                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                        .fill(cell.map { levelColor($0.level) } ?? .clear)
+                                        .frame(width: cellSize, height: cellSize)
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .frame(height: 7 * 16 + 6 * 3)
+
+                HStack {
+                    Text("\(heatmap.activeDays) active days in \(heatmap.weeks.count) weeks")
+                    Spacer()
+                    HStack(spacing: 3) {
+                        Text("Less")
+                        ForEach(0..<5, id: \.self) { lv in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(levelColor(lv))
+                                .frame(width: 9, height: 9)
+                        }
+                        Text("More")
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct ProviderDetailSheet: View {
+    @EnvironmentObject private var prefs: PhonePreferences
+    @Environment(\.dismiss) private var dismiss
+    let provider: RankedProviderItem
+    let horizonTitle: String
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack(spacing: 14) {
+                        ProviderEmblem(source: provider.source, size: 44)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(provider.displayName)
+                                .font(.title3.weight(.bold))
+                            Text("\(horizonTitle) · \(ProviderIdentity.rollingCadenceNote(provider.source))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+
+                    LabeledContent("Estimated Cost", value: prefs.formatCost(provider.costUsd))
+                        .monospacedDigit()
+                    LabeledContent("Total Tokens", value: prefs.formatTokens(provider.tokens))
+                        .monospacedDigit()
+                    LabeledContent("Coding Sessions", value: provider.conversations.formatted())
+                        .monospacedDigit()
+                }
+
+                Section("Models Used in \(provider.displayName)") {
+                    ForEach(provider.models) { model in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(model.name)
+                                    .font(.subheadline.weight(.semibold))
+                                Spacer()
+                                Text(prefs.formatCost(model.costUsd))
+                                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                            }
+                            HStack(spacing: 12) {
+                                Text("\(prefs.formatTokens(model.tokens)) tokens")
+                                if model.cachedInputTokens > 0 {
+                                    Text("\(prefs.formatTokens(model.cachedInputTokens)) cached")
+                                }
+                                if model.reasoningTokens > 0 {
+                                    Text("\(prefs.formatTokens(model.reasoningTokens)) reasoning")
+                                }
+                                Spacer()
+                                Text("\(model.conversations) sess")
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                        }
+                        .padding(.vertical, 3)
+                    }
+                }
+            }
+            .navigationTitle(provider.displayName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}

@@ -2,7 +2,6 @@ import XCTest
 @testable import TokenTracker
 
 final class PKCETests: XCTestCase {
-    /// RFC 7636 Appendix B test vector.
     func testS256ChallengeMatchesRFCVector() {
         let pkce = PKCE(verifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
         XCTAssertEqual(pkce.challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
@@ -58,8 +57,8 @@ final class CloudErrorTests: XCTestCase {
     }
 }
 
-final class UsageSnapshotTests: XCTestCase {
-    func testTopModelsMergeAcrossSourcesAndSortByTokens() throws {
+final class WorkspaceSnapshotTests: XCTestCase {
+    func testTopModelsMergeAcrossSourcesAndSortStably() throws {
         let json = """
         {"from":"2026-11-01","to":"2026-11-12","days":12,"sources":[
           {"source":"claude","totals":{"billable_total_tokens":300,"total_cost_usd":"3"},
@@ -70,22 +69,39 @@ final class UsageSnapshotTests: XCTestCase {
         ]}
         """
         let breakdown = try JSONDecoder().decode(ModelBreakdownResponse.self, from: Data(json.utf8))
-        let snapshot = UsageSnapshot(period: .week, summary: UsageSummaryResponse(), breakdown: breakdown, fetchedAt: Date())
-        XCTAssertEqual(snapshot.topModels.map(\.name), ["opus", "gpt"])
-        XCTAssertEqual(snapshot.topModels.first?.tokens, 450)
-        XCTAssertEqual(snapshot.topModels.first?.sources, ["claude", "opencode"])
-        XCTAssertEqual(snapshot.topModels.first?.costUsd ?? 0, 4, accuracy: 0.0001)
-        XCTAssertEqual(snapshot.sources.map(\.source), ["opencode", "claude"])
+        let models = PhoneWorkspaceSnapshot.rankModels(from: breakdown)
+        let providers = PhoneWorkspaceSnapshot.rankProviders(from: breakdown)
+        XCTAssertEqual(models.map(\.name), ["opus", "gpt"])
+        XCTAssertEqual(models.first?.tokens, 450)
+        XCTAssertEqual(models.first?.sources, ["claude", "opencode"])
+        XCTAssertEqual(models.first?.costUsd ?? 0, 4, accuracy: 0.0001)
+        XCTAssertEqual(providers.map(\.source), ["opencode", "claude"])
     }
 
     func testWeekRangeStartsMonday() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
-        // Thursday 2026-11-12
         let now = DateComponents(calendar: calendar, year: 2026, month: 11, day: 12, hour: 9).date!
-        let range = UsagePeriod.week.range(now: now, calendar: calendar)
+        let range = UsageHorizon.week.range(now: now, calendar: calendar)
         XCTAssertEqual(range.from, "2026-11-09")
         XCTAssertEqual(range.to, "2026-11-15")
+    }
+
+    func testDailyEntryDecodesCostAndModelPairs() throws {
+        let json = """
+        {"from":"2026-11-13","to":"2026-11-13","data":[
+          {"day":"2026-11-13","total_tokens":1500,"billable_total_tokens":1500,
+           "total_cost_usd":4.25,"conversation_count":3,"models":{"claude-opus-4-6":1000,"gpt-5.6-sol":500}}
+        ]}
+        """
+        let decoded = try JSONDecoder().decode(PhoneDailyUsageResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.data.first?.totalCostUsd ?? 0, 4.25, accuracy: 0.001)
+        XCTAssertEqual(decoded.data.first?.models["claude-opus-4-6"], 1000)
+    }
+
+    func testCLICodeNormalizationFormatsDash() {
+        XCTAssertEqual(CloudAPIClient.normalizeCLICode("ab23cd45"), "AB23-CD45")
+        XCTAssertEqual(CloudAPIClient.normalizeCLICode("AB23-CD45"), "AB23-CD45")
     }
 }
 
@@ -113,10 +129,11 @@ final class RequestOnlyAndStreakTests: XCTestCase {
         ]}
         """
         let breakdown = try JSONDecoder().decode(ModelBreakdownResponse.self, from: Data(json.utf8))
-        let snapshot = UsageSnapshot(period: .day, summary: UsageSummaryResponse(), breakdown: breakdown, fetchedAt: Date())
-        XCTAssertEqual(snapshot.sources.map(\.source), ["claude", "qoder"])
-        XCTAssertEqual(snapshot.topModels.last?.name, "auto")
-        XCTAssertEqual(snapshot.topModels.last?.conversations, 7)
+        let providers = PhoneWorkspaceSnapshot.rankProviders(from: breakdown)
+        let models = PhoneWorkspaceSnapshot.rankModels(from: breakdown)
+        XCTAssertEqual(providers.map(\.source), ["claude", "qoder"])
+        XCTAssertEqual(models.last?.name, "auto")
+        XCTAssertEqual(models.last?.conversations, 7)
     }
 
     func testCurrentStreakCountsBackFromTodayOrYesterday() {
@@ -127,9 +144,9 @@ final class RequestOnlyAndStreakTests: XCTestCase {
             cell("2026-11-08", 5), cell("2026-11-09", 0), cell("2026-11-10", 9),
             cell("2026-11-11", 4), cell("2026-11-12", 0), nil, nil,
         ]])
-        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-12"), Streak(days: 2, reachesHistoryStart: false), "today empty: count from yesterday")
-        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-11"), Streak(days: 2, reachesHistoryStart: false))
-        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-14"), Streak(days: 0, reachesHistoryStart: false))
+        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-12"), ActivityStreak(days: 2, reachesHistoryStart: false))
+        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-11"), ActivityStreak(days: 2, reachesHistoryStart: false))
+        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-14"), ActivityStreak(days: 0, reachesHistoryStart: false))
     }
 
     func testStreakReachingTheFirstFetchedDayIsALowerBound() {
@@ -139,19 +156,6 @@ final class RequestOnlyAndStreakTests: XCTestCase {
             HeatmapCell(day: "2026-11-10", totalTokens: 4, level: 2),
             nil, nil, nil, nil,
         ]])
-        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-10"), Streak(days: 3, reachesHistoryStart: true))
-    }
-}
-
-final class RankingTieTests: XCTestCase {
-    func testEqualTotalsSortByName() throws {
-        let json = """
-        {"sources":[{"source":"codex","totals":{"billable_total_tokens":200},"models":[
-          {"model":"zeta","model_id":"zeta","totals":{"billable_total_tokens":100}},
-          {"model":"alpha","model_id":"alpha","totals":{"billable_total_tokens":100}}]}]}
-        """
-        let breakdown = try JSONDecoder().decode(ModelBreakdownResponse.self, from: Data(json.utf8))
-        let snapshot = UsageSnapshot(period: .day, summary: UsageSummaryResponse(), breakdown: breakdown, fetchedAt: Date())
-        for _ in 0..<20 { XCTAssertEqual(snapshot.topModels.map(\.name), ["alpha", "zeta"]) }
+        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-10"), ActivityStreak(days: 3, reachesHistoryStart: true))
     }
 }

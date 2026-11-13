@@ -32,9 +32,19 @@ enum CloudError: LocalizedError, Equatable {
         switch self {
         case .signedOut:
             return "Your session expired. Sign in again."
-        case .cloudAccessRequired:
-            return "This account doesn't have TokenTracker Cloud access."
-        case .server(let status, _, let message):
+        case .cloudAccessRequired(let code):
+            switch code {
+            case "cloud_read_only_expired":
+                return "This account's Cloud read window has ended."
+            case "cloud_history_window_exceeded":
+                return "The requested range is outside your Cloud history window."
+            default:
+                return "This account does not have active TokenTracker Cloud access."
+            }
+        case .server(let status, let code, let message):
+            if code == "invalid user_code format" || status == 400 && message?.contains("user_code") == true {
+                return "Enter an 8-character CLI pairing code in XXXX-XXXX format."
+            }
             if let message, !message.isEmpty { return message }
             return "The server returned HTTP \(status)."
         case .invalidResponse:
