@@ -1773,6 +1773,10 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         json(res, { error: "Cloud sync preference changed", code: "CLOUD_SYNC_CHANGED" }, 409);
         return "served";
       }
+      // The reset writes its marker before the remote wipe, so a read that
+      // started before the marker can overlap the wipe and return a partial
+      // aggregate. Re-check now that the read has finished.
+      if (cloudUsageRebuildPending()) return ACCOUNT_FALLBACK_CLOUD_REBUILD_PENDING;
       accountViewFailures.delete(failureKey);
       res.writeHead(200, {
         "Content-Type": "application/json",

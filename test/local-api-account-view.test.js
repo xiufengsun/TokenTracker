@@ -947,6 +947,39 @@ for (const marker of ["valid", "unreadable"]) {
   });
 }
 
+test("a cloud read that overlaps the start of a rebuild is not served as the account view", async () => {
+  // The reset writes its marker before the remote wipe, so a read already in
+  // flight can come back with a partial aggregate after the marker exists.
+  const queuePath = path.join(tmpHome, "queue.jsonl");
+  writeQueue(queuePath, [SAMPLE_ROW]);
+  const trackerDir = seedSignedInTracker();
+
+  const accessJwt = freshAccessJwt();
+  const realFetch = global.fetch;
+  global.fetch = async (urlStr) => {
+    if (String(urlStr).includes("/api/auth/refresh")) {
+      return { ok: true, status: 200, json: async () => ({ accessToken: accessJwt }) };
+    }
+    if (String(urlStr).includes("/tokentracker-account-heatmap")) {
+      fs.writeFileSync(path.join(trackerDir, "cloud-usage-reset.json"), JSON.stringify({
+        version: 1, operationId: "f69f383c-6e0f-49b4-ac21-c43fa939b5fe",
+        ownerId: "0f7b613c-ff9e-4250-8237-3d02c7c52da1", deviceId: "2faf0823-a6df-4eed-9387-735a29b879db",
+        baseUrl: "https://example.insforge.app", phase: "prepared" }));
+      return { ok: true, status: 200, json: async () => ({ weeks: [], active_days: 0 }) };
+    }
+    throw new Error(`unexpected fetch ${urlStr}`);
+  };
+  try {
+    const handler = freshHandler(queuePath);
+    const res = await call(handler, { endpoint: HEATMAP_ENDPOINT });
+    assert.equal(res._headers["x-tokentracker-account-view"], "0");
+    assert.equal(res._headers["x-tokentracker-account-fallback"], "cloud-rebuild-pending");
+    assert.ok(res.json().weeks.flat().some((day) => day?.total_tokens > 0), "serves this machine's usage");
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
 test("one popover refresh mints ONE access token across concurrent account reads", async () => {
   const queuePath = path.join(tmpHome, "queue.jsonl");
   writeQueue(queuePath, [SAMPLE_ROW]);
