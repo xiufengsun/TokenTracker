@@ -165,7 +165,8 @@ test("stable brackets, endpoint changes, and incremental sync preserve logical u
   assert.equal(row.conversation_count, 4);
   assert.deepEqual(row.backend_usage.map((p) => [p.backend, p.total_tokens]), [["anthropic", 110], ["unknown", 220], ["custom", 110]]);
   assert.equal(row.backend_usage[2].backend_origin, originB);
-  assert.equal(computeRowCost(row), computeRowCost(original));
+  // Anthropic + unknown turns keep the model estimate; only the custom turn is excluded.
+  assert.equal(computeRowCost(row), computeRowCost(original) * 3);
   assert.equal(getModelPricingInfo(row.model, row).status, "unpriced");
   const saved = fs.readFileSync(f.queuePath, "utf8");
   await f.sync();
@@ -196,10 +197,40 @@ for (const scenario of ["changed-first-turn", "missing-start", "missing-stop", "
     const row = f.rows().at(-1);
     assert.equal(row.backend_usage[0].backend, "unknown");
     assert.equal(row.backend_usage[0].backend_origin, undefined);
-    assert.equal(computeRowCost(row), 0); // priced subtotal; explicitly unpriced, NOT free
-    assert.equal(getModelPricingInfo(row.model, row).status, "unpriced");
+    // Unproven provenance is not a gateway claim: keep the model estimate.
+    const { backend_usage, ...unattributed } = row;
+    assert.ok(computeRowCost(row) > 0);
+    assert.equal(computeRowCost(row), computeRowCost(unattributed));
+    assert.equal(getModelPricingInfo(row.model, row).status, "priced");
   });
 }
+
+test("default setup without ANTHROPIC_BASE_URL keeps Claude usage priced", async (t) => {
+  // Regression: no endpoint env (the default Claude Code install) is recorded
+  // as unknown provenance, which used to price every new Claude turn at $0.
+  const f = fixture(t);
+  f.hook("SessionStart", undefined);
+  f.turn(); f.hook("Stop", undefined);
+  await f.sync();
+  const row = f.rows().at(-1);
+  assert.deepEqual(row.backend_usage.map((p) => p.backend), ["unknown"]);
+  assert.ok(computeRowCost(row) > 0);
+  assert.equal(getModelPricingInfo(row.model, row).status, "priced");
+  const session = await scanClaudeSession(f.file, { trackerDir: f.trackerDir });
+  assert.equal(session.cost_usd, computeRowCost(row));
+  assert.equal(session.cost_is_partial, false);
+});
+
+test("custom gateway usage stays unpriced", async (t) => {
+  const f = fixture(t);
+  f.hook("SessionStart", B);
+  f.turn(); f.hook("Stop", B);
+  await f.sync();
+  const row = f.rows().at(-1);
+  assert.deepEqual(row.backend_usage.map((p) => p.backend), ["custom"]);
+  assert.equal(computeRowCost(row), 0); // priced subtotal; explicitly unpriced, NOT free
+  assert.equal(getModelPricingInfo(row.model, row).status, "unpriced");
+});
 
 test("late Stop, current environment and resumed sessions never relabel earlier ingestion", async (t) => {
   const f = fixture(t);
@@ -452,5 +483,5 @@ test("truncated old session boundary does not exempt replacement usage", async (
   createBackendResolver(f.file, f.trackerDir, { legacyOffset: fixtureStat(f.file).size + 1000 });
   const row = await scanClaudeSession(f.file, { trackerDir: f.trackerDir });
   assert.equal(row.model_usage[0].backend_usage[0].backend, "unknown");
-  assert.equal(row.cost_usd, 0);
+  assert.ok(row.cost_usd > 0);
 });
