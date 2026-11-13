@@ -1,17 +1,31 @@
 # TokenTracker for iPhone
 
-Native iOS 26 Liquid Glass companion for TokenTracker Cloud.
+Native iOS 26 companion for TokenTracker Cloud.
 
-TokenTracker for iPhone tracks nothing locally on the phone — it signs in to your TokenTracker Cloud account and gives you an actionable mobile view of the AI coding usage, estimated spend, rolling burn windows, and synced computers your Mac, Windows, and Linux machines upload.
+Token Tracker for iPhone tracks nothing on the phone. It signs in to TokenTracker Cloud and shows the usage, estimated spend and synced computers that your Mac, Windows and Linux machines upload.
 
-See [`DESIGN.md`](./DESIGN.md) for the full product architecture, information architecture, and design rationale.
+Design: [`DESIGN.md`](./DESIGN.md). Latest review: [`REVIEW.md`](./REVIEW.md).
 
-## Key Capabilities
+## What it shows
 
-- **Pulse (Usage & Spend):** Cross-device or per-computer spend and token ledger, cache-hit efficiency, intraday 24-hour and 30-day velocity charts, coding tool & model breakdowns, and an 18-week consistency heatmap.
-- **Pacing & Limits:** Synced 5-hour burst, 24-hour, 7-day, and 30-day rolling windows, optional personal spend targets with CodexBar-style even-burn pace notches (shared `LimitPace` engine with macOS), and per-tool plan renewal cycles.
-- **Account, Cloud & Phone Privacy:** Cloud status & retention details, remote CLI pairing code approval (`tokentracker login`), computer pause/resume & rename, cost masking (`$•••`), App Switcher blur shield, Face ID lock, and Public Leaderboard visibility settings.
-- **App Store 3.1.3(f) Compliant:** Pure companion experience with clear empty/blocked states and zero in-app purchase flows or external pricing/upgrade links.
+- Pulse: estimated cost, tokens and sessions for Today, Week, Month or 24 months, for all computers or one. Hourly or 30-day chart, coding tools with real brand marks, top models, 18-week heatmap.
+- Pacing: last 5 hours, today, 7 days and 30 days. Bars appear against spend targets and per-tool caps you set on the phone. Plan renewal dates are optional. Provider rate limits stay on the desktop, because they use local credentials.
+- Settings: Cloud status, synced computers (pause / resume / rename), CLI pairing-code approval, cost masking, app-switcher blur, Face ID lock, leaderboard visibility, units.
+- No in-app purchase and no pricing or upgrade links (App Store 3.1.3(f)).
+
+## Brand assets
+
+Provider marks and the product mark come from the dashboard. After changing `dashboard/src/ui/dashboard/components/ProviderIcon.jsx` or `dashboard/public/brand-logos/`, run:
+
+```bash
+node TokenTrackerPhone/scripts/sync-brand-assets.mjs
+```
+
+## Screenshots
+
+```bash
+TokenTrackerPhone/scripts/capture-screenshots.sh <simulator-udid>   # after a Debug simulator build
+```
 
 ## Build & Test
 

@@ -267,12 +267,11 @@ struct PulseView: View {
                         Text(pacingHeadline(snapshot: snapshot, hottest: hottest, burst5h: burst5h))
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
+                            .fixedSize(horizontal: false, vertical: true)
                         Text(pacingSubtitle(snapshot: snapshot, hottest: hottest))
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     Spacer(minLength: 6)
@@ -428,6 +427,7 @@ struct PulseView: View {
 private struct TokenCompositionStrip: View {
     let totals: TokenTotals
     let prefs: PhonePreferences
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private struct Segment: Identifiable {
         let id: String
@@ -462,8 +462,10 @@ private struct TokenCompositionStrip: View {
 
                 // Two fixed columns; labels never shrink below their natural width.
                 LazyVGrid(
-                    columns: [GridItem(.flexible(), spacing: 16, alignment: .leading),
-                              GridItem(.flexible(), spacing: 16, alignment: .leading)],
+                    columns: Array(
+                        repeating: GridItem(.flexible(), spacing: 16, alignment: .leading),
+                        count: typeSize >= .xxLarge ? 1 : 2
+                    ),
                     alignment: .leading,
                     spacing: 6
                 ) {
