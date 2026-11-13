@@ -22256,16 +22256,18 @@ function antigravityPlannerSteps(buffer) {
   return steps;
 }
 
-// True when an append adds a planner step the previous transcript did not cover.
-// That step may already have been billed from the sibling database.
+// True when an append now covers a generation the previous pass billed from the
+// sibling database. A new planner step that was never supplemented stays incremental.
 function antigravityCoverageChanged(buffer, previous, dbPath) {
-  if (!Buffer.isBuffer(buffer) || !previous || !(Number(previous.size) >= 0) || !dbPath) return false;
+  const supplemented = new Set(Array.isArray(previous?.supplementedSteps) ? previous.supplementedSteps : []);
+  if (!Buffer.isBuffer(buffer) || !previous || !(Number(previous.size) >= 0) || !dbPath || supplemented.size === 0) {
+    return false;
+  }
   const before = antigravityPlannerSteps(buffer.subarray(0, Number(previous.size)));
-  const after = antigravityPlannerSteps(buffer);
   // The appended planner step sits past the stored cursor, so the whole readable
   // prefix is compared, not only the lines the previous pass billed.
-  for (const step of after) {
-    if (!before.has(step)) return true;
+  for (const step of antigravityPlannerSteps(buffer)) {
+    if (!before.has(step) && supplemented.has(step)) return true;
   }
   return false;
 }
@@ -23412,7 +23414,7 @@ async function parseAntigravityFile({
       }
     }
     const uncovered = [...stepMap.entries()].filter(([step, info]) => info?.hasUsageMetadata && !coveredSteps.has(step));
-    supplementedSteps = uncovered.map(([step]) => step);
+    if (uncovered.length) supplementedSteps = uncovered.map(([step]) => step);
     if (uncovered.length) {
       const nativeEvents = await require("./antigravity-native").readAntigravityNativeSession(dbPath);
       const byStep = new Map((nativeEvents?.events || []).map((event) => [event.step_index, event]));
