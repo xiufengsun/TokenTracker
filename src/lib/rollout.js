@@ -22238,16 +22238,19 @@ const ANTIGRAVITY_CURSOR_VERSION = 2;
 const ANTIGRAVITY_EXTRACTOR_REVISION = 2;
 const ANTIGRAVITY_MAX_CONTRIBUTIONS = 4096;
 
-function antigravityPlannerSteps(buffer, cutoff = Infinity) {
+function antigravityPlannerSteps(buffer) {
   const steps = new Set();
   if (!Buffer.isBuffer(buffer)) return steps;
-  const lines = buffer.toString("utf8").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  for (let i = 0; i < lines.length && i < cutoff; i++) {
+  for (const line of buffer.toString("utf8").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
     try {
-      const event = JSON.parse(lines[i]);
+      const event = JSON.parse(trimmed);
       if (event?.type === "PLANNER_RESPONSE" && Number.isFinite(event.step_index)) steps.add(event.step_index);
     } catch {
-      break;
+      // A truncated final line is the cursor boundary, not the end of the file.
+      // Only a complete line that fails to parse ends the readable prefix.
+      if (line.endsWith("\n") || line.endsWith("\r")) break;
     }
   }
   return steps;
@@ -22256,11 +22259,12 @@ function antigravityPlannerSteps(buffer, cutoff = Infinity) {
 // True when an append adds a planner step the previous transcript did not cover.
 // That step may already have been billed from the sibling database.
 function antigravityCoverageChanged(buffer, previous, dbPath) {
-  if (!Buffer.isBuffer(buffer) || !previous || !(Number(previous.size) > 0) || !dbPath) return false;
+  if (!Buffer.isBuffer(buffer) || !previous || !(Number(previous.size) >= 0) || !dbPath) return false;
   const before = antigravityPlannerSteps(buffer.subarray(0, Number(previous.size)));
+  const after = antigravityPlannerSteps(buffer);
   // The appended planner step sits past the stored cursor, so the whole readable
   // prefix is compared, not only the lines the previous pass billed.
-  for (const step of antigravityPlannerSteps(buffer)) {
+  for (const step of after) {
     if (!before.has(step)) return true;
   }
   return false;
@@ -22502,7 +22506,11 @@ async function parseAntigravityIncremental({
   const deferredIncompletePaths = new Set();
   let needsFullRebuild = false;
   for (const [filePath, prev] of Object.entries(fileCursors)) {
-    if (!resolveAntigravityDbPath(filePath) || !prev || Number(prev.lastLine || 0) <= 0) {
+    if (
+      !resolveAntigravityDbPath(filePath) ||
+      !prev ||
+      (Number(prev.lastLine || 0) <= 0 && !prev.supplementedSteps)
+    ) {
       continue;
     }
     const isLegacy =
@@ -22546,13 +22554,11 @@ async function parseAntigravityIncremental({
       const dbPath = resolveAntigravityDbPath(filePath);
       const dbIdentity = await statAntigravityDatabase(dbPath);
       const sameInode = st && prev.inode === (st.ino || 0);
+      const transcriptBytes = await readAntigravityTranscriptBytes(filePath);
       const transcriptCanAppend =
         sameInode &&
         (Number.isFinite(st.size) ? st.size : 0) >= Number(prev.size || 0) &&
-        antigravityTranscriptPrefixMatches(
-          await readAntigravityTranscriptBytes(filePath),
-          prev,
-        );
+        antigravityTranscriptPrefixMatches(transcriptBytes, prev);
       const sameSource =
         !fileSourceByPath.has(filePath) ||
         (prev.source == null ? defaultSource : prev.source) === fileSourceByPath.get(filePath);
@@ -22569,7 +22575,17 @@ async function parseAntigravityIncremental({
         });
         projectChanged = antigravityProjectAssignmentChanged(prev, projectContext);
       }
-      if (!transcriptCanAppend || !sameDb || staleExtractor || !sameSource || projectChanged) {
+      const coverageChanged =
+        transcriptCanAppend &&
+        antigravityCoverageChanged(transcriptBytes, prev, dbPath);
+      if (
+        !transcriptCanAppend ||
+        !sameDb ||
+        staleExtractor ||
+        !sameSource ||
+        projectChanged ||
+        coverageChanged
+      ) {
         if (!inventoryComplete) {
           deferredIncompletePaths.add(filePath);
         } else {

@@ -15522,6 +15522,56 @@ test("parseAntigravityIncremental rebuilds a capped ledger synced before the ext
   }
 });
 
+test("parseAntigravityIncremental rebuilds a capped ledger when an append covers a supplemented step", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-antigravity-capped-coverage-"));
+  try {
+    const { transcriptPath, queuePath } = await setupAntigravitySqliteSession(tmp, {
+      protos: [
+        buildAntigravityTestProto({
+          model: "gemini-3.8-flash", lastStepIndex: 0, uncachedInput: 1000,
+          cachedInput: 2000, outputTokens: 200, textOutput: 150, reasoningOutput: 50,
+        }),
+        buildAntigravityTestProto({
+          model: "gemini-3.8-flash", lastStepIndex: 4, uncachedInput: 10,
+          outputTokens: 5, textOutput: 5,
+        }),
+      ],
+      lines: antigravityPlannerLines([
+        {
+          userStep: 0, userAt: "2026-04-05T14:00:00.000Z", userContent: "hello",
+          plannerStep: 1, plannerAt: "2026-04-05T14:01:00.000Z",
+          plannerContent: "response", thinking: "reasoning",
+        },
+      ]),
+    });
+    const cursors = { version: 1, files: {}, updatedAt: null };
+    await parseAntigravityIncremental({ sessionFiles: [transcriptPath], cursors, queuePath });
+    const cursor = cursors.files[transcriptPath];
+    cursor.contributionsComplete = false;
+    const discarded = bucketKey("antigravity", "gemini-3.8-flash", "2026-04-05T13:00:00.000Z");
+    cursors.hourly.buckets[discarded] = {
+      totals: {
+        input_tokens: 90, cached_input_tokens: 0, cache_creation_input_tokens: 0,
+        output_tokens: 10, reasoning_output_tokens: 0, total_tokens: 100,
+        billable_total_tokens: 100, total_cost_usd: 0, conversation_count: 1,
+      },
+      queuedKey: null,
+    };
+    await fs.appendFile(transcriptPath, "\n" + JSON.stringify({
+      type: "PLANNER_RESPONSE", step_index: 5, created_at: "2026-04-05T14:02:00.000Z", content: "later",
+    }) + "\n");
+
+    await parseAntigravityIncremental({ sessionFiles: [transcriptPath], cursors, queuePath });
+
+    assert.equal(cursors.hourly.buckets[discarded]?.totals?.total_tokens ?? 0, 0);
+    const latest = new Map();
+    for (const row of await readJsonLines(queuePath)) latest.set(row.hour_start, row);
+    assert.equal(latest.get("2026-04-05T14:00:00.000Z").total_tokens, 3200 + 15);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("parseAntigravityIncremental rebuilds capped ledgers when project attribution changes", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-antigravity-project-cap-"));
   try {

@@ -369,6 +369,23 @@ test("appending a planner response retracts the usage previously supplemented fo
   assert.equal(fs.readFileSync(first.queuePath, "utf8"), saved);
 });
 
+test("an empty transcript cursor retracts supplemented usage once the planner step arrives", async (t) => {
+  const { home, root, db } = fixture(t);
+  const transcript = path.join(root, "brain", ID, ".system_generated", "logs", "transcript.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, "");
+  const cursors = {};
+  const first = await hourly(home, [transcript], cursors);
+  assert.equal(first.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335);
+  assert.equal(cursors.files[transcript].size, 0);
+  fs.appendFileSync(transcript, JSON.stringify({
+    type: "PLANNER_RESPONSE", step_index: 1, created_at: AT, content: SECRET,
+  }) + "\n");
+  assert.equal(fs.statSync(db).mtimeMs, fs.statSync(db).mtimeMs);
+  const appended = await hourly(home, [transcript], cursors);
+  assert.equal(appended.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335);
+});
+
 test("a previously scanned Antigravity directory stays incomplete on a temporary ENOENT", async (t) => {
   const { home, root } = fixture(t, { transcript: true });
   const brain = path.join(root, "brain");
