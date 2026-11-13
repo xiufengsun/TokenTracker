@@ -15558,8 +15558,23 @@ test("parseAntigravityIncremental rebuilds a capped ledger when an append covers
       queuedKey: null,
     };
     await fs.appendFile(transcriptPath, "\n" + JSON.stringify({
+      type: "USER_INPUT", step_index: 2, created_at: "2026-04-05T14:01:30.000Z", content: "continue",
+    }) + "\n");
+    await parseAntigravityIncremental({ sessionFiles: [transcriptPath], cursors, queuePath });
+    assert.equal(cursors.files[transcriptPath].contributionsComplete, false,
+      "an ordinary append cannot restore discarded ledger entries");
+    await fs.appendFile(transcriptPath, "\n" + JSON.stringify({
       type: "PLANNER_RESPONSE", step_index: 5, created_at: "2026-04-05T14:02:00.000Z", content: "later",
     }) + "\n");
+
+    const beforeDeferred = JSON.stringify(cursors.files[transcriptPath]);
+    const queueBeforeDeferred = await fs.readFile(queuePath, "utf8");
+    const deferred = await parseAntigravityIncremental({
+      sessionFiles: [transcriptPath], cursors, queuePath, inventoryComplete: false,
+    });
+    assert.equal(deferred.bucketsQueued, 0);
+    assert.equal(JSON.stringify(cursors.files[transcriptPath]), beforeDeferred);
+    assert.equal(await fs.readFile(queuePath, "utf8"), queueBeforeDeferred);
 
     await parseAntigravityIncremental({ sessionFiles: [transcriptPath], cursors, queuePath });
 

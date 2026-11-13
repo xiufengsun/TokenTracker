@@ -369,6 +369,36 @@ test("appending a planner response retracts the usage previously supplemented fo
   assert.equal(fs.readFileSync(first.queuePath, "utf8"), saved);
 });
 
+test("ordinary appends preserve supplements until each planner response arrives, including after restart", async (t) => {
+  const { home, db, file } = fixture(t, { transcript: true });
+  runSql(db, "DELETE FROM gen_metadata; INSERT INTO gen_metadata VALUES (0, X'" + generation().toString("hex")
+    + "'), (1, X'" + shiftStep(generation(40, "response-b"), 4)
+    + "'), (2, X'" + shiftStep(generation(20, "response-c"), 8) + "')");
+  let cursors = {};
+  const expected = 335 + 275 + 255;
+  const first = await hourly(home, [file], cursors);
+  assert.equal(first.rows.reduce((sum, row) => sum + row.total_tokens, 0), expected);
+  assert.deepEqual(cursors.files[file].supplementedSteps, [5, 9]);
+
+  for (const step of [5, 9]) {
+    fs.appendFileSync(file, JSON.stringify({ type: "USER_INPUT", step_index: step - 1, created_at: AT, content: SECRET }) + "\n");
+    const ordinary = await hourly(home, [file], cursors);
+    assert.equal(ordinary.rows.reduce((sum, row) => sum + row.total_tokens, 0), expected);
+    assert.deepEqual(cursors.files[file].supplementedSteps, step === 5 ? [5, 9] : [9]);
+    // The next CLI invocation reloads only the persisted cursor, not parser state.
+    cursors = JSON.parse(JSON.stringify(cursors));
+    fs.appendFileSync(file, JSON.stringify({ type: "PLANNER_RESPONSE", step_index: step, created_at: AT, content: SECRET }) + "\n");
+    const covered = await hourly(home, [file], cursors);
+    assert.equal(covered.rows.reduce((sum, row) => sum + row.total_tokens, 0), expected);
+    assert.deepEqual(cursors.files[file].supplementedSteps, step === 5 ? [9] : undefined);
+  }
+  const saved = fs.readFileSync(first.queuePath, "utf8");
+  await hourly(home, [file], cursors);
+  assert.equal(fs.readFileSync(first.queuePath, "utf8"), saved);
+  const [session] = await readAntigravitySessions([file]);
+  assert.equal(session.tokens.total_tokens, expected);
+});
+
 test("an empty transcript cursor retracts supplemented usage once the planner step arrives", async (t) => {
   const { home, root, db } = fixture(t);
   const transcript = path.join(root, "brain", ID, ".system_generated", "logs", "transcript.jsonl");

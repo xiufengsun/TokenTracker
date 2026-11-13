@@ -22939,6 +22939,12 @@ async function parseAntigravityIncremental({
         projectKey,
       });
 
+      // An unchanged-db resume skips the supplemental pass but keeps its billed
+      // contributions. Keep their step identities too, until a full walk
+      // recomputes which generations are still absent from the transcript.
+      if (lastLine > 0 && sameDb && Array.isArray(prev?.supplementedSteps)) {
+        result.supplementedSteps = prev.supplementedSteps;
+      }
       const mergedContributions = { ...(prev?.contributions || {}) };
       for (const [cKey, cVal] of Object.entries(result.contributions || {})) {
         if (!mergedContributions[cKey]) {
@@ -23026,7 +23032,9 @@ async function parseAntigravityIncremental({
       // reread on an unchanged stat. Drop the marker once the transcript catches up.
       ...(result.supplementedSteps ? { supplementedSteps: result.supplementedSteps } : {}),
       contributions: contributionState.contributions,
-      contributionsComplete: contributionState.complete,
+      // Merging new deltas does not recover entries discarded by an earlier cap.
+      contributionsComplete: contributionState.complete &&
+        (needsFullRebuild || needsReconcile || isLegacy || prev?.contributionsComplete !== false),
       updatedAt: new Date().toISOString(),
     };
 
