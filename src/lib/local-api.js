@@ -1639,6 +1639,20 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
   // manual sync. See ACCOUNT_FALLBACK_* below for the vocabulary.
   const ACCOUNT_FALLBACK_CLOUD_SYNC_OFF = "cloud-sync-off";
   const ACCOUNT_FALLBACK_SIGNED_OUT = "signed-out";
+  // "Rebuild cloud usage" wiped this device's cloud rows and is replaying the
+  // queue from offset 0. On the free tier that replay is one upload window
+  // (10 batches) per UTC day, so it can take days; until it finishes the cloud
+  // aggregate is missing most of this machine's history (typically every
+  // recent day). Serving it as the account view showed Today/7d/30d as 0.
+  // Not "transient-": clients keep their last account snapshot for transient
+  // reasons, and that snapshot is the same incomplete aggregate.
+  const ACCOUNT_FALLBACK_CLOUD_REBUILD_PENDING = "cloud-rebuild-pending";
+
+  function cloudUsageRebuildPending() {
+    // An unreadable marker also blocks uploads (cloudUsageResetBlocksUpload),
+    // so the cloud copy is just as stale: fail toward local data.
+    try { return Boolean(readCloudUsageReset(trackerDataDir)); } catch { return true; }
+  }
 
   // Every transient reason is prefixed "transient-"; clients only need the
   // prefix, so new reasons can be added without a client change.
@@ -1665,6 +1679,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
     if (!getCloudSyncPref()) return ACCOUNT_FALLBACK_CLOUD_SYNC_OFF;
     const refreshToken = getRefreshTokenForCloud();
     if (!refreshToken) return ACCOUNT_FALLBACK_SIGNED_OUT;
+    if (cloudUsageRebuildPending()) return ACCOUNT_FALLBACK_CLOUD_REBUILD_PENDING;
     invalidateAfterAccountUpload();
     const runtime = getRuntime();
     if (runtime.configurationError) return ACCOUNT_FALLBACK_SIGNED_OUT;
