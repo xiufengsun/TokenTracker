@@ -399,6 +399,37 @@ test("ordinary appends preserve supplements until each planner response arrives,
   assert.equal(session.tokens.total_tokens, expected);
 });
 
+for (const partial of [false, true]) {
+  test("a zero-line " + (partial ? "partial" : "empty") + " transcript cursor does not supplement native usage twice", async (t) => {
+    const { home, db, file } = fixture(t, { transcript: true });
+    const user = JSON.stringify({ type: "USER_INPUT", step_index: 0, created_at: AT, content: SECRET });
+    fs.writeFileSync(file, partial ? user.slice(0, -1) : "");
+    let cursors = {};
+    const first = await hourly(home, [file], cursors);
+    assert.equal(first.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335);
+    assert.equal(cursors.files[file].lastLine, 0);
+    const dbMtime = fs.statSync(db).mtimeMs;
+
+    fs.appendFileSync(file, partial ? "}\n" : user + "\n");
+    const appended = await hourly(home, [file], cursors);
+    assert.equal(fs.statSync(db).mtimeMs, dbMtime);
+    assert.equal(appended.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335);
+    assert.equal(appended.result.bucketsQueued, 0);
+    assert.deepEqual(cursors.files[file].supplementedSteps, [1]);
+    cursors = JSON.parse(JSON.stringify(cursors));
+    const saved = fs.readFileSync(first.queuePath, "utf8");
+    await hourly(home, [file], cursors);
+    assert.equal(fs.readFileSync(first.queuePath, "utf8"), saved);
+
+    fs.appendFileSync(file, JSON.stringify({ type: "PLANNER_RESPONSE", step_index: 1, created_at: AT, content: SECRET }) + "\n");
+    const covered = await hourly(home, [file], cursors);
+    assert.equal(covered.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335);
+    assert.equal(cursors.files[file].supplementedSteps, undefined);
+    const [session] = await readAntigravitySessions([file]);
+    assert.equal(session.tokens.total_tokens, 335);
+  });
+}
+
 test("an empty transcript cursor retracts supplemented usage once the planner step arrives", async (t) => {
   const { home, root, db } = fixture(t);
   const transcript = path.join(root, "brain", ID, ".system_generated", "logs", "transcript.jsonl");

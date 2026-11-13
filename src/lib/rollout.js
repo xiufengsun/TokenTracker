@@ -22923,7 +22923,8 @@ async function parseAntigravityIncremental({
         filePath,
         ...(transcriptBytes ? { rawBuffer: transcriptBytes } : {}),
         lastLine,
-        supplementUncovered: Boolean(prev) && !sameDb,
+        // Even a zero-line cursor may already hold billed native supplements.
+        supplementUncovered: !prev || !sameDb || !canResume,
         baselineLine,
         initialContextTokens,
         initialPrevContext,
@@ -22942,7 +22943,7 @@ async function parseAntigravityIncremental({
       // An unchanged-db resume skips the supplemental pass but keeps its billed
       // contributions. Keep their step identities too, until a full walk
       // recomputes which generations are still absent from the transcript.
-      if (lastLine > 0 && sameDb && Array.isArray(prev?.supplementedSteps)) {
+      if (canResume && sameDb && Array.isArray(prev?.supplementedSteps)) {
         result.supplementedSteps = prev.supplementedSteps;
       }
       const mergedContributions = { ...(prev?.contributions || {}) };
@@ -23144,7 +23145,7 @@ async function parseAntigravityFile({
   initialModel,
   initialLastPlannerModel,
   initialUsageSource,
-  supplementUncovered = false,
+  supplementUncovered = !(Number(lastLine) > 0),
   hourlyState,
   touchedBuckets,
   source,
@@ -23406,7 +23407,7 @@ async function parseAntigravityFile({
   // those were billed on an earlier pass. The caller sets supplementUncovered
   // on a full walk or when the database identity changed; an unchanged resume
   // already holds the uncovered generations in its ledger.
-  if (!nativeSession && (supplementUncovered || !(Number(lastLine) > 0)) && stepMap && stepMap.size > 0 && fssync.existsSync(dbPath)) {
+  if (!nativeSession && supplementUncovered && stepMap && stepMap.size > 0 && fssync.existsSync(dbPath)) {
     const coveredSteps = new Set();
     for (let i = 0; i < lines.length; i++) {
       try {
