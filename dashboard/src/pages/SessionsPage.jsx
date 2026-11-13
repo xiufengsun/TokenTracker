@@ -44,6 +44,7 @@ const SOURCE_FILTERS = [
   { id: "omp", label: () => "oh-my-pi" },
   { id: "dsh", label: () => copy("provider.display.deepseek_harness") },
   { id: "pi", label: () => copy("provider.display.pi") },
+  { id: "antigravity", label: () => copy("limits.provider.antigravity") },
 ];
 
 const DATE_RANGES = [
@@ -336,14 +337,14 @@ const SessionRow = React.memo(function SessionRow({
             title={Number(session.subagent_total_tokens) ? copy("sessions.thread.tokens_summary", { own: formatCompactNumber(session.own_total_tokens), subagents: formatCompactNumber(session.subagent_total_tokens), combined: formatCompactNumber(session.combined_total_tokens) }) : undefined}
             className="mt-1 text-sm tabular-nums text-oai-black dark:text-white md:mt-0"
           >
-            {formatCompactNumber(session.total_tokens)}
+            {session.usage_precision === "unavailable" ? copy("sessions.detail.not_recorded") : formatCompactNumber(session.total_tokens)}
             {Number(session.subagent_total_tokens) ? <span className="mt-0.5 block text-xs text-oai-gray-500 dark:text-oai-gray-400">Σ {formatCompactNumber(session.combined_total_tokens)}</span> : null}
           </dd>
         </div>
         <div className="sessions-row-value">
           <dt className="text-xs text-oai-gray-600 dark:text-oai-gray-300 md:sr-only">{copy("sessions.col.cost")}</dt>
           <dd className="mt-1 text-sm tabular-nums text-oai-black dark:text-white md:mt-0" title={session.cost_is_partial ? copy("sessions.cost.partial_title") : undefined}>
-            {session.cost_is_partial && Number(session.cost_usd) === 0 ? copy("dashboard.cost_breakdown.unpriced_label") : <>{session.cost_is_partial ? "≥" : ""}{formatUsdCurrency(session.cost_usd, { currency, rate })}</>}
+            {session.usage_precision === "unavailable" ? copy("sessions.detail.not_recorded") : session.cost_is_partial && Number(session.cost_usd) === 0 ? copy("dashboard.cost_breakdown.unpriced_label") : <>{session.cost_is_partial ? "≥" : ""}{formatUsdCurrency(session.cost_usd, { currency, rate })}</>}
           </dd>
         </div>
         <div className="sessions-row-value">
@@ -607,6 +608,7 @@ export function SessionsPage() {
   }, [scopedSessions, sourceFilter, projectFilter, modelFilter, rangeFilter, customFrom, customTo, deferredQuery]);
 
   const summary = useMemo(() => summarizeSessions(filtered), [filtered]);
+  const summaryUsageUnavailable = filtered.length > 0 && filtered.every((session) => session.usage_precision === "unavailable");
 
   const grouped = useMemo(() => {
     const visibleHashes = new Set(filtered.map((row) => row.session_hash));
@@ -802,8 +804,8 @@ export function SessionsPage() {
             <section className="mb-6 flex items-start gap-3 rounded-lg border border-oai-gray-200 px-4 py-3 dark:border-oai-gray-800">
               <dl className="sessions-kpis grid min-w-0 flex-1 grid-cols-2 gap-y-3 sm:grid-cols-4">
                 <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.summary.count")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{formatCompactNumber(summary.count)}</dd></div>
-                <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.col.tokens")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{formatCompactNumber(summary.tokens)}</dd></div>
-                <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.col.cost")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{summary.costIsPartial && summary.cost === 0 ? copy("dashboard.cost_breakdown.unpriced_label") : <>{summary.costIsPartial ? "≥" : ""}{formatUsdCurrency(summary.cost, { currency, rate })}</>}</dd></div>
+                <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.col.tokens")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{summaryUsageUnavailable ? copy("sessions.detail.not_recorded") : formatCompactNumber(summary.tokens)}</dd></div>
+                <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.col.cost")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{summaryUsageUnavailable ? copy("sessions.detail.not_recorded") : summary.costIsPartial && summary.cost === 0 ? copy("dashboard.cost_breakdown.unpriced_label") : <>{summary.costIsPartial ? "≥" : ""}{formatUsdCurrency(summary.cost, { currency, rate })}</>}</dd></div>
                 <div>
                   <dt className="flex items-center gap-1.5 text-xs text-oai-gray-500 dark:text-oai-gray-400">
                     <span>{copy("sessions.summary.speed")}</span>

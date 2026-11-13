@@ -358,6 +358,52 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("Review release")).not.toBeInTheDocument();
   });
 
+  it("filters Antigravity sessions, opens token details, and copies the CLI resume command", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const session = {
+      ...response.sessions[0], source: "antigravity", session_hash: "antigravity-cli",
+      title: "Antigravity CLI session", input_tokens: 100, output_tokens: 20,
+      cached_input_tokens: 200, cache_creation_input_tokens: 5, reasoning_output_tokens: 10,
+      total_tokens: 335, usage_precision: "reported",
+      resume_command: "agy --conversation 11111111-2222-3333-4444-555555555555",
+    };
+    getSessions.mockResolvedValue({ ...response, sessions: [...response.sessions, session] });
+    window.history.replaceState(null, "", "/sessions?source=antigravity");
+    render(<SessionsPage />);
+    expect(await screen.findByText(session.title)).toBeInTheDocument();
+    expect(screen.queryByText("Review release")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: `Copy resume command: ${session.resume_command}` }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(session.resume_command));
+    fireEvent.click(screen.getByRole("button", { name: `View statistics for ${session.title}` }));
+    const dialog = screen.getByRole("dialog", { name: "Session statistics" });
+    expect(within(dialog).getByText("100")).toBeInTheDocument();
+    expect(within(dialog).getByText("200")).toBeInTheDocument();
+    expect(within(dialog).getByText(session.resume_command)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close session statistics" }));
+    await chooseSelect("Filter by session source", "All tools");
+    expect(screen.getByText("Review release")).toBeInTheDocument();
+    await chooseSelect("Filter by session source", "Antigravity");
+    expect(screen.queryByText("Review release")).not.toBeInTheDocument();
+  });
+
+  it("shows unavailable Antigravity usage as not recorded in the list and details", async () => {
+    const session = {
+      ...response.sessions[0], source: "antigravity", session_hash: "empty-antigravity",
+      title: "Empty CLI conversation", total_tokens: 0, cost_usd: 0,
+      input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0,
+      reasoning_output_tokens: 0, model: "unknown", usage_precision: "unavailable",
+      usage_is_incomplete: true, resume_command: null,
+    };
+    getSessions.mockResolvedValue({ ...response, sessions: [session] });
+    render(<SessionsPage />);
+    expect(await screen.findByText(session.title)).toBeInTheDocument();
+    expect(screen.getAllByText("Not recorded").length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(screen.getByRole("button", { name: `View statistics for ${session.title}` }));
+    const dialog = screen.getByRole("dialog", { name: "Session statistics" });
+    expect(within(dialog).getAllByText("Not recorded").length).toBeGreaterThanOrEqual(7);
+  });
+
   it("renders and searches every observed model in a mixed Codex session", async () => {
     const mixed = {
       ...response.sessions[1],

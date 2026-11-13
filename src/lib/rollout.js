@@ -11,6 +11,7 @@ const crypto = require("node:crypto");
 const { ensureDir, writeJson, chmod600IfPossible } = require("./fs");
 const { physicalJsonlRecords } = require("./jsonl-lines");
 const { readSqliteJsonRows, readSqliteJsonRowsAsync } = require("./sqlite-reader");
+const { extractAntigravityGenInfo } = require("./antigravity-usage");
 const wsl = require("./wsl-probe");
 const { resolveInstallPaths } = require("./install-resolver");
 const { expandHome } = require("./scan-roots");
@@ -22216,6 +22217,10 @@ async function listAntigravityTranscriptsWithStatus(geminiHome, knownFiles = nul
   const results = await Promise.all(
     dirs.map((dir) => listAntigravitySessionFilesWithStatus(dir, knownFiles)),
   );
+  const { listAntigravityNativeFiles } = require("./antigravity-native");
+  const native = await Promise.all(dirs.map((dir, index) =>
+    listAntigravityNativeFiles(path.dirname(dir), results[index].files, knownFiles || [])));
+  results.push(...native);
   return {
     files: results.flatMap((result) => result.files),
     complete: results.every((result) => result.complete),
@@ -22230,7 +22235,7 @@ const ANTIGRAVITY_CURSOR_VERSION = 2;
 // Bump when extractAntigravityGenInfo starts reading records it used to
 // discard. Kept apart from the cursor version: a cursor-version mismatch routes
 // to the legacy migration, which treats the cursor as having no per-file ledger.
-const ANTIGRAVITY_EXTRACTOR_REVISION = 1;
+const ANTIGRAVITY_EXTRACTOR_REVISION = 2;
 const ANTIGRAVITY_MAX_CONTRIBUTIONS = 4096;
 
 function hashAntigravityTranscript(buffer) {
@@ -22451,6 +22456,20 @@ async function parseAntigravityIncremental({
       .map((entry) => (typeof entry === "string" ? entry : entry?.path))
       .filter(Boolean),
   );
+  // A CLI cascade can gain (or lose) a brain transcript after its native db
+  // was already synced. Move the ledger to the discovered representation so
+  // reconciliation retracts its old contribution instead of billing it twice.
+  for (const filePath of liveFilePaths) {
+    if (fileCursors[filePath]) continue;
+    const dbPath = resolveAntigravityDbPath(filePath);
+    if (!dbPath) continue;
+    const aliases = Object.keys(fileCursors).filter((previousPath) =>
+      !liveFilePaths.has(previousPath) && resolveAntigravityDbPath(previousPath) === dbPath);
+    if (aliases.length === 1) {
+      fileCursors[filePath] = fileCursors[aliases[0]];
+      delete fileCursors[aliases[0]];
+    }
+  }
   const incompleteContributionPaths = new Set();
   const deferredIncompletePaths = new Set();
   let needsFullRebuild = false;
@@ -22494,7 +22513,7 @@ async function parseAntigravityIncremental({
         if (needsFullRebuild) break;
         continue;
       }
-      const prev = cursors.files[filePath];
+      const prev = fileCursors[filePath];
       const st = await fs.stat(filePath).catch(() => null);
       const dbPath = resolveAntigravityDbPath(filePath);
       const dbIdentity = await statAntigravityDatabase(dbPath);
@@ -22982,169 +23001,9 @@ async function parseAntigravityIncremental({
   return { filesProcessed, eventsAggregated, bucketsQueued, projectBucketsQueued };
 }
 
-function decodeAntigravityVarint(buf, offset) {
-  if (!Buffer.isBuffer(buf) || !Number.isSafeInteger(offset) || offset < 0) {
-    throw new RangeError("invalid Antigravity protobuf offset");
-  }
-  const start = offset;
-  let res = 0;
-  for (let count = 0; count < 10; count++) {
-    if (offset >= buf.length) throw new RangeError("truncated Antigravity protobuf varint");
-    const b = buf[offset++];
-    // 64 bits is nine 7-bit groups plus one bit of a tenth byte.
-    if (count === 9 && b > 1) throw new RangeError("Antigravity protobuf varint exceeds 64 bits");
-    res += (b & 0x7f) * 2 ** (count * 7);
-    if (!(b & 0x80)) {
-      if (Number.isSafeInteger(res)) return [res, offset];
-      // Antigravity writes 2^64 - 1 in fields the extractor never reads. The
-      // float sum has already lost precision, so re-read the bytes exactly.
-      let exact = 0n;
-      for (let i = start; i < offset; i++) {
-        exact |= BigInt(buf[i] & 0x7f) << BigInt((i - start) * 7);
-      }
-      return [exact, offset];
-    }
-  }
-  throw new RangeError("overlong Antigravity protobuf varint");
-}
-
-function findAntigravityProtoFields(buf) {
-  if (!Buffer.isBuffer(buf)) throw new RangeError("invalid Antigravity protobuf payload");
-  const fields = [];
-  let offset = 0;
-  while (offset < buf.length) {
-    const [tag, next] = decodeAntigravityVarint(buf, offset);
-    if (typeof tag !== "number") throw new RangeError("unsafe Antigravity protobuf field tag");
-    offset = next;
-    const fieldNum = Math.floor(tag / 8);
-    const wireType = tag & 7;
-    if (fieldNum <= 0) throw new RangeError("invalid Antigravity protobuf field number");
-    if (wireType === 0) {
-      // May be a BigInt; token reads use Number.isSafeInteger, so it is never billed.
-      const [val, vNext] = decodeAntigravityVarint(buf, offset);
-      offset = vNext;
-      fields.push({ num: fieldNum, val });
-    } else if (wireType === 2) {
-      const [len, lNext] = decodeAntigravityVarint(buf, offset);
-      offset = lNext;
-      if (len > buf.length - offset) {
-        throw new RangeError("truncated Antigravity protobuf field");
-      }
-      fields.push({ num: fieldNum, val: buf.subarray(offset, offset + len) });
-      offset += len;
-    } else if (wireType === 1) {
-      if (buf.length - offset < 8) throw new RangeError("truncated Antigravity protobuf field");
-      offset += 8;
-    } else if (wireType === 5) {
-      if (buf.length - offset < 4) throw new RangeError("truncated Antigravity protobuf field");
-      offset += 4;
-    } else {
-      throw new RangeError("unsupported Antigravity protobuf wire type");
-    }
-  }
-  return fields;
-}
-
-function extractAntigravityGenInfo(buf) {
-  try {
-    const root = findAntigravityProtoFields(buf);
-    const f1 = root.find((f) => f.num === 1)?.val;
-    if (!f1) return null;
-
-    const inner = findAntigravityProtoFields(f1);
-    let model = null;
-    const f19 = inner.find((f) => f.num === 19)?.val;
-    if (f19) model = Buffer.from(f19).toString("utf8").trim();
-
-    let contextTokens = 0;
-    const f9 = inner.find((f) => f.num === 9)?.val;
-    if (f9) {
-      const f10 = findAntigravityProtoFields(f9).find((f) => f.num === 10)?.val;
-      if (f10) {
-        const tok = findAntigravityProtoFields(f10).find((f) => f.num === 1)?.val;
-        if (Number.isSafeInteger(tok)) contextTokens = tok;
-      }
-    }
-
-    let lastStepIndex = null;
-    for (const f of inner) {
-      if (f.num !== 20 || !f.val) continue;
-      const kv = findAntigravityProtoFields(f.val);
-      const k = kv.find((x) => x.num === 1)?.val;
-      const v = kv.find((x) => x.num === 2)?.val;
-      if (k && Buffer.from(k).toString("utf8") === "last_step_index" && v) {
-        const rawStepIndex = Buffer.from(v).toString("utf8").trim();
-        if (/^\d+$/.test(rawStepIndex)) {
-          const parsed = Number(rawStepIndex);
-          if (Number.isSafeInteger(parsed)) lastStepIndex = parsed;
-        }
-      }
-    }
-
-    let uncachedInput;
-    let cachedInput;
-    let outputTokens;
-    let textOutput;
-    let reasoningOutput;
-    let hasUsageMetadata = false;
-
-    const f4 = inner.find((f) => f.num === 4)?.val;
-    if (f4) {
-      // Antigravity internal usage message layout (Field 4):
-      // - f4.1: system / tool instruction prefix tokens (per-model fixed prefix)
-      // - f4.2: user / prompt tokens for this turn
-      // - f4.3: total output tokens checksum (f4.9 text + f4.10 reasoning)
-      // - f4.5: cached prompt tokens (cache read)
-      // - f4.9: text output tokens
-      // - f4.10: reasoning / thought tokens
-      const f4fields = findAntigravityProtoFields(f4);
-      const sTok = f4fields.find((f) => f.num === 1)?.val;
-      const pTok = f4fields.find((f) => f.num === 2)?.val;
-      const cTok = f4fields.find((f) => f.num === 5)?.val;
-      const oTok = f4fields.find((f) => f.num === 3)?.val;
-      const tTok = f4fields.find((f) => f.num === 9)?.val;
-      const rTok = f4fields.find((f) => f.num === 10)?.val;
-      if (
-        Number.isSafeInteger(sTok) ||
-        Number.isSafeInteger(pTok) ||
-        Number.isSafeInteger(cTok) ||
-        Number.isSafeInteger(oTok) ||
-        Number.isSafeInteger(tTok) ||
-        Number.isSafeInteger(rTok)
-      ) {
-        hasUsageMetadata = true;
-        const sysTokens = Number.isSafeInteger(sTok) ? sTok : 0;
-        const promptTokens = Number.isSafeInteger(pTok) ? pTok : 0;
-        uncachedInput = sysTokens + promptTokens;
-        cachedInput = Number.isSafeInteger(cTok) ? cTok : 0;
-        outputTokens = Number.isSafeInteger(oTok) ? oTok : 0;
-        textOutput = Number.isSafeInteger(tTok) ? tTok : 0;
-        reasoningOutput = Number.isSafeInteger(rTok) ? rTok : 0;
-      }
-    }
-
-    return {
-      model,
-      contextTokens,
-      lastStepIndex,
-      ...(hasUsageMetadata
-        ? {
-            uncachedInput,
-            cachedInput,
-            outputTokens,
-            textOutput,
-            reasoningOutput,
-            hasUsageMetadata: true,
-          }
-        : {}),
-    };
-  } catch (_error) {
-    return null;
-  }
-}
-
 function resolveAntigravityDbPath(transcriptPath) {
   if (!transcriptPath || typeof transcriptPath !== "string") return null;
+  if (/[/\\]conversations[/\\][^/\\]+\.db$/.test(transcriptPath)) return transcriptPath;
   const m = transcriptPath.match(/^(.*)[/\\]brain[/\\]([^/\\]+)[/\\]\.system_generated[/\\]logs[/\\]transcript.*\.jsonl$/);
   if (!m) return null;
   return path.join(m[1], "conversations", `${m[2]}.db`);
@@ -23225,8 +23084,11 @@ async function parseAntigravityFile({
   projectTouchedBuckets,
   projectRef,
   projectKey,
+  onUsage,
 }) {
-  const raw = Buffer.isBuffer(rawBuffer)
+  const nativeSession = filePath.endsWith(".db")
+    ? await require("./antigravity-native").readAntigravityNativeSession(filePath) : null;
+  const raw = nativeSession ? nativeSession.events.map(JSON.stringify).join("\n") : Buffer.isBuffer(rawBuffer)
     ? rawBuffer.toString("utf8")
     : await fs.readFile(filePath, "utf8").catch(() => null);
   if (raw === null) {
@@ -23258,7 +23120,8 @@ async function parseAntigravityFile({
   let eventsAggregated = 0;
   const contributions = {};
   const dbPath = resolveAntigravityDbPath(filePath);
-  const stepMap = dbPath ? readAntigravityConversationDb(dbPath) : null;
+  const stepMap = nativeSession ? new Map(nativeSession.events.map((event) => [event.step_index, event.native_usage]))
+    : dbPath ? readAntigravityConversationDb(dbPath) : null;
   // Resume cached context-token total + model so historical lines (i < lastLine)
   // don't need to be re-tokenized on every sync. Falls back to a full re-walk
   // when the cached state is missing (legacy cursor) or the file rotated.
@@ -23326,7 +23189,7 @@ async function parseAntigravityFile({
     }
 
     const eventContextTokens = antigravityContextTokens(parsed);
-    const dbTurn =
+    const dbTurn = nativeSession ? parsed.native_usage :
       parsed.type === "PLANNER_RESPONSE" && stepMap && Number.isFinite(parsed.step_index)
         ? stepMap.get(parsed.step_index)
         : null;
@@ -23388,9 +23251,10 @@ async function parseAntigravityFile({
 
         delta.input_tokens = uncached;
         delta.cached_input_tokens = cached;
+        delta.cache_creation_input_tokens = dbTurn.cacheWrite || 0;
         delta.output_tokens = output;
         delta.reasoning_output_tokens = reasoning;
-        delta.total_tokens = uncached + cached + output + reasoning;
+        delta.total_tokens = uncached + cached + delta.cache_creation_input_tokens + output + reasoning;
         delta.billable_total_tokens = delta.total_tokens;
         delta.conversation_count = 1;
         billedPlanner = delta.total_tokens > 0;
@@ -23444,6 +23308,7 @@ async function parseAntigravityFile({
       };
     }
     addTotals(contributions[cKey].totals, delta);
+    if (typeof onUsage === "function") onUsage({ timestamp, model, ...delta, usage_precision: dbTurn?.hasUsageMetadata ? "reported" : "estimated" });
 
     if (applyBuckets !== false && hourlyState && touchedBuckets) {
       const bucket = getHourlyBucket(hourlyState, source, model, bucketStart);
@@ -23493,8 +23358,10 @@ async function readAntigravityDefaultModel(filePath) {
   try {
     // filePath: …/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript.jsonl
     // Go up 5 levels to reach the variant root (e.g. …/antigravity-cli/)
-    let dir = filePath;
-    for (let i = 0; i < 5; i++) dir = path.dirname(dir);
+    let dir = filePath.endsWith(".db") ? path.dirname(path.dirname(filePath)) : filePath;
+    if (!filePath.endsWith(".db")) {
+      for (let i = 0; i < 5; i++) dir = path.dirname(dir);
+    }
     const raw = await fs.readFile(path.join(dir, "settings.json"), "utf8");
     const settings = JSON.parse(raw);
     if (settings.model && typeof settings.model === "string") {
@@ -26663,6 +26530,7 @@ module.exports = {
   resolveAntigravityDbPath,
   extractAntigravityGenInfo,
   readAntigravityConversationDb,
+  parseAntigravityFile,
 
   // Trae SOLO (ByteDance AI IDE)
   resolveTraePath,

@@ -13223,7 +13223,7 @@ function buildAntigravityTestProto({
   model,
   contextTokens,
   lastStepIndex,
-  systemTokens,
+  modelEnum,
   uncachedInput,
   cachedInput,
   outputTokens,
@@ -13239,7 +13239,7 @@ function buildAntigravityTestProto({
     parts.push(f9);
   }
   if (
-    Number.isFinite(systemTokens) ||
+    Number.isFinite(modelEnum) ||
     Number.isFinite(uncachedInput) ||
     Number.isFinite(cachedInput) ||
     Number.isFinite(outputTokens) ||
@@ -13247,12 +13247,12 @@ function buildAntigravityTestProto({
     Number.isFinite(reasoningOutput)
   ) {
     const f4Parts = [];
-    if (Number.isFinite(systemTokens)) f4Parts.push(encodeAntigravityTestVi(1, systemTokens));
+    if (Number.isFinite(modelEnum)) f4Parts.push(encodeAntigravityTestVi(1, modelEnum));
     if (Number.isFinite(uncachedInput)) f4Parts.push(encodeAntigravityTestVi(2, uncachedInput));
     if (Number.isFinite(outputTokens)) f4Parts.push(encodeAntigravityTestVi(3, outputTokens));
     if (Number.isFinite(cachedInput)) f4Parts.push(encodeAntigravityTestVi(5, cachedInput));
-    if (Number.isFinite(textOutput)) f4Parts.push(encodeAntigravityTestVi(9, textOutput));
-    if (Number.isFinite(reasoningOutput)) f4Parts.push(encodeAntigravityTestVi(10, reasoningOutput));
+    if (Number.isFinite(textOutput)) f4Parts.push(encodeAntigravityTestVi(10, textOutput));
+    if (Number.isFinite(reasoningOutput)) f4Parts.push(encodeAntigravityTestVi(9, reasoningOutput));
     parts.push(encodeAntigravityTestLd(4, Buffer.concat(f4Parts)));
   }
   if (lastStepIndex != null) {
@@ -13485,7 +13485,7 @@ test("extractAntigravityGenInfo does not bill a 64-bit value that lands in a tok
   const info = extractAntigravityGenInfo(proto);
 
   assert.ok(info, "the readable sibling fields must survive");
-  assert.equal(info.uncachedInput, 100);
+  assert.equal(info.uncachedInput, 0); // field 1 is a model enum; field 2 is unsafe
   assert.equal(info.cachedInput, 16319);
 });
 
@@ -13501,17 +13501,17 @@ test("extractAntigravityGenInfo rejects a varint wider than 64 bits", () => {
   assert.equal(extractAntigravityGenInfo(proto), null);
 });
 
-test("extractAntigravityGenInfo includes f4.1 system prompt prefix in uncachedInput", () => {
+test("extractAntigravityGenInfo never bills f4.1 model enum as input tokens", () => {
   const proto = buildAntigravityTestProto({
     model: "gemini-3.8-flash",
     lastStepIndex: 0,
-    systemTokens: 1016,
+    modelEnum: 1016,
     uncachedInput: 2000,
     cachedInput: 5000,
     outputTokens: 200,
   });
   const info = extractAntigravityGenInfo(proto);
-  assert.equal(info.uncachedInput, 3016); // 1016 system + 2000 prompt
+  assert.equal(info.uncachedInput, 2000);
   assert.equal(info.cachedInput, 5000);
   assert.equal(info.outputTokens, 200);
 });

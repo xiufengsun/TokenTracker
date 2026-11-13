@@ -49,6 +49,7 @@ const {
 const { resolveTrackerPaths } = require("../lib/tracker-paths");
 const { resolveDeviceTokenPresence } = require("../lib/cloud-device-token");
 const {
+  resolveAntigravityBrainDirs,
   resolveKimiWireFiles,
   resolveKimiCodeWireFiles,
   resolveKiroCliDbPath,
@@ -704,26 +705,18 @@ async function cmdStatus(argv = []) {
   const geminiCliActive = formatResolvedPaths(geminiPaths, "tmp");
   const geminiCliInstalled = geminiCliActive.length > 0;
 
-  // Antigravity (passive brains scan)
+  // Antigravity (brain transcripts or db-only native conversations)
   const antigravityActive = [];
   if (geminiPaths.native) {
-    const dirs = [
-      path.join(geminiPaths.native, "antigravity", "brain"),
-      path.join(geminiPaths.native, "antigravity-ide", "brain"),
-      path.join(geminiPaths.native, "antigravity-insiders", "brain"),
-      path.join(geminiPaths.native, "antigravity-cli", "brain"),
-    ];
+    const dirs = resolveAntigravityBrainDirs(geminiPaths.native)
+      .flatMap(dir => [dir, path.join(path.dirname(dir), "conversations")]);
     if (dirs.some(d => { try { return fssync.existsSync(d); } catch (_) { return false; } })) {
       antigravityActive.push(`native: ${geminiPaths.native}`);
     }
   }
   if (geminiPaths.wsl) {
-    const dirs = [
-      path.join(geminiPaths.wsl, "antigravity", "brain"),
-      path.join(geminiPaths.wsl, "antigravity-ide", "brain"),
-      path.join(geminiPaths.wsl, "antigravity-insiders", "brain"),
-      path.join(geminiPaths.wsl, "antigravity-cli", "brain"),
-    ];
+    const dirs = resolveAntigravityBrainDirs(geminiPaths.wsl)
+      .flatMap(dir => [dir, path.join(path.dirname(dir), "conversations")]);
     if (dirs.some(d => { try { return fssync.existsSync(d); } catch (_) { return false; } })) {
       antigravityActive.push(`WSL: ${geminiPaths.wsl}`);
     }
@@ -1402,7 +1395,7 @@ async function cmdStatus(argv = []) {
         ? `- Gemini CLI: sessions found (${geminiCliActive.join(" | ")})`
         : null,
       antigravityInstalled
-        ? `- Antigravity: brain found (${antigravityActive.join(" | ")})`
+        ? `- Antigravity: sessions found (${antigravityActive.join(" | ")})`
         : null,
       (!geminiCliInstalled && !antigravityInstalled && geminiInstalledStatus)
         ? `- Gemini CLI / Antigravity: home found (${geminiActive.join(" | ")})`
