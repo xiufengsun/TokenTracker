@@ -291,7 +291,15 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
         let js = """
         (function(){
           var d = \(isDark ? "true" : "false");
-          if (d) { document.documentElement.classList.add('dark'); } else { document.documentElement.classList.remove('dark'); }
+          // Only write the class directly when the dashboard follows the system.
+          // When the user pinned light/dark, a direct write would hijack the
+          // pinned theme; the event alone refreshes the frontend cache.
+          try {
+            var t = localStorage.getItem('tokentracker-theme') || 'system';
+            if (t === 'system') {
+              if (d) { document.documentElement.classList.add('dark'); } else { document.documentElement.classList.remove('dark'); }
+            }
+          } catch (e) {}
           window.dispatchEvent(new CustomEvent('native:systemAppearanceChanged', { detail: { isDark: d } }));
         })();
         """
