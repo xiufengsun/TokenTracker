@@ -108,6 +108,8 @@ const {
 const SIDECAR_VERSION = 32;
 // Invalidate only Codex token summaries; other sources keep their cached rows.
 const CODEX_USAGE_VERSION = 1;
+// Repair Antigravity metadata without invalidating every provider's cached rows.
+const ANTIGRAVITY_SESSION_VERSION = 1;
 const EDIT_TOOLS = new Set([
   "apply_patch",
   "edit",
@@ -2205,7 +2207,8 @@ async function discoverSessionFiles(home, env = process.env, deps = {}) {
     ? (deps.discoverWslHome || wsl.discoverWslHome)(".gemini", { env }) : null;
   const geminiPaths = resolveInstallPaths({ nativeValue: geminiNative, wslValue: geminiWsl }, env, { platform: zcodePlatform });
   const antigravity = await discoverAntigravitySessions(
-    dedupeDirsByRealpath(Object.values(geminiPaths).filter(Boolean)), incomplete);
+    dedupeDirsByRealpath(Object.values(geminiPaths).filter(Boolean)), incomplete,
+    deps.knownAntigravityFiles);
   return { claude, codex: groupCodexFiles([...codex, ...archived]), grok, zcode, opencode, kimi, omp, dsh, pi, antigravity, incomplete };
 }
 
@@ -2300,7 +2303,7 @@ function loadCodexTitleIndex(filePath) {
 // Grok titles live in sibling summary.json (and signals can change without
 // touching updates.jsonl on some partial flushes).
 function analyticsEntryStatKey(source, filePath) {
-  if (source === "antigravity") return filesSignature(antigravitySessionDependencies([filePath].flat()));
+  if (source === "antigravity") return "v" + ANTIGRAVITY_SESSION_VERSION + ":" + filesSignature(antigravitySessionDependencies([filePath].flat()));
   const filePaths = (Array.isArray(filePath) ? filePath : [filePath]).filter(Boolean);
   const sessionStats = filePaths.map((value) => sessionFileStatKey(value) || "missing");
   if (sessionStats.every((value) => value === "missing")) return null;
@@ -2432,7 +2435,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
         // `recheck` deliberately skips the TTL so Refresh always re-walks the
         // directories; the per-file stat reuse below still avoids re-parsing.
         !recheck &&
-        !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && !retryPiScan && !retryAntigravityScan && previousMeta.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION &&
+        !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && !retryPiScan && !retryAntigravityScan && previousMeta.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.antigravity_session_version === ANTIGRAVITY_SESSION_VERSION &&
         Number.isFinite(checkedAt) &&
         Date.now() - checkedAt < Math.max(0, Number(cacheTtlMs) || 0)
       ) {
@@ -2440,7 +2443,9 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       }
     } catch { /* first run */ }
   }
-  const discovered = await discoverSessionFiles(home);
+  const knownAntigravityFiles = Array.isArray(previousMeta?.antigravity_files)
+    ? previousMeta.antigravity_files.filter((filePath) => typeof filePath === "string") : [];
+  const discovered = await discoverSessionFiles(home, process.env, { knownAntigravityFiles });
   // Incomplete discovery (an unreadable projects/ or sessions/ dir): never let
   // a partial inventory replace a complete snapshot. Serve the last complete
   // sidecar when there is one; otherwise build from what is readable but do
@@ -2482,7 +2487,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   // transcript, so a transient read/parse failure can recover without waiting
   // for the file itself to change.
   const retrySkippedOnRecheck = recheck && Number(previousMeta?.skipped_files) > 0;
-  if (!force && !retrySkippedOnRecheck && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && !retryPiScan && !retryAntigravityScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.signature === signature) {
+  if (!force && !retrySkippedOnRecheck && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && !retryPiScan && !retryAntigravityScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.antigravity_session_version === ANTIGRAVITY_SESSION_VERSION && previousMeta.signature === signature) {
     const cached = readSidecarWithMeta(sidecarPath, previousMeta);
     // A missing/corrupt sidecar reads as an empty list. The source signature
     // can still match, so only an explicit refresh used to notice the loss;
@@ -2658,6 +2663,8 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     await writeAtomic(metaPath, `${JSON.stringify({
       version: SIDECAR_VERSION,
       codex_usage_version: incompleteCodexUsage ? 0 : CODEX_USAGE_VERSION,
+      antigravity_session_version: ANTIGRAVITY_SESSION_VERSION,
+      antigravity_files: discovered.antigravity,
       signature,
       generated_at: generatedAt,
       checked_at: generatedAt,

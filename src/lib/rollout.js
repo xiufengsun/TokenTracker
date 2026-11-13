@@ -22839,6 +22839,7 @@ async function parseAntigravityIncremental({
         filePath,
         ...(transcriptBytes ? { rawBuffer: transcriptBytes } : {}),
         lastLine: 0,
+        supplementUncovered: true,
         baselineLine: needsFullRebuild ? 0 : baselineLine,
         watermarkLine: Number(prev?.lastLine || 0),
         initialUsageSource: prev?.usageSource,
@@ -22868,6 +22869,7 @@ async function parseAntigravityIncremental({
         filePath,
         ...(transcriptBytes ? { rawBuffer: transcriptBytes } : {}),
         lastLine,
+        supplementUncovered: Boolean(prev) && !sameDb,
         baselineLine,
         initialContextTokens,
         initialPrevContext,
@@ -23077,6 +23079,7 @@ async function parseAntigravityFile({
   initialModel,
   initialLastPlannerModel,
   initialUsageSource,
+  supplementUncovered = false,
   hourlyState,
   touchedBuckets,
   source,
@@ -23094,19 +23097,10 @@ async function parseAntigravityFile({
   if (raw === null) {
     throw new Error(`Antigravity transcript could not be read: ${filePath}`);
   }
-  if (!raw.trim()) {
-    return {
-      lastLine: 0,
-      eventsAggregated: 0,
-      contextTokens: 0,
-      previousContextTokens: 0,
-      currentModel: null,
-      lastPlannerModel: null,
-      usageSource: "estimated",
-      dbReadOk: true,
-      contributions: {},
-    };
-  }
+  // An empty transcript is not an empty cascade when a sibling database still
+  // holds usage. Fall through so those generations are billed below; a transcript
+  // that already covers a step remains the only representation of that step.
+  const transcriptIsEmpty = !nativeSession && !raw.trim();
 
   const allLines = raw
     .split(/\r?\n/)
@@ -23339,6 +23333,84 @@ async function parseAntigravityFile({
     lastPlannerModel = model;
     contextTokens += eventContextTokens;
     lastCompletedLine = i + 1;
+  }
+
+  // Generations the transcript never represented still belong to this cascade.
+  // Every PLANNER_RESPONSE step is covered, including lines before the cursor:
+  // those were billed on an earlier pass. The caller sets supplementUncovered
+  // on a full walk or when the database identity changed; an unchanged resume
+  // already holds the uncovered generations in its ledger.
+  if (!nativeSession && (supplementUncovered || !(Number(lastLine) > 0)) && stepMap && stepMap.size > 0 && fssync.existsSync(dbPath)) {
+    const coveredSteps = new Set();
+    for (const line of lines) {
+      try {
+        const event = JSON.parse(line);
+        if (event?.type === "PLANNER_RESPONSE" && Number.isFinite(event.step_index)) {
+          coveredSteps.add(event.step_index);
+        }
+      } catch { /* the prefix walk already stopped at this record */ }
+    }
+    const uncovered = [...stepMap.entries()].filter(([step, info]) => info?.hasUsageMetadata && !coveredSteps.has(step));
+    if (uncovered.length) {
+      const nativeEvents = await require("./antigravity-native").readAntigravityNativeSession(dbPath);
+      const byStep = new Map((nativeEvents?.events || []).map((event) => [event.step_index, event]));
+      for (const [step, dbTurn] of uncovered) {
+        const event = byStep.get(step);
+        const timestamp = event?.created_at;
+        const bucketStart = timestamp ? toUtcHalfHourStart(timestamp) : null;
+        if (!timestamp || !bucketStart) continue;
+        const uncached = dbTurn.uncachedInput || 0;
+        const cached = dbTurn.cachedInput || 0;
+        const reasoning = dbTurn.reasoningOutput || 0;
+        let output = 0;
+        if (Number.isFinite(dbTurn.textOutput) && dbTurn.textOutput > 0) output = dbTurn.textOutput;
+        else if (Number.isFinite(dbTurn.outputTokens)) output = Math.max(0, dbTurn.outputTokens - reasoning);
+        const delta = initTotals();
+        delta.input_tokens = uncached;
+        delta.cached_input_tokens = cached;
+        delta.cache_creation_input_tokens = dbTurn.cacheWrite || 0;
+        delta.output_tokens = output;
+        delta.reasoning_output_tokens = reasoning;
+        delta.total_tokens = uncached + cached + delta.cache_creation_input_tokens + output + reasoning;
+        delta.billable_total_tokens = delta.total_tokens;
+        delta.conversation_count = 1;
+        if (delta.total_tokens <= 0) continue;
+        const model = normalizeAntigravityTranscriptModel(dbTurn.model) || currentModel || "antigravity-unknown";
+        const cKey = `${source}|${model}|${bucketStart}|${projectKey || ""}`;
+        if (!contributions[cKey]) {
+          contributions[cKey] = {
+            source, model, bucketStart,
+            projectKey: projectKey || null, projectRef: projectRef || null, totals: initTotals(),
+          };
+        }
+        addTotals(contributions[cKey].totals, delta);
+        if (typeof onUsage === "function") onUsage({ timestamp, model, ...delta, usage_precision: "reported" });
+        if (applyBuckets !== false && hourlyState && touchedBuckets) {
+          const bucket = getHourlyBucket(hourlyState, source, model, bucketStart);
+          addTotals(bucket.totals, delta);
+          touchedBuckets.add(bucketKey(source, model, bucketStart));
+          if (projectKey && projectState && projectTouchedBuckets) {
+            const projectBucket = getProjectBucket(projectState, projectKey, source, bucketStart, projectRef);
+            addTotals(projectBucket.totals, delta);
+            projectTouchedBuckets.add(projectBucketKey(projectKey, source, bucketStart));
+          }
+        }
+        eventsAggregated += 1;
+      }
+    }
+  }
+  if (transcriptIsEmpty && Object.keys(contributions).length === 0 && !dbReadFailed) {
+    return {
+      lastLine: 0,
+      eventsAggregated: 0,
+      contextTokens: 0,
+      previousContextTokens: 0,
+      currentModel: null,
+      lastPlannerModel: null,
+      usageSource: hasSqliteMetadata ? "sqlite" : "estimated",
+      dbReadOk: !dbPath || stepMap !== null,
+      contributions: {},
+    };
   }
 
   return {

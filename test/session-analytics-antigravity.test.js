@@ -189,6 +189,89 @@ test("WSL native reads clean up their snapshot on success and failure", async (t
   assert.equal(cleaned, 2);
 });
 
+for (const host of ["wsl$", "wsl.localhost"]) {
+  test("WSL workspace URLs preserve encoded names and the " + host + " distro root", async (t) => {
+    const { db } = fixture(t, { variant: "antigravity-ide" });
+    const wsl = require("../src/lib/wsl-probe");
+    const { readAntigravityNativeSession } = require("../src/lib/antigravity-native");
+    const metadata = Buffer.concat([
+      bytes(1, bytes(1, "file:///home/user/repo%20name/%E4%B8%AD%E6%96%87")), bytes(2, stamp()),
+    ]);
+    runSql(db, "UPDATE trajectory_metadata_blob SET data=X'" + metadata.toString("hex") + "'");
+    const source = "//" + host + "/Ubuntu/home/user/.gemini/antigravity-ide/conversations/" + ID + ".db";
+    t.mock.method(wsl, "snapshotSqliteDb", (original) => {
+      assert.equal(original, source);
+      return { path: db, cleanup() {} };
+    });
+    const session = await readAntigravityNativeSession(source);
+    assert.equal(session.cwd, path.win32.join("//" + host + "/Ubuntu", "home", "user", "repo name", "中文"));
+  });
+}
+
+test("WSL snapshots do not re-anchor a recorded Windows drive URL", async (t) => {
+  const { db } = fixture(t);
+  const wsl = require("../src/lib/wsl-probe");
+  const { readAntigravityNativeSession } = require("../src/lib/antigravity-native");
+  const metadata = Buffer.concat([bytes(1, bytes(1, "file:///C:/repo%20name")), bytes(2, stamp())]);
+  runSql(db, "UPDATE trajectory_metadata_blob SET data=X'" + metadata.toString("hex") + "'");
+  const source = "//wsl.localhost/Ubuntu/home/user/.gemini/antigravity-cli/conversations/" + ID + ".db";
+  t.mock.method(wsl, "snapshotSqliteDb", () => ({ path: db, cleanup() {} }));
+  const session = await readAntigravityNativeSession(source);
+  assert.equal(session.cwd, process.platform === "win32" ? path.win32.join("C:/", "repo name") : "/C:/repo name");
+});
+
+test("a partial transcript tail keeps the readable batch and is picked up when completed", async (t) => {
+  const { home, file, db } = fixture(t, { transcript: true });
+  const controlDb = path.join(home, ".gemini", "antigravity", "conversations", "control-session.db");
+  fs.mkdirSync(path.dirname(controlDb), { recursive: true });
+  fs.copyFileSync(db, controlDb);
+  runSql(controlDb, "UPDATE gen_metadata SET data=X'" + generation(50, "response-control").toString("hex") + "'");
+  const nextAt = "2026-11-13T08:01:00Z";
+  const pending = JSON.stringify({ type: "USER_INPUT", created_at: nextAt, content: SECRET });
+  fs.appendFileSync(file, pending.slice(0, -1));
+  const rows = await buildSessionAnalytics({ home, force: true });
+  assert.equal(rows.length, 2);
+  assert.equal(rows.skippedFiles, 0);
+  assert.equal(rows.reduce((sum, row) => sum + row.total_tokens, 0), 620);
+  const cli = rows.find((row) => row.antigravity_variant === "antigravity-cli");
+  assert.equal(cli.turns, 1);
+  assert.equal(cli.ended_at, AT.replace("Z", ".000Z"));
+  fs.appendFileSync(file, "}\n");
+  const refreshed = await buildSessionAnalytics({ home, recheck: true });
+  assert.equal(refreshed.length, 2);
+  const updated = refreshed.find((row) => row.antigravity_variant === "antigravity-cli");
+  assert.equal(updated.turns, 2);
+  assert.equal(updated.ended_at, nextAt.replace("Z", ".000Z"));
+  assert.equal(updated.total_tokens, 335);
+  assert.equal(JSON.stringify(refreshed).includes(SECRET), false);
+});
+
+test("turn metadata stops at the same malformed record as the Usage parser", async (t) => {
+  const { file } = fixture(t, { transcript: true });
+  fs.appendFileSync(file, "{broken\n" + JSON.stringify({
+    type: "USER_INPUT", created_at: "2026-11-13T08:02:00Z", content: SECRET,
+  }) + "\n");
+  const [row] = await readAntigravitySessions([file]);
+  assert.equal(row.turns, 1);
+  assert.equal(row.tokens.total_tokens, 335);
+  assert.equal(row.ended_at, AT.replace("Z", ".000Z"));
+});
+
+test("the reader revision repairs cached Antigravity metadata without source file changes", async (t) => {
+  const { home } = fixture(t);
+  const [original] = await buildSessionAnalytics({ home, force: true });
+  const sidecar = resolveSessionSidecarPath(home);
+  fs.writeFileSync(sidecar, JSON.stringify({ ...original, project_ref: "/stale-workspace" }) + "\n");
+  const metaPath = sidecar + ".meta.json";
+  const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+  delete meta.antigravity_session_version;
+  for (const entry of Object.values(meta.files)) entry.stat_key = entry.stat_key.replace(/^v1:/, "");
+  fs.writeFileSync(metaPath, JSON.stringify(meta));
+  const [refreshed] = await buildSessionAnalytics({ home });
+  assert.equal(refreshed.project_ref, original.project_ref);
+  assert.equal(refreshed.total_tokens, 335);
+});
+
 test("switching between db-only and transcript-backed discovery never bills a cascade twice", async (t) => {
   const { home, root, db } = fixture(t);
   const cursors = {};
@@ -204,6 +287,76 @@ test("switching between db-only and transcript-backed discovery never bills a ca
   const fallback = await hourly(home, await listAntigravityTranscripts(path.join(home, ".gemini")), cursors);
   assert.equal(fallback.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335);
   assert.deepEqual(Object.keys(cursors.files), [db]);
+});
+
+test("an empty transcript keeps sibling database usage instead of zeroing the ledger", async (t) => {
+  const { home, root, db } = fixture(t);
+  const cursors = {};
+  await hourly(home, [db], cursors);
+  const transcript = path.join(root, "brain", ID, ".system_generated", "logs", "transcript.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, "");
+  const files = await listAntigravityTranscripts(path.join(home, ".gemini"));
+  assert.deepEqual(files, [transcript]);
+  const switched = await hourly(home, files, cursors);
+  assert.equal(switched.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335);
+  const [session] = await readAntigravitySessions([transcript]);
+  assert.equal(session.tokens.total_tokens, 335);
+  assert.equal(session.usage_precision, "reported");
+  assert.equal(JSON.stringify(switched.rows).includes(SECRET), false);
+});
+
+test("a transcript bills uncovered sibling generations once and does not rebill covered steps", async (t) => {
+  const { home, db, file } = fixture(t, { transcript: true });
+  const covered = generation();
+  const uncovered = generation(40, "response-b");
+  const stepMarker = Buffer.from(bytes(20, Buffer.concat([
+    bytes(1, "last_step_index"), bytes(2, "0"),
+  ]))).toString("hex");
+  const shifted = uncovered.toString("hex").replace(stepMarker, Buffer.from(bytes(20, Buffer.concat([
+    bytes(1, "last_step_index"), bytes(2, "4"),
+  ]))).toString("hex"));
+  runSql(db, "DELETE FROM gen_metadata; INSERT INTO gen_metadata VALUES (0, X'" + covered.toString("hex")
+    + "'), (1, X'" + shifted + "')");
+  const cursors = {};
+  const usage = await hourly(home, [file], cursors);
+  assert.equal(usage.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335 + 275);
+  const saved = fs.readFileSync(usage.queuePath, "utf8");
+  await hourly(home, [file], cursors);
+  assert.equal(fs.readFileSync(usage.queuePath, "utf8"), saved);
+  const [session] = await readAntigravitySessions([file]);
+  assert.equal(session.tokens.total_tokens, 335 + 275);
+  assert.equal(session.model_calls, 2);
+  assert.equal(session.usage_precision, "reported");
+  assert.equal(JSON.stringify(session).includes(SECRET), false);
+});
+
+test("a previously scanned Antigravity directory stays incomplete on a temporary ENOENT", async (t) => {
+  const { home, root } = fixture(t, { transcript: true });
+  const brain = path.join(root, "brain");
+  const conversations = path.join(root, "conversations");
+  const complete = await buildSessionAnalytics({ home, force: true });
+  assert.equal(complete.find((row) => row.source === "antigravity").total_tokens, 335);
+  const sidecar = resolveSessionSidecarPath(home);
+  const metaPath = sidecar + ".meta.json";
+  const recorded = JSON.parse(fs.readFileSync(metaPath, "utf8")).antigravity_files;
+  assert.equal(recorded.some((file) => file.includes(path.join("brain", ID))), true);
+  const sidecarBefore = fs.readFileSync(sidecar, "utf8");
+  const metaBefore = fs.readFileSync(metaPath, "utf8");
+  fs.rmSync(brain, { recursive: true, force: true });
+  fs.rmSync(conversations, { recursive: true, force: true });
+  const retained = await buildSessionAnalytics({ home, cacheTtlMs: 0 });
+  assert.equal(retained.find((row) => row.source === "antigravity").total_tokens, 335);
+  assert.equal(retained.incompleteDirs.length, 1);
+  assert.equal(fs.readFileSync(sidecar, "utf8"), sidecarBefore);
+  assert.equal(fs.readFileSync(metaPath, "utf8"), metaBefore);
+});
+
+test("a never-installed Antigravity variant stays an empty inventory", async (t) => {
+  const { home } = fixture(t);
+  const discovered = await discoverSessionFiles(home, { HOME: home }, { probeWsl: false });
+  assert.equal(discovered.incomplete.length, 0);
+  assert.equal(discovered.antigravity.length, 1);
 });
 
 test("a failed native read retains the last complete sidecar and retries unchanged files", async (t) => {

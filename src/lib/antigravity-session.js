@@ -28,10 +28,11 @@ function antigravitySessionDependencies(files) {
   }))];
 }
 
-async function discoverAntigravitySessions(roots, incomplete) {
+async function discoverAntigravitySessions(roots, incomplete, knownFiles = null) {
+  const known = knownFiles instanceof Set ? knownFiles : new Set(knownFiles || []);
   const found = [];
   for (const root of roots) {
-    const inventory = await listAntigravityTranscriptsWithStatus(root);
+    const inventory = await listAntigravityTranscriptsWithStatus(root, known);
     found.push(...inventory.files);
     if (!inventory.complete) incomplete.push({ path: root, error: "ANTIGRAVITY_INVENTORY_INCOMPLETE" });
   }
@@ -49,7 +50,9 @@ async function readAntigravitySessions(files) {
     const db = resolveAntigravityDbPath(file);
     const native = db && fs.existsSync(db) ? await readAntigravityNativeSession(db) : null;
     const events = [];
-    const result = await parseAntigravityFile({ filePath: file, applyBuckets: false, source: "antigravity", onUsage: (event) => events.push(event) });
+    const transcript = file.endsWith(".db") ? null : await fs.promises.readFile(file);
+    const result = await parseAntigravityFile({ filePath: file, rawBuffer: transcript,
+      applyBuckets: false, source: "antigravity", onUsage: (event) => events.push(event) });
     // A database read failure must retain the previous complete sidecar, rather
     // than replacing reported usage with a text-length estimate.
     if (db && fs.existsSync(db) && !result.dbReadOk) throw new Error("Antigravity database is unavailable");
@@ -70,10 +73,14 @@ async function readAntigravitySessions(files) {
     }
     const times = events.map((event) => Date.parse(event.timestamp)).filter(Number.isFinite);
     let turns = 0;
-    if (!file.endsWith(".db")) {
-      const raw = await fs.promises.readFile(file, "utf8");
-      for (const line of raw.split(/\r?\n/).filter(Boolean)) {
-        const event = JSON.parse(line);
+    if (transcript) {
+      for (const line of transcript.toString("utf8").split(/\r?\n/).map((line) => line.trim()).filter(Boolean)) {
+        let event;
+        try { event = JSON.parse(line); } catch {
+          // Match the Usage parser's readable prefix. An active writer may
+          // finish this record later; a changed file will invalidate the cache.
+          break;
+        }
         const at = Date.parse(event.created_at);
         if (Number.isFinite(at)) times.push(at);
         if (event.type === "USER_INPUT") turns++;

@@ -59,7 +59,15 @@ async function readAntigravityNativeSnapshot(dbPath, originalPath) {
       if (Buffer.isBuffer(workspace)) {
         const uri = workspace.toString("utf8");
         if (uri.startsWith("file:")) {
-          try { cwd = fileURLToPath(uri); } catch { /* unsupported URI */ }
+          try {
+            const url = new URL(uri);
+            const pathname = decodeURIComponent(url.pathname);
+            // The source path, not the local snapshot path, identifies the
+            // distro. Windows fileURLToPath rejects normal POSIX file URLs.
+            const posixWorkspace = wsl.wslUncRoot(originalPath) && !url.hostname
+              && !/^\/[A-Za-z]:[\\/]/.test(pathname) && !/%2f/i.test(url.pathname);
+            cwd = posixWorkspace ? wsl.mapWslCwdToUnc(pathname, originalPath) : fileURLToPath(url);
+          } catch { /* unsupported URI */ }
         }
       }
     }
