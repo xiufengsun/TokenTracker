@@ -15,6 +15,10 @@ final class DashboardModel: ObservableObject {
     /// Last good data, kept on screen while refreshing or after a failure.
     @Published private(set) var snapshot: UsageSnapshot?
 
+    /// The snapshot only while it matches the picker, so switching periods
+    /// never shows the previous period's numbers under the new label.
+    var visibleSnapshot: UsageSnapshot? { snapshot?.period == period ? snapshot : nil }
+
     private let client: CloudUsageClient
     private var loadTask: Task<Void, Never>?
 

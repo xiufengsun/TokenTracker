@@ -40,7 +40,7 @@ struct DashboardScreen: View {
                         ErrorBanner(message: message) { Task { await model.refresh() } }
                     }
 
-                    if let snapshot = model.snapshot {
+                    if let snapshot = model.visibleSnapshot {
                         SummaryCard(snapshot: snapshot)
                         if let daily = snapshot.daily { TrendCard(daily: daily) }
                         if snapshot.breakdown != nil {
@@ -57,12 +57,12 @@ struct DashboardScreen: View {
                 }
                 .padding(.horizontal)
                 .padding(.bottom, 24)
-                .animation(.default, value: model.snapshot?.fetchedAt)
+                .animation(.default, value: model.visibleSnapshot?.fetchedAt)
             }
             .background(Color(.systemGroupedBackground))
             .refreshable { await model.refresh() }
             .overlay(alignment: .top) {
-                if model.phase == .loading && model.snapshot != nil {
+                if model.phase == .loading && model.visibleSnapshot != nil {
                     ProgressView().padding(.top, 4)
                 }
             }

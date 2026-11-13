@@ -93,7 +93,8 @@ final class RefreshFailureTests: XCTestCase {
     func testOnlyRejectedRefreshTokensEndTheSession() {
         XCTAssertTrue(SessionStore.isRejectedRefresh(.signedOut))
         XCTAssertTrue(SessionStore.isRejectedRefresh(.server(status: 401, code: nil, message: nil)))
-        XCTAssertTrue(SessionStore.isRejectedRefresh(.server(status: 400, code: "INVALID_REFRESH_TOKEN", message: nil)))
+        XCTAssertFalse(SessionStore.isRejectedRefresh(.server(status: 400, code: "INVALID_INPUT", message: nil)))
+        XCTAssertFalse(SessionStore.isRejectedRefresh(.server(status: 403, code: nil, message: nil)))
         XCTAssertFalse(SessionStore.isRejectedRefresh(.server(status: 429, code: nil, message: nil)))
         XCTAssertFalse(SessionStore.isRejectedRefresh(.server(status: 503, code: nil, message: nil)))
         XCTAssertFalse(SessionStore.isRejectedRefresh(.transport("offline")))
@@ -126,9 +127,19 @@ final class RequestOnlyAndStreakTests: XCTestCase {
             cell("2026-11-08", 5), cell("2026-11-09", 0), cell("2026-11-10", 9),
             cell("2026-11-11", 4), cell("2026-11-12", 0), nil, nil,
         ]])
-        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-12"), 2, "today empty: count from yesterday")
-        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-11"), 2)
-        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-14"), 0)
+        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-12"), Streak(days: 2, reachesHistoryStart: false), "today empty: count from yesterday")
+        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-11"), Streak(days: 2, reachesHistoryStart: false))
+        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-14"), Streak(days: 0, reachesHistoryStart: false))
+    }
+
+    func testStreakReachingTheFirstFetchedDayIsALowerBound() {
+        let heatmap = HeatmapResponse(weeks: [[
+            HeatmapCell(day: "2026-11-08", totalTokens: 5, level: 2),
+            HeatmapCell(day: "2026-11-09", totalTokens: 9, level: 2),
+            HeatmapCell(day: "2026-11-10", totalTokens: 4, level: 2),
+            nil, nil, nil, nil,
+        ]])
+        XCTAssertEqual(heatmap.currentStreak(today: "2026-11-10"), Streak(days: 3, reachesHistoryStart: true))
     }
 }
 

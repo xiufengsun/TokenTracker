@@ -75,25 +75,31 @@ extension TokenTotals {
     var displayTokens: Int { billableTotalTokens > 0 ? billableTotalTokens : totalTokens }
 }
 
+struct Streak: Equatable {
+    var days: Int
+    /// The streak runs past the first fetched day, so `days` is a lower bound.
+    var reachesHistoryStart: Bool
+}
+
 extension HeatmapResponse {
     /// The account endpoint always sends `streak_days: 0`, so the streak is
     /// derived here: consecutive active days ending today, or ending yesterday
     /// while today has no usage yet.
-    func currentStreak(today: String) -> Int {
-        let active = Set(weeks.flatMap { $0 }.compactMap { $0 }
-            .filter { $0.totalTokens > 0 || $0.level > 0 }
-            .map(\.day))
-        guard var cursor = DayFormat.date(today) else { return 0 }
+    func currentStreak(today: String) -> Streak {
+        let cells = weeks.flatMap { $0 }.compactMap { $0 }
+        let fetched = Set(cells.map(\.day))
+        let active = Set(cells.filter { $0.totalTokens > 0 || $0.level > 0 }.map(\.day))
+        guard var cursor = DayFormat.date(today) else { return Streak(days: 0, reachesHistoryStart: false) }
         let calendar = Calendar.localGregorian
         if !active.contains(today) {
             cursor = calendar.date(byAdding: .day, value: -1, to: cursor) ?? cursor
         }
-        var streak = 0
+        var days = 0
         while active.contains(DayFormat.string(cursor)) {
-            streak += 1
+            days += 1
             guard let previous = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
             cursor = previous
         }
-        return streak
+        return Streak(days: days, reachesHistoryStart: days > 0 && !fetched.contains(DayFormat.string(cursor)))
     }
 }

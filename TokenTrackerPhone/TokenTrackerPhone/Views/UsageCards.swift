@@ -285,7 +285,10 @@ private struct ShareRow: View {
 struct HeatmapCard: View {
     let heatmap: HeatmapResponse
 
-    private var streak: Int { heatmap.currentStreak(today: DayFormat.string(Date())) }
+    private var streakLabel: String {
+        let streak = heatmap.currentStreak(today: DayFormat.string(Date()))
+        return streak.reachesHistoryStart ? "\(streak.days)+ day streak" : "\(streak.days)-day streak"
+    }
 
     private func accessibilityLabel(for cell: HeatmapCell) -> String {
         let date = DayFormat.date(cell.day)?.formatted(date: .abbreviated, time: .omitted) ?? cell.day
@@ -318,7 +321,7 @@ struct HeatmapCard: View {
             .frame(height: 7 * 18 + 6 * 3)
 
             HStack {
-                Label("\(streak)-day streak", systemImage: "flame")
+                Label(streakLabel, systemImage: "flame")
                 Spacer()
                 Text("\(heatmap.activeDays) active days")
             }

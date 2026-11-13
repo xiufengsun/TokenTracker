@@ -67,14 +67,15 @@ final class SessionStore: ObservableObject {
         return try await task.value
     }
 
-    /// Only a refresh token the server refuses ends the session; rate limits,
-    /// outages and network failures keep it for the next attempt.
+    /// Only a refresh token the server refuses ends the session. InsForge
+    /// answers an invalid or expired one with 401 `AUTH_UNAUTHORIZED`; rate
+    /// limits, outages, other 4xx and network failures keep it for next time.
     nonisolated static func isRejectedRefresh(_ error: CloudError) -> Bool {
         switch error {
         case .signedOut:
             return true
         case .server(let status, _, _):
-            return [400, 401, 403].contains(status)
+            return status == 401
         default:
             return false
         }
