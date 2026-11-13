@@ -51,6 +51,21 @@ final class CloudErrorTests: XCTestCase {
         XCTAssertEqual(CloudError.from(status: 401, body: Data(#"{"error":"Unauthorized"}"#.utf8)), .signedOut)
     }
 
+    func testMachineSlotFailuresGetReadableCopyNotRawCodes() {
+        // tokentracker-billing remove/resume failure: `error` carries the code.
+        let billing = CloudError.from(status: 409, body: Data(#"{"error":"cloud_machine_limit","membership":{}}"#.utf8))
+        XCTAssertEqual(billing, .server(status: 409, code: "cloud_machine_limit", message: "cloud_machine_limit"))
+        XCTAssertFalse(billing.localizedDescription.contains("cloud_"))
+        XCTAssertTrue(billing.localizedDescription.contains("sync slot"))
+
+        // cloudFailure(): `{...result, error: code}` for an expired pairing code.
+        let grant = CloudError.from(status: 410, body: Data(#"{"ok":false,"code":"cloud_device_code_expired","status":410,"error":"cloud_device_code_expired"}"#.utf8))
+        XCTAssertTrue(grant.localizedDescription.contains("expired"))
+
+        let unknown = CloudError.from(status: 409, body: Data(#"{"error":"cloud_something_new"}"#.utf8))
+        XCTAssertFalse(unknown.localizedDescription.contains("cloud_something_new"))
+    }
+
     func testOtherFailuresKeepStatusAndMessage() {
         let error = CloudError.from(status: 503, body: Data(#"{"error":"Cloud access unavailable","code":"cloud_access_unavailable"}"#.utf8))
         XCTAssertEqual(error, .server(status: 503, code: "cloud_access_unavailable", message: "Cloud access unavailable"))
@@ -157,5 +172,94 @@ final class RequestOnlyAndStreakTests: XCTestCase {
             nil, nil, nil, nil,
         ]])
         XCTAssertEqual(heatmap.currentStreak(today: "2026-11-10"), ActivityStreak(days: 3, reachesHistoryStart: true))
+    }
+}
+
+final class ProviderMarkTests: XCTestCase {
+    func testKnownSourcesResolveToRealBrandAssets() {
+        XCTAssertEqual(ProviderMarks.entry(for: "claude")?.asset, "ProviderMark-claude-code")
+        XCTAssertEqual(ProviderMarks.entry(for: "codex")?.asset, "ProviderMark-codex")
+        XCTAssertEqual(ProviderMarks.entry(for: "cursor")?.isTemplate, true)
+        XCTAssertEqual(ProviderMarks.entry(for: "copilot")?.isTemplate, true)
+    }
+
+    func testPiRoutedSourcesFallBackToPiLogoLikeDashboard() {
+        XCTAssertEqual(ProviderMarks.entry(for: "pi-xai")?.asset, ProviderMarks.entry(for: "pi")?.asset)
+        XCTAssertEqual(ProviderMarks.entry(for: "pi-dots")?.asset, "ProviderMark-dots")
+    }
+
+    func testUnknownSourceHasNoInventedMark() {
+        XCTAssertNil(ProviderMarks.entry(for: "muse"))
+        XCTAssertNil(ProviderMarks.entry(for: "some-new-tool"))
+    }
+
+    func testEveryCatalogAssetExistsInTheAppBundle() {
+        let bundle = Bundle(for: SessionStore.self)
+        for (key, entry) in ProviderMarkCatalog.entries {
+            XCTAssertNotNil(UIImage(named: entry.asset, in: bundle, with: nil), "missing asset for \(key)")
+        }
+        XCTAssertNotNil(UIImage(named: "TokenTrackerMark", in: bundle, with: nil))
+    }
+}
+
+final class PacingModelTests: XCTestCase {
+    private var calendar: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        return cal
+    }
+
+    func testTrailingFiveHoursCountsCurrentHourAndFourBefore() {
+        let now = DateComponents(calendar: calendar, year: 2026, month: 11, day: 13, hour: 2, minute: 30).date!
+        let today = PhoneHourlyUsageResponse(day: "2026-11-13", data: [
+            PhoneHourlyEntry(hour: "2026-11-13T00:00:00", totalTokens: 10),
+            PhoneHourlyEntry(hour: "2026-11-13T02:00:00", totalTokens: 20),
+        ])
+        let yesterday = PhoneHourlyUsageResponse(day: "2026-11-12", data: [
+            PhoneHourlyEntry(hour: "2026-11-12T21:00:00", totalTokens: 1000), // 5 hours back: excluded
+            PhoneHourlyEntry(hour: "2026-11-12T22:00:00", totalTokens: 300),
+        ])
+        let snapshot = PhoneWorkspaceSnapshot(
+            horizon: .today, selectedDeviceId: nil, now: now,
+            periodSummary: UsageSummaryResponse(), todaySummary: UsageSummaryResponse(),
+            todayHourly: today, yesterdayHourly: yesterday
+        )
+        XCTAssertEqual(snapshot.trailingFiveHourTokens, 330)
+    }
+
+    func testProviderProfilesUseSevenAndThirtyDayBreakdownsPerSource() throws {
+        func breakdown(_ claude: Int, _ codex: Int) throws -> ModelBreakdownResponse {
+            let json = """
+            {"sources":[
+              {"source":"claude","totals":{"billable_total_tokens":\(claude),"total_cost_usd":"\(claude / 100)"},"models":[]},
+              {"source":"codex","totals":{"billable_total_tokens":\(codex),"total_cost_usd":"\(codex / 100)"},"models":[]}
+            ]}
+            """
+            return try JSONDecoder().decode(ModelBreakdownResponse.self, from: Data(json.utf8))
+        }
+        let snapshot = PhoneWorkspaceSnapshot(
+            horizon: .today, selectedDeviceId: nil, now: Date(),
+            periodSummary: UsageSummaryResponse(), todaySummary: UsageSummaryResponse(),
+            weeklyBreakdown: try breakdown(1000, 3000),
+            monthlyBreakdown: try breakdown(9000, 4000)
+        )
+        let budgets = ["codex": TrackedToolBudget(source: "codex", weeklyBudgetUsd: 40)]
+        let profiles = snapshot.providerPacingProfiles(budgets: budgets)
+        XCTAssertEqual(profiles.map(\.source), ["codex", "claude"])
+        XCTAssertEqual(profiles.first?.hottestBudgetFraction ?? 0, 0.75, accuracy: 0.0001)
+        XCTAssertEqual(profiles.last?.thirtyDayCostUsd ?? 0, 90, accuracy: 0.0001)
+    }
+
+    func testAutoRenewingPlanRollsForwardPastStoredDate() {
+        let iso = ISO8601DateFormatter()
+        let stored = iso.date(from: "2026-09-05T12:00:00Z")!
+        let now = iso.date(from: "2026-11-13T12:00:00Z")!
+        let renewing = TrackedToolBudget(source: "claude", billingCycle: "monthly", nextRenewalISO: iso.string(from: stored), autoRenew: true)
+        let next = renewing.upcomingRenewal(now: now, calendar: calendar)!
+        XCTAssertGreaterThanOrEqual(next, now)
+        XCTAssertLessThan(next.timeIntervalSince(now), 32 * 86_400)
+
+        let ending = TrackedToolBudget(source: "claude", billingCycle: "monthly", nextRenewalISO: iso.string(from: stored), autoRenew: false)
+        XCTAssertEqual(ending.upcomingRenewal(now: now), stored)
     }
 }

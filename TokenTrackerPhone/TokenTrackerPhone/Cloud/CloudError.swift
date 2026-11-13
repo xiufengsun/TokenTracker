@@ -28,6 +28,19 @@ enum CloudError: LocalizedError, Equatable {
         return .server(status: status, code: code, message: message)
     }
 
+    /// Codes from `cloud_set_machine_status`, `cloud_grant_device_code` and
+    /// `cloud_account_access` (see migrations/20261004120000_cloud-machine-access.sql).
+    static let friendlyMessages: [String: String] = [
+        "cloud_machine_limit": "Every Cloud sync slot is in use. Pause another computer first, then resume this one.",
+        "cloud_machine_not_found": "That computer is no longer linked to this account. Pull to refresh.",
+        "cloud_machine_paused": "This computer is paused. Resume it under Synced Computers, then try again.",
+        "cloud_device_code_unknown": "That code wasn't found. Check it matches the one in your terminal.",
+        "cloud_device_code_expired": "That code has expired. Run tokentracker login again for a new one.",
+        "cloud_device_code_claimed": "That code was already approved by another account.",
+        "cloud_access_unavailable": "TokenTracker Cloud is temporarily unavailable. Try again shortly.",
+        "cloud_sync_throttled": "Too many requests. Wait a moment and try again.",
+    ]
+
     var errorDescription: String? {
         switch self {
         case .signedOut:
@@ -45,8 +58,10 @@ enum CloudError: LocalizedError, Equatable {
             if code == "invalid user_code format" || status == 400 && message?.contains("user_code") == true {
                 return "Enter an 8-character CLI pairing code in XXXX-XXXX format."
             }
-            if let message, !message.isEmpty { return message }
-            return "The server returned HTTP \(status)."
+            if let code, let friendly = Self.friendlyMessages[code] { return friendly }
+            // Edge functions put the machine code in `error`; never show it raw.
+            if let message, !message.isEmpty, message != code, !message.hasPrefix("cloud_") { return message }
+            return "TokenTracker Cloud couldn't complete this (HTTP \(status))."
         case .invalidResponse:
             return "The server sent an unexpected response."
         case .transport(let message):

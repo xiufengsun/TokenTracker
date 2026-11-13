@@ -12,6 +12,7 @@ struct LimitsPacingView: View {
             ZStack {
                 AppBackground()
 
+                ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         headerControlBar
@@ -19,6 +20,7 @@ struct LimitsPacingView: View {
                         if let snapshot = workspace.visibleSnapshot ?? workspace.snapshot {
                             accountRollingWindowsCard(snapshot)
                             providerWindowsSection(snapshot)
+                                .id("tools")
                             cloudArchitectureBoundaryCard
                         } else if case .failed(let message) = workspace.phase {
                             WorkspaceFailureView(
@@ -38,6 +40,8 @@ struct LimitsPacingView: View {
                 .refreshable {
                     await workspace.refresh()
                 }
+                .scenarioScrollAnchor(proxy)
+                }
             }
             .navigationTitle("Pacing & Limits")
             .navigationBarTitleDisplayMode(.large)
@@ -46,7 +50,7 @@ struct LimitsPacingView: View {
                     Button {
                         showAccountTargetSheet = true
                     } label: {
-                        Label("Targets", systemImage: "slider.horizontal.3")
+                        Label("Spend Targets", systemImage: "target")
                     }
                     .accessibilityIdentifier("limits.editTargets")
                 }
@@ -68,10 +72,10 @@ struct LimitsPacingView: View {
         let source: String
     }
 
-    // MARK: - Top Glass Mode Toggle (Used vs Remaining — Mirrors macOS Menu Bar)
+    // MARK: - Used / Remaining toggle (same semantics as the macOS menu bar)
 
     private var headerControlBar: some View {
-        HStack(spacing: 10) {
+        HStack {
             GlassSegmentedControl(
                 items: WindowMeterStyle.allCases,
                 selection: $prefs.windowMeterStyle,
@@ -79,21 +83,7 @@ struct LimitsPacingView: View {
                 identifierPrefix: "limits.meter",
                 fillsWidth: false
             )
-
             Spacer()
-
-            Button {
-                showAccountTargetSheet = true
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "target")
-                    Text(hasAnySpendTarget ? "Targets On" : "Set Targets")
-                }
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            }
-            .buttonStyle(.glass)
         }
     }
 
@@ -107,98 +97,82 @@ struct LimitsPacingView: View {
         let remaining = prefs.windowMeterStyle == .remaining
         let cal = Calendar.localGregorian
         let endOfToday = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: snapshot.now)) ?? snapshot.now
+        let rolling = snapshot.todaySummary.rolling
 
         return TelemetrySurface(padding: 18) {
             VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Rolling Account Windows")
-                            .font(.headline)
-                        Text("Synced Cloud activity & spend pace across your computers")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Account Windows")
+                        .font(.headline)
+                    Text("Estimated spend synced from all your computers")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
-                // 5-Hour Burst Window
-                rollingWindowRow(
-                    title: "5h Burst Window",
-                    primaryMetric: prefs.formatTokens(snapshot.trailingFiveHourTokens),
-                    secondaryMetric: snapshot.trailingFiveHourWindowReset.map {
-                        "rolls over in \(LimitPace.durationString(max(0, $0.timeIntervalSince(snapshot.now))))"
-                    } ?? "idle window",
-                    fraction: fiveHourBurstIntensity(snapshot),
-                    windowSeconds: nil,
-                    resetDate: nil,
-                    now: snapshot.now,
-                    remainingMode: false,
-                    isTargetBased: false
+                windowRow(
+                    title: "Last 5 hours",
+                    value: prefs.formatTokens(snapshot.trailingFiveHourTokens),
+                    detail: snapshot.trailingFiveHourTokens > 0
+                        ? "tokens · this hour and the 4 before it"
+                        : "No activity in the last 5 hours",
+                    target: nil,
+                    used: 0,
+                    pace: nil,
+                    remainingMode: false
                 )
 
                 Divider()
 
-                // Today's Spend Window
-                rollingWindowRow(
-                    title: "Today (24h)",
-                    primaryMetric: prefs.formatCost(snapshot.todayCostUsd),
-                    secondaryMetric: prefs.dailySpendTargetUsd > 0
-                        ? "of \(prefs.formatCost(prefs.dailySpendTargetUsd, masked: false)) target"
-                        : "\(prefs.formatTokens(snapshot.todaySummary.totals.displayTokens)) tokens",
-                    fraction: prefs.dailySpendTargetUsd > 0
-                        ? snapshot.todayCostUsd / prefs.dailySpendTargetUsd
-                        : (snapshot.averageDailyCost30d > 0 ? min(1, snapshot.todayCostUsd / (snapshot.averageDailyCost30d * 1.5)) : 0),
-                    windowSeconds: prefs.dailySpendTargetUsd > 0 ? 86_400 : nil,
-                    resetDate: prefs.dailySpendTargetUsd > 0 ? endOfToday : nil,
-                    now: snapshot.now,
-                    remainingMode: remaining && prefs.dailySpendTargetUsd > 0,
-                    isTargetBased: prefs.dailySpendTargetUsd > 0
+                windowRow(
+                    title: "Today",
+                    value: prefs.formatCost(snapshot.todayCostUsd),
+                    detail: "\(prefs.formatTokens(snapshot.todaySummary.totals.displayTokens)) tokens · resets at midnight",
+                    target: prefs.dailySpendTargetUsd,
+                    used: snapshot.todayCostUsd,
+                    pace: (window: 86_400, reset: endOfToday, now: snapshot.now),
+                    remainingMode: remaining
                 )
 
                 Divider()
 
-                // 7-Day Rolling Window
-                rollingWindowRow(
-                    title: "7d Rolling",
-                    primaryMetric: prefs.formatCost(snapshot.sevenDayCostUsd),
-                    secondaryMetric: prefs.weeklySpendTargetUsd > 0
-                        ? "of \(prefs.formatCost(prefs.weeklySpendTargetUsd, masked: false)) target"
-                        : "\(prefs.formatTokens(snapshot.todaySummary.rolling.last7d.totals.billableTotalTokens)) · \(snapshot.todaySummary.rolling.last7d.activeDays)/7d active",
-                    fraction: prefs.weeklySpendTargetUsd > 0
-                        ? snapshot.sevenDayCostUsd / prefs.weeklySpendTargetUsd
-                        : thirtyDayNormalized7dFraction(snapshot),
-                    windowSeconds: nil,
-                    resetDate: nil,
-                    now: snapshot.now,
-                    remainingMode: remaining && prefs.weeklySpendTargetUsd > 0,
-                    isTargetBased: prefs.weeklySpendTargetUsd > 0
+                windowRow(
+                    title: "Last 7 days",
+                    value: prefs.formatCost(snapshot.sevenDayCostUsd),
+                    detail: "\(prefs.formatTokens(rolling.last7d.totals.billableTotalTokens)) tokens · \(rolling.last7d.activeDays) of 7 days active",
+                    target: prefs.weeklySpendTargetUsd,
+                    used: snapshot.sevenDayCostUsd,
+                    pace: nil,
+                    remainingMode: remaining
                 )
 
                 Divider()
 
-                // 30-Day Rolling Window
-                rollingWindowRow(
-                    title: "30d Rolling",
-                    primaryMetric: prefs.formatCost(snapshot.thirtyDayCostUsd),
-                    secondaryMetric: prefs.monthlySpendTargetUsd > 0
-                        ? "of \(prefs.formatCost(prefs.monthlySpendTargetUsd, masked: false)) target"
-                        : "avg \(prefs.formatCost(snapshot.averageDailyCost30d))/active day",
-                    fraction: prefs.monthlySpendTargetUsd > 0
-                        ? snapshot.thirtyDayCostUsd / prefs.monthlySpendTargetUsd
-                        : (snapshot.thirtyDayCostUsd > 0 ? 0.55 : 0),
-                    windowSeconds: nil,
-                    resetDate: nil,
-                    now: snapshot.now,
-                    remainingMode: remaining && prefs.monthlySpendTargetUsd > 0,
-                    isTargetBased: prefs.monthlySpendTargetUsd > 0
+                windowRow(
+                    title: "Last 30 days",
+                    value: prefs.formatCost(snapshot.thirtyDayCostUsd),
+                    detail: "\(prefs.formatCost(snapshot.averageDailyCost30d)) per active day · \(rolling.last30d.activeDays) active",
+                    target: prefs.monthlySpendTargetUsd,
+                    used: snapshot.thirtyDayCostUsd,
+                    pace: nil,
+                    remainingMode: remaining
                 )
 
-                if prefs.dailySpendTargetUsd > 0 {
+                if !hasAnySpendTarget {
+                    Button {
+                        showAccountTargetSheet = true
+                    } label: {
+                        Label("Set spend targets", systemImage: "target")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.glass)
+                } else if prefs.dailySpendTargetUsd > 0 {
                     HStack(spacing: 6) {
                         Rectangle()
                             .fill(Color.primary)
                             .frame(width: 2, height: 9)
-                        Text("The notch on target bars marks even-burn pace through the window.")
+                        Text("The notch on today's bar marks even pace until midnight.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -207,42 +181,28 @@ struct LimitsPacingView: View {
         }
     }
 
-    private func fiveHourBurstIntensity(_ snapshot: PhoneWorkspaceSnapshot) -> Double {
-        let burst = Double(snapshot.trailingFiveHourTokens)
-        guard burst > 0 else { return 0 }
-        let avgDailyTokens = Double(snapshot.todaySummary.rolling.last30d.avgPerActiveDay ?? 0)
-        guard avgDailyTokens > 0 else { return 0.35 }
-        return min(1.0, burst / max(avgDailyTokens * 0.75, 1))
-    }
-
-    private func thirtyDayNormalized7dFraction(_ snapshot: PhoneWorkspaceSnapshot) -> Double {
-        guard snapshot.thirtyDayCostUsd > 0 else { return 0 }
-        let expectedWeekly = snapshot.thirtyDayCostUsd * (7.0 / 30.0)
-        guard expectedWeekly > 0 else { return 0 }
-        return min(1.0, (snapshot.sevenDayCostUsd / expectedWeekly) * 0.5)
-    }
-
-    private func rollingWindowRow(
+    /// One window. A bar is drawn only against a target the user set; without
+    /// one there is no meaningful denominator, so the row shows numbers only.
+    private func windowRow(
         title: String,
-        primaryMetric: String,
-        secondaryMetric: String,
-        fraction: Double,
-        windowSeconds: Double?,
-        resetDate: Date?,
-        now: Date,
-        remainingMode: Bool,
-        isTargetBased: Bool
+        value: String,
+        detail: String,
+        target: Double?,
+        used: Double,
+        pace: (window: Double, reset: Date, now: Date)?,
+        remainingMode: Bool
     ) -> some View {
+        let hasTarget = (target ?? 0) > 0
+        let fraction = hasTarget ? used / (target ?? 1) : 0
         let clampedUsed = min(max(fraction, 0), 1)
         let displayPercent = remainingMode ? (1 - clampedUsed) * 100 : clampedUsed * 100
-        let fillColor = isTargetBased ? Palette.paceColor(fraction: fraction) : Color.primary.opacity(0.45)
 
         var paceResult: LimitPace.Result? = nil
-        if isTargetBased, let windowSeconds, let resetDate {
+        if hasTarget, let pace {
             paceResult = LimitPace.compute(
                 usedFraction: clampedUsed,
-                windowSeconds: windowSeconds,
-                secondsUntilReset: max(0, resetDate.timeIntervalSince(now)),
+                windowSeconds: pace.window,
+                secondsUntilReset: max(0, pace.reset.timeIntervalSince(pace.now)),
                 remainingMode: remainingMode
             )
         }
@@ -251,68 +211,89 @@ struct LimitsPacingView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
-                Spacer()
-                Text(primaryMetric)
+                Spacer(minLength: 8)
+                Text(value)
                     .font(.subheadline.weight(.bold).monospacedDigit())
-                if isTargetBased {
-                    let pctInt = Int((remainingMode ? max(0, (1 - fraction) * 100) : fraction * 100).rounded())
-                    Text("· \(pctInt)% \(remainingMode ? "left" : "used")")
-                        .font(.caption.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(Palette.paceColor(fraction: fraction))
+                    .contentTransition(.numericText())
+            }
+
+            if hasTarget, let target {
+                PaceMeterBar(
+                    percent: displayPercent,
+                    fillColor: Palette.paceColor(fraction: fraction),
+                    pacePercent: paceResult?.pacePercent,
+                    paceOver: paceResult?.paceOver ?? false,
+                    height: 8
+                )
+
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        targetCaption(target: target, fraction: fraction, remainingMode: remainingMode)
+                        Spacer(minLength: 8)
+                        paceCaption(paceResult)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        targetCaption(target: target, fraction: fraction, remainingMode: remainingMode)
+                        paceCaption(paceResult)
+                    }
                 }
             }
 
-            PaceMeterBar(
-                percent: displayPercent,
-                fillColor: fillColor,
-                pacePercent: paceResult?.pacePercent,
-                paceOver: paceResult?.paceOver ?? false,
-                height: 8
-            )
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+    }
 
-            HStack {
-                Text(secondaryMetric)
+    private func targetCaption(target: Double, fraction: Double, remainingMode: Bool) -> some View {
+        let pct = Int(((remainingMode ? max(0, 1 - fraction) : fraction) * 100).rounded())
+        return Text("\(pct)% \(remainingMode ? "left" : "used") of \(prefs.formatCost(target, masked: false))")
+            .font(.caption.weight(.semibold).monospacedDigit())
+            .foregroundStyle(Palette.paceColor(fraction: fraction))
+            .lineLimit(1)
+    }
+
+    @ViewBuilder
+    private func paceCaption(_ result: LimitPace.Result?) -> some View {
+        if let result {
+            if let eta = result.runsOutEta {
+                Text("Reaches target in ~\(eta) at this pace")
+                    .font(.caption)
+                    .foregroundStyle(Palette.critical)
+                    .lineLimit(1)
+            } else if let projected = result.projectedEnd {
+                Text("On pace for \(projected)% by midnight")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Spacer()
-                if let paceResult {
-                    if let eta = paceResult.runsOutEta {
-                        Text("Hits target in ~\(eta) at current pace")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(Palette.critical)
-                    } else if let projected = paceResult.projectedEnd {
-                        Text("Projected \(projected)% by reset")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                    .lineLimit(1)
             }
         }
     }
 
-    // MARK: - 2. Per-Provider Window Activity & Plan Budgets
+    // MARK: - 2. Per-Tool Spend & Plan Cycles
 
     private func providerWindowsSection(_ snapshot: PhoneWorkspaceSnapshot) -> some View {
         let profiles = snapshot.providerPacingProfiles(budgets: prefs.toolBudgets)
         return VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Tool Windows & Plan Cycles")
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Coding Tools")
                     .font(.headline)
-                Spacer()
-                Text("Tap a tool to set cap / cycle")
+                Text("Tap a tool to set a spend cap or plan renewal date.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 2)
+            .padding(.horizontal, 4)
 
             if profiles.isEmpty {
                 TelemetrySurface(padding: 18) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("No Active Tool Windows Yet")
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("No tool activity in the last 30 days")
                             .font(.subheadline.weight(.semibold))
-                        Text("Once Claude, Codex, Cursor, Muse, or another CLI syncs usage to Cloud, its 5-hour burst, 7-day, and 30-day windows appear here.")
+                        Text("When Claude Code, Codex, Cursor, Muse Code, or another tool syncs usage to Cloud, it appears here.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             } else {
@@ -332,136 +313,115 @@ struct LimitsPacingView: View {
         } label: {
             TelemetrySurface(padding: 16) {
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 10) {
-                        ProviderEmblem(source: profile.source, size: 34)
+                    HStack(spacing: 12) {
+                        ProviderEmblem(source: profile.source, size: 36)
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(profile.displayName)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.primary)
-                                if let cycle = budget?.billingCycle, budget?.nextRenewalISO != nil {
-                                    Image(systemName: budget?.autoRenew == false ? "clock" : "infinity")
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(.secondary)
-                                        .accessibilityLabel(cycle)
-                                }
-                            }
-                            Text(ProviderIdentity.rollingCadenceNote(profile.source))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
+                        Text(profile.displayName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
 
-                        Spacer()
+                        Spacer(minLength: 8)
 
-                        Image(systemName: "slider.horizontal.3")
+                        Image(systemName: "chevron.right")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(7)
-                            .background(Color.primary.opacity(0.06), in: Circle())
+                            .foregroundStyle(.tertiary)
                     }
 
-                    // Window Metrics Strip (5h / 7d / 30d synced from Cloud)
-                    HStack(spacing: 0) {
-                        miniWindowStat(
-                            label: "5h Burst",
-                            value: profile.fiveHourTokens > 0 ? prefs.formatTokens(profile.fiveHourTokens) : "Quiet",
-                            sub: profile.nextWindowReset.map {
-                                "\(LimitPace.durationString(max(0, $0.timeIntervalSince(now)))) left"
-                            } ?? "rolling"
-                        )
-                        miniWindowStat(
-                            label: "7d Window",
-                            value: prefs.formatCost(profile.sevenDayCostUsd),
-                            sub: prefs.formatTokens(profile.sevenDayTokens)
-                        )
-                        miniWindowStat(
-                            label: "30d Window",
-                            value: prefs.formatCost(profile.thirtyDayCostUsd),
-                            sub: prefs.formatTokens(profile.thirtyDayTokens)
-                        )
-                    }
-
-                    // Optional User-Configured Weekly / Monthly Tool Budget Bar
-                    if let weeklyCap = budget?.weeklyBudgetUsd, weeklyCap > 0 {
-                        let frac = profile.sevenDayCostUsd / weeklyCap
-                        let pct = remaining ? max(0, (1 - frac) * 100) : min(100, frac * 100)
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack {
-                                Text("7d Budget (\(prefs.formatCost(weeklyCap, masked: false)))")
-                                    .font(.caption2.weight(.medium))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Text("\(Int((remaining ? max(0, (1 - frac) * 100) : frac * 100).rounded()))% \(remaining ? "left" : "used")")
-                                    .font(.caption2.weight(.semibold).monospacedDigit())
-                                    .foregroundStyle(Palette.paceColor(fraction: frac))
-                            }
-                            PaceMeterBar(percent: pct, fillColor: Palette.paceColor(fraction: frac), height: 6)
+                    Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 2) {
+                        GridRow {
+                            statLabel("Last 7 days")
+                            statLabel("Last 30 days")
                         }
+                        GridRow {
+                            statValue(prefs.formatCost(profile.sevenDayCostUsd))
+                            statValue(prefs.formatCost(profile.thirtyDayCostUsd))
+                        }
+                        GridRow {
+                            statDetail("\(prefs.formatTokens(profile.sevenDayTokens)) tokens")
+                            statDetail("\(prefs.formatTokens(profile.thirtyDayTokens)) tokens")
+                        }
+                    }
+
+                    if let weeklyCap = budget?.weeklyBudgetUsd, weeklyCap > 0 {
+                        capMeter(title: "7-day cap", used: profile.sevenDayCostUsd, cap: weeklyCap, remaining: remaining)
                     }
 
                     if let monthlyCap = budget?.monthlyBudgetUsd, monthlyCap > 0 {
-                        let frac = profile.thirtyDayCostUsd / monthlyCap
-                        let pct = remaining ? max(0, (1 - frac) * 100) : min(100, frac * 100)
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack {
-                                Text("30d Budget (\(prefs.formatCost(monthlyCap, masked: false)))")
-                                    .font(.caption2.weight(.medium))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Text("\(Int((remaining ? max(0, (1 - frac) * 100) : frac * 100).rounded()))% \(remaining ? "left" : "used")")
-                                    .font(.caption2.weight(.semibold).monospacedDigit())
-                                    .foregroundStyle(Palette.paceColor(fraction: frac))
-                            }
-                            PaceMeterBar(percent: pct, fillColor: Palette.paceColor(fraction: frac), height: 6)
-                        }
+                        capMeter(title: "30-day cap", used: profile.thirtyDayCostUsd, cap: monthlyCap, remaining: remaining)
                     }
 
-                    // Optional Plan Renewal Cycle Bar
-                    if let renewalISO = budget?.nextRenewalISO,
-                       let renewalDate = ISO8601DateFormatter().date(from: renewalISO) {
-                        let cycleDays: Double = budget?.billingCycle == "yearly" ? 365 : 30
-                        let secondsLeft = renewalDate.timeIntervalSince(now)
-                        let elapsedFrac = min(1, max(0, 1 - (secondsLeft / (cycleDays * 86_400))))
-                        let displayPct = remaining ? (1 - elapsedFrac) * 100 : elapsedFrac * 100
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack {
-                                Text("Plan Renewal Cycle")
-                                    .font(.caption2.weight(.medium))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Text(secondsLeft > 0 ? "renews in \(LimitPace.durationString(secondsLeft))" : "renews today")
-                                    .font(.caption2.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
-                            PaceMeterBar(
-                                percent: displayPct,
-                                fillColor: secondsLeft <= 3 * 86_400 ? Palette.warning : Color.primary.opacity(0.45),
-                                height: 6
-                            )
-                        }
+                    if let budget, let renewalDate = budget.upcomingRenewal(now: now) {
+                        renewalRow(renewalDate, cycle: budget.billingCycle, autoRenew: budget.autoRenew, now: now, remaining: remaining)
                     }
                 }
             }
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("limits.tool.\(profile.source)")
     }
 
-    private func miniWindowStat(label: String, value: String, sub: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.subheadline.weight(.semibold).monospacedDigit())
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-            Text(sub)
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
+    private func statLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func statValue(_ text: String) -> some View {
+        Text(text)
+            .font(.title3.weight(.semibold).monospacedDigit())
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+    }
+
+    private func statDetail(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+
+    private func capMeter(title: String, used: Double, cap: Double, remaining: Bool) -> some View {
+        let frac = used / cap
+        let pct = remaining ? max(0, (1 - frac) * 100) : min(100, frac * 100)
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text("\(title) \(prefs.formatCost(cap, masked: false))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(Int(pct.rounded()))% \(remaining ? "left" : "used")")
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(Palette.paceColor(fraction: frac))
+            }
+            PaceMeterBar(percent: pct, fillColor: Palette.paceColor(fraction: frac), height: 6)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func renewalRow(_ date: Date, cycle: String?, autoRenew: Bool, now: Date, remaining: Bool) -> some View {
+        let cal = Calendar.localGregorian
+        let cycleStart = cal.date(byAdding: cycle == "yearly" ? .year : .month, value: -1, to: date) ?? date
+        let cycleLength = max(date.timeIntervalSince(cycleStart), 1)
+        let secondsLeft = date.timeIntervalSince(now)
+        let elapsedFrac = min(1, max(0, 1 - secondsLeft / cycleLength))
+        let displayPct = remaining ? (1 - elapsedFrac) * 100 : elapsedFrac * 100
+        let verb = autoRenew ? "Renews" : "Ends"
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text("\(cycle == "yearly" ? "Yearly" : "Monthly") plan")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(secondsLeft > 0
+                     ? "\(verb) \(date.formatted(date: .abbreviated, time: .omitted)) · \(LimitPace.durationString(secondsLeft))"
+                     : (autoRenew ? "\(verb) today" : "Ended"))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(secondsLeft <= 3 * 86_400 ? Palette.warning : Color.secondary)
+            }
+            PaceMeterBar(percent: displayPct, fillColor: Color.primary.opacity(0.45), height: 6)
+        }
     }
 
     // MARK: - 3. Honest Architecture Disclosure (Local Credentials vs Cloud Sync)
@@ -476,10 +436,10 @@ struct LimitsPacingView: View {
                     .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Why Live Provider Rate Caps Stay on Desktop")
+                    Text("Provider rate limits stay on your computer")
                         .font(.footnote.weight(.semibold))
 
-                    Text("Exact provider rate-limit percentages (such as Claude OAuth utilization, Codex reset-credit banks, or DeepSeek wallet balances) are read directly from local CLI credentials on your Mac, Windows, or Linux machine and are never uploaded to TokenTracker Cloud for security. On iPhone, Pacing & Limits tracks your Cloud-synced 5h/7d/30d token & cost windows alongside any spend caps or renewal dates you set here.")
+                    Text("Claude, Codex, Cursor, and other plan limits are read with sign-in credentials stored on your computer. Those credentials and limit readings are never uploaded, so the menu bar app and desktop dashboard show them, not this iPhone. Here you see Cloud-synced spend against targets you set.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

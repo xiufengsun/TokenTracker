@@ -132,20 +132,6 @@ enum ProviderIdentity {
         }
     }
 
-    /// Standard rolling window semantics documented across Claude/Codex/Muse/OpenCode Go.
-    static func rollingCadenceNote(_ source: String) -> String {
-        switch source.lowercased() {
-        case "claude": return "5h burst + 7d rolling windows"
-        case "codex": return "5h primary + 7d secondary windows"
-        case "cursor": return "Monthly plan cycle + fast requests"
-        case "muse": return "Contributor & session burst activity"
-        case "opencode", "opencodego", "opencode-go": return "5h / 7d / 30d rolling spend windows"
-        case "kimi": return "5h burst + 7d rolling windows"
-        case "deepseek": return "Pay-as-you-go API balance (peak/off-peak)"
-        default: return "Rolling Cloud activity windows"
-        }
-    }
-
     /// True when the source comes from an account-wide cloud API rather than per-machine logs.
     static func isAccountLevelSource(_ source: String) -> Bool {
         let lower = source.lowercased()
@@ -228,29 +214,19 @@ struct WindowTelemetryBar: Identifiable, Equatable {
 struct ProviderPacingProfile: Identifiable, Equatable {
     var id: String { source }
     var source: String
-    var fiveHourTokens: Int
     var sevenDayTokens: Int
     var sevenDayCostUsd: Double
     var thirtyDayTokens: Int
     var thirtyDayCostUsd: Double
     var sevenDayConversations: Int
     var budget: TrackedToolBudget?
-    var nextWindowReset: Date?
 
     var displayName: String { ProviderIdentity.displayName(source) }
 
-    /// Estimated 5h cost scaled proportionally from the provider's 7d token/cost mix when tokens > 0.
-    var estimatedFiveHourCostUsd: Double {
-        guard sevenDayTokens > 0, fiveHourTokens > 0 else { return 0 }
-        return sevenDayCostUsd * (Double(fiveHourTokens) / Double(sevenDayTokens))
-    }
-
+    /// Highest share of a user-set cap (7d or 30d) this tool has used, if any.
     var hottestBudgetFraction: Double? {
         guard let budget else { return nil }
         var candidates: [Double] = []
-        if let b5 = budget.fiveHourBudgetUsd, b5 > 0 {
-            candidates.append(estimatedFiveHourCostUsd / b5)
-        }
         if let bw = budget.weeklyBudgetUsd, bw > 0 {
             candidates.append(sevenDayCostUsd / bw)
         }
@@ -300,16 +276,16 @@ struct PhoneWorkspaceSnapshot: Equatable {
 
     var periodSummary: UsageSummaryResponse
     var todaySummary: UsageSummaryResponse
-    var daily30d: PhoneDailyUsageResponse?
-    var todayHourly: PhoneHourlyUsageResponse?
-    var yesterdayHourly: PhoneHourlyUsageResponse?
-    var periodBreakdown: ModelBreakdownResponse?
-    var weeklyBreakdown: ModelBreakdownResponse?
-    var monthlyBreakdown: ModelBreakdownResponse?
-    var heatmap: HeatmapResponse?
-    var accountDevices: AccountDevicesResponse?
-    var cloudAccount: CloudAccountStatusResponse?
-    var cloudMachines: CloudMachineListResponse?
+    var daily30d: PhoneDailyUsageResponse? = nil
+    var todayHourly: PhoneHourlyUsageResponse? = nil
+    var yesterdayHourly: PhoneHourlyUsageResponse? = nil
+    var periodBreakdown: ModelBreakdownResponse? = nil
+    var weeklyBreakdown: ModelBreakdownResponse? = nil
+    var monthlyBreakdown: ModelBreakdownResponse? = nil
+    var heatmap: HeatmapResponse? = nil
+    var accountDevices: AccountDevicesResponse? = nil
+    var cloudAccount: CloudAccountStatusResponse? = nil
+    var cloudMachines: CloudMachineListResponse? = nil
 
     var periodCostUsd: Double {
         Double(periodSummary.totals.totalCostUsd ?? "") ?? 0
@@ -342,35 +318,21 @@ struct PhoneWorkspaceSnapshot: Equatable {
         return thirtyDayCostUsd / Double(active)
     }
 
-    /// Synced tokens observed across the trailing 5 hours (from `account-hourly` today + yesterday).
+    /// Tokens in the hourly buckets that overlap the last 5 hours: the current
+    /// hour plus the four before it (`account-hourly`, today + yesterday). The
+    /// API reports whole local hours, so this can include up to 59 minutes more.
     var trailingFiveHourTokens: Int {
         trailingFiveHourBuckets.reduce(0) { $0 + $1.totalTokens }
     }
 
-    var trailingFiveHourByModel: [String: Int] {
-        var out: [String: Int] = [:]
-        for bucket in trailingFiveHourBuckets {
-            for (model, count) in bucket.models {
-                out[model, default: 0] += count
-            }
-        }
-        return out
-    }
-
-    var trailingFiveHourWindowReset: Date? {
-        guard let oldestActive = trailingFiveHourBuckets.first(where: { $0.totalTokens > 0 }),
-              let start = Self.parseLocalHour(oldestActive.hour) else {
-            return nil
-        }
-        return start.addingTimeInterval(5 * 3600)
-    }
-
     private var trailingFiveHourBuckets: [PhoneHourlyEntry] {
         let all = (yesterdayHourly?.data ?? []) + (todayHourly?.data ?? [])
-        let cutoff = now.addingTimeInterval(-5 * 3600)
+        let cal = Calendar.localGregorian
+        let currentHourStart = cal.dateInterval(of: .hour, for: now)?.start ?? now
+        let firstHourStart = currentHourStart.addingTimeInterval(-4 * 3600)
         return all.filter { entry in
-            guard let date = Self.parseLocalHour(entry.hour) else { return false }
-            return date >= cutoff && date <= now.addingTimeInterval(3600)
+            guard let date = Self.parseLocalHour(entry.hour, calendar: cal) else { return false }
+            return date >= firstHourStart && date <= currentHourStart
         }
     }
 
@@ -394,30 +356,23 @@ struct PhoneWorkspaceSnapshot: Equatable {
     }
 
     func providerPacingProfiles(budgets: [String: TrackedToolBudget]) -> [ProviderPacingProfile] {
-        let weeklyBySource = Dictionary(uniqueKeysWithValues: Self.rankProviders(from: weeklyBreakdown).map { ($0.source, $0) })
-        let monthlyBySource = Dictionary(uniqueKeysWithValues: Self.rankProviders(from: monthlyBreakdown).map { ($0.source, $0) })
-        let fiveHourModels = trailingFiveHourByModel
+        let weeklyBySource = Dictionary(uniqueKeysWithValues: Self.rankProviders(from: weeklyBreakdown).map { ($0.source.lowercased(), $0) })
+        let monthlyBySource = Dictionary(uniqueKeysWithValues: Self.rankProviders(from: monthlyBreakdown).map { ($0.source.lowercased(), $0) })
 
-        var allSources = Set(weeklyBySource.keys).union(monthlyBySource.keys).union(budgets.keys)
-        allSources = allSources.filter { !$0.isEmpty }
+        let allSources = Set(weeklyBySource.keys).union(monthlyBySource.keys).union(budgets.keys)
+            .filter { !$0.isEmpty }
 
         let profiles: [ProviderPacingProfile] = allSources.map { source in
             let w = weeklyBySource[source]
             let m = monthlyBySource[source]
-            let sourceModelNames = Set((w?.models ?? m?.models ?? []).map(\.name))
-            let approx5hTokens = sourceModelNames.reduce(0) { sum, modelName in
-                sum + (fiveHourModels[modelName] ?? 0)
-            }
             return ProviderPacingProfile(
-                source: source,
-                fiveHourTokens: approx5hTokens,
+                source: w?.source ?? m?.source ?? source,
                 sevenDayTokens: w?.tokens ?? 0,
                 sevenDayCostUsd: w?.costUsd ?? 0,
                 thirtyDayTokens: m?.tokens ?? 0,
                 thirtyDayCostUsd: m?.costUsd ?? 0,
                 sevenDayConversations: w?.conversations ?? 0,
-                budget: budgets[source.lowercased()],
-                nextWindowReset: approx5hTokens > 0 ? trailingFiveHourWindowReset : nil
+                budget: budgets[source]
             )
         }
 
@@ -427,7 +382,7 @@ struct PhoneWorkspaceSnapshot: Equatable {
                 let lf = lhs.hottestBudgetFraction ?? -1
                 let rf = rhs.hottestBudgetFraction ?? -1
                 if lf != rf { return lf > rf }
-                if lhs.sevenDayTokens != rhs.sevenDayTokens { return lhs.sevenDayTokens > rhs.sevenDayTokens }
+                if lhs.thirtyDayCostUsd != rhs.thirtyDayCostUsd { return lhs.thirtyDayCostUsd > rhs.thirtyDayCostUsd }
                 return lhs.source < rhs.source
             }
     }

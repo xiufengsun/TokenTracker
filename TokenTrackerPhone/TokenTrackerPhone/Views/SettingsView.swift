@@ -15,9 +15,11 @@ struct SettingsView: View {
     @State private var actionNotice: String?
     @State private var actionError: String?
     @State private var confirmSignOut = false
+    @State private var pausingMachine: CloudMachineItem?
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             List {
                 accountSection
 
@@ -36,6 +38,8 @@ struct SettingsView: View {
                 signOutSection
             }
             .listStyle(.insetGrouped)
+            .scenarioScrollAnchor(proxy)
+            }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .task {
@@ -67,7 +71,7 @@ struct SettingsView: View {
                     }
                 }
             } message: {
-                Text("Updates this machine's label across your TokenTracker Cloud devices.")
+                Text("The new name shows on every device signed in to this account.")
             }
             .confirmationDialog(
                 "Sign out of TokenTracker?",
@@ -75,7 +79,7 @@ struct SettingsView: View {
                 titleVisibility: .visible
             ) {
                 Button("Sign Out", role: .destructive) {
-                    workspace.reset()
+                    // RootContainerView resets the workspace when the session clears.
                     Task { await sessions.signOut() }
                 }
                 Button("Cancel", role: .cancel) {}
@@ -188,90 +192,129 @@ struct SettingsView: View {
 
     // MARK: - 3. Synced Computers
 
+    /// Machines come from `tokentracker-billing?action=devices` (Cloud sync slots,
+    /// pause / resume). Rename goes through `tokentracker-device-rename`, which is
+    /// keyed by the device id from `tokentracker-account-devices`, so a machine is
+    /// renameable only when exactly one device row carries its name.
     @ViewBuilder
     private var syncedComputersSection: some View {
-        let machines = workspace.snapshot?.cloudMachines?.machines ?? []
+        let machineList = workspace.snapshot?.cloudMachines
+        let machines = machineList?.machines ?? []
         let deviceRows = workspace.snapshot?.accountDevices?.devices ?? []
 
         Section {
-            if machines.isEmpty && deviceRows.isEmpty {
-                Text("No synced computers registered yet.")
+            if machines.isEmpty {
+                Text(deviceRows.isEmpty ? "No computers are syncing to Cloud yet." : "Cloud sync slots couldn't load. Pull down on Pulse to refresh.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-            } else if !machines.isEmpty {
+            } else {
                 ForEach(machines) { machine in
-                    HStack(spacing: 12) {
-                        Image(systemName: machine.platformSymbol)
-                            .font(.body.weight(.medium))
-                            .foregroundStyle(machine.isPaused ? Color.secondary : Color.primary)
-                            .frame(width: 26)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(machine.displayName)
-                                .font(.subheadline.weight(.medium))
-                            HStack(spacing: 5) {
-                                Text(machine.platformLabel)
-                                if let seen = machine.lastSeenAt, let formatted = formatRelativeOrShort(seen) {
-                                    Text("·")
-                                    Text("Seen \(formatted)")
-                                }
-                                if machine.isPaused {
-                                    Text("· Paused")
-                                        .foregroundStyle(Palette.warning)
-                                }
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        if busyMachineId == machine.machineId {
-                            ProgressView()
-                        } else {
-                            Button(machine.isPaused ? "Resume" : "Pause") {
-                                toggleMachine(machine)
-                            }
-                            .font(.caption.weight(.semibold))
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-            }
-
-            if !deviceRows.isEmpty {
-                ForEach(deviceRows) { dev in
-                    Button {
-                        renameText = dev.displayName
-                        renamingDevice = dev
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(dev.displayName)
-                                    .font(.subheadline)
-                                    .foregroundStyle(.primary)
-                                Text("30d machine tokens · tap to rename")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Text(prefs.formatTokens(dev.totalTokens))
-                                .font(.subheadline.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                            Image(systemName: "pencil")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
+                    machineRow(machine, renameTarget: renameTarget(for: machine, in: deviceRows))
                 }
             }
         } header: {
-            Text("Synced Computers")
+            HStack {
+                Text("Synced Computers")
+                Spacer()
+                if let count = machineList?.machineCount {
+                    if let limit = machineList?.machineLimit {
+                        Text("\(count) of \(limit) slots")
+                    } else {
+                        Text("\(count) active")
+                    }
+                }
+            }
         } footer: {
-            Text("Pausing a computer stops new Cloud uploads from that machine without deleting its historical usage.")
+            Text(machineList?.overMachineLimit == true
+                 ? "This account has more computers than sync slots. Pause one so the others can keep syncing."
+                 : "Pausing frees the computer's sync slot and stops new uploads. Its history stays in Cloud, and you can resume it here.")
         }
+        .id("computers")
+        .confirmationDialog(
+            "Pause Cloud sync for \(pausingMachine?.displayName ?? "this computer")?",
+            isPresented: Binding(get: { pausingMachine != nil }, set: { if !$0 { pausingMachine = nil } }),
+            titleVisibility: .visible,
+            presenting: pausingMachine
+        ) { machine in
+            Button("Pause Sync", role: .destructive) { toggleMachine(machine) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("New uploads stop and its sync slot is freed. Local data and Cloud history stay. The computer signs in again after you resume it.")
+        }
+    }
+
+    private func renameTarget(for machine: CloudMachineItem, in rows: [AccountDeviceRow]) -> AccountDeviceRow? {
+        let matches = rows.filter { $0.displayName == machine.displayName }
+        return matches.count == 1 ? matches.first : nil
+    }
+
+    private func machineRow(_ machine: CloudMachineItem, renameTarget: AccountDeviceRow?) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: machine.platformSymbol)
+                .font(.body.weight(.medium))
+                .foregroundStyle(machine.isPaused ? Color.secondary : Color.primary)
+                .frame(width: 26)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(machine.displayName)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+                Text(machineSubtitle(machine))
+                    .font(.caption)
+                    .foregroundStyle(machine.isPaused ? Palette.warning : Color.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            if busyMachineId == machine.machineId {
+                ProgressView()
+            } else {
+                Button(machine.isPaused ? "Resume" : "Pause") {
+                    if machine.isPaused {
+                        toggleMachine(machine)
+                    } else {
+                        pausingMachine = machine
+                    }
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel("\(machine.isPaused ? "Resume" : "Pause") \(machine.displayName)")
+            }
+        }
+        .padding(.vertical, 2)
+        .contextMenu {
+            if let renameTarget {
+                Button {
+                    renameText = renameTarget.displayName
+                    renamingDevice = renameTarget
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+            }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if let renameTarget {
+                Button {
+                    renameText = renameTarget.displayName
+                    renamingDevice = renameTarget
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                .tint(.gray)
+            }
+        }
+    }
+
+    private func machineSubtitle(_ machine: CloudMachineItem) -> String {
+        var parts = [machine.platformLabel]
+        if machine.isPaused {
+            parts.append("Paused")
+        } else if let seen = machine.lastSeenAt, let formatted = formatRelativeOrShort(seen) {
+            parts.append("Synced \(formatted)")
+        }
+        return parts.joined(separator: " · ")
     }
 
     // MARK: - 4. Privacy & Phone Security
@@ -281,6 +324,7 @@ struct SettingsView: View {
             Toggle(isOn: $prefs.discreteAmounts) {
                 Label("Mask Cost Figures", systemImage: "eye.slash")
             }
+            .id("privacy")
 
             Toggle(isOn: $prefs.hideSwitcherSnapshot) {
                 Label("Privacy Blur in App Switcher", systemImage: "rectangle.portrait.slash")
@@ -382,8 +426,11 @@ struct SettingsView: View {
 
             Button {
                 Task {
+                    actionNotice = nil
                     await workspace.refresh()
-                    actionNotice = "Synced latest Cloud snapshot."
+                    if workspace.phase == .loaded && workspace.warningBanner == nil {
+                        actionNotice = "Updated from Cloud."
+                    }
                 }
             } label: {
                 HStack {
@@ -456,8 +503,8 @@ struct SettingsView: View {
             do {
                 try await workspace.setMachinePaused(machine.machineId, paused: !machine.isPaused)
                 actionNotice = machine.isPaused
-                    ? "Resumed Cloud uploads for \(machine.displayName)."
-                    : "Paused Cloud uploads for \(machine.displayName)."
+                    ? "Resumed \(machine.displayName). It reconnects on its next sync."
+                    : "Paused \(machine.displayName)."
             } catch {
                 actionError = error.localizedDescription
             }
@@ -499,7 +546,7 @@ struct SettingsView: View {
             return fmt.date(from: iso)
         }()
         guard let date else { return nil }
-        let seconds = max(0, Date().timeIntervalSince(date))
+        let seconds = max(0, (workspace.snapshot?.now ?? Date()).timeIntervalSince(date))
         if seconds < 3600 { return "\(max(1, Int(seconds / 60)))m ago" }
         if seconds < 86_400 { return "\(Int(seconds / 3600))h ago" }
         return date.formatted(date: .abbreviated, time: .omitted)

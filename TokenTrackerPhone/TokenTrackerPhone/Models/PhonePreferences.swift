@@ -167,6 +167,21 @@ struct TrackedToolBudget: Codable, Equatable, Identifiable {
         self.autoRenew = autoRenew
     }
 
+    /// Next renewal on or after `now`. An auto-renewing plan whose stored date
+    /// has passed rolls forward by whole billing cycles; a plan that does not
+    /// auto-renew keeps its end date.
+    func upcomingRenewal(now: Date = Date(), calendar: Calendar = .localGregorian) -> Date? {
+        guard let iso = nextRenewalISO, var date = ISO8601DateFormatter().date(from: iso) else { return nil }
+        guard autoRenew else { return date }
+        let step: DateComponents = billingCycle == "yearly" ? DateComponents(year: 1) : DateComponents(month: 1)
+        var guardCount = 0
+        while date < now, guardCount < 600, let next = calendar.date(byAdding: step, to: date) {
+            date = next
+            guardCount += 1
+        }
+        return date
+    }
+
     var hasAnyRule: Bool {
         (fiveHourBudgetUsd ?? 0) > 0
             || (weeklyBudgetUsd ?? 0) > 0

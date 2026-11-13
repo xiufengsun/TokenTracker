@@ -25,6 +25,13 @@ enum SimulatorLaunchScenario: String {
         return nil
     }
 
+    /// Optional `--scroll <anchor>` used by scripts/capture-screenshots.sh.
+    static var scrollAnchor: String? {
+        let args = ProcessInfo.processInfo.arguments
+        guard let idx = args.firstIndex(of: "--scroll"), idx + 1 < args.count else { return nil }
+        return args[idx + 1]
+    }
+
     var fixedNow: Date {
         var cal = Calendar.localGregorian
         cal.timeZone = .current

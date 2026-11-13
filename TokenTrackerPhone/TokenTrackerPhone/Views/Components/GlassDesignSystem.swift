@@ -286,3 +286,20 @@ extension View {
             .foregroundStyle(Color(.systemBackground))
     }
 }
+
+// MARK: - Debug screenshot anchors
+
+extension View {
+    /// Debug builds only: scrolls to the `--scroll` anchor once content has loaded.
+    func scenarioScrollAnchor(_ proxy: ScrollViewProxy) -> some View {
+        #if DEBUG
+        task {
+            guard let anchor = SimulatorLaunchScenario.scrollAnchor else { return }
+            try? await Task.sleep(for: .milliseconds(700))
+            proxy.scrollTo(anchor, anchor: .top)
+        }
+        #else
+        self
+        #endif
+    }
+}

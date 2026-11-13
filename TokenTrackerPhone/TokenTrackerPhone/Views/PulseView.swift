@@ -13,6 +13,7 @@ struct PulseView: View {
             ZStack {
                 AppBackground()
 
+                ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         controlStrip
@@ -38,7 +39,9 @@ struct PulseView: View {
                                 pacingGlanceBridge(snapshot)
                                 timelineChartSection(snapshot)
                                 providerLedgerSection(snapshot)
+                                    .id("tools")
                                 modelBreakdownSection(snapshot)
+                                    .id("models")
                                 consistencyHeatmapSection(snapshot)
                                 syncFootnote(snapshot)
                             }
@@ -59,6 +62,8 @@ struct PulseView: View {
                 }
                 .refreshable {
                     await workspace.refresh()
+                }
+                .scenarioScrollAnchor(proxy)
                 }
             }
             .navigationTitle("Pulse")
@@ -259,21 +264,12 @@ struct PulseView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 2) {
-                        if let hottest, let frac = hottest.hottestBudgetFraction {
-                            Text("\(hottest.displayName) at \(Int((frac * 100).rounded()))% of target")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.primary)
-                        } else if burst5h > 0 {
-                            Text("\(prefs.formatTokens(burst5h)) in trailing 5h window")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.primary)
-                        } else {
-                            Text("7d rolling spend · \(prefs.formatCost(snapshot.sevenDayCostUsd))")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.primary)
-                        }
-
-                        Text(pacingSubtitle(snapshot: snapshot, burst5h: burst5h))
+                        Text(pacingHeadline(snapshot: snapshot, hottest: hottest, burst5h: burst5h))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                        Text(pacingSubtitle(snapshot: snapshot, hottest: hottest))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -294,12 +290,21 @@ struct PulseView: View {
         }
     }
 
-    private func pacingSubtitle(snapshot: PhoneWorkspaceSnapshot, burst5h: Int) -> String {
-        if burst5h > 0, let reset = snapshot.trailingFiveHourWindowReset {
-            let secs = max(0, reset.timeIntervalSince(snapshot.now))
-            return "5h window rolls over in \(LimitPace.durationString(secs)) · Inspect Pacing"
+    private func pacingHeadline(snapshot: PhoneWorkspaceSnapshot, hottest: ProviderPacingProfile?, burst5h: Int) -> String {
+        if let hottest, let frac = hottest.hottestBudgetFraction {
+            return "\(hottest.displayName) at \(Int((frac * 100).rounded()))% of its cap"
         }
-        return "\(snapshot.todaySummary.rolling.last7d.activeDays)/7 active days · Open Pacing & Windows"
+        if burst5h > 0 {
+            return "\(prefs.formatTokens(burst5h)) tokens in the last 5 hours"
+        }
+        return "\(prefs.formatCost(snapshot.sevenDayCostUsd)) in the last 7 days"
+    }
+
+    private func pacingSubtitle(snapshot: PhoneWorkspaceSnapshot, hottest: ProviderPacingProfile?) -> String {
+        if hottest?.hottestBudgetFraction != nil {
+            return "\(prefs.formatCost(snapshot.sevenDayCostUsd)) across all tools in 7 days"
+        }
+        return "Rolling windows and targets in Pacing"
     }
 
     // MARK: - 3. Intraday / 30-Day Timeline Chart
@@ -849,7 +854,7 @@ private struct ProviderDetailSheet: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(provider.displayName)
                                 .font(.title3.weight(.bold))
-                            Text("\(horizonTitle) · \(ProviderIdentity.rollingCadenceNote(provider.source))")
+                            Text(horizonTitle)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
