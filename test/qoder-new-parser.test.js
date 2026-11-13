@@ -497,6 +497,98 @@ async function runOne(t, records, { sourceKey = "qoder", cursorKey = "qoderNew",
   return { res, queuePath, rows: queueRows(queuePath).filter((r) => r.source === sourceKey), cursors, tmp, sessionFile };
 }
 
+// ── Cache-inclusive input (remote-chat route) ──
+//
+// Qoder CLI 1.1.8x / agent 1.1.79+ copy Chat Completions prompt_tokens into
+// input_tokens, so cache reads (and any cache writes) are a subset of it. Those
+// records carry context_usage_ratio = input_tokens / context window. Older
+// Anthropic-shaped CN/BYOK rows without that field stay disjoint.
+
+const inclusiveRec = (usage, opts) => {
+  const rec = qRec(usage, opts);
+  rec.version = "1.1.86";
+  rec.message.model = "auto";
+  return rec;
+};
+
+test("cache-inclusive input_tokens are split into non-cached input and cache reads", async (t) => {
+  const { rows } = await runOne(t, [inclusiveRec({
+    input_tokens: 36301, cache_read_input_tokens: 22016, cache_creation_input_tokens: 0,
+    output_tokens: 266, context_usage_ratio: 0.0907525,
+  })]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].input_tokens, 14285);
+  assert.equal(rows[0].cached_input_tokens, 22016);
+  assert.equal(rows[0].cache_creation_input_tokens, 0);
+  assert.equal(rows[0].output_tokens, 266);
+  assert.equal(rows[0].total_tokens, 36567);
+  assert.equal(rows[0].billable_total_tokens, 36567);
+});
+
+test("cache-inclusive input_tokens also contain cache-creation tokens", async (t) => {
+  const { rows } = await runOne(t, [inclusiveRec({
+    input_tokens: 10000, cache_read_input_tokens: 6000, cache_creation_input_tokens: 1500,
+    output_tokens: 300, context_usage_ratio: 0.025,
+  })]);
+  assert.equal(rows[0].input_tokens, 2500);
+  assert.equal(rows[0].cached_input_tokens, 6000);
+  assert.equal(rows[0].cache_creation_input_tokens, 1500);
+  assert.equal(rows[0].total_tokens, 10300);
+  assert.equal(rows[0].billable_total_tokens, 10300);
+});
+
+test("disjoint usage stays unchanged: no context_usage_ratio, or cache exceeding input", async (t) => {
+  const byok = qRec({
+    input_tokens: 1200, cache_read_input_tokens: 800, cache_creation_input_tokens: 100, output_tokens: 50,
+    service_tier: "standard",
+  }, { id: "byok" });
+  byok.message.model = "qoder-custom-e60342d2-d1f7-4203-8fe4-7d0d29bbfaee/glm-5.3-flash";
+  const { rows: byokRows } = await runOne(t, [byok]);
+  assert.equal(byokRows[0].input_tokens, 1200);
+  assert.equal(byokRows[0].cached_input_tokens, 800);
+  assert.equal(byokRows[0].cache_creation_input_tokens, 100);
+  assert.equal(byokRows[0].total_tokens, 2150);
+
+  const { rows: overRows } = await runOne(t, [inclusiveRec({
+    input_tokens: 500, cache_read_input_tokens: 9000, output_tokens: 20, context_usage_ratio: 0.00125,
+  })]);
+  assert.equal(overRows[0].input_tokens, 500);
+  assert.equal(overRows[0].cached_input_tokens, 9000);
+  assert.equal(overRows[0].total_tokens, 9520);
+});
+
+test("re-sync corrects buckets queued with double-counted cache-inclusive input", async (t) => {
+  const usage = {
+    input_tokens: 36301, cache_read_input_tokens: 22016, cache_creation_input_tokens: 0,
+    output_tokens: 266, context_usage_ratio: 0.0907525,
+  };
+  const { cursors, queuePath, sessionFile } = await runOne(t, [inclusiveRec(usage)]);
+  // Rewrite the cursor and hourly bucket into the state the previous release
+  // left behind: raw input kept as ordinary input on top of the cache reads.
+  const stale = (totals) => {
+    totals.input_tokens = 36301;
+    totals.total_tokens = 58583;
+    totals.billable_total_tokens = 58583;
+  };
+  for (const entry of Object.values(cursors.qoderNew.messages)) stale(entry.totals);
+  const bucketKeys = Object.keys(cursors.hourly.buckets);
+  assert.equal(bucketKeys.length, 1);
+  stale(cursors.hourly.buckets[bucketKeys[0]].totals);
+  cursors.hourly.buckets[bucketKeys[0]].queuedKey = null;
+
+  const second = await parseQoderNewIncremental({
+    sessionFiles: [sessionFile], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew",
+  });
+  assert.equal(second.bucketsQueued, 1);
+  const latest = queueRows(queuePath).filter((r) => r.source === "qoder").at(-1);
+  assert.equal(latest.input_tokens, 14285);
+  assert.equal(latest.cached_input_tokens, 22016);
+  assert.equal(latest.output_tokens, 266);
+  assert.equal(latest.total_tokens, 36567);
+  assert.equal(latest.billable_total_tokens, 36567);
+  assert.equal(latest.conversation_count, 1);
+});
+
 test("billable:false with real credits counts as activity, no tokens, no cost", async (t) => {
   const { res, rows } = await runOne(t, [
     qRec({ credits: 0.7290659749999999, original_credits: 0.7290659749999999, billable: false,
@@ -925,10 +1017,15 @@ test("real Qoder CN corpus: every credit-bearing row is admitted and carries no 
     if (!Number.isFinite(value) || value < 0) value = 0;
     return Math.trunc(value);
   };
-  const usageTokens = (usage) => fieldTokens(usage.input_tokens)
-    + fieldTokens(usage.output_tokens)
-    + fieldTokens(usage.cache_read_input_tokens ?? usage.cached_tokens)
-    + fieldTokens(usage.cache_creation_input_tokens);
+  const usageTokens = (usage) => {
+    const input = fieldTokens(usage.input_tokens);
+    const cache = fieldTokens(usage.cache_read_input_tokens ?? usage.cached_tokens)
+      + fieldTokens(usage.cache_creation_input_tokens);
+    // Cache-inclusive rows (context_usage_ratio present) already count cache
+    // inside input_tokens.
+    const inclusive = Number.isFinite(usage.context_usage_ratio) && cache <= input;
+    return (inclusive ? input : input + cache) + fieldTokens(usage.output_tokens);
+  };
   for (const file of files) {
     const isMainSession = !/[\\/]subagents[\\/]/.test(file);
     for (const line of fs.readFileSync(file, "utf8").split("\n")) {
