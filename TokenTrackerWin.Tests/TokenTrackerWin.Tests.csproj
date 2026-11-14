@@ -18,6 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="../TokenTrackerWin/SilentStart.cs" Link="SilentStart.cs" />
     <Compile Include="../TokenTrackerWin/ChildProcessProxy.cs" Link="ChildProcessProxy.cs" />
     <Compile Include="../TokenTrackerWin/LocalSyncPublisher.cs" Link="LocalSyncPublisher.cs" />
     <Compile Include="../TokenTrackerWin/ResumableDownloader.cs" Link="ResumableDownloader.cs" />

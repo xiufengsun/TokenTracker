@@ -22,7 +22,9 @@ struct TokenTrackerBarApp: App {
                         NSApp.activate(ignoringOtherApps: true)
                         NSApp.orderFrontStandardAboutPanel(nil)
                     }
-                    #if !TOKENTRACKER_NATIVE_QA
+                    // "Check for Updates" is unavailable in Debug (Dev variant)
+                    // builds — it would install the official app over the dev one.
+                    #if !TOKENTRACKER_NATIVE_QA && !DEBUG
                     Button(Strings.menuCheckForUpdates) {
                         UpdateChecker.shared.check(silent: false)
                     }
@@ -163,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // an SMAppService login launch should remain a quiet menu bar startup.
         // SMAppService spawns via launchd with no launch Apple Event at all, so
         // treating "currentAppleEvent == nil" as a normal open was the #989 bug.
+        // With Silent Start enabled, no launch shows the dashboard (spec §4).
         let launchEvent = NSAppleEventManager.shared().currentAppleEvent
         let launchedAsLoginItem = launchEvent?
             .attributeDescriptor(forKeyword: keyAELaunchedAsLogInItem) != nil
@@ -175,7 +178,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             loginItemRegistered = false
         }
-        if LoginLaunchPresentationPolicy.shouldOpenDashboardOnLaunch(
+        let silentStart = UserDefaults.standard.bool(forKey: StatusBarController.launchSilentlyKey)
+        if !silentStart && LoginLaunchPresentationPolicy.shouldOpenDashboardOnLaunch(
             launchAppleEventPresent: launchEvent != nil,
             launchedAsLoginItem: launchedAsLoginItem,
             loginItemRegistered: loginItemRegistered
@@ -193,7 +197,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             viewModel.startAutoRefresh()
 
+            // Unavailable in Debug (Dev variant / QA) builds. UpdateChecker's own
+            // path guard only skips non-/Applications roots, so a Dev copy living
+            // in /Applications or ~/Applications would still silently install the
+            // official release; hard-off like the other three update entry points
+            // (dev spec §4-6).
+            #if !DEBUG
             UpdateChecker.shared.check(silent: true)
+            #endif
         }
     }
 
