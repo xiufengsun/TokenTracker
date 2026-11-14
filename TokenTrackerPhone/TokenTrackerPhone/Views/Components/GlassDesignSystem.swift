@@ -121,7 +121,7 @@ struct SettingsIconLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 10) {
             configuration.icon
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .symbolRenderingMode(.monochrome)
                 .foregroundStyle(iconColor)
                 .imageScale(.small)
