@@ -22,6 +22,7 @@ export const LIMIT_PROVIDER_IDS = [
   "workbuddy",
   "workbuddyAi",
   "deepseek",
+  "muse",
 ];
 
 /** Keys for ProviderIcon — mono logos use inline SVG; colored logos use /brand-logos/. */
@@ -59,6 +60,8 @@ export const LIMIT_PROVIDER_ICON_KEYS = {
   // DeepSeek (platform.deepseek.com) — the whale mark under /brand-logos/,
   // already present for the service-status card.
   deepseek: "DEEPSEEK",
+  // Muse Code (Meta AI) — official gradient Meta infinity mark under /brand-logos/.
+  muse: "MUSE",
 };
 
 export function limitProviderIconKey(id) {
@@ -107,6 +110,8 @@ export function limitProviderName(id) {
       return copy("limits.provider.workbuddy_ai");
     case "deepseek":
       return copy("limits.provider.deepseek");
+    case "muse":
+      return copy("limits.provider.muse");
     default:
       return String(id || "");
   }

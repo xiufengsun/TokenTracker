@@ -152,6 +152,18 @@ interface UsageLimitsData {
     stale?: boolean;
     cached_at?: string | null;
   };
+  muse?: {
+    configured: boolean;
+    error?: string | null;
+    plan_label?: string | null;
+    auth_action_required?: string | null;
+    primary_window?: { used_percent: number; reset_at?: string | null; limit_window_seconds?: number | null } | null;
+    secondary_window?: { used_percent: number; reset_at?: string | null; limit_window_seconds?: number | null } | null;
+    cached?: boolean;
+    stale?: boolean;
+    cached_at?: string | null;
+    source?: string | null;
+  };
 }
 
 interface UsageLimitsInitialState {

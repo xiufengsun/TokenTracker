@@ -26,6 +26,7 @@ enum LimitResetProviderIconCatalog {
         return LimitsSettingsStore.iconNames[provider]
     }
 
+    /// Bundled brand-logo SVG filename for providers rendered from `Resources/brand-logos`, or `nil` for asset-catalog icons.
     static func svgFilename(for provider: String) -> String? {
         switch provider {
         case "cursor": return "cursor.svg"
@@ -42,6 +43,7 @@ enum LimitResetProviderIconCatalog {
         case "devin": return "devin.svg"
         case "workbuddy": return "codebuddy.svg"
         case "workbuddyAi": return "codebuddy.svg"
+        case "muse": return "muse.svg"
         default: return nil
         }
     }
@@ -303,6 +305,12 @@ extension UsageLimitsResponse {
             addGeneric("workbuddyAi", workbuddyAi.configured, workbuddyAi.error, [
                 ("primary", Strings.workbuddyPlanLabel, workbuddyAi.primaryWindow),
                 ("secondary", Strings.workbuddyAddonLabel, workbuddyAi.secondaryWindow),
+            ])
+        }
+        if let muse {
+            addGeneric("muse", muse.configured, muse.error, [
+                ("primary", "5h", muse.primaryWindow),
+                ("secondary", "Weekly", muse.secondaryWindow),
             ])
         }
 

@@ -850,5 +850,13 @@
   "settings.local_data.error.too_many_devices": "已達匯入資料上限，請先移除不再需要的來源。",
   "settings.local_data.error.unknown_device": "此匯入來源已不存在。",
   "settings.local_data.error.transfer_failed": "操作失敗，請檢查檔案與本機應用程式後重試。",
-  "settings.local_data.local_history_only": "離線快照不含工作階段記錄。內容分解需選擇「本機」查看；專案、工作階段和成效分析始終只包含本機記錄。"
+  "settings.local_data.local_history_only": "離線快照不含工作階段記錄。內容分解需選擇「本機」查看；專案、工作階段和成效分析始終只包含本機記錄。",
+  "limits.provider.muse": "Muse Code",
+  "limits.label.muse_5h": "5h",
+  "limits.label.muse_weekly": "每週",
+  "limits.muse.setupHint.title": "連接 Muse Code",
+  "limits.muse.setupHint.subtitle": "透過本機的官方 Muse CLI 讀取你的 Muse Code 訂閱額度。",
+  "limits.muse.setupHint.step1": "安裝 Muse Code 並執行下方命令登入，TokenTracker 自動沿用登入，無需重新啟動。",
+  "limits.muse.setupHint.note": "登入後點選上方「重新整理限額」按鈕即可。TokenTracker 透過本機 muse usage --json 讀取額度視窗。",
+  "limits.muse.setupHint.snippet_login": "muse login   # 登入 Muse Code"
 }

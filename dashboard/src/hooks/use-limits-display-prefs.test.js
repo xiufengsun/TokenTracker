@@ -159,6 +159,7 @@ describe("useLimitsDisplayPrefs", () => {
         "grok",
         "kimi",
         "kiro",
+        "muse",
         "opencodeGo",
         "qoder",
         "qoderCn",
