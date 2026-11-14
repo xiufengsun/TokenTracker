@@ -228,7 +228,8 @@ describe("SettingsPage category navigation", () => {
     expect(cloudButton).toHaveAttribute("aria-controls", "settings-panel-cloud");
     expect(cloudPanel).toHaveAttribute("aria-labelledby", "settings-nav-cloud");
     expect(cloudPanel).not.toHaveAttribute("hidden");
-    expect(container.firstChild).toHaveClass("tt-cloud-settings");
+    expect(cloudPanel).toHaveClass("tt-cloud-settings");
+    expect(container.firstChild).not.toHaveClass("tt-cloud-settings");
     expect(screen.queryByText("Cloud membership, billing and sync")).not.toBeInTheDocument();
     expect(accountPanel).toHaveAttribute("hidden");
     expect(cloudButton.closest("nav").textContent).toContain("Personal");
@@ -240,7 +241,8 @@ describe("SettingsPage category navigation", () => {
     expect(container.firstChild).not.toHaveClass("tt-cloud-settings");
     await act(async () => { await userEvent.click(cloudButton); });
     expect(cloudButton).toHaveFocus();
-    expect(container.firstChild).toHaveClass("tt-cloud-settings");
+    expect(cloudPanel).toHaveClass("tt-cloud-settings");
+    expect(container.firstChild).not.toHaveClass("tt-cloud-settings");
     expect(screen.getByTestId("location")).toHaveTextContent("/settings?section=cloud&source=trial");
     expect(screen.getByTestId("account-content")).toBeInTheDocument();
     expect(screen.getByTestId("cloud-content")).toBeInTheDocument();
