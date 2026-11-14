@@ -158,7 +158,8 @@ describe("ActivityHeatmap reset tabs", () => {
       renderHeatmap();
       fireEvent.click(screen.getByRole("tab", { name: copy("heatmap.view.codex") }));
       await waitFor(() => expect(cell("2026-11-01").className).toContain("bg-amber-500"));
-      expect(fetchMock.mock.calls[0][1].signal).toBeUndefined();
+      expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+      expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(false);
     } finally {
       AbortSignal.timeout = original;
     }

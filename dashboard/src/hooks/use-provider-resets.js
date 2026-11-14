@@ -12,13 +12,18 @@ function loadResets() {
   if (cache && Date.now() - cache.fetchedAtMs < CACHE_TTL_MS) return Promise.resolve(cache.data);
   if (!inflight) {
     // AbortSignal.timeout is missing on Safari < 16 (macOS 12 WebViews).
-    const signal = typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(REQUEST_TIMEOUT_MS) : undefined;
+    const controller = typeof AbortSignal.timeout === "function" ? null : new AbortController();
+    const signal = controller ? controller.signal : AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const timeoutId = controller
+      ? setTimeout(() => controller.abort(new DOMException("Request timed out", "TimeoutError")), REQUEST_TIMEOUT_MS)
+      : null;
     inflight = fetchProviderResets({ signal })
       .then((data) => {
         cache = { data, fetchedAtMs: Date.now() };
         return data;
       })
       .finally(() => {
+        if (timeoutId !== null) clearTimeout(timeoutId);
         inflight = null;
       });
   }
