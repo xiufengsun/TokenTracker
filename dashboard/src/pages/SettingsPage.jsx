@@ -1,7 +1,8 @@
 import React from "react";
-import { Cloud, FlaskConical, Gauge, Globe, Monitor, Palette, Settings, UserRound } from "lucide-react";
+import { Cloud, FlaskConical, Gauge, Globe, Info, Monitor, Palette, Settings, UserRound } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { LimitsSettingsPanel } from "../components/LimitsSettingsPanel.jsx";
+import { AboutSection } from "../components/settings/AboutSection.jsx";
 import { AccountSection } from "../components/settings/AccountSection.jsx";
 import { CloudSection } from "../components/settings/CloudSection.jsx";
 import { useAccountProfileSettings } from "../components/settings/useAccountProfileSettings.js";
@@ -30,6 +31,7 @@ const SETTINGS_SECTION_IDS = {
   NATIVE_APP: "native-app",
   NETWORK: "network",
   LOCAL_DATA: "local-data",
+  ABOUT: "about",
   ACCOUNT: "account",
   CLOUD: "cloud",
   LIMITS: "limits",
@@ -214,6 +216,14 @@ export function SettingsPage() {
       Icon: Monitor,
       content: <LocalDataSection active={activeSection === SETTINGS_SECTION_IDS.LOCAL_DATA} />,
     }] : []),
+    {
+      id: SETTINGS_SECTION_IDS.ABOUT,
+      label: copy("settings.section.about"),
+      description: copy("settings.section.about.description"),
+      group: SETTINGS_GROUP_IDS.APP,
+      Icon: Info,
+      content: <AboutSection active={activeSection === SETTINGS_SECTION_IDS.ABOUT} />,
+    },
     {
       id: SETTINGS_SECTION_IDS.LABS,
       label: copy("settings.section.labs"),
