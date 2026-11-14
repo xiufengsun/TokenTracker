@@ -41,8 +41,10 @@ struct SettingsView: View {
             .scrollEdgeEffectStyle(.hard, for: .bottom)
             .scenarioScrollAnchor(proxy)
             }
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.large)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                ScreenHeader(title: "Settings")
+            }
+            .hiddenSystemNavigationTitle("Settings")
             .task {
                 await workspace.loadPublicProfileIfNeeded()
             }

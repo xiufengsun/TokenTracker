@@ -71,17 +71,15 @@ struct PulseView: View {
                 .scenarioScrollAnchor(proxy)
                 }
             }
-            .navigationTitle("Pulse")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    deviceScopeMenu
-                }
-                ToolbarSpacer(.fixed, placement: .topBarTrailing)
-                ToolbarItem(placement: .topBarTrailing) {
-                    shareButton
+            .safeAreaInset(edge: .top, spacing: 0) {
+                ScreenHeader(title: "Pulse") {
+                    HStack(spacing: 10) {
+                        deviceScopeMenu
+                        shareButton
+                    }
                 }
             }
+            .hiddenSystemNavigationTitle("Pulse")
             .sheet(item: $selectedProvider) { provider in
                 ProviderDetailSheet(provider: provider, horizonTitle: workspace.horizon.fullTitle)
             }
@@ -129,6 +127,8 @@ struct PulseView: View {
                 Label("Share", systemImage: "square.and.arrow.up")
             }
         }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.glass)
         .disabled(shareableSnapshot == nil || preparingShare)
         .accessibilityIdentifier("pulse.share")
     }
@@ -208,6 +208,7 @@ struct PulseView: View {
             }
             .accessibilityIdentifier("pulse.deviceMenu")
         }
+        .buttonStyle(.glass)
     }
 
     // MARK: - 1. Spend & Token Ledger
@@ -857,13 +858,7 @@ private struct HeatmapSurfaceCard: View {
     }
 
     private func levelColor(_ level: Int) -> Color {
-        switch min(max(level, 0), 4) {
-        case 0: return Color.primary.opacity(0.06)
-        case 1: return Color.primary.opacity(0.22)
-        case 2: return Color.primary.opacity(0.42)
-        case 3: return Color.primary.opacity(0.66)
-        default: return Color.primary.opacity(0.92)
-        }
+        Palette.heatmapLevel(level)
     }
 
     var body: some View {

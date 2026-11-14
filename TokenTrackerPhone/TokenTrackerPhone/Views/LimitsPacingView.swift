@@ -45,18 +45,19 @@ struct LimitsPacingView: View {
                 .scenarioScrollAnchor(proxy)
                 }
             }
-            .navigationTitle("Pacing & Limits")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+            .safeAreaInset(edge: .top, spacing: 0) {
+                ScreenHeader(title: "Pacing & Limits") {
                     Button {
                         showAccountTargetSheet = true
                     } label: {
                         Label("Spend Targets", systemImage: "target")
                     }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.glass)
                     .accessibilityIdentifier("limits.editTargets")
                 }
             }
+            .hiddenSystemNavigationTitle("Pacing & Limits")
             .sheet(isPresented: $showAccountTargetSheet) {
                 AccountSpendTargetsSheet()
             }

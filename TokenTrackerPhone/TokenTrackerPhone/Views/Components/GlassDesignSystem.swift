@@ -1,11 +1,13 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Monochrome Palette
 
-/// Token Tracker on iPhone is black and white. Ink is the system label color,
-/// so it flips with Light / Dark Mode. Color appears only when it means
-/// something: orange when a target is close, red when it is reached or an
-/// action failed.
+/// Token Tracker on iPhone is black and white for chrome and typography.
+/// Ink is the system label color, so it flips with Light / Dark Mode.
+/// Color appears when it means something: the Activity heatmap uses the
+/// same emerald steps as the desktop dashboard, orange when a target is
+/// close, and red when it is reached or an action failed.
 enum Palette {
     static let ink = Color.primary
     static let warning = Color.orange
@@ -18,10 +20,28 @@ enum Palette {
         return ink
     }
 
-    /// Grayscale steps for stacked data (token composition, heatmap levels).
+    /// Grayscale steps for stacked data (token composition, share-neutral bars).
     static func step(_ index: Int) -> Color {
         let opacities: [Double] = [0.88, 0.58, 0.34, 0.18]
         return ink.opacity(opacities[min(max(index, 0), opacities.count - 1)])
+    }
+
+    /// Pulse Activity heatmap — same emerald ramps as dashboard
+    /// `ActivityHeatmap.jsx` (`HEATMAP_COLORS_LIGHT` / `HEATMAP_COLORS_DARK`).
+    /// Share-card heatmaps keep their own Neon and Broadsheet palettes.
+    static func heatmapLevel(_ level: Int) -> Color {
+        let index = min(max(level, 0), 4)
+        let light: [UInt32] = [0xEBEDF0, 0xA7F3D0, 0x6EE7B7, 0x34D399, 0x10B981]
+        let dark: [UInt32] = [0x121212, 0x065F46, 0x059669, 0x10B981, 0x34D399]
+        return Color(uiColor: UIColor { traits in
+            let hex = traits.userInterfaceStyle == .dark ? dark[index] : light[index]
+            return UIColor(
+                red: CGFloat((hex >> 16) & 0xFF) / 255,
+                green: CGFloat((hex >> 8) & 0xFF) / 255,
+                blue: CGFloat(hex & 0xFF) / 255,
+                alpha: 1
+            )
+        })
     }
 }
 
@@ -30,6 +50,62 @@ struct AppBackground: View {
     var body: some View {
         Color(.systemGroupedBackground)
             .ignoresSafeArea()
+    }
+}
+
+
+// MARK: - Screen header (title and actions on one row)
+
+/// Tab-root header. The system large title sits on a second row below
+/// toolbar buttons, and a leading `ToolbarItem` is clipped into a compact
+/// glass chip, so the title and actions live in this row instead.
+struct ScreenHeader<Actions: View>: View {
+    let title: String
+    @ViewBuilder var actions: Actions
+
+    init(title: String, @ViewBuilder actions: () -> Actions) {
+        self.title = title
+        self.actions = actions()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(title)
+                .font(.title.weight(.bold))
+                .foregroundStyle(.primary)
+                .minimumScaleFactor(0.75)
+                .lineLimit(1)
+                .layoutPriority(1)
+                .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 8)
+            actions
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 4)
+        .padding(.bottom, 10)
+        .background {
+            Color(.systemGroupedBackground)
+                .ignoresSafeArea(edges: .top)
+        }
+    }
+}
+
+extension ScreenHeader where Actions == EmptyView {
+    init(title: String) {
+        self.title = title
+        self.actions = EmptyView()
+    }
+}
+
+extension View {
+    /// Keep a navigation title for accessibility, but hide the system bar
+    /// so `ScreenHeader` can own the top row.
+    func hiddenSystemNavigationTitle(_ title: String) -> some View {
+        self
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
     }
 }
 
