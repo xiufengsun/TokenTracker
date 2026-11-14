@@ -158,6 +158,7 @@ struct SettingsView: View {
         return Section {
             HStack {
                 Label("Status", systemImage: "icloud")
+                    .settingsRowLabel()
                 Spacer()
                 Text(membership?.displayStatusTitle ?? "Cloud Connected")
                     .font(.subheadline.weight(.medium))
@@ -182,6 +183,7 @@ struct SettingsView: View {
 
             Button(action: onPairCLI) {
                 Label("Approve CLI Code", systemImage: "terminal")
+                    .settingsRowLabel()
             }
             .accessibilityIdentifier("settings.pairCLI")
         } header: {
@@ -252,9 +254,9 @@ struct SettingsView: View {
     private func machineRow(_ machine: CloudMachineItem, renameTarget: AccountDeviceRow?) -> some View {
         HStack(spacing: 12) {
             Image(systemName: machine.platformSymbol)
-                .font(.body.weight(.medium))
-                .foregroundStyle(machine.isPaused ? Color.secondary : Color.primary)
-                .frame(width: 26)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.secondary)
+                .frame(width: 18, height: 18)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(machine.displayName)
@@ -324,15 +326,18 @@ struct SettingsView: View {
         Section {
             Toggle(isOn: $prefs.discreteAmounts) {
                 Label("Mask Cost Figures", systemImage: "eye.slash")
+                    .settingsRowLabel()
             }
             .id("privacy")
 
             Toggle(isOn: $prefs.hideSwitcherSnapshot) {
                 Label("Blur in App Switcher", systemImage: "rectangle.portrait.slash")
+                    .settingsRowLabel()
             }
 
             Toggle(isOn: $prefs.requireBiometricUnlock) {
                 Label("Require Face ID / Passcode", systemImage: "faceid")
+                    .settingsRowLabel()
             }
 
             if let profile = workspace.publicProfile {
@@ -341,7 +346,7 @@ struct SettingsView: View {
                 } label: {
                     HStack {
                         Label("Leaderboard Profile", systemImage: "trophy")
-                            .foregroundStyle(.primary)
+                            .settingsRowLabel()
                         Spacer()
                         Text(profile.enabled ? (profile.anonymous ? "Anonymous" : "Public") : "Private")
                             .font(.subheadline)
@@ -369,6 +374,7 @@ struct SettingsView: View {
                 }
             } label: {
                 Label("Appearance", systemImage: "circle.lefthalf.filled")
+                    .settingsRowLabel()
             }
 
             Picker(selection: $prefs.currency) {
@@ -377,6 +383,7 @@ struct SettingsView: View {
                 }
             } label: {
                 Label("Currency", systemImage: "dollarsign.circle")
+                    .settingsRowLabel()
             }
 
             Picker(selection: $prefs.tokenNumberFormat) {
@@ -385,6 +392,7 @@ struct SettingsView: View {
                 }
             } label: {
                 Label("Token Numbers", systemImage: "number")
+                    .settingsRowLabel()
             }
 
             if prefs.tokenNumberFormat == .compact {
@@ -394,6 +402,7 @@ struct SettingsView: View {
                     }
                 } label: {
                     Label("Compact Units", systemImage: "scalemass")
+                        .settingsRowLabel()
                 }
             }
 
@@ -403,6 +412,7 @@ struct SettingsView: View {
                 }
             } label: {
                 Label("Target Bars", systemImage: "chart.bar.xaxis")
+                    .settingsRowLabel()
             }
         } header: {
             Text("Appearance & Units")
@@ -423,6 +433,7 @@ struct SettingsView: View {
                 }
             } label: {
                 Label("Auto-Refresh", systemImage: "arrow.triangle.2.circlepath")
+                    .settingsRowLabel()
             }
 
             Button {
@@ -436,6 +447,7 @@ struct SettingsView: View {
             } label: {
                 HStack {
                     Label("Refresh Now", systemImage: "arrow.clockwise")
+                        .settingsRowLabel()
                     Spacer()
                     if workspace.isRefreshing {
                         ProgressView()
@@ -461,6 +473,7 @@ struct SettingsView: View {
                 openURL(CloudConfig.privacyPolicyURL)
             } label: {
                 Label("Privacy Policy", systemImage: "hand.raised")
+                    .settingsRowLabel()
             }
 
             Button {
@@ -469,8 +482,9 @@ struct SettingsView: View {
                 Label {
                     Text("Source Code")
                 } icon: {
-                    BrandProviderIcon(provider: "github", size: 20)
+                    BrandProviderIcon(provider: "github", size: 15)
                 }
+                .settingsRowLabel()
             }
         }
     }
@@ -485,6 +499,7 @@ struct SettingsView: View {
                 HStack {
                     Spacer()
                     Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                        .settingsRowLabel(iconColor: Palette.critical, titleColor: Palette.critical)
                         .fontWeight(.semibold)
                     Spacer()
                 }

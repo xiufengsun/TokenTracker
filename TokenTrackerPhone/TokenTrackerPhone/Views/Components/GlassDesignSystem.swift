@@ -109,6 +109,35 @@ extension View {
     }
 }
 
+
+// MARK: - Settings row icons
+
+/// Compact icons for Settings list rows. The system List `Label` style
+/// inflates SF Symbols to a large chip; that looks coarse next to the text.
+struct SettingsIconLabelStyle: LabelStyle {
+    var iconColor: Color = Color.secondary
+    var titleColor: Color? = nil
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 10) {
+            configuration.icon
+                .font(.system(size: 15, weight: .semibold))
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(iconColor)
+                .imageScale(.small)
+                .frame(width: 18, height: 18, alignment: .center)
+            configuration.title
+                .foregroundStyle(titleColor ?? Color.primary)
+        }
+    }
+}
+
+extension View {
+    func settingsRowLabel(iconColor: Color = Color.secondary, titleColor: Color? = nil) -> some View {
+        self.labelStyle(SettingsIconLabelStyle(iconColor: iconColor, titleColor: titleColor))
+    }
+}
+
 // MARK: - Product Mark
 
 /// The real Token Tracker mark (black rounded square, white bolt), shipped as
