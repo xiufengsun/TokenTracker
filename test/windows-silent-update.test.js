@@ -42,7 +42,10 @@ test("silent Windows upgrade work does not resume on the WinForms synchronizatio
 
 test("the Windows installer force-closes a crashed host during upgrade", () => {
   const iss = read("TokenTrackerWin", "installer", "TokenTracker.iss");
-  assert.match(iss, /^\s*CloseApplications=yes\s*$/m);
-  assert.match(iss, /^\s*ForceCloseApplications=yes\s*$/m);
+  // Inno Setup accepts CloseApplications=force|yes|no. ForceCloseApplications
+  // is only a command-line switch (/FORCECLOSEAPPLICATIONS), not a [Setup]
+  // directive; CI's ISCC 6.7.1 rejects the latter.
+  assert.match(iss, /^\s*CloseApplications=force\s*$/m);
+  assert.doesNotMatch(iss, /^\s*ForceCloseApplications\s*=/m);
   assert.match(iss, /^\s*RestartApplications=no\s*$/m);
 });

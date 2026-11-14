@@ -350,10 +350,10 @@ internal sealed class UpdateChecker
     /// <summary>
     /// Run the installer fully silently and restart this exe once it finishes. The
     /// <c>cmd</c> we spawn is detached from this process (and from the server's job
-    /// object), so it survives the tray quitting; the installer's <c>CloseApplications</c>
-    /// / <c>ForceCloseApplications</c> are the backstop for any instance still holding a
-    /// file lock. We restart via the current exe path so an in-place upgrade relaunches
-    /// the same install location.
+    /// object), so it survives the tray quitting; the installer's
+    /// <c>CloseApplications=force</c> and this command's <c>/FORCECLOSEAPPLICATIONS</c>
+    /// are the backstop for any instance still holding a file lock. We restart via
+    /// the current exe path so an in-place upgrade relaunches the same install location.
     /// </summary>
     private static void LaunchSilentInstaller(string setupPath)
     {

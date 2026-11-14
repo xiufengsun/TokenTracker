@@ -47,12 +47,14 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 ; Close a running tray instance (and its EmbeddedServer\node.exe child, which
-; holds a file lock) before overwriting its files on upgrade. Force-close is
-; the backstop when the old host crashed mid-update and left node.exe holding
-; files (#1115). We drive the relaunch ourselves after a silent update, so
-; don't let Restart Manager do it.
-CloseApplications=yes
-ForceCloseApplications=yes
+; holds a file lock) before overwriting its files on upgrade. CloseApplications
+; must be the official yes/force/no value — there is no ForceCloseApplications
+; [Setup] directive, and Inno 6.7.1 rejects it (CI "Compile Windows review
+; installer"). force is the backstop when the old host crashed mid-update and
+; left node.exe holding files (#1115). Silent upgrades also pass
+; /FORCECLOSEAPPLICATIONS on the command line. We drive the relaunch ourselves
+; after a silent update, so don't let Restart Manager do it.
+CloseApplications=force
 RestartApplications=no
 
 ; A language picker appears at setup start (Inno shows it automatically when more
