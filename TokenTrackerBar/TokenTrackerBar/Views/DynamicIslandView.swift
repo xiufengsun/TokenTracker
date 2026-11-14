@@ -1,11 +1,34 @@
 import SwiftUI
 
+/// NotchNook-calibrated spring curves for the Dynamic Island's two-stage
+/// hover-peek, tactile press tuck, click-to-expand, and critically damped
+/// collapse transitions.
+enum DynamicIslandSpring {
+    /// Primary morphing spring (hover peek, click-expand, closed hover-out).
+    static let primaryMorph: Animation = .spring(response: 0.5, dampingFraction: 0.85, blendDuration: 0)
+    /// Tactile press spring (`isPressing` 50% inward tuck and release).
+    static let tactilePress: Animation = .spring(response: 0.5, dampingFraction: 0.55, blendDuration: 0)
+    /// Expanded -> closed collapse spring (critically damped, zero top-bezel overshoot).
+    static let collapse: Animation = .spring(response: 0.4, dampingFraction: 1.0, blendDuration: 0)
+
+    /// Applies `updates` inside `spring`, or without animation when Reduce Motion is enabled.
+    @MainActor
+    static func perform(_ spring: Animation, updates: () -> Void) {
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            updates()
+        } else {
+            withAnimation(spring, updates)
+        }
+    }
+}
+
 /// SwiftUI content of the Dynamic Island panel.
 ///
 /// Collapsed: a notch-hugging black bar — today's tokens on the left wing,
 /// today's cost on the right wing, the center occluded by the hardware notch.
-/// Hover: expands into a spend summary (today / 7d / 30d / total) plus the
-/// usage-limits bars, all fed by the shared `DashboardViewModel`.
+/// Hovering peeks the silhouette outward (or expands immediately when opted
+/// in), and clicking expands into a spend summary (today / 7d / 30d / total)
+/// plus the usage-limits bars, all fed by the shared `DashboardViewModel`.
 ///
 /// The panel window is always the expanded size; only this black shape
 /// animates. Growing from a top-aligned outer frame (instead of resizing the
@@ -70,13 +93,35 @@ struct DynamicIslandView: View {
         }
     }
 
+    /// Renders the black island silhouette, border stroke, reveal mask, and drop shadow.
     private var island: some View {
         let geo = state.geometry
         let expanded = state.isExpanded
-        let islandWidth = expanded
-            ? max(DynamicIslandGeometry.expandedWidth, geo.collapsedWidth)
-            : geo.collapsedWidth
-        let shoulderRadius = expanded ? CGFloat(8) : min(6, geo.collapsedHeight / 4)
+        let peeking = (state.isHovered || state.isPressing) && !expanded
+        let isShadowed = peeking || expanded
+        let islandWidth = DynamicIslandLayoutPolicy.visualWidth(
+            collapsedWidth: geo.collapsedWidth,
+            isExpanded: expanded,
+            isHovered: state.isHovered,
+            isPressing: state.isPressing
+        )
+        let collapsedFrameHeight = DynamicIslandLayoutPolicy.visualCollapsedHeight(
+            collapsedHeight: geo.collapsedHeight,
+            isHovered: state.isHovered,
+            isPressing: state.isPressing
+        )
+        let shoulderRadius = DynamicIslandLayoutPolicy.topShoulderRadius(
+            collapsedHeight: geo.collapsedHeight,
+            isExpanded: expanded,
+            isHovered: state.isHovered,
+            isPressing: state.isPressing
+        )
+        let bottomRadius = DynamicIslandLayoutPolicy.bottomCornerRadius(
+            collapsedHeight: geo.collapsedHeight,
+            isExpanded: expanded,
+            isHovered: state.isHovered,
+            isPressing: state.isPressing
+        )
         let renderedWidth = islandWidth + shoulderRadius * 2
         let revealWidth = DynamicIslandVisibilityPolicy.revealWidth(
             progress: state.visibilityProgress,
@@ -87,7 +132,7 @@ struct DynamicIslandView: View {
         )
         let shape = IslandRoundedRectangle(
             topShoulderRadius: shoulderRadius,
-            bottomRadius: expanded ? 22 : min(12, geo.collapsedHeight / 2.5)
+            bottomRadius: bottomRadius
         )
 
         return VStack(spacing: 0) {
@@ -102,37 +147,31 @@ struct DynamicIslandView: View {
             }
         }
         // Width is always explicit. Height: nil when expanded lets the VStack
-        // size naturally to its content; explicit when collapsed.
-        .frame(width: islandWidth, height: expanded ? nil : geo.collapsedHeight, alignment: .top)
+        // size naturally to its content; explicit when collapsed or peeking.
+        .frame(width: islandWidth, height: expanded ? nil : collapsedFrameHeight, alignment: .top)
         // The native notch shoulder flares outward at the screen edge, then
         // curves inward to the content body. Keep that flare outside the
         // content width so it never squeezes either metric wing.
         .padding(.horizontal, shoulderRadius)
         .fixedSize(horizontal: false, vertical: expanded)
         .clipShape(shape)
-        .background(
-            shape.fill(Color.black)
-                .shadow(color: .black.opacity(expanded ? 0.25 : 0), radius: expanded ? 10 : 0, x: 0, y: expanded ? 5 : 0)
-                .shadow(color: .black.opacity(expanded ? 0.15 : 0), radius: expanded ? 3 : 0, x: 0, y: expanded ? 1 : 0)
-        )
+        .background(shape.fill(Color.black))
         .overlay(
-            Group {
-                if expanded {
-                    shape
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.18),
-                                    Color.white.opacity(0.05),
-                                    Color.white.opacity(0.08)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 0.5
-                        )
-                }
-            }
+            shape
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.18),
+                            Color.white.opacity(0.05),
+                            Color.white.opacity(0.08)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.5
+                )
+                .opacity(expanded ? 1 : (peeking ? 0.75 : 0))
+                .allowsHitTesting(false)
         )
         // Report the rendered island height back to the controller for
         // hit-test sizing. This runs AFTER layout so it reads the actual
@@ -150,6 +189,14 @@ struct DynamicIslandView: View {
             Rectangle()
                 .frame(width: revealWidth)
         }
+        // Apply drop shadow AFTER `.mask` so the mask's layout-bounds raster
+        // never clips the outer shadow blur to alpha = 0.
+        .shadow(
+            color: .black.opacity(isShadowed ? 0.75 : 0),
+            radius: isShadowed ? 20 : 0,
+            x: 0,
+            y: isShadowed ? 8 : 0
+        )
         // Top-align inside the always-expanded panel so height/width springs
         // grow downward / outward instead of from the view's center (which
         // would pull the top edge away from the screen and flash wallpaper).
@@ -164,6 +211,17 @@ struct DynamicIslandView: View {
     private var collapsedRow: some View {
         let geo = state.geometry
         let metrics = wingMetrics
+        let collapsedWidth = DynamicIslandLayoutPolicy.visualCollapsedWidth(
+            collapsedWidth: geo.collapsedWidth,
+            isHovered: state.isHovered,
+            isPressing: state.isPressing
+        )
+        let collapsedHeight = DynamicIslandLayoutPolicy.visualCollapsedHeight(
+            collapsedHeight: geo.collapsedHeight,
+            isHovered: state.isHovered,
+            isPressing: state.isPressing
+        )
+        let wingExpansion = max(0, (collapsedWidth - geo.collapsedWidth) / 2)
         return HStack(spacing: 0) {
             Group {
                 if compactModeEnabled {
@@ -172,13 +230,13 @@ struct DynamicIslandView: View {
                     buildWingView(for: metrics.left)
                 }
             }
-            .frame(width: geo.wingWidth)
+            .frame(width: geo.wingWidth + wingExpansion)
             Spacer()
                 .frame(width: geo.centerGapWidth)
             buildWingView(for: metrics.right, suppressValue: compactModeEnabled)
-                .frame(width: geo.wingWidth)
+                .frame(width: geo.wingWidth + wingExpansion)
         }
-        .frame(height: geo.collapsedHeight)
+        .frame(height: collapsedHeight)
         // Invisible natural-size copies of both wings: their measured max
         // drives the shared wing width, keeping the island tight + symmetric.
         .background(

@@ -643,5 +643,8 @@
   "cloud.free.device_scope": "현재 기기의 사용량만 집계",
   "cloud.plan.includes_local": "무료 로컬 기능 모두 포함",
   "cloud.plan.device_sync": "기기 수 제한 없이 사용량 통합·동기화",
-  "cloud.plan.device_fair_use": "일상적인 개인 사용은 기기 수 제한이나 기기별 추가 요금이 없습니다. 대량 또는 비정상적인 기기 연결에는 동기화 보호가 적용될 수 있습니다."
+  "cloud.plan.device_fair_use": "일상적인 개인 사용은 기기 수 제한이나 기기별 추가 요금이 없습니다. 대량 또는 비정상적인 기기 연결에는 동기화 보호가 적용될 수 있습니다.",
+  "settings.labs.island_expand_on_hover.label": "마우스 오버 시 바로 펼치기",
+  "settings.labs.island_expand_on_hover.hint": "마우스를 올리면 다이나믹 아일랜드 전체 패널을 즉시 펼칩니다. 끄면 마우스 오버 시 가장자리만 살짝 열리고 클릭해야 펼쳐져 오작동을 방지합니다.",
+  "settings.labs.island_expand_on_hover.aria": "다이나믹 아일랜드 마우스 오버 시 바로 펼치기 전환"
 }

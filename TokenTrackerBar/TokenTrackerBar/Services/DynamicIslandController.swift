@@ -88,6 +88,11 @@ struct DynamicIslandGeometry: Equatable {
 @MainActor
 final class DynamicIslandState: ObservableObject {
     @Published var isExpanded = false
+    /// True while the pointer is hovering the collapsed or expanded island.
+    @Published var isHovered = false
+    /// True while `mouseDown` is actively held inside the collapsed island,
+    /// driving the 50% inward tactile press tuck before `mouseUp` expands.
+    @Published var isPressing = false
     /// 0 = hidden, 1 = fully revealed through a centered mask.
     @Published var visibilityProgress: CGFloat = 0
     /// Selects the center-point endpoint while closing.
@@ -115,15 +120,12 @@ final class DynamicIslandState: ObservableObject {
 /// Notch-hugging "Dynamic Island" (boring.notch-style): a transparent,
 /// always-on-top, non-activating panel pinned to the top-center of the screen.
 /// Collapsed it shows today's tokens (left wing) and today's cost (right wing)
-/// around the hardware notch; hovering expands it into a spend + limits detail
-/// card. Shares the app's single `DashboardViewModel` — no independent polling.
+/// around the hardware notch; hovering peeks the silhouette (or expands
+/// immediately when opted in) and clicking opens a spend + limits detail card.
+/// Shares the app's single `DashboardViewModel` — no independent polling.
 @MainActor
 final class DynamicIslandController: NSObject {
     static let enabledDefaultsKey = "DynamicIslandEnabled"
-
-    /// Delay before collapsing after the pointer leaves, so grazing the island
-    /// edge doesn't flap it shut.
-    private static let collapseDelay: TimeInterval = 0.25
 
     private let viewModel: DashboardViewModel
     private let state = DynamicIslandState()
@@ -223,8 +225,19 @@ final class DynamicIslandController: NSObject {
         }
     }
 
+    /// Whether the Dynamic Island feature is enabled in `UserDefaults`.
     var isEnabled: Bool {
         UserDefaults.standard.bool(forKey: Self.enabledDefaultsKey)
+    }
+
+    /// Whether the Dynamic Island detail card is currently open.
+    var isExpanded: Bool {
+        state.isExpanded
+    }
+
+    /// Whether hovering the collapsed island opens the full card immediately.
+    private var isExpandOnHoverEnabled: Bool {
+        DynamicIslandInteractionPolicy.isExpandOnHoverEnabled()
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -250,6 +263,7 @@ final class DynamicIslandController: NSObject {
         }
     }
 
+    /// Creates or orders front the island panel and animates its centered reveal mask.
     func show() {
         guard shouldShowPanel else { return }
         let panel = panel ?? makePanel()
@@ -260,6 +274,8 @@ final class DynamicIslandController: NSObject {
         // Always reveal from the compact, non-interactive state.
         state.isVisibilityDismissing = false
         state.isExpanded = false
+        state.isHovered = false
+        state.isPressing = false
         state.isPanelVisible = true
         acceptsIslandInteraction = false
         repositionPanel()
@@ -301,6 +317,7 @@ final class DynamicIslandController: NSObject {
         }
     }
 
+    /// Clears interaction state, animates the centered dismissal mask, and orders out the panel.
     func hide() {
         collapseWorkItem?.cancel()
         collapseWorkItem = nil
@@ -311,6 +328,8 @@ final class DynamicIslandController: NSObject {
 
         guard let panel, state.isPanelVisible, panel.isVisible else {
             state.isExpanded = false
+            state.isHovered = false
+            state.isPressing = false
             state.visibilityProgress = 0
             state.isPanelVisible = false
             panel?.orderOut(nil)
@@ -319,6 +338,8 @@ final class DynamicIslandController: NSObject {
 
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             state.isExpanded = false
+            state.isHovered = false
+            state.isPressing = false
             state.visibilityProgress = 0
             state.isPanelVisible = false
             panel.orderOut(nil)
@@ -327,6 +348,8 @@ final class DynamicIslandController: NSObject {
 
         withAnimation(.timingCurve(0.4, 0, 0.2, 1, duration: DynamicIslandVisibilityPolicy.hideDuration)) {
             state.isExpanded = false
+            state.isHovered = false
+            state.isPressing = false
             state.visibilityProgress = 0
         }
         scheduleVisibilityCompletion(
@@ -359,28 +382,128 @@ final class DynamicIslandController: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
-    // MARK: - Hover-driven expand / collapse
+    // MARK: - Hover peek, tactile press & click-to-expand
 
+    /// Routes tracking-area hover enter/exit events to peek, expand, or delayed collapse.
     fileprivate func handleHover(_ hovering: Bool) {
         if hovering {
-            // Tracking areas are rebuilt as the island expands/collapses.
+            // Tracking areas are rebuilt as the island peeks/expands/collapses.
             // Ignore a stale enter from the previous area unless the pointer
             // is physically inside the CURRENT AppKit hit rect.
-            guard DynamicIslandInteractionPolicy.shouldExpand(
+            let action = DynamicIslandInteractionPolicy.hoverAction(
                 hovering: true,
-                pointerInsideInteractiveRegion: isPointerOverIsland()
-            ) else { return }
+                pointerInsideInteractiveRegion: isPointerOverIsland(),
+                isExpanded: state.isExpanded,
+                expandOnHover: isExpandOnHoverEnabled
+            )
+            guard action != .none else { return }
             collapseWorkItem?.cancel()
             collapseWorkItem = nil
-            expand()
+
+            if DynamicIslandInteractionPolicy.shouldPerformHoverHaptic(
+                wasHovered: state.isHovered,
+                isHovered: true,
+                isExpanded: state.isExpanded
+            ) {
+                NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+            }
+
+            switch action {
+            case .none:
+                break
+            case .peek:
+                DynamicIslandSpring.perform(DynamicIslandSpring.primaryMorph) {
+                    state.isHovered = true
+                }
+                panel?.updateHitRegion()
+            case .expand:
+                expand()
+            }
         } else {
             collapseWorkItem?.cancel()
             collapseWorkItem = nil
             // A menu is tracking — keep the island open; endMenuHold decides.
             guard menuHoldCount == 0 else { return }
+            if state.isPressing {
+                DynamicIslandSpring.perform(DynamicIslandSpring.tactilePress) {
+                    state.isPressing = false
+                }
+                panel?.updateHitRegion()
+            }
+            let delay = DynamicIslandInteractionPolicy.collapseDelay(isExpanded: state.isExpanded)
             let item = DispatchWorkItem { [weak self] in self?.collapse() }
             collapseWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.collapseDelay, execute: item)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+        }
+    }
+
+    /// Starts tactile press tracking when `mouseDown` lands inside the
+    /// collapsed/peeked island.
+    fileprivate func handleMouseDown(at localPoint: NSPoint) -> Bool {
+        guard DynamicIslandInteractionPolicy.shouldExpandOnClick(
+            acceptsInteraction: acceptsIslandInteraction,
+            isExpanded: state.isExpanded
+        ), hitRectInPanel().contains(localPoint) else {
+            return false
+        }
+        collapseWorkItem?.cancel()
+        collapseWorkItem = nil
+        DynamicIslandSpring.perform(DynamicIslandSpring.tactilePress) {
+            state.isHovered = true
+            state.isPressing = true
+        }
+        panel?.updateHitRegion()
+        return true
+    }
+
+    /// Updates tactile press state during an active click drag so dragging off
+    /// the island un-tucks cleanly, while dragging back re-arms the press.
+    fileprivate func handleMouseDragged(at localPoint: NSPoint) {
+        guard DynamicIslandInteractionPolicy.shouldExpandOnClick(
+            acceptsInteraction: acceptsIslandInteraction,
+            isExpanded: state.isExpanded
+        ) else {
+            if state.isPressing {
+                DynamicIslandSpring.perform(DynamicIslandSpring.tactilePress) {
+                    state.isPressing = false
+                }
+                panel?.updateHitRegion()
+            }
+            return
+        }
+        let inside = hitRectInPanel().contains(localPoint)
+        if inside {
+            collapseWorkItem?.cancel()
+            collapseWorkItem = nil
+        }
+        guard inside != state.isPressing else { return }
+        DynamicIslandSpring.perform(DynamicIslandSpring.tactilePress) {
+            if inside { state.isHovered = true }
+            state.isPressing = inside
+        }
+        panel?.updateHitRegion()
+    }
+
+    /// Completes a collapsed-island click: expands when released inside the
+    /// full peek `hitRegion`, or resets the tactile press when cancelled.
+    fileprivate func handleMouseUp(at localPoint: NSPoint, wasTracking: Bool) {
+        let canExpand = wasTracking && DynamicIslandInteractionPolicy.shouldExpandOnClick(
+            acceptsInteraction: acceptsIslandInteraction,
+            isExpanded: state.isExpanded
+        )
+        let releaseInside = hitRectInPanel().contains(localPoint)
+        if canExpand && releaseInside {
+            expand()
+            return
+        }
+        if state.isPressing {
+            DynamicIslandSpring.perform(DynamicIslandSpring.tactilePress) {
+                state.isPressing = false
+            }
+            panel?.updateHitRegion()
+        }
+        if wasTracking && !releaseInside && menuHoldCount == 0 && !isPointerOverIsland() {
+            collapse()
         }
     }
 
@@ -419,28 +542,43 @@ final class DynamicIslandController: NSObject {
         return hitRectInPanel().contains(local)
     }
 
+    /// Springs the island open into its full spend-and-limits detail card.
     private func expand() {
-        guard !state.isExpanded else { return }
+        collapseWorkItem?.cancel()
+        collapseWorkItem = nil
+        guard !state.isExpanded else {
+            if !state.isHovered || state.isPressing {
+                DynamicIslandSpring.perform(DynamicIslandSpring.primaryMorph) {
+                    state.isHovered = true
+                    state.isPressing = false
+                }
+                panel?.updateHitRegion()
+            }
+            return
+        }
         // Panel frame stays put — only the black shape springs open from the
         // top. Resizing the window mid-animation was what opened the seam.
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        DynamicIslandSpring.perform(DynamicIslandSpring.primaryMorph) {
+            state.isHovered = true
+            state.isPressing = false
             state.isExpanded = true
-        } else {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                state.isExpanded = true
-            }
         }
         panel?.updateHitRegion()
     }
 
+    /// Retracts any active card expansion, hover peek, or press tuck back to the idle notch bar.
     private func collapse() {
-        guard state.isExpanded else { return }
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        collapseWorkItem?.cancel()
+        collapseWorkItem = nil
+        let wasExpanded = state.isExpanded
+        guard wasExpanded || state.isHovered || state.isPressing else { return }
+        let spring = wasExpanded
+            ? DynamicIslandSpring.collapse
+            : DynamicIslandSpring.primaryMorph
+        DynamicIslandSpring.perform(spring) {
             state.isExpanded = false
-        } else {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
-                state.isExpanded = false
-            }
+            state.isHovered = false
+            state.isPressing = false
         }
         // Collapse the AppKit hit region immediately. The SwiftUI shape may
         // continue its spring animation visually, but its transparent former
@@ -448,7 +586,7 @@ final class DynamicIslandController: NSObject {
         panel?.updateHitRegion()
         // Re-assert after the spring settles in case measured geometry changed
         // during the transition.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, !self.state.isExpanded else { return }
             self.panel?.updateHitRegion()
         }
@@ -522,7 +660,8 @@ final class DynamicIslandController: NSObject {
     /// island so the drop shadow isn't clipped by the window server.
     private func panelFrame(on screen: NSScreen) -> NSRect {
         let bleed = DynamicIslandGeometry.shadowBleed
-        let panelW = max(DynamicIslandGeometry.expandedWidth, state.geometry.collapsedWidth) + bleed * 2
+        let maxCollapsedHitWidth = state.geometry.collapsedWidth + DynamicIslandLayoutPolicy.peekWidthExpansion
+        let panelW = max(DynamicIslandGeometry.expandedWidth, maxCollapsedHitWidth) + bleed * 2
         let panelH = DynamicIslandLayoutPolicy.panelHeight(
             screenTop: screen.frame.maxY,
             visibleBottom: screen.visibleFrame.minY
@@ -543,14 +682,22 @@ final class DynamicIslandController: NSObject {
         let geo = state.geometry
         let panelW = panel.frame.width
         let panelH = panel.frame.height
-        let width = state.isExpanded
-            ? max(DynamicIslandGeometry.expandedWidth, geo.collapsedWidth)
-            : geo.collapsedWidth
+        let width = DynamicIslandLayoutPolicy.hitWidth(
+            collapsedWidth: geo.collapsedWidth,
+            isExpanded: state.isExpanded,
+            isHovered: state.isHovered,
+            isPressing: state.isPressing
+        )
+        let collapsedHeight = DynamicIslandLayoutPolicy.hitCollapsedHeight(
+            collapsedHeight: geo.collapsedHeight,
+            isHovered: state.isHovered,
+            isPressing: state.isPressing
+        )
         // Expanded: the measured island height (clamped to the panel), so the
         // transparent area below the island stays click-through.
         let height = state.isExpanded
             ? min(max(state.expandedHeight, geo.collapsedHeight), panelH)
-            : geo.collapsedHeight
+            : collapsedHeight
         // Centered horizontally, top-aligned vertically in the panel.
         let x = (panelW - width) / 2
         let y = panelH - height
@@ -847,15 +994,21 @@ private final class IslandPanel: NSPanel, CursorHitScoping {
 /// AppKit delivers the event to whatever is underneath (menu bar, desktop).
 private final class IslandHitView: NSView {
     weak var islandController: DynamicIslandController?
+    /// Active interactive bounds in view coordinates; updates rebuild the hover tracking area.
     var hitRegion: NSRect = .zero {
         didSet {
+            if hitRegion.isEmpty {
+                isTrackingPress = false
+            }
             guard hitRegion != oldValue else { return }
             rebuildHoverTrackingArea()
         }
     }
 
     private var hoverTrackingArea: NSTrackingArea?
+    private var isTrackingPress = false
 
+    /// Replaces the `NSTrackingArea` so hover enter/exit matches the current `hitRegion`.
     private func rebuildHoverTrackingArea() {
         if let hoverTrackingArea {
             removeTrackingArea(hoverTrackingArea)
@@ -873,9 +1026,16 @@ private final class IslandHitView: NSView {
         hoverTrackingArea = trackingArea
     }
 
+    /// Claims collapsed/peeked clicks directly and routes expanded hits to SwiftUI subviews.
     override func hitTest(_ point: NSPoint) -> NSView? {
         // `point` is in this view's coordinate system (origin bottom-left).
         guard hitRegion.contains(point) else { return nil }
+        // While collapsed or peeking, claim the entire island rect at the
+        // AppKit container level so the first left-click reaches mouseDown/mouseUp
+        // instead of landing on non-interactive SwiftUI wing labels.
+        if islandController?.isExpanded == false {
+            return self
+        }
         // The hardware-notch gap has no SwiftUI child content. Claim it at
         // the AppKit container level so it is just as interactive as either
         // populated metric wing, while outer transparent chrome still passes
@@ -883,15 +1043,39 @@ private final class IslandHitView: NSView {
         return super.hitTest(point) ?? self
     }
 
+    /// Forwards tracking-area hover entry to the island controller.
     override func mouseEntered(with event: NSEvent) {
         islandController?.handleHover(true)
     }
 
+    /// Forwards tracking-area hover exit to the island controller.
     override func mouseExited(with event: NSEvent) {
         islandController?.handleHover(false)
     }
 
+    /// Accepts the initial click on this non-activating panel without stealing app focus.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// Begins tactile press tracking when a left-click starts inside the collapsed island.
+    override func mouseDown(with event: NSEvent) {
+        let localPoint = convert(event.locationInWindow, from: nil)
+        isTrackingPress = islandController?.handleMouseDown(at: localPoint) ?? false
+    }
+
+    /// Updates tactile press state as the pointer drags in or out of `hitRegion`.
+    override func mouseDragged(with event: NSEvent) {
+        guard isTrackingPress else { return }
+        let localPoint = convert(event.locationInWindow, from: nil)
+        islandController?.handleMouseDragged(at: localPoint)
+    }
+
+    /// Completes or cancels a tracked collapsed-island click on button release.
+    override func mouseUp(with event: NSEvent) {
+        let wasTracking = isTrackingPress
+        isTrackingPress = false
+        let localPoint = convert(event.locationInWindow, from: nil)
+        islandController?.handleMouseUp(at: localPoint, wasTracking: wasTracking)
+    }
 
     override func rightMouseDown(with event: NSEvent) {
         StatusBarController.showContextMenuFromIsland(event: event, view: self)

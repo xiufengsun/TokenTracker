@@ -659,5 +659,8 @@
   "cloud.free.device_scope": "Nutzungsstatistiken nur für dieses Gerät",
   "cloud.plan.includes_local": "Alle kostenlosen lokalen Funktionen enthalten",
   "cloud.plan.device_sync": "Unbegrenzte Geräte · geräteübergreifende Synchronisierung",
-  "cloud.plan.device_fair_use": "Unbegrenzte Geräte für die alltägliche persönliche Nutzung, ohne Gebühren pro Gerät. Viele oder ungewöhnliche Geräteverbindungen können den Synchronisierungsschutz auslösen."
+  "cloud.plan.device_fair_use": "Unbegrenzte Geräte für die alltägliche persönliche Nutzung, ohne Gebühren pro Gerät. Viele oder ungewöhnliche Geräteverbindungen können den Synchronisierungsschutz auslösen.",
+  "settings.labs.island_expand_on_hover.label": "Beim Hover direkt öffnen",
+  "settings.labs.island_expand_on_hover.hint": "Öffnet das vollständige Dynamic-Island-Panel sofort beim Hover. Wenn deaktiviert, zeigt Hover zunächst eine dezente Vorschau und ein Klick öffnet das Panel.",
+  "settings.labs.island_expand_on_hover.aria": "Dynamic Island beim Hover direkt öffnen umschalten"
 }
