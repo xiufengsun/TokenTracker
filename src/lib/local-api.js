@@ -1229,6 +1229,14 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
   const accountViewFailures = new Map();
   const accountViewInFlight = new Map();
   let accountUploadState = readAccountUploadState();
+  // Serializes config.json read-modify-write transactions across the proxy and
+  // instance save endpoints: overlapping saves both read the old config and
+  // the later write silently reverts the other's change.
+  let configWriteChain = null;
+  const withConfigLock = (task) => {
+    configWriteChain = (configWriteChain || Promise.resolve()).then(task, task);
+    return configWriteChain;
+  };
   const runtimeConfigPath = path.join(path.dirname(qp), "config.json");
   const instancePath = path.join(trackerDataDir, "runtime-instance.json");
   const issuedAccessTokenInstances = new Map();
@@ -3624,29 +3632,35 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           json(res, { ok: false, error: parsed.error }, 400);
           return true;
         }
-        const current = readConfig();
-        const prevProxy = current.proxy && typeof current.proxy === "object" && !Array.isArray(current.proxy)
-          ? current.proxy
-          : {};
-        current.proxy = {
-          ...prevProxy,
-          mode: parsed.value.mode,
-          protocol: parsed.value.protocol,
-          host: parsed.value.host,
-          port: parsed.value.port,
-        };
+        let proxyConfig;
         try {
-          await writeConfig(current);
+          // Read-modify-write under the shared config lock so a concurrent
+          // instance save cannot interleave and silently revert either change.
+          await withConfigLock(async () => {
+            const current = readConfig();
+            const prevProxy = current.proxy && typeof current.proxy === "object" && !Array.isArray(current.proxy)
+              ? current.proxy
+              : {};
+            current.proxy = {
+              ...prevProxy,
+              mode: parsed.value.mode,
+              protocol: parsed.value.protocol,
+              host: parsed.value.host,
+              port: parsed.value.port,
+            };
+            await writeConfig(current);
+            proxyConfig = current.proxy;
+          });
         } catch (error) {
           json(res, { ok: false, error: error?.message || "failed to save proxy config" }, 500);
           return true;
         }
         invalidateSystemProxyCache();
-        const applyResult = applyUndiciProxyIfNeeded({ proxyConfig: current.proxy });
+        const applyResult = applyUndiciProxyIfNeeded({ proxyConfig });
         json(res, {
           ok: applyResult?.ok !== false,
           unprotected: applyResult?.unprotected === true,
-          ...toResponse(current),
+          ...toResponse({ proxy: proxyConfig }),
         });
         return true;
       }
@@ -3693,6 +3707,169 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         timeoutMs: 5000,
       });
       json(res, result);
+      return true;
+    }
+
+    // --- cloud instance target (official cloud vs self-hosted InsForge) ---
+    // Persisted on config.json next to the queue. GET is unauthenticated so the
+    // settings page can probe availability; POST requires local-auth. Saving
+    // only writes the config — the next getRuntime() call notices the changed
+    // fingerprint and performs the instance switch cleanup (relay cookies,
+    // device identity, account-view state) itself.
+    if (p === "/functions/tokentracker-instance-config") {
+      const {
+        DEFAULT_BASE_URL,
+        DEFAULT_ANON_KEY,
+        normalizeInstanceBaseUrl: normalizeInstance,
+        isPublicAnonKey,
+      } = require("./runtime-config");
+      const { writeFileAtomic, chmod600IfPossible } = require("./fs");
+      const configPath = path.join(path.dirname(qp), "config.json");
+      const readConfig = () => {
+        try {
+          const parsed = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+        } catch {
+          return {};
+        }
+      };
+      const writeConfig = async (next) => {
+        // config.json carries the device token; keep the replacement private
+        // from creation instead of relying on the chmod below (a crash between
+        // write and chmod would otherwise leave it world-readable under a
+        // permissive umask).
+        await writeFileAtomic(configPath, JSON.stringify(next, null, 2), { mode: 0o600 });
+        await chmod600IfPossible(configPath);
+      };
+      const describe = () => {
+        const runtime = getRuntime();
+        const officialBase = normalizeInstance(DEFAULT_BASE_URL);
+        const normalized = normalizeInstance(runtime.baseUrl) || "";
+        return {
+          baseUrl: normalized,
+          officialUrl: officialBase,
+          custom: Boolean(normalized) && normalized !== officialBase,
+          dashboardUrl: normalizeInstance(runtime.dashboardUrl) || "",
+          anonKeySet: Boolean(runtime.anonKey),
+          configurationError: runtime.configurationError || null,
+        };
+      };
+      const method = String(req.method || "GET").toUpperCase();
+      if (method === "GET") {
+        json(res, describe());
+        return true;
+      }
+      if (method === "POST" || method === "PUT") {
+        if (!isAuthorizedLocalMutation(req)) {
+          json(res, { ok: false, error: "Unauthorized" }, 401);
+          return true;
+        }
+        let body = {};
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          json(res, { ok: false, error: "invalid JSON" }, 400);
+          return true;
+        }
+        const requested = normalizeInstance(String(body?.baseUrl ?? ""));
+        if (!requested) {
+          json(res, { ok: false, error: "invalid_instance_url" }, 400);
+          return true;
+        }
+        const official = requested === normalizeInstance(DEFAULT_BASE_URL);
+        if (!official) {
+          const anonKey = typeof body?.anonKey === "string" ? body.anonKey.trim() : "";
+          if (!anonKey) {
+            json(res, { ok: false, error: "instance_anon_key_required" }, 400);
+            return true;
+          }
+          if (!isPublicAnonKey(anonKey) || anonKey === DEFAULT_ANON_KEY) {
+            json(res, { ok: false, error: "invalid_instance_anon_key" }, 400);
+            return true;
+          }
+        }
+        // Read-modify-write under the shared config lock so a concurrent proxy
+        // save cannot interleave and silently revert either change.
+        await withConfigLock(async () => {
+          const current = readConfig();
+          if (official) {
+            // Persist the official selection explicitly: merely deleting the
+            // override would let a custom TOKENTRACKER_INSFORGE_BASE_URL in the
+            // environment become active again while the UI reports success.
+            current.baseUrl = DEFAULT_BASE_URL;
+            current.anonKey = DEFAULT_ANON_KEY;
+            delete current.dashboardUrl;
+          } else {
+            current.baseUrl = requested;
+            current.anonKey = typeof body?.anonKey === "string" ? body.anonKey.trim() : "";
+            current.dashboardUrl = requested;
+          }
+          await writeConfig(current);
+        });
+        json(res, { ok: true, ...describe() });
+        return true;
+      }
+      json(res, { error: "Method Not Allowed" }, 405);
+      return true;
+    }
+
+    // --- cloud instance reachability probe ---
+    // Runs server-side so a self-hosted instance without CORS headers for the
+    // dashboard origin is still testable. Any HTTP response (including 4xx/5xx)
+    // proves the address is routable and TLS terminates; only network-level
+    // failures count as unreachable.
+    if (p === "/functions/tokentracker-instance-test") {
+      if (String(req.method || "GET").toUpperCase() !== "POST") {
+        json(res, { error: "Method Not Allowed" }, 405);
+        return true;
+      }
+      if (!isAuthorizedLocalMutation(req)) {
+        json(res, { ok: false, error: "Unauthorized" }, 401);
+        return true;
+      }
+      let body = {};
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        json(res, { ok: false, error: "invalid JSON" }, 400);
+        return true;
+      }
+      const { normalizeInstanceBaseUrl: normalizeInstance } = require("./runtime-config");
+      const target = normalizeInstance(String(body?.baseUrl ?? ""));
+      if (!target) {
+        json(res, { ok: false, error: "invalid_instance_url" }, 400);
+        return true;
+      }
+      let reachable = false;
+      let httpStatus = null;
+      let errorCode = "unreachable";
+      try {
+        // Deliberate server-side fetch of a loopback-validated, local-auth'd
+        // user-provided address on a loopback-only server (this is the whole
+        // point of the probe: the browser cannot fetch it through CORS), so
+        // the URL is untrusted input only in the CodeQL sense.
+        // codeql[js/server-side-request-forgery]
+        const response = await fetch(target, {
+          method: "GET",
+          redirect: "manual",
+          signal: AbortSignal.timeout(8000),
+        });
+        reachable = true;
+        httpStatus = response.status;
+        // Release the socket promptly: a slow/streaming body would otherwise
+        // keep the connection alive after the status line has been captured.
+        response.body?.cancel?.().catch?.(() => {});
+      } catch (error) {
+        if (error?.name === "TimeoutError") errorCode = "timeout";
+        else if (error?.name === "AbortError") errorCode = "timeout";
+        // Distinguish TLS failures (untrusted/self-signed cert on the target)
+        // from routing failures so the hint points at the certificate, not
+        // the address.
+        else if (/CERT|SELF_?SIGNED|UNABLE_TO_VERIFY/i.test(String(error?.cause?.code || error?.code || ""))) {
+          errorCode = "certificate";
+        }
+      }
+      json(res, { ok: true, reachable, status: httpStatus, error: reachable ? null : errorCode });
       return true;
     }
 
