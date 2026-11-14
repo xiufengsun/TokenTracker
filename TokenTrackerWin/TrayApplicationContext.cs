@@ -78,6 +78,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly UpdateChecker _updateChecker = new();
     private UpdateStrings _updateStrings = UpdateStrings.For(NativeLocalization.CurrentResolvedLocale);
     private bool _updateBalloonShown;
+    private string? _lastUpdateError;
+    private bool _integrityCheckFailedDuringInstall;
 
     // Theme and tray state refresh independently of WebView script execution.
     private readonly System.Windows.Forms.Timer _refreshTimer = new() { Interval = 2000 };
@@ -243,9 +245,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         // Click-to-update: keep the menu item in sync with the checker, quit when it's
         // ready to hand off to the installer, and run one quiet check on launch. The
-        // checker self-skips dev builds; installed builds auto-install when enabled.
+        // checker self-skips dev builds; installed builds check in the background when enabled.
         _updateChecker.Changed += () => PostToUi(() =>
         {
+            if (_updateChecker.State is UpdateChecker.UpdateState.Downloading
+                or UpdateChecker.UpdateState.Installing
+                or UpdateChecker.UpdateState.Idle)
+            {
+                _lastUpdateError = null;
+            }
             RefreshUpdateMenuItem();
             PushDashboardNativeSettings();
         });
@@ -253,8 +261,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // A failed checksum is not transient noise — the download was discarded and
         // nothing was installed, so say so instead of silently reverting the menu item.
         _updateChecker.IntegrityCheckFailed += () => PostToUi(() =>
+        {
+            _integrityCheckFailedDuringInstall = true;
+            _lastUpdateError = _updateStrings.IntegrityErrorMessage;
             _trayIcon.ShowBalloonTip(8000, _updateStrings.IntegrityErrorTitle,
-                _updateStrings.IntegrityErrorMessage, ToolTipIcon.Warning));
+                _updateStrings.IntegrityErrorMessage, ToolTipIcon.Warning);
+            PushDashboardNativeSettings();
+        });
         _ = _updateChecker.CheckAsync(silent: true);
         _updateCheckTimer.Tick += (_, _) => _ = _updateChecker.CheckAsync(silent: true);
         _updateCheckTimer.Start();
@@ -345,6 +358,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         _strings = TrayStrings.For(NativeLocalization.ResolveLocale(_localePreference));
         _updateStrings = UpdateStrings.For(NativeLocalization.ResolveLocale(_localePreference));
+        if (_lastUpdateError is not null)
+        {
+            _lastUpdateError = _integrityCheckFailedDuringInstall
+                ? _updateStrings.IntegrityErrorMessage
+                : _updateStrings.ErrorMessage;
+        }
 
         _menuFont?.Dispose();
         _summaryFont?.Dispose();
@@ -390,6 +409,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _starItem.Text = _strings.StarOnGitHub;
         _quitItem.Text = _strings.Quit;
         RefreshUpdateMenuItem();
+        PushDashboardNativeSettings();
 
         ApplyThemeToMenu();
 
@@ -769,6 +789,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
             // macOS-specific settings row out of the Windows page.
             launchAtLoginSupported = false,
             updateStatus,
+            updateError = _lastUpdateError,
+            updateAvailable = _updateChecker.State == UpdateChecker.UpdateState.UpdateAvailable,
+            latestVersion = _updateChecker.LatestVersion,
             updateBusy = _updateChecker.State is UpdateChecker.UpdateState.Checking
                 or UpdateChecker.UpdateState.Downloading
                 or UpdateChecker.UpdateState.Installing,
@@ -804,6 +827,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         PushDashboardNativeSettings();
     }
 
+    /// <summary>Dispatch an action requested by the dashboard WebView bridge.</summary>
     private void RunDashboardNativeAction(string name)
     {
         switch (name)
@@ -814,9 +838,33 @@ internal sealed class TrayApplicationContext : ApplicationContext
             case "checkForUpdates":
                 OnCheckUpdatesClicked();
                 break;
+            case "updateNow":
+                _ = RunDashboardUpdateNowAsync();
+                break;
             case "openAbout":
                 OpenInBrowser(Constants.GitHubUrl);
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Download and install the pending release when triggered from the dashboard,
+    /// surfacing any download, checksum, or installer-launch failure back to the UI.
+    /// </summary>
+    private async Task RunDashboardUpdateNowAsync()
+    {
+        if (_updateChecker.State != UpdateChecker.UpdateState.UpdateAvailable) return;
+        _integrityCheckFailedDuringInstall = false;
+        _lastUpdateError = null;
+        PushDashboardNativeSettings();
+
+        var installed = await _updateChecker.DownloadAndInstallAsync();
+        if (!installed)
+        {
+            _lastUpdateError = _integrityCheckFailedDuringInstall
+                ? _updateStrings.IntegrityErrorMessage
+                : _updateStrings.ErrorMessage;
+            PushDashboardNativeSettings();
         }
     }
 
@@ -927,13 +975,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
             case UpdateChecker.UpdateState.UpdateAvailable:
                 _checkUpdatesItem.Text = string.Format(_updateStrings.UpdateNow, _updateChecker.LatestVersion);
                 _checkUpdatesItem.Enabled = true;
-                if (_updateChecker.AutoUpdateEnabled && _updateChecker.State == UpdateChecker.UpdateState.UpdateAvailable)
-                {
-                    // An enabled automatic check will immediately start the
-                    // background installer, so a "click the tray to update"
-                    // balloon would be both noisy and misleading.
-                    break;
-                }
                 if (!_updateBalloonShown)
                 {
                     _updateBalloonShown = true;
