@@ -128,6 +128,21 @@ async function verifiedUserIdFromJwt(authHeader: string | null): Promise<string 
 // TODO: extract to a shared edge-pricing module; tracked in feedback_model_pricing_sync.
 const MODEL_PRICING: Record<string, { input: number; output: number; cache_read: number; cache_write?: number }> = {
   // ── Anthropic Claude ──
+  // Fable 5.2 standard tier ($8/$40, cache hit $0.20, 5-minute cache write $10),
+  // verified 2026-11-10. Exact keys only: edge has no Claude normalizer, so the
+  // dotted id and the OpenRouter-qualified ids never reach claude-fable-5-2.
+  // The 1-hour cache write ($16) cannot fit cache_write. Fast mode is the
+  // separate $16/$80 SKU below; floating -latest aliases stay unmatched.
+  "claude-fable-5-2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "claude-fable-5.2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "anthropic/claude-fable-5.2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "anthropic/claude-fable-5.2-20261109": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "anthropic/claude-fable-5-2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  // Fast mode is 2x input/output. Cache dollars are not published; the pricing
+  // page says caching multipliers stack on fast pricing, so 0.025x and the
+  // 5-minute 1.25x are applied to the $16 fast input ($0.40 / $20).
+  "claude-fable-5-2-fast": { input: 16, output: 80, cache_read: 0.4, cache_write: 20 },
+  "claude-fable-5.2-fast": { input: 16, output: 80, cache_read: 0.4, cache_write: 20 },
   "claude-fable-5": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
   "claude-opus-5": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
   "claude-opus-5-fast": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
@@ -218,6 +233,13 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "gemini-2.5-pro-preview-05-06": { input: 1.25, output: 10, cache_read: 0.125 },
   "gemini-2.5-flash": { input: 0.3, output: 2.5, cache_read: 0.03 },
   "gemini-3-flash-preview": { input: 0.5, output: 3, cache_read: 0.05 },
+  // Gemini 3.8/3.7/3.6 Flash Global Standard introductory list rate through
+  // 2026-12-31 (issue #1063). Verified from cloud.google.com/model-garden/pricing
+  // and aistudio.google.com/docs/pricing. No published per-token cache-write rate.
+  "gemini-3.5-flash": { input: 1.5, output: 9, cache_read: 0.15 },
+  "gemini-3.8-flash": { input: 0.75, output: 3.75, cache_read: 0.075 },
+  "gemini-3.7-flash": { input: 0.75, output: 3.75, cache_read: 0.075 },
+  "gemini-3.6-flash": { input: 0.75, output: 3.75, cache_read: 0.075 },
   "gemini-3-pro-preview": { input: 2, output: 12, cache_read: 0.2 },
   "gemini-3.1-pro-preview": { input: 2, output: 12, cache_read: 0.2 },
   // ── Cursor Composer ──
@@ -295,6 +317,11 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "cursor-grok-4.6-fast": { input: 4, output: 12, cache_read: 1, cache_write: 0 },
   "cursor-grok-4.7": { input: 2, output: 6, cache_read: 0.5, cache_write: 0 },
   "cursor-grok-4.7-fast": { input: 4, output: 12, cache_read: 1, cache_write: 0 },
+  // Bare ids for the same SKUs (ZCode / Grok Build record grok-4.7 and
+  // grok-4.7-build-fast). Explicit keys so they do not ride on the
+  // "grok-4.7" / "grok-4.7"+fast fuzzy matchers below.
+  "grok-4.7": { input: 2, output: 6, cache_read: 0.5, cache_write: 0 },
+  "grok-4.7-build-fast": { input: 4, output: 12, cache_read: 1, cache_write: 0 },
   "grok-4-0709": { input: 3.00, output: 15.00, cache_read: 0.75 },
   "grok-4": { input: 3.00, output: 15.00, cache_read: 0.75 },
   "grok-4-latest": { input: 3.00, output: 15.00, cache_read: 0.75 },
@@ -466,6 +493,17 @@ function getModelPricing(model: string, source = "") {
   // reports its own positive cost still wins earlier via
   // SOURCES_WITH_AUTHORITATIVE_COST.
   if (lower.includes("cline-free/") || lower.includes("cline-pass/")) return ZERO_PRICING;
+  // Fable 5.2 before the broad fable matcher, or claude-fable-5-2 bills at the
+  // Fable 5 $10/$50 rate. Fast before 5.2 (the "fable-5.2" needle is a prefix
+  // of "fable-5.2-fast"), and -latest never matches: it is a floating alias
+  // the Anthropic docs did not pin to 5.2 on 2026-11-10.
+  if (/(?:^|\/)claude-fable-latest(?:$|[^a-z0-9])/.test(lower)) return ZERO_PRICING;
+  const fableKey = lower.replace(/[^a-z0-9./]+/g, "-");
+  // The minor must end or be followed by a non-digit. Without that boundary
+  // the dated Fable 5 ids (claude-fable-5-20250901) and fable-5-20 contain
+  // "fable-5-2" / "fable-5.2" and bill at the 5.2 rate.
+  if (/fable-5[.-]2-fast(?:$|[^0-9])/.test(fableKey)) return MODEL_PRICING["claude-fable-5-2-fast"];
+  if (/fable-5[.-]2(?:$|[^0-9])/.test(fableKey)) return MODEL_PRICING["claude-fable-5-2"];
   if (lower.includes("fable")) return MODEL_PRICING["claude-fable-5"];
   // Opus 5 fast mode bills at 2x the standard Opus tier ($10/$50), so the
   // -fast matcher must precede both the opus-5 and the generic opus fallback.
@@ -502,6 +540,18 @@ function getModelPricing(model: string, source = "") {
   if (lower.includes("gpt-5")) return MODEL_PRICING["gpt-5"];
   // gemini-4-argon must precede gemini-3 / gemini-2.5 substring matchers.
   if (lower.includes("gemini-4-argon") || lower.includes("gemini-4.argon")) return MODEL_PRICING["gemini-4-argon"];
+  // Gemini 3.8/3.7/3.6 Flash introductory Standard rates must precede the
+  // gemini-3 catch-all (which bills at gemini-3-flash-preview). Alternate
+  // SKUs (cyber, tts, lite, image, live) have different published rates.
+  // Unknown suffixes such as -n have no published independent SKU — return
+  // zero rather than inventing a rate or inheriting preview (#1063).
+  // Reasoning-effort suffixes (high/medium/low/...) match the local
+  // normalizeAntigravityModel strip and keep the published Flash rate.
+  if (/gemini-3\.[876]-flash-(?!cyber|tts|lite|image|live|thinking|xhigh|high|medium|low|fast)[a-z0-9]/.test(lower)) return ZERO_PRICING;
+  if (/gemini-3\.8-flash(?!-(?:cyber|tts|lite|image|live))/.test(lower)) return MODEL_PRICING["gemini-3.8-flash"];
+  if (/gemini-3\.7-flash(?!-(?:cyber|tts|lite|image|live))/.test(lower)) return MODEL_PRICING["gemini-3.7-flash"];
+  if (/gemini-3\.6-flash(?!-(?:cyber|tts|lite|image|live))/.test(lower)) return MODEL_PRICING["gemini-3.6-flash"];
+  if (/gemini-3\.5-flash(?!-(?:cyber|tts|lite|image|live))/.test(lower)) return MODEL_PRICING["gemini-3.5-flash"];
   // gemini-3 pro tiers (gemini-3-pro, gemini-3.1-pro, -high, -customtools…)
   // must not fall through to the flash rate (4x undercount).
   if (lower.includes("gemini-3") && lower.includes("pro")) return MODEL_PRICING["gemini-3-pro-preview"];

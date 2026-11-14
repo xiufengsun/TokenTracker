@@ -151,17 +151,21 @@ test("resolveTraeCnStoragePath returns null when no CN client is installed", () 
   assert.equal(resolveTraeCnStoragePath({ platform: "linux", home: parent, env: {} }), null);
 });
 
-test("resolveTraeCnStoragePath finds the classic client through a junction", { skip: process.platform !== "win32" }, () => {
+test("resolveTraeCnStoragePath finds and reads the classic client through a junction", (t) => {
   const parent = makeTraeCnHome();
   const realHome = makeTraeCnHome();
-  writeStorage(realHome);
-  // mklink /D relocation is the community-standard way to move Trae CN off
-  // C:; statSync follows the junction, so discovery needs no special casing.
+  t.after(() => {
+    fs.rmSync(parent, { recursive: true, force: true });
+    fs.rmSync(realHome, { recursive: true, force: true });
+  });
+  writeStorage(realHome, { token: "junction-jwt-canary" });
+  // Windows creates a real junction; POSIX exercises equivalent symlink IO.
   fs.symlinkSync(realHome, path.join(parent, "Trae CN"), "junction");
   assert.equal(
     resolveTraeCnStoragePath({ platform: "win32", home: "C:\\u", env: { APPDATA: parent } }),
     path.join(parent, "Trae CN", "User", "globalStorage", "storage.json"),
   );
+  assert.equal(readTraeCnAuthFromStorage({ platform: "win32", home: parent, env: { APPDATA: parent } }).token, "junction-jwt-canary");
 });
 
 test("resolveTraeCnStoragePath hands a non-file storage.json to the reader (fail-closed)", () => {
@@ -999,5 +1003,62 @@ test("readTraeCnAuthFromStorage: ENOENT / ENOTDIR mean absent (null), other IO e
       },
       code,
     );
+  }
+});
+
+test("TRAE CN doctor probe is local, opt-in, and credential-safe", () => {
+  const { inspectTraeCnAuth } = require("../src/lib/trae-cn-config");
+  const home = makeTraeCnHome();
+  try {
+    const env = { [TRAE_CN_HOME_ENV]: home };
+    const storagePath = writeStorage(home, { token: "doctor-jwt-canary", refreshToken: "doctor-refresh-canary" });
+    assert.equal(inspectTraeCnAuth({ env, fsModule: {
+      readFileSync() { assert.fail("opted-out doctor must not read auth"); },
+    } }).auth, "unchecked");
+    env.TOKENTRACKER_TRAE_CN_USAGE = "1";
+    const state = inspectTraeCnAuth({ env });
+    assert.deepEqual(state, { usage_opt_in: true, storage_path: storagePath, auth: "readable" });
+    assert.doesNotMatch(JSON.stringify(state), /canary/);
+    fs.writeFileSync(storagePath, "doctor-jwt-canary malformed json");
+    assert.equal(inspectTraeCnAuth({ env }).auth, "malformed");
+    assert.equal(inspectTraeCnAuth({ env, fsModule: {
+      readFileSync() { throw Object.assign(new Error("doctor-jwt-canary"), { code: "EACCES" }); },
+    } }).auth, "unreadable");
+    fs.rmSync(storagePath);
+    assert.equal(inspectTraeCnAuth({ env }).auth, "not-signed-in");
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test("persistent TRAE CN rejection explains recovery without reading the response body", async () => {
+  for (const status of [401, 403]) {
+    let calls = 0;
+    await assert.rejects(fetchTraeCnUsageWithAuth({
+      start_time: START, end_time: END,
+      readAuth: () => ({ token: "auth-jwt-canary", refreshToken: "auth-refresh-canary" }),
+      fetchImpl: async () => {
+        calls++;
+        return { status, ok: false, json() { assert.fail("auth error body must not be read"); } };
+      },
+    }), (error) => {
+      assert.equal(error.status, status);
+      assert.match(error.message, /Sign in again/);
+      assert.match(error.message, /TOKENTRACKER_TRAE_CN_HOME/);
+      assert.doesNotMatch(error.message, /canary/);
+      return true;
+    });
+    assert.equal(calls, 2);
+  }
+});
+
+test("TRAE CN API error codes cannot echo credentials", async () => {
+  for (const code of ["jwt-canary", { token: "jwt-canary" }, ["jwt-canary"], true]) {
+    await assert.rejects(fetchTraeCnUsagePage({
+      jwt: JWT, start_time: START, end_time: END, page_num: 1,
+      fetchImpl: async () => jsonResponse(200, { code, message: "jwt-canary" }),
+    }), (error) => {
+      assert.equal(error.message, "Trae CN usage API returned an invalid error code.");
+      assert.doesNotMatch(JSON.stringify(error), /canary/);
+      return true;
+    });
   }
 });

@@ -128,6 +128,31 @@ test("Qwen3.8 Max local and all cloud paths share Singapore International rates 
   }
 });
 
+test("Grok 4.7 and Grok 4.7 Build Fast are explicitly priced on the edge too", () => {
+  const { getModelPricing: localPricing } = require("../src/lib/pricing");
+  // Without explicit keys these ids only reached the right numbers through
+  // the "grok-4.7" / "grok-4.7"+fast fuzzy matchers, which would silently
+  // follow any future edit to the Cursor entries instead of these SKUs.
+  const models = ["grok-4.7", "grok-4.7-build-fast"];
+  for (const name of [CANONICAL, ...MIRRORS]) {
+    const { code } = transformSync(extractBlock(name), { loader: "ts", target: "es2020" });
+    const edgePricing = vm.runInNewContext(`${code}\ngetModelPricing;`);
+    for (const model of models) {
+      const local = localPricing(model);
+      const edge = JSON.parse(JSON.stringify(edgePricing(model)));
+      assert.equal(edge.input, local.input, `${name}: ${model} input`);
+      assert.equal(edge.output, local.output, `${name}: ${model} output`);
+      assert.equal(edge.cache_read, local.cache_read, `${name}: ${model} cache_read`);
+      assert.equal(edge.cache_write || 0, local.cache_write, `${name}: ${model} cache_write`);
+    }
+  }
+  assert.notEqual(
+    localPricing("grok-4.7-build-fast").input,
+    localPricing("grok-4.7").input,
+    "the Fast SKU must not collapse onto the base grok-4.7 rate",
+  );
+});
+
 test("canonical pricing block retains regression-prone entries and matcher order", () => {
   const block = extractBlock(CANONICAL);
 
@@ -146,9 +171,15 @@ test("canonical pricing block retains regression-prone entries and matcher order
     '"cursor-grok-4.6-fast"',
     '"cursor-grok-4.7"',
     '"cursor-grok-4.7-fast"',
+    '"grok-4.7"',
+    '"grok-4.7-build-fast"',
     '"composer-2.5"',
     '"composer-2.5-fast"',
     '"gemini-4-argon"',
+    '"gemini-3.5-flash"',
+    '"gemini-3.8-flash"',
+    '"gemini-3.7-flash"',
+    '"gemini-3.6-flash"',
     '"kimi-k3.1-pro"',
     '"kimi-k3.1-pro-highspeed"',
     '"glm-5.3"',
@@ -206,6 +237,11 @@ test("canonical pricing block retains regression-prone entries and matcher order
   );
   order('lower.includes("grok-4.5"))', 'lower.includes("grok-4"))');
   order('lower.includes("gemini-4-argon")', 'lower.includes("gemini-3"))');
+  order('/gemini-3\\.[876]-flash-(?!cyber|tts|lite|image|live|thinking|xhigh|high|medium|low|fast)[a-z0-9]/', '/gemini-3\\.8-flash(?!-(?:cyber|tts|lite|image|live))/');
+  order('/gemini-3\\.8-flash(?!-(?:cyber|tts|lite|image|live))/', 'lower.includes("gemini-3"))');
+  order('/gemini-3\\.7-flash(?!-(?:cyber|tts|lite|image|live))/', 'lower.includes("gemini-3"))');
+  order('/gemini-3\\.6-flash(?!-(?:cyber|tts|lite|image|live))/', 'lower.includes("gemini-3"))');
+  order('/gemini-3\\.5-flash(?!-(?:cyber|tts|lite|image|live))/', 'lower.includes("gemini-3"))');
   order('lower.includes("kimi-k3.1-pro-highspeed")', 'lower.includes("kimi-k3.1-pro")');
   order('lower.includes("kimi-k3.1-pro")', 'lower.includes("kimi-k3")');
   order('lower.includes("kimi-k3")', 'lower.includes("kimi")');
@@ -216,6 +252,70 @@ test("canonical pricing block retains regression-prone entries and matcher order
   // and glm-5.3 must precede glm-5, or flash rows bill at 6.7x.
   order('lower.includes("glm-5.3-flash")', 'lower.includes("glm-5.3")');
   order('lower.includes("glm-5.3")', 'lower.includes("glm-5")');
+  // Fable 5.2 ($8/$40) must beat the broad fable matcher (Fable 5, $10/$50),
+  // and the fast SKU must beat the 5.2 needle it starts with.
+  order('/fable-5[.-]2-fast(?:$|[^0-9])/', '/fable-5[.-]2(?:$|[^0-9])/');
+  order('/fable-5[.-]2(?:$|[^0-9])/', 'lower.includes("fable")');
+  order('claude-fable-latest', '/fable-5[.-]2(?:$|[^0-9])/');
+});
+
+test("Claude Fable 5.2 prices at $8/$40 locally and in all cloud paths, ahead of Fable 5", () => {
+  const { getModelPricing: localPricing, getModelPricingInfo } = require("../src/lib/pricing");
+  const standard = { input: 8, output: 40, cache_read: 0.2, cache_write: 10 };
+  const fast = { input: 16, output: 80, cache_read: 0.4, cache_write: 20 };
+  const norm = (o) => ({
+    input: o.input || 0,
+    output: o.output || 0,
+    cache_read: o.cache_read || 0,
+    cache_write: o.cache_write || 0,
+  });
+  const standardIds = [
+    "claude-fable-5-2",
+    "claude-fable-5.2",
+    "Claude Fable 5.2",
+    "Fable 5.2",
+    "anthropic/claude-fable-5.2",
+    "anthropic/claude-fable-5.2-20261109",
+    "anthropic/claude-fable-5-2",
+    "vertex_ai/claude-fable-5-2@default",
+    "github_copilot/claude-fable-5.2",
+  ];
+  const fastIds = ["claude-fable-5-2-fast", "claude-fable-5.2-fast", "azure_ai/claude-fable-5-2-fast"];
+  // Floating alias. Anthropic docs checked 2026-11-10 do not pin it to 5.2.
+  const unpriced = ["claude-fable-latest", "anthropic/claude-fable-latest", "bedrock/claude-fable-latest"];
+  for (const name of [CANONICAL, ...MIRRORS]) {
+    const { code } = transformSync(extractBlock(name), { loader: "ts", target: "es2020" });
+    const edgePricing = vm.runInNewContext(`${code}\ngetModelPricing;`);
+    for (const model of standardIds) {
+      assert.deepEqual(norm(JSON.parse(JSON.stringify(edgePricing(model)))), standard, `${name}: ${model}`);
+      const local = localPricing(model, { source: "claude" });
+      for (const field of Object.keys(standard)) {
+        assert.equal(local[field], standard[field], `local ${model}.${field}`);
+      }
+    }
+    for (const model of fastIds) {
+      assert.deepEqual(norm(JSON.parse(JSON.stringify(edgePricing(model)))), fast, `${name}: ${model}`);
+      assert.equal(localPricing(model).input, fast.input, `local ${model}`);
+    }
+    for (const model of unpriced) {
+      assert.deepEqual(
+        norm(JSON.parse(JSON.stringify(edgePricing(model)))),
+        { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+        `${name}: ${model} must not inherit a Fable rate`,
+      );
+      assert.equal(getModelPricingInfo(model, { source: "claude" }).status, "unpriced", `local ${model}`);
+    }
+    // Fable 5 keeps its own rate on both sides.
+    assert.equal(edgePricing("claude-fable-5").input, 10, `${name}: fable 5`);
+    assert.equal(localPricing("claude-fable-5").input, 10);
+    // Dated Fable 5 ids and fable-5-20 contain the digits of 5.2. They must
+    // not take the 5.2 rate; with no other match they fall through to Fable 5
+    // on the edge and stay unpriced locally (origin/main prices neither).
+    for (const model of ["claude-fable-5-20250901", "claude-fable-5-20261109", "fable-5-20", "claude-fable-5-20"]) {
+      assert.equal(edgePricing(model).input, 10, `${name}: ${model} must not bill at the 5.2 rate`);
+      assert.equal(getModelPricingInfo(model).status, "unpriced", `local ${model}`);
+    }
+  }
 });
 
 test("models promoted from LiteLLM-only coverage price identically locally and in all cloud paths (#929)", () => {
@@ -666,10 +766,57 @@ test("Kimi K3.1 Pro / Highspeed priced distinctly from kimi-k3 locally and in al
       JSON.parse(JSON.stringify(edgePricing("kimi-k3"))),
       `${name}: k3.1-pro must not inherit kimi-k3`,
     );
+    for (const argon of ["gemini-4-argon", "gemini-4-argon-b", "gemini-4-argon-trial", "gemini-4.argon-b"]) {
+      assert.deepEqual(
+        JSON.parse(JSON.stringify(edgePricing(argon))),
+        { input: 2, output: 10, cache_read: 0.1, cache_write: 0 },
+        `${name}: ${argon}`,
+      );
+      assert.equal(localPricing(argon).input, 2, `local ${argon}`);
+      assert.equal(localPricing(argon).output, 10, `local ${argon}`);
+      assert.equal(localPricing(argon).cache_read, 0.1, `local ${argon}`);
+    }
+    for (const flash of ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]) {
+      assert.deepEqual(
+        JSON.parse(JSON.stringify(edgePricing(flash))),
+        { input: 0.75, output: 3.75, cache_read: 0.075 },
+        `${name}: ${flash}`,
+      );
+      assert.equal(localPricing(flash).input, 0.75, `local ${flash}`);
+      assert.equal(localPricing(flash).output, 3.75, `local ${flash}`);
+      assert.notDeepEqual(
+        JSON.parse(JSON.stringify(edgePricing(flash))),
+        JSON.parse(JSON.stringify(edgePricing("gemini-3-flash-preview"))),
+        `${name}: ${flash} must not inherit gemini-3-flash-preview`,
+      );
+    }
     assert.deepEqual(
-      JSON.parse(JSON.stringify(edgePricing("gemini-4-argon"))),
-      { input: 2, output: 10, cache_read: 0.1, cache_write: 0 },
-      `${name}: gemini-4-argon`,
+      JSON.parse(JSON.stringify(edgePricing("gemini-3.8-flash-n"))),
+      { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+      `${name}: gemini-3.8-flash-n must stay unpriced`,
+    );
+    assert.equal(localPricing("gemini-3.8-flash-n", { source: "antigravity" }).input, 0);
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(edgePricing("gemini-3.8-flash-high"))),
+      { input: 0.75, output: 3.75, cache_read: 0.075 },
+      `${name}: gemini-3.8-flash-high keeps the published Flash rate`,
+    );
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(edgePricing("gemini-3.5-flash"))),
+      { input: 1.5, output: 9, cache_read: 0.15 },
+      `${name}: gemini-3.5-flash`,
+    );
+    assert.equal(localPricing("gemini-3.5-flash").input, 1.5);
+    assert.equal(localPricing("gemini-3.5-flash").output, 9);
+    assert.notDeepEqual(
+      JSON.parse(JSON.stringify(edgePricing("gemini-3.5-flash"))),
+      JSON.parse(JSON.stringify(edgePricing("gemini-3-flash-preview"))),
+      `${name}: gemini-3.5-flash must not inherit gemini-3-flash-preview`,
+    );
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(edgePricing("gemini-3.5-flash-n"))),
+      { input: 1.5, output: 9, cache_read: 0.15 },
+      `${name}: gemini-3.5-flash-n keeps the LiteLLM/fuzzy-aligned 3.5 Flash rate`,
     );
   }
 });

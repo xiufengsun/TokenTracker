@@ -126,10 +126,14 @@ test("private aggregation sees whole-row corrections, timezone buckets, and Deep
   await upload(device.token,[row(60)]);
   const corrected=await query("account_usage_grouped_cached",args);
   assert.equal(corrected[0].total_tokens,60);assert.equal(corrected[0].bucket,"2026-10-01T20:00:00");
-  const weekend={...row(70),model:"deepseek-v4-pro",hour_start:"2026-10-03T02:00:00Z"};
-  await upload(device.token,[weekend]);
+  const weekend=[["deepseek-v4-pro",70],["deepseek-v4.1-flash",71],["deepseek-flash",72]]
+    .map(([model,tokens])=>({...row(tokens),model,hour_start:"2026-10-03T02:00:00Z"}));
+  await upload(device.token,weekend);
   const tiers=await query("account_usage_grouped_cached",[owner,null,"2026-10-03T00:00:00Z","2026-10-04T00:00:00Z","day","UTC",null]);
-  assert.equal(tiers[0].pricing_tier,"off_peak");
+  assert.deepEqual(Object.fromEntries(tiers.map(t=>[t.model,t.pricing_tier])),
+    {"deepseek-v4-pro":"off_peak","deepseek-v4.1-flash":"off_peak","deepseek-flash":"off_peak"});
+  assert.deepEqual(Object.fromEntries(tiers.map(t=>[t.model,t.total_tokens])),
+    {"deepseek-v4-pro":70,"deepseek-v4.1-flash":71,"deepseek-flash":72});
 });
 
 test("installer refuses incomplete platform roles, existing unregistered applications, checksum drift, and missing functions",async()=>{

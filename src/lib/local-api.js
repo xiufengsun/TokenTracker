@@ -1,3 +1,4 @@
+const { hasUnknownBackendCost } = require("./claude-backend");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -25,7 +26,9 @@ const { negotiateEncoding } = require("./accept-encoding");
 const { createLocalUsageTransfer, MAX_BYTES: LOCAL_USAGE_MAX_BYTES } = require("./local-usage-transfer");
 const { fetchProviderServiceStatus } = require("./provider-status");
 
-const SYNC_TIMEOUT_MS = 120_000;
+// How long a local-sync request waits for its sync child before answering.
+// Native clients give up at 130s (macOS) so the server must answer first.
+const SYNC_RESPONSE_WAIT_MS = 120_000;
 // A failed account-view request should not stall every dashboard refresh
 // while an expired session or unreachable backend keeps timing out. The first
 // request still falls back normally; subsequent fan-out requests reuse that
@@ -909,15 +912,9 @@ function runSyncCommand(extraEnv = {}, opts = {}) {
     const finish = (fn, v) => {
       if (settled) return;
       settled = true;
-      clearTimeout(tid);
       opts.signal?.removeEventListener("abort", cancel);
       fn(v);
     };
-    let timedOut = false;
-    const tid = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    }, SYNC_TIMEOUT_MS);
     child.stdout?.on("data", (c) => {
       stdout += c;
     });
@@ -928,7 +925,6 @@ function runSyncCommand(extraEnv = {}, opts = {}) {
       finish(reject, Object.assign(e, { stdout: trimOutput(stdout), stderr: trimOutput(stderr) }));
     });
     child.on("close", (code) => {
-      if (timedOut) { finish(reject, Object.assign(new Error("Sync timed out"), { code: "SYNC_TIMEOUT", stdout: trimOutput(stdout), stderr: trimOutput(stderr) })); return; }
       if (opts.signal?.aborted) { finish(reject, Object.assign(new Error("Account session changed"), { code: "auth_session_changed", status: 409 })); return; }
       const r = { code: code ?? 1, stdout: trimOutput(stdout), stderr: trimOutput(stderr) };
       if (code === 0) {
@@ -945,6 +941,23 @@ function runSyncCommand(extraEnv = {}, opts = {}) {
       finish(reject, error);
     });
   });
+}
+
+// The sync child owns its own lifetime: it holds the sync lock and commits its
+// cursors only after the whole scan finishes. Killing it when the HTTP caller
+// stops waiting discarded that progress, so a backlog longer than one wait
+// window was rescanned and killed on every attempt and never landed. The
+// caller gets an answer after `waitMs`; the child keeps running to completion
+// and only an explicit abort (account session change) terminates it.
+function waitForSyncResponse(syncPromise, waitMs = SYNC_RESPONSE_WAIT_MS) {
+  let tid;
+  const expired = new Promise((_, reject) => {
+    tid = setTimeout(() => reject(Object.assign(
+      new Error("Sync is still running in the background"),
+      { code: "SYNC_RUNNING", status: 503 },
+    )), waitMs);
+  });
+  return Promise.race([syncPromise, expired]).finally(() => clearTimeout(tid));
 }
 
 // ---------------------------------------------------------------------------
@@ -1165,6 +1178,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
   let relayCookies = new Map();
   const localAuthToken = crypto.randomBytes(24).toString("hex");
   const trackerDataDir = isolatedTrackerDataDir || path.dirname(qp);
+  const cursorLogin = require("./cursor-login").createCursorLogin({ trackerDir: trackerDataDir });
   const cookiePath = path.join(trackerDataDir, "relay-cookies.json");
   const localSyncDeviceTokenStore = createCloudDeviceTokenStore(path.join(trackerDataDir, "cloud-device-token.json"));
   const localSyncDeviceTokenCache = new Map();
@@ -1386,6 +1400,13 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
     }
   }
 
+  function rememberIssuedAccessToken(accessToken, sourceFingerprint) {
+    if (!sourceFingerprint || typeof accessToken !== "string" || accessToken.length > 8192) return;
+    const hash = crypto.createHash("sha256").update(accessToken).digest("hex");
+    if (!issuedAccessTokenInstances.has(hash)) issuedAccessTokenInstances.set(hash, sourceFingerprint);
+    while (issuedAccessTokenInstances.size > 64) issuedAccessTokenInstances.delete(issuedAccessTokenInstances.keys().next().value);
+  }
+
   function captureAuthTokensFromBody(bodyBuffer, contentType, { newLogin = false, sourceFingerprint } = {}) {
     if (!bodyBuffer || !String(contentType || "").toLowerCase().includes("application/json")) return;
     let parsed = null;
@@ -1394,11 +1415,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
     } catch {
       return;
     }
-    if (sourceFingerprint && typeof parsed?.accessToken === "string" && parsed.accessToken.length <= 8192) {
-      const hash = crypto.createHash("sha256").update(parsed.accessToken).digest("hex");
-      if (!issuedAccessTokenInstances.has(hash)) issuedAccessTokenInstances.set(hash, sourceFingerprint);
-      while (issuedAccessTokenInstances.size > 64) issuedAccessTokenInstances.delete(issuedAccessTokenInstances.keys().next().value);
-    }
+    rememberIssuedAccessToken(parsed?.accessToken, sourceFingerprint);
     let changed = false;
     const token = typeof parsed?.csrfToken === "string" ? parsed.csrfToken.trim() : "";
     if (token) {
@@ -1622,6 +1639,20 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
   // manual sync. See ACCOUNT_FALLBACK_* below for the vocabulary.
   const ACCOUNT_FALLBACK_CLOUD_SYNC_OFF = "cloud-sync-off";
   const ACCOUNT_FALLBACK_SIGNED_OUT = "signed-out";
+  // "Rebuild cloud usage" wiped this device's cloud rows and is replaying the
+  // queue from offset 0. On the free tier that replay is one upload window
+  // (10 batches) per UTC day, so it can take days; until it finishes the cloud
+  // aggregate is missing most of this machine's history (typically every
+  // recent day). Serving it as the account view showed Today/7d/30d as 0.
+  // Not "transient-": clients keep their last account snapshot for transient
+  // reasons, and that snapshot is the same incomplete aggregate.
+  const ACCOUNT_FALLBACK_CLOUD_REBUILD_PENDING = "cloud-rebuild-pending";
+
+  function cloudUsageRebuildPending() {
+    // An unreadable marker also blocks uploads (cloudUsageResetBlocksUpload),
+    // so the cloud copy is just as stale: fail toward local data.
+    try { return Boolean(readCloudUsageReset(trackerDataDir)); } catch { return true; }
+  }
 
   // Every transient reason is prefixed "transient-"; clients only need the
   // prefix, so new reasons can be added without a client change.
@@ -1648,6 +1679,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
     if (!getCloudSyncPref()) return ACCOUNT_FALLBACK_CLOUD_SYNC_OFF;
     const refreshToken = getRefreshTokenForCloud();
     if (!refreshToken) return ACCOUNT_FALLBACK_SIGNED_OUT;
+    if (cloudUsageRebuildPending()) return ACCOUNT_FALLBACK_CLOUD_REBUILD_PENDING;
     invalidateAfterAccountUpload();
     const runtime = getRuntime();
     if (runtime.configurationError) return ACCOUNT_FALLBACK_SIGNED_OUT;
@@ -1741,6 +1773,10 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         json(res, { error: "Cloud sync preference changed", code: "CLOUD_SYNC_CHANGED" }, 409);
         return "served";
       }
+      // The reset writes its marker before the remote wipe, so a read that
+      // started before the marker can overlap the wipe and return a partial
+      // aggregate. Re-check now that the read has finished.
+      if (cloudUsageRebuildPending()) return ACCOUNT_FALLBACK_CLOUD_REBUILD_PENDING;
       accountViewFailures.delete(failureKey);
       res.writeHead(200, {
         "Content-Type": "application/json",
@@ -2059,6 +2095,90 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         const hasCsrfHeader = typeof proxyHeaders["x-csrf-token"] === "string" && proxyHeaders["x-csrf-token"].trim().length > 0;
         const relayCsrfToken = getRelayCookieValue(csrfRelayCookieName);
         const relayRefreshToken = getRelayCookieValue("insforge_refresh_token", { decode: true });
+        // Issue #1074: the backend rotates refresh tokens, but this proxy and
+        // `mintAccessToken` used to POST the same token independently. A page
+        // refresh concurrent with a background account read then consumed the
+        // token twice — the loser got 401 and the SPA signed the user out.
+        // Route every refresh that still has a persisted token through the
+        // shared mint (cache + single-flight + one retry against a just-
+        // rotated file) so both callers share one result.
+        if (p === "/api/auth/refresh" && relayRefreshToken && String(req.method || "GET").toUpperCase() === "POST") {
+          for await (const _chunk of req) { /* drain unused body */ }
+          const latestRuntime = getRuntime();
+          if (latestRuntime.configurationError || latestRuntime.baseUrl !== runtime.baseUrl || latestRuntime.anonKey !== runtime.anonKey) {
+            json(res, { code: "instance_changed", error: "The configured backend changed during authentication. Reload and sign in again." }, 409);
+            return true;
+          }
+          const mintOpts = {
+            baseUrl: insforgeBase,
+            anonKey: runtime.anonKey,
+            timeoutMs: runtime.httpTimeoutMs,
+            throwOnFailure: true,
+          };
+          const rejectIfRefreshContextChanged = () => {
+            const currentRuntime = getRuntime();
+            if (currentRuntime.configurationError || currentRuntime.baseUrl !== runtime.baseUrl || currentRuntime.anonKey !== runtime.anonKey) {
+              json(res, { code: "instance_changed", error: "The configured backend changed during authentication. Reload and sign in again." }, 409);
+              return true;
+            }
+            if (authSessionAtStart !== getCloudAccountSessionGeneration()) {
+              json(res, { error: "Account session changed", code: "auth_session_changed" }, 409);
+              return true;
+            }
+            return false;
+          };
+          let minted = null;
+          try {
+            try {
+              minted = await mintAccessToken({ ...mintOpts, refreshToken: relayRefreshToken });
+            } catch (error) {
+              // Only retry a consumed-token 401 against a just-rotated
+              // persisted token for the SAME backend/session. Otherwise a
+              // rejected mint from instance A could submit instance B's
+              // newly saved refresh token to A.
+              if (rejectIfRefreshContextChanged()) return true;
+              const latest = getRelayCookieValue("insforge_refresh_token", { decode: true });
+              if (latest && latest !== relayRefreshToken && error?.status === 401) {
+                minted = await mintAccessToken({ ...mintOpts, refreshToken: latest });
+              } else {
+                throw error;
+              }
+            }
+          } catch (error) {
+            if (rejectIfRefreshContextChanged()) return true;
+            // performMint tags every non-OK HTTP status as auth_rejected.
+            // Only a real 401 means the credential was consumed/invalid;
+            // 429/503 must not sign the SPA out.
+            if (error?.status === 401) {
+              json(res, { error: "AUTH_UNAUTHORIZED", message: "Invalid or expired refresh token" }, 401);
+              return true;
+            }
+            throw error;
+          }
+          if (rejectIfRefreshContextChanged()) return true;
+          if (!minted?.accessToken) {
+            json(res, { error: "AUTH_UNAUTHORIZED", message: "Invalid or expired refresh token" }, 401);
+            return true;
+          }
+          const payload = { accessToken: minted.accessToken };
+          if (minted.refreshToken) payload.refreshToken = minted.refreshToken;
+          if (minted.user) payload.user = minted.user;
+          // Persist the rotation without bumping sessionGeneration — that
+          // would 409 a concurrent waiter that shared this mint.
+          // setRelayRefreshToken matches the background account-read path.
+          if (minted.refreshToken) setRelayRefreshToken(minted.refreshToken);
+          if (minted.csrfToken) setRelayCsrfToken(minted.csrfToken);
+          // Cache hits return csrfToken:null. The SDK still needs the current
+          // CSRF to sign out; without it, logout 403s and a reload signs the
+          // user back in. Fall back to the relayed token we just persisted.
+          const csrfToken = minted.csrfToken || getRelayCookieValue(csrfRelayCookieName);
+          if (csrfToken) payload.csrfToken = csrfToken;
+          rememberIssuedAccessToken(minted.accessToken, fingerprintFor(runtime));
+          const resBody = Buffer.from(JSON.stringify(payload));
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(resBody);
+          return true;
+        }
         // A cookie-less client (fresh WebView after an app update/restart) has no
         // browser session to pair a CSRF token with — the persisted refresh token
         // replayed through the mobile flow is the only viable recovery. The relay
@@ -2575,13 +2695,15 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           waitForLock:
             !drain && !background && Boolean(extraEnv.TOKENTRACKER_DEVICE_TOKEN),
         });
-        controller.done = syncPromise.catch(() => {});
-        const result = await syncPromise.catch((error) => {
+        // The controller tracks the child, not this request: an account switch
+        // must still be able to stop a sync that outlived its HTTP wait.
+        controller.done = syncPromise.catch(() => {}).finally(() => activeCloudSyncs.delete(controller));
+        const result = await waitForSyncResponse(syncPromise).catch((error) => {
           if (uploadGeneration !== localCloudGeneration) throw Object.assign(new Error("Account session changed"), { code: "auth_session_changed", status: 409 });
           const failure = currentCloudUploadFailure(syncStartedAt, { backoff: auto && drain, deviceToken: extraEnv.TOKENTRACKER_DEVICE_TOKEN, attemptId: extraEnv.TOKENTRACKER_LOCAL_SYNC_ATTEMPT_ID });
           if (failure) Object.assign(error, failure);
           throw error;
-        }).finally(() => activeCloudSyncs.delete(controller));
+        });
         if (extraEnv.TOKENTRACKER_DEVICE_TOKEN && uploadGeneration !== localCloudGeneration) throw Object.assign(new Error("Account session changed"), { code: "auth_session_changed", status: 409 });
         const failure = currentCloudUploadFailure(syncStartedAt, { deviceToken: extraEnv.TOKENTRACKER_DEVICE_TOKEN, attemptId: extraEnv.TOKENTRACKER_LOCAL_SYNC_ATTEMPT_ID });
         if (failure) throw Object.assign(new Error("Cloud upload failed"), failure);
@@ -2942,6 +3064,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         if (!sa.models.has(mdl))
           sa.models.set(mdl, { model: mdl, model_id: mdl, pricing: getModelPricingInfo(mdl, { source: src }), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0, total_cost_usd: "0" } });
         const ma = sa.models.get(mdl);
+        if (hasUnknownBackendCost(row)) ma.pricing = getModelPricingInfo(mdl, row);
         const reportedCost = ["grok", "cline"].includes(src) && Number(row.total_cost_usd) > 0;
         const costSource = reportedCost ? "provider_reported" : "model_pricing";
         ma.cost_source = ma.cost_source && ma.cost_source !== costSource ? "mixed" : costSource;
@@ -3274,6 +3397,48 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           account_view: Boolean(getRefreshTokenForCloud()) && getCloudSyncPref(),
         },
       });
+      return true;
+    }
+
+    // Explicit Cursor browser authorization. Never return the verifier or session token.
+    if (p === "/functions/tokentracker-cursor-connection") {
+      if (!isAuthorizedLocalMutation(req)) {
+        json(res, { error: "Unauthorized" }, 401);
+        return true;
+      }
+      res.setHeader("Cache-Control", "no-store");
+      const method = String(req.method || "GET").toUpperCase();
+      if (method === "GET") {
+        json(res, cursorLogin.status());
+        return true;
+      }
+      if (method !== "POST") {
+        json(res, { error: "Method Not Allowed" }, 405);
+        return true;
+      }
+      let body;
+      try { body = await readJsonBody(req); } catch {
+        json(res, { error: "Invalid JSON body" }, 400);
+        return true;
+      }
+      try {
+        let result;
+        switch (body?.action) {
+          case "start": result = cursorLogin.start(); break;
+          case "poll": result = await cursorLogin.poll(body.attemptId); break;
+          case "cancel": result = cursorLogin.cancel(body.attemptId); break;
+          case "disconnect": result = cursorLogin.disconnect(); break;
+          default:
+            json(res, { error: "Unknown Cursor connection action" }, 400);
+            return true;
+        }
+        if (result.status === "connected" || result.status === "disconnected") {
+          require("./usage-limits").resetUsageLimitsCache({ invalidateInFlight: true });
+        }
+        json(res, result);
+      } catch {
+        json(res, { error: "Could not update the Cursor connection" }, 500);
+      }
       return true;
     }
 

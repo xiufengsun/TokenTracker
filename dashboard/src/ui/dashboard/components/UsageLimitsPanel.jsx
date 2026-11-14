@@ -14,6 +14,7 @@ import { buildResetBankRows } from "./usage-limits-reset-bank.js";
 import { PROVIDER_LIMIT_SPECS } from "./usage-limits-provider-specs.js";
 import { HoverTooltip } from "../../components/HoverTooltip.jsx";
 import { cycleView, countdownText, remainingLabel } from "../../../lib/subscription-display.js";
+import { CursorConnectionControl } from "./CursorConnectionControl.jsx";
 import { saveProviderApiKey } from "../../../lib/api";
 
 const LIMITS_PROVIDER_ICON_CLASS = "shrink-0 text-oai-black dark:text-oai-white";
@@ -409,24 +410,24 @@ function StatusBadge({ label, age = null, tone = "live", tooltip = null }) {
   );
 }
 
-function ToolGroup({ name, providerId, children, expandable = false, expanded = false, onToggle, badge = null, rightAdornment = null, toggleOnHeader = false }) {
+function ToolGroup({ name, providerId, children, expandable = false, expanded = false, onToggle, badge = null, rightAdornment = null, toggleOnHeader = false, actions = null }) {
   const providerKey = limitProviderIconKey(providerId);
   const header = (
     <div className="flex min-w-0 items-center gap-3">
       {providerKey ? (
         <ProviderIcon provider={providerKey} size={22} className={LIMITS_PROVIDER_ICON_CLASS} />
       ) : null}
-      <span className="text-base font-semibold text-oai-black dark:text-oai-white">{name}</span>
+      <span className="text-sm font-medium text-oai-black dark:text-oai-white">{name}</span>
       {rightAdornment ? <span className="shrink-0">{rightAdornment}</span> : null}
       {badge}
     </div>
   );
   const cardClass = "rounded-xl border border-oai-gray-200 bg-white dark:border-oai-gray-800 dark:bg-oai-gray-900";
-  const headerClass = "flex w-full items-center justify-between gap-3 border-b border-oai-gray-200 px-4 py-4 text-left dark:border-oai-gray-800 sm:px-5";
+  const headerClass = "flex w-full items-center justify-between gap-3 border-b border-oai-gray-200 px-4 py-3 text-left dark:border-oai-gray-800 sm:px-5";
   const body = <div className="flex flex-col gap-2 px-4 py-4 sm:px-5">{children}</div>;
 
   if (!expandable) {
-    return <div className={cardClass}><div className={headerClass}>{header}</div>{body}</div>;
+    return <div className={cardClass}><div className={headerClass}>{header}{actions}</div>{body}</div>;
   }
 
   if (toggleOnHeader) {
@@ -453,7 +454,7 @@ function ToolGroup({ name, providerId, children, expandable = false, expanded = 
       className={`${cardClass} cursor-pointer transition-colors hover:border-oai-gray-300 dark:hover:border-oai-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500`}>
       <div className={headerClass}>
         {header}
-        <ChevronDown size={16} aria-hidden className={`shrink-0 text-oai-gray-400 transition-transform ${expanded ? "rotate-180" : ""}`} />
+        <span className="flex shrink-0 items-center gap-1">{actions}<ChevronDown size={16} aria-hidden className={`shrink-0 text-oai-gray-400 transition-transform ${expanded ? "rotate-180" : ""}`} /></span>
       </div>
       {body}
     </div>
@@ -508,6 +509,7 @@ function SubscriptionBar({ subscription, now, mode = LIMIT_DISPLAY_MODES.USED })
   return (
     <div className="flex items-center gap-2">
       <span
+        data-limit-label=""
         className="text-xs sm:text-sm text-oai-gray-500 dark:text-oai-gray-400 shrink-0 whitespace-nowrap"
         style={{ width: "var(--tt-limits-label-w)" }}
       >
@@ -1023,6 +1025,7 @@ function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, bad
       onToggle={onToggle}
       badge={badge}
       rightAdornment={subscription ? <SubscriptionRightBadge subscription={subscription} /> : null}
+      actions={id === "cursor" && data.connection_source === "browser" ? <CursorConnectionControl connected onSaved={onKeySaved} /> : null}
       toggleOnHeader={id === "zcode"}
     >
       <LimitWindowSection mode={mode} rows={rows} extra={extra} expanded={expanded} />
@@ -1048,12 +1051,13 @@ function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, bad
 // fetch error). A linked subscription still belongs to this row: it is
 // user-entered data, so its badge/progress stay visible regardless of the
 // tool's own configuration state.
-function renderUnlinkedProvider(id, statusNodes, expanded, onToggle, subscription = null, now = Date.now(), mode = LIMIT_DISPLAY_MODES.USED) {
+function renderUnlinkedProvider(id, statusNodes, expanded, onToggle, subscription = null, now = Date.now(), mode = LIMIT_DISPLAY_MODES.USED, actions = null) {
   const hasSubscription = Boolean(subscription);
   return (
     <ToolGroup
       key={id}
       name={limitProviderName(id)}
+      actions={actions}
       providerId={id}
       expandable={hasSubscription}
       expanded={expanded}
@@ -1073,11 +1077,27 @@ function renderUnlinkedProvider(id, statusNodes, expanded, onToggle, subscriptio
 
 function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = null, now = Date.now(), onKeySaved = null) {
   if (!PROVIDER_LIMIT_SPECS[id]) return null;
+  const connectionActions = id === "cursor"
+    ? <CursorConnectionControl connected={data?.connection_source === "browser"} onSaved={onKeySaved} />
+    : null;
+  if (id === "claude" && data?.limits_status === "not_applicable") {
+    return renderUnlinkedProvider(id,
+      <StatusLine>{copy("limits.claude.custom_backend")}</StatusLine>,
+      expanded, onToggle, subscription, now, mode);
+  }
   if (!data?.configured) {
     return renderUnlinkedProvider(
       id,
       <>
-        <StatusLine>{copy("limits.status.not_connected")}</StatusLine>
+        {id === "cursor" ? (
+          <div className="space-y-2">
+            <div className="space-y-1 text-xs leading-relaxed text-oai-gray-600 dark:text-oai-gray-300">
+              <p>{copy("limits.cursor.connection.description")}</p>
+              <p className="text-oai-gray-500 dark:text-oai-gray-400">{copy("limits.cursor.connection.privacy")}</p>
+            </div>
+            {connectionActions}
+          </div>
+        ) : <StatusLine>{copy("limits.status.not_connected")}</StatusLine>}
         {id === "opencodeGo" ? <SetupHint title={copy("limits.opencodeGo.setupHint.title")}><OpenCodeGoSetupHint onSaved={onKeySaved} /></SetupHint> : null}
         {id === "commandCode" ? <SetupHint title={copy("limits.commandCode.setupHint.title")}><CommandCodeSetupHint onSaved={onKeySaved} /></SetupHint> : null}
         {id === "codingPlan" ? <SetupHint title={copy("limits.codingPlan.setupHint.title")}><ArkCodingPlanSetupHint /></SetupHint> : null}
@@ -1107,7 +1127,7 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
     return renderUnlinkedProvider(
       id,
       <>
-        <StatusLine tone="error">{data.error}</StatusLine>
+        <StatusLine tone="error">{id === "cursor" && data.auth_action_required === "reauth" ? copy("limits.cursor.connection.expired") : data.error}</StatusLine>
         {id === "kiro"
           ? renderProviderExtra(PROVIDER_LIMIT_SPECS.kiro.extra, data)
           : null}
@@ -1124,6 +1144,7 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
       subscription,
       now,
       mode,
+      connectionActions,
     );
   }
 

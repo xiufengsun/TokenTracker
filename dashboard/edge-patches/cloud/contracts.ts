@@ -13,6 +13,7 @@ export interface CloudOrder {
   billing_mode?: "fixed" | "recurring";
   provider_order_id: string | null;
   provider_checkout_id?: string | null;
+  provider_checkout_expires_at?: string | null;
   waffo_order_id?: string | null;
   retry_order_id?: string | null;
   retry_payment_conflict_at?: string | null;

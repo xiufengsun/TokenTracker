@@ -43,6 +43,7 @@ const SOURCE_FILTERS = [
   { id: "kimi", label: () => copy("leaderboard.column.kimi") },
   { id: "omp", label: () => "oh-my-pi" },
   { id: "dsh", label: () => copy("provider.display.deepseek_harness") },
+  { id: "pi", label: () => copy("provider.display.pi") },
 ];
 
 const DATE_RANGES = [
@@ -342,7 +343,7 @@ const SessionRow = React.memo(function SessionRow({
         <div className="sessions-row-value">
           <dt className="text-xs text-oai-gray-600 dark:text-oai-gray-300 md:sr-only">{copy("sessions.col.cost")}</dt>
           <dd className="mt-1 text-sm tabular-nums text-oai-black dark:text-white md:mt-0" title={session.cost_is_partial ? copy("sessions.cost.partial_title") : undefined}>
-            {session.cost_is_partial ? "≥" : ""}{formatUsdCurrency(session.cost_usd, { currency, rate })}
+            {session.cost_is_partial && Number(session.cost_usd) === 0 ? copy("dashboard.cost_breakdown.unpriced_label") : <>{session.cost_is_partial ? "≥" : ""}{formatUsdCurrency(session.cost_usd, { currency, rate })}</>}
           </dd>
         </div>
         <div className="sessions-row-value">
@@ -802,7 +803,7 @@ export function SessionsPage() {
               <dl className="sessions-kpis grid min-w-0 flex-1 grid-cols-2 gap-y-3 sm:grid-cols-4">
                 <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.summary.count")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{formatCompactNumber(summary.count)}</dd></div>
                 <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.col.tokens")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{formatCompactNumber(summary.tokens)}</dd></div>
-                <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.col.cost")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{summary.costIsPartial ? "≥" : ""}{formatUsdCurrency(summary.cost, { currency, rate })}</dd></div>
+                <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.col.cost")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{summary.costIsPartial && summary.cost === 0 ? copy("dashboard.cost_breakdown.unpriced_label") : <>{summary.costIsPartial ? "≥" : ""}{formatUsdCurrency(summary.cost, { currency, rate })}</>}</dd></div>
                 <div>
                   <dt className="flex items-center gap-1.5 text-xs text-oai-gray-500 dark:text-oai-gray-400">
                     <span>{copy("sessions.summary.speed")}</span>

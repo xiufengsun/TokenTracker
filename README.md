@@ -262,7 +262,7 @@ An Arch `PKGBUILD` for a local pacman install lives in `TokenTrackerLinux/packag
 | **Kilo Code** (VS Code extension) | ✅ Auto | Passive `ui_messages.json` reader (Cursor/Code/CodeBuddy/Windsurf globalStorage) |
 | **Antigravity** | ✅ Auto | Passive transcript reader (`~/.gemini/{antigravity,antigravity-ide,antigravity-cli}/brain/**/transcript.jsonl`); see [quota credentials and Linux keyring setup](docs/antigravity-limits.md). Disable quota lookup with `TOKENTRACKER_DISABLE_ANTIGRAVITY_QUOTA=1` |
 | **OmO** | ✅ Auto | Passive reader (`~/.omo/agent/sessions/**/*.jsonl`, subagent transcripts included). Same session format as oh-my-pi but a separate install root, cursor namespace and source label, so both can be tracked side by side. Reasoning tokens are reported as a subset of output (Codex convention) and are never billed twice |
-| **pi** (`@mariozechner/pi-coding-agent`) | ✅ Auto | Passive reader (`~/.pi/agent/sessions/**/*.jsonl`) |
+| **pi** (`@mariozechner/pi-coding-agent`) | ✅ Auto | Passive reader (`~/.pi/agent/sessions/**/*.jsonl`, pi-subagents fork transcripts folded in) + Sessions browser (`pi --session <id>` resume) |
 | **Dots** | ✅ Auto | Routed through pi's provider split (`pi-dots` source, same passive reader) — no separate hook |
 | **Prime Agent** | ✅ Auto | Metadata-only passive usage reader (`~/.prime/agent/sessions/*.jsonl`; reads usage/model/provider/timestamp, never prompts or responses) |
 | **Craft Agents** | ✅ Auto | Passive session reader (`~/.craft-agent` + workspace session logs) |
@@ -467,6 +467,8 @@ Requires **Xcode 16+** and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 ---
 
 ## 🔧 Troubleshooting
+
+- **Antivirus quarantined `tracker.js` on Windows** — see [Antivirus false positives](docs/antivirus-false-positives.md) (suspected Kaspersky PDM false positive; vendor review still required).
 
 **ZCode totals decreased after v0.96.0?** This release corrects historical cache/reasoning double counting, including previously uploaded months. See the [ZCode history correction](docs/zcode-history-correction.md) for the accounting change and local backup details.
 

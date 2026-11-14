@@ -158,6 +158,103 @@ function sampleSession(usageTime) {
   };
 }
 
+
+for (const linkedPart of ["app root", "globalStorage"]) {
+  test(`TRAE CN sync reads auth through a linked ${linkedPart} and remains idempotent`, async (t) => {
+    await withTempTraeEnv(async ({ home, traeCnHome }) => {
+      writeTraeCnStorage(traeCnHome);
+      const link = linkedPart === "app root" ? traeCnHome : path.join(traeCnHome, "User", "globalStorage");
+      const target = path.join(home, "relocated CN 数据");
+      fs.renameSync(link, target);
+      fs.symlinkSync(target, link, "junction");
+      const requests = [];
+      const opts = {
+        traeCnFetchImpl: traeFetchOnce({ user_usage_group_by_sessions: [sampleSession(NOW_MS / 1000 - 60)], total: 1 }, requests),
+        traeCnNowMs: NOW_MS,
+      };
+      await cmdSync(["--auto", "--source=trae-cn"], opts);
+      const before = readQueueRows(home);
+      assert.equal(before.filter((row) => row.source === "trae-cn" && !row.kind).length, 1);
+      await cmdSync(["--auto", "--source=trae-cn"], opts);
+      assert.deepEqual(readQueueRows(home), before);
+      assert.equal(requests.length, 2);
+      // The same link must not bypass privacy/background gating.
+      await cmdSync(["--auto", "--background", "--source=trae-cn"], opts);
+      process.env.TOKENTRACKER_TRAE_CN_USAGE = "0";
+      await cmdSync(["--auto", "--source=trae-cn"], opts);
+      assert.equal(requests.length, 2);
+    });
+  });
+}
+
+for (const command of ["sync", "status"]) {
+  test(`TRAE CN inaccessible storage is reported by ${command}`, async (t) => {
+    await withTempTraeEnv(async ({ home, traeCnHome }) => {
+      writeTraeCnStorage(traeCnHome);
+      const storagePath = path.join(traeCnHome, "User", "globalStorage", "storage.json");
+      const exists = fs.existsSync;
+      const stat = fs.statSync;
+      const read = fs.readFileSync;
+      t.mock.method(fs, "existsSync", (file) => file === storagePath ? false : exists(file));
+      const denied = () => Object.assign(new Error("private-jwt-canary"), { code: "EACCES" });
+      t.mock.method(fs, "statSync", (file, ...args) => {
+        if (file === storagePath) throw denied();
+        return stat(file, ...args);
+      });
+      t.mock.method(fs, "readFileSync", (file, ...args) => {
+        if (file === storagePath) throw denied();
+        return read(file, ...args);
+      });
+      let stderr = "", stdout = "";
+      const writeErr = process.stderr.write.bind(process.stderr);
+      const writeOut = process.stdout.write.bind(process.stdout);
+      t.mock.method(process.stderr, "write", (chunk, ...args) => {
+        if (typeof chunk !== "string") return writeErr(chunk, ...args);
+        stderr += chunk;
+        return true;
+      });
+      t.mock.method(process.stdout, "write", (chunk, ...args) => {
+        if (typeof chunk !== "string") return writeOut(chunk, ...args);
+        stdout += chunk;
+        return true;
+      });
+      if (command === "sync") {
+        await cmdSync(["--source=trae-cn"], {
+          traeCnNowMs: NOW_MS,
+          traeCnFetchImpl: async () => assert.fail("unreadable auth must not trigger a request"),
+        });
+        assert.match(stderr, /TRAE Work CN sync: Trae CN storage.json could not be read/);
+        assert.equal(readQueueRows(home).some((row) => row.source === "trae-cn"), false);
+        assert.equal(readCursors(home).traeCn, undefined);
+      } else {
+        await require("../src/commands/status").cmdStatus([]);
+        assert.match(stdout, /Trae SOLO CN:.*auth unreadable/);
+      }
+      assert.doesNotMatch(stderr + stdout, /private-jwt-canary/);
+    });
+  });
+}
+
+test("missing TRAE CN override and unsigned storage stay quiet and never fetch", async (t) => {
+  await withTempTraeEnv(async ({ traeCnHome }) => {
+    let stderr = "";
+    const writeErr = process.stderr.write.bind(process.stderr);
+    const writeOut = process.stdout.write.bind(process.stdout);
+    t.mock.method(process.stderr, "write", (chunk, ...args) => {
+      if (typeof chunk !== "string") return writeErr(chunk, ...args);
+      stderr += chunk;
+      return true;
+    });
+    t.mock.method(process.stdout, "write", (chunk, ...args) =>
+      typeof chunk === "string" ? true : writeOut(chunk, ...args));
+    const opts = { traeCnFetchImpl: async () => assert.fail("missing auth must not fetch") };
+    await cmdSync(["--source=trae-cn"], opts);
+    fs.writeFileSync(path.join(traeCnHome, "User", "globalStorage", "storage.json"), "{}");
+    await cmdSync(["--source=trae-cn"], opts);
+    assert.doesNotMatch(stderr, /TRAE Work CN sync:/);
+  });
+});
+
 test("non-background auto trae-cn sync fetches the exact rolling range and queues the row", async () => {
   await withTempTraeEnv(async ({ home, traeCnHome }) => {
     writeTraeCnStorage(traeCnHome);
@@ -444,5 +541,43 @@ test("failed TRAE CN fetch skips parser/queue/cursor mutation while other provid
     assert.ok(rows.some((row) => row.source === "codex"), "unrelated provider continued");
     assert.ok(!rows.some((row) => row.source === "trae-cn"), "no trae-cn rows after failure");
     assert.equal(readCursors(home).traeCn, undefined);
+  });
+});
+
+test("persistent 401 preserves prior TRAE CN usage across repeated syncs and gives safe recovery guidance", async (t) => {
+  await withTempTraeEnv(async ({ home, traeCnHome }) => {
+    writeTraeCnStorage(traeCnHome);
+    await cmdSync(["--auto", "--source=trae-cn"], {
+      traeCnFetchImpl: traeFetchOnce({ user_usage_group_by_sessions: [sampleSession(NOW_MS / 1000 - 60)], total: 1 }),
+      traeCnNowMs: NOW_MS,
+    });
+    const queueBefore = readQueueRows(home);
+    const stateBefore = readCursors(home).traeCn;
+    let output = "";
+    const writeErr = process.stderr.write.bind(process.stderr);
+    const writeOut = process.stdout.write.bind(process.stdout);
+    t.mock.method(process.stderr, "write", (chunk, ...args) => {
+      if (typeof chunk !== "string") return writeErr(chunk, ...args);
+      output += chunk;
+      return true;
+    });
+    t.mock.method(process.stdout, "write", (chunk, ...args) =>
+      typeof chunk === "string" ? true : writeOut(chunk, ...args));
+    let calls = 0;
+    const opts = {
+      traeCnNowMs: NOW_MS,
+      traeCnFetchImpl: async () => {
+        calls++;
+        return { ok: false, status: 401, json() { assert.fail("must not consume rejection body"); } };
+      },
+    };
+    await cmdSync(["--source=trae-cn"], opts);
+    await cmdSync(["--source=trae-cn"], opts);
+    assert.equal(calls, 4);
+    assert.deepEqual(readQueueRows(home), queueBefore);
+    assert.deepEqual(readCursors(home).traeCn, stateBefore);
+    assert.match(output, /HTTP 401.*Sign in again/);
+    assert.match(output, /TOKENTRACKER_TRAE_CN_HOME/);
+    assert.doesNotMatch(output, /fake-jwt-token|synthetic/);
   });
 });

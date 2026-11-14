@@ -278,22 +278,6 @@ function PiIcon({ size = 16, className = "" }) {
   );
 }
 
-function DroidIcon({ size = 16, className = "" }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      {/* antennae */}
-      <path d="M9 3v2" />
-      <path d="M15 3v2" />
-      {/* head */}
-      <rect x="4" y="6" width="16" height="13" rx="3" />
-      {/* eyes */}
-      <circle cx="9" cy="13" r="1.4" fill="currentColor" stroke="none" />
-      <circle cx="15" cy="13" r="1.4" fill="currentColor" stroke="none" />
-      {/* mouth slot */}
-      <path d="M9 16h6" />
-    </svg>
-  );
-}
 
 // ZCode is Z.ai's coding agent — use the official Z.ai logomark (three diagonal
 // slashes forming a "Z"). Mono / currentColor, so it renders through the inline
@@ -378,15 +362,19 @@ const PROVIDER_ICON_MAP = {
   CLAUDE: ClaudeIcon,
   ZCODE: ZcodeIcon,
   CODEBUDDY: CodeBuddyIcon,
-  // WorkBuddy ships the same Tencent "buddy" mascot mark as CodeBuddy.
+  // WorkBuddy ships the same Tencent "buddy" mascot mark as CodeBuddy. The
+  // international build reports its own source slug (`workbuddy-ai`, from
+  // ~/.workbuddy-ai), which used to fall through to the dashed placeholder
+  // on the dashboard provider cards and the logo wall.
   WORKBUDDY: CodeBuddyIcon,
+  "WORKBUDDY-AI": CodeBuddyIcon,
   CODEX: CodexIcon,
   COPILOT: CopilotIcon,
   CRAFT: CraftIcon,
   CURSOR: CursorIcon,
   DEEPSEEK: DeepSeekHarnessIcon,
   DSH: DeepSeekHarnessIcon,
-  DROID: DroidIcon,
+
   DUMATE: DumateIcon,
   "EVERY-CODE": CodexIcon,
   GEMINI: GeminiIcon,
@@ -446,6 +434,8 @@ const PROVIDER_LOGO_MAP = {
   QODER: "/brand-logos/qoder.svg",
   // Devin (devin.ai) — the three-hexagon "nodes" mark, mono like Qoder.
   DEVIN: "/brand-logos/devin.svg",
+  // Factory / Droid — official geometric node mark from factory.com/icon.svg.
+  DROID: "/brand-logos/factory.svg",
   REASONIX: "/brand-logos/reasonix.png",
   UNSLOTH: "/brand-logos/unsloth.svg",
   // Qoder CN ships its own brand mark — the domestic edition's icon (a green
@@ -472,6 +462,8 @@ const PROVIDER_LOGO_CLASS_MAP = {
   // The Devin nodes mark ships as a black currentColor trace — same
   // dark-mode inversion treatment as the Qoder mark.
   DEVIN: "dark:invert",
+  // Factory mark is a black mono trace of the official white-on-black icon.
+  DROID: "dark:invert",
   // The sail PNG is solid black on transparent — invert to white in dark
   // mode so it doesn't disappear against the dark dashboard background.
   DOTS: "dark:invert",

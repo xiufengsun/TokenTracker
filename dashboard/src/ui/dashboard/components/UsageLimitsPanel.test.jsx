@@ -8,6 +8,8 @@ import { UsageLimitsPanel } from "./UsageLimitsPanel.jsx";
 
 vi.mock("../../../lib/api", () => ({
   saveProviderApiKey: vi.fn(),
+  isLocalhostHost: () => true,
+  updateCursorConnection: vi.fn(),
 }));
 
 function formatExpiry(iso) {
@@ -53,6 +55,16 @@ afterEach(() => {
 });
 
 describe("UsageLimitsPanel", () => {
+  it.each([
+    [EN_LOCALE, "Custom backend — Anthropic limits not applicable"],
+    [ZH_CN_LOCALE, "自定义后端 — Anthropic 限额不适用"],
+  ])("shows custom Claude limits explicitly in %s", async (locale, message) => {
+    setCopyLocale(locale);
+    render(<UsageLimitsPanel order={["claude"]} claude={{ configured: true, backend: "custom", limits_status: "not_applicable" }} />);
+    await waitFor(() => expect(screen.getByText(message)).toBeVisible());
+    expect(screen.queryByText("0%")).not.toBeInTheDocument();
+  });
+
   afterEach(() => {
     setCopyLocale(EN_LOCALE);
   });
@@ -1494,6 +1506,14 @@ describe("UsageLimitsPanel", () => {
     // Collapsed: top-right auto-renew icon badge and the "Subscription" bar label.
     expect(screen.getByRole("img", { name: "Auto-renew" })).toBeInTheDocument();
     expect(screen.getByText("Subscription")).toBeInTheDocument();
+    // SubscriptionBar must opt into widest-label measurement like LimitBar,
+    // otherwise CJK "订阅" is clipped by --tt-limits-label-w from short 5h/7d labels (#1019).
+    const subscriptionLabel = screen.getByText("Subscription");
+    expect(subscriptionLabel.hasAttribute("data-limit-label")).toBe(true);
+    const labelGroup = subscriptionLabel.closest("[data-limit-label-group]");
+    expect(labelGroup).not.toBeNull();
+    const measured = [...labelGroup.querySelectorAll("[data-limit-label]")].map((el) => el.textContent);
+    expect(measured).toContain("Subscription");
 
     // Expanding reveals the subscription detail line.
     fireEvent.click(screen.getByText("Cursor").closest("[role='button']"));

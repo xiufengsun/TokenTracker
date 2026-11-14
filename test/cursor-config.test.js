@@ -90,6 +90,53 @@ describe("parseCursorCsv — with Cloud Agent ID columns", () => {
   });
 });
 
+// ── parseCursorCsv — request-only rows (issue #998) ──
+
+describe("parseCursorCsv — request-only rows", () => {
+  const csvText = `Date,Cloud Agent ID,Automation ID,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost
+"2026-10-01T08:00:00.000Z","","","Included","grok-bot-automation","No","0","0","0","0","0","0.00"
+"2026-10-01T09:00:00.000Z","","","Included","","No","0","0","0","0","0","0.00"
+"2026-10-01T10:00:00.000Z","","","Included","auto","No","0","0","500","0","0","0.00"`;
+
+  it("keeps a 0-token row that carries a model identity", () => {
+    const records = parseCursorCsv(csvText);
+    assert.equal(records.length, 2);
+    const r = records[0];
+    assert.equal(r.date, "2026-10-01T08:00:00.000Z");
+    assert.equal(r.model, "grok-bot-automation");
+    assert.equal(r.kind, "Included");
+    assert.equal(r.inputTokens, 0);
+    assert.equal(r.cacheReadTokens, 0);
+    assert.equal(r.outputTokens, 0);
+    assert.equal(r.totalTokens, 0);
+  });
+
+  it("still drops a 0-token row without any model", () => {
+    const records = parseCursorCsv(csvText);
+    assert.ok(!records.some((r) => r.model === ""));
+  });
+
+  it("keeps a cache-read-only row even when the Total column is 0", () => {
+    // Component columns are the source of truth: isAllZeroUsage downstream
+    // counts cacheReadTokens, so dropping on Total Tokens alone would lose
+    // rows the incremental parser would otherwise import.
+    const records = parseCursorCsv(csvText);
+    const r = records.find((rec) => rec.model === "auto");
+    assert.ok(r, "cache-read-only row kept");
+    assert.equal(r.cacheReadTokens, 500);
+    assert.equal(r.totalTokens, 0);
+  });
+
+  it("keeps a token-bearing row that has no model", () => {
+    const csv = `Date,Cloud Agent ID,Automation ID,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost
+"2026-10-01T11:00:00.000Z","","","Included","","No","0","0","500","0","0","0.00"`;
+    const records = parseCursorCsv(csv);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].model, "");
+    assert.equal(records[0].cacheReadTokens, 500);
+  });
+});
+
 describe("Cursor billing kind classification", () => {
   it("treats included and on-demand usage as billable-ish", () => {
     assert.equal(isCursorBillableKind("Included"), true);
@@ -428,6 +475,38 @@ describe("extractCursorSessionToken", () => {
       cookie: `WorkosCursorSessionToken=user_FALLBACK%3A%3A${jwt}`,
       userId: "user_FALLBACK",
     });
+  });
+
+  it("rejects encrypted Cursor Safe Storage tokens without spawning security (#1043)", () => {
+    const encrypted = `cursor-safe-storage:v1:${Buffer.alloc(40).toString("base64")}`;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-cursor-safe-storage-reject-"));
+    const { stateDbPath, cliConfigPath } = resolveCursorPaths({ home, env: {} });
+    fs.mkdirSync(path.dirname(stateDbPath), { recursive: true });
+    fs.writeFileSync(stateDbPath, "", "utf8");
+    fs.mkdirSync(path.dirname(cliConfigPath), { recursive: true });
+    fs.writeFileSync(
+      cliConfigPath,
+      JSON.stringify({ authInfo: { authId: "auth0|user_ENCRYPTED" } }),
+      "utf8",
+    );
+    let securityCalls = 0;
+    const deps = {
+      execFileSync: (cmd, args) => {
+        if (String(cmd).includes("security") || (Array.isArray(args) && args.includes("Cursor Safe Storage"))) {
+          securityCalls += 1;
+          throw new Error("security must not be invoked");
+        }
+        return JSON.stringify([{ value: encrypted }]);
+      },
+      requireFn: () => {
+        throw new Error("sqlite3 CLI used");
+      },
+      env: {},
+    };
+
+    assert.equal(extractCursorAuth({ home, env: {}, deps }), null);
+    assert.equal(extractCursorSessionToken({ home, env: {}, deps }), null);
+    assert.equal(securityCalls, 0);
   });
 
   it("exposes the bearer token only through the full Cursor auth helper", () => {

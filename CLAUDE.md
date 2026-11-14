@@ -18,7 +18,7 @@ For the canonical list of supported providers, grep `parse*Incremental` in `src/
 ## Frequently used commands
 
 ```bash
-npm test                                  # node --test test/*.test.js  (209 files)
+npm test                                  # node --test test/*.test.js
 node --test test/<name>.test.js           # single test file
 npm run ci:local                          # tests + validations + builds
 npm run dashboard:dev                     # Vite dev server with local API mock (port 5173)

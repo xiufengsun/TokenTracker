@@ -761,8 +761,6 @@ usage.overview.antigravity_notice_title,ui,DashboardPage,UsageOverview,antigravi
 usage.overview.antigravity_notice_body,ui,DashboardPage,UsageOverview,antigravity_notice_body,"Exact token usage and prompt-cache hits are parsed from Antigravity session metadata when available. Fallback transcripts without metadata are estimated from text length (~4 chars/token).",,active
 usage.overview.devin_notice_title,ui,DashboardPage,UsageOverview,devin_notice_title,"Cost not estimated",,active
 usage.overview.devin_notice_body,ui,DashboardPage,UsageOverview,devin_notice_body,"Devin reports real local token counts, but swe-2, swe-2-high and compactor have no pricing data in this build, so they are excluded from dollar estimates. A $0 figure does not mean the usage was free.",,active
-usage.overview.trae_notice_title,ui,DashboardPage,UsageOverview,trae_notice_title,"TRAE cost is partial",,active
-usage.overview.trae_notice_body,ui,DashboardPage,UsageOverview,trae_notice_body,"In multi-step turns, TRAE splits cached input for the final step, not the earlier ones. Input without a cache split counts toward token totals but not toward cost. Costs use model prices, not billed amounts.",,active
 usage.overview.week_cross_month_hint,ui,DashboardPage,UsageOverview,week_cross_month_hint,"This week spans two calendar months, so its total is not directly comparable with a single month's usage",,active
 limits.panel.title,ui,LimitsPage,UsageLimitsPanel,title,"Usage Limits",,active
 limits.panel.mode_separator,ui,LimitsPage,UsageLimitsPanel,title_separator," · ",,active
@@ -813,6 +811,7 @@ limits.provider.copilot,ui,LimitsPage,UsageLimitsPanel,provider_copilot,"GitHub 
 limits.provider.antigravity,ui,LimitsPage,UsageLimitsPanel,provider_antigravity,"Antigravity",,active
 limits.provider.zcode,ui,LimitsPage,UsageLimitsPanel,provider_zcode,"ZCode",,active
 provider.display.omp,ui,*,ProviderDisplay,omp,"oh-my-pi",,active
+provider.display.pi,ui,*,ProviderDisplay,pi,"Pi",,active
 provider.display.omo,ui,*,ProviderDisplay,omo,"OmO",,active
 provider.display.minimax_code,ui,*,ProviderDisplay,minimax_code,"MiniMax Code",,active
 provider.display.command_code,ui,*,ProviderDisplay,command_code,"Command Code",,active
@@ -2184,3 +2183,16 @@ settings.local_data.local_history_only,dashboard,DashboardPage,LocalDataSection,
 leaderboard.profile_modal.window.lifetime,dashboard,LeaderboardProfileModal,StatCards,lifetime,"Totals: all time. Active days, daily average and breakdowns: {{from}} to {{to}}.",,active
 leaderboard.profile_modal.window.period,dashboard,LeaderboardProfileModal,StatCards,period,Stats: {{from}} to {{to}}.,,active
 leaderboard.profile_modal.window.average,dashboard,LeaderboardProfileModal,StatCards,average,"Window cost divided by {{days}} calendar days, including days without usage.",,active
+limits.claude.custom_backend,ui,LimitsPage,UsageLimitsPanel,status,Custom backend — Anthropic limits not applicable,,active
+limits.cursor.connection.connect,dashboard,LimitsPage,CursorConnectionControl,connect,Connect,,active
+limits.cursor.connection.reconnect,dashboard,LimitsPage,CursorConnectionControl,reconnect,Reconnect Cursor,,active
+limits.cursor.connection.disconnect,dashboard,LimitsPage,CursorConnectionControl,disconnect,Disconnect,,active
+limits.cursor.connection.open,dashboard,LimitsPage,CursorConnectionControl,open,Open sign-in,,active
+limits.cursor.connection.cancel,dashboard,LimitsPage,CursorConnectionControl,cancel,Cancel,,active
+limits.cursor.connection.waiting,dashboard,LimitsPage,CursorConnectionControl,waiting,Waiting…,,active
+limits.cursor.connection.expired,dashboard,LimitsPage,CursorConnectionControl,expired,Cursor connection expired. Connect again to refresh usage.,,active
+limits.cursor.connection.failed,dashboard,LimitsPage,CursorConnectionControl,failed,Could not connect to Cursor. Try signing in again.,,active
+limits.cursor.connection.manage,dashboard,LimitsPage,CursorConnectionControl,manage,Cursor connection,,active
+limits.cursor.connection.retry,dashboard,LimitsPage,CursorConnectionControl,retry,Retry connection,,active
+limits.cursor.connection.description,dashboard,LimitsPage,CursorConnectionControl,description,Cursor encrypts its saved sign-in. Connect on Cursor's website to read your usage and limits.,,active
+limits.cursor.connection.privacy,dashboard,LimitsPage,CursorConnectionControl,privacy,Your sign-in credentials stay on this device and are never sent to TokenTracker servers.,,active

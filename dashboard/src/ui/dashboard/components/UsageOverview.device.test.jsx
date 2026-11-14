@@ -75,4 +75,28 @@ describe("UsageOverview device dropdown", () => {
     );
     expect(screen.queryByLabelText("Filter by device")).toBeNull();
   });
+
+  it("uses the scope-switch aria label when the unified scope/device filter is on", async () => {
+    const onDeviceChange = vi.fn();
+    render(
+      <UsageOverview
+        {...baseProps}
+        accountScopeSwitchable
+        deviceOptions={[
+          { value: "__scope:local__", label: "This device" },
+          { value: "d1", label: "MacBook" },
+          { value: "", label: "Account-wide" },
+        ]}
+        selectedDevice=""
+        onDeviceChange={onDeviceChange}
+      />,
+      { wrapper: Wrapper },
+    );
+    const trigger = screen.getByLabelText("Data scope");
+    expect(trigger).toBeInTheDocument();
+    await userEvent.click(trigger);
+    // Prefer role=option — plain text can hit a non-interactive selected label.
+    await userEvent.click(await screen.findByRole("option", { name: "MacBook" }));
+    expect(onDeviceChange).toHaveBeenCalledWith("d1");
+  });
 });

@@ -535,3 +535,72 @@ test("native background payload reaches ingest with the runtime anon key", async
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
 });
+
+test("a sync that outlives the HTTP wait keeps running until it commits; only an account change stops it", async (t) => {
+  const fixture = createCloudSyncHome("tokentracker-local-api-background-slow-");
+  const savedBaseUrl = process.env.TOKENTRACKER_INSFORGE_BASE_URL;
+  const savedHome = process.env.HOME;
+  const savedUserProfile = process.env.USERPROFILE;
+  const savedFetch = global.fetch;
+  process.env.TOKENTRACKER_INSFORGE_BASE_URL = "https://cloud.example";
+  process.env.HOME = fixture.tmpHome;
+  process.env.USERPROFILE = fixture.tmpHome;
+  installDeviceTokenFetch([]);
+
+  let child = null;
+  const kills = [];
+  let markSpawned;
+  const spawned = new Promise((resolve) => { markSpawned = resolve; });
+  const { mod, restore } = loadLocalApiWithSpawn(() => {
+    child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    // A real SIGTERM ends the scan before it can commit its cursors.
+    child.kill = (signal) => { kills.push(signal); process.nextTick(() => child.emit("close", null)); };
+    markSpawned();
+    return child;
+  });
+
+  try {
+    const handler = mod.createLocalApiHandler({
+      queuePath: path.join(fixture.trackerDir, "queue.jsonl"),
+      trackerDataDir: fixture.trackerDir,
+    });
+    const localAuthToken = await getLocalAuthToken(handler);
+    const post = (pathname, body) => {
+      const res = createResponse();
+      const done = handler(
+        createRequest({ method: "POST", headers: { "x-tokentracker-local-auth": localAuthToken }, body: JSON.stringify(body) }),
+        res,
+        new URL(`http://127.0.0.1${pathname}`),
+      );
+      return { res, done };
+    };
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const sync = post("/functions/tokentracker-local-sync", {
+      auto: true, background: true, allLocalSources: true, publishAccount: true,
+    });
+    await spawned;
+    t.mock.timers.tick(120_000);
+    assert.equal(await sync.done, true);
+    assert.equal(sync.res.statusCode, 503);
+    assert.equal(JSON.parse(sync.res.body.toString("utf8")).code, "SYNC_RUNNING");
+    assert.deepEqual(kills, [], "the caller's wait window must not kill the scan");
+
+    // The publishing child still carries the old account's device token, so an
+    // account change after the response must still terminate it.
+    const pref = post("/functions/tokentracker-cloud-sync-pref", { enabled: false });
+    assert.equal(await pref.done, true);
+    assert.equal(pref.res.statusCode, 200);
+    assert.deepEqual(kills, ["SIGTERM"]);
+  } finally {
+    restore();
+    global.fetch = savedFetch;
+    if (savedBaseUrl === undefined) delete process.env.TOKENTRACKER_INSFORGE_BASE_URL;
+    else process.env.TOKENTRACKER_INSFORGE_BASE_URL = savedBaseUrl;
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = savedUserProfile;
+    fs.rmSync(fixture.tmpHome, { recursive: true, force: true });
+  }
+});

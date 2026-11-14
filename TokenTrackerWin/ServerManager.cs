@@ -63,7 +63,8 @@ internal sealed class ServerManager : IDisposable
         new(new HttpClientHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(3) };
 
     // The local API owns its configured network timeouts (which may be
-    // unbounded) and its 120s sync-child timeout. Do not impose a finite
+    // unbounded) and answers a sync request within its 120s wait window (the
+    // sync child itself keeps running to completion). Do not impose a finite
     // native timeout that could release the single-flight slot while the
     // server is still publishing; shutdown cancels this request and kills the
     // server/child process instead.
@@ -78,7 +79,7 @@ internal sealed class ServerManager : IDisposable
     // returns at the _backgroundSyncCts guard, so the timer AND the "Sync Now"
     // menu item both become silent no-ops until the app is restarted, even
     // though `tracker sync` in a terminal still works.  Cancel well above the
-    // local API's own 120s sync-child budget so a slow but live publish is
+    // local API's own 120s response window so a slow but live publish is
     // never cut short.
     private static readonly TimeSpan BackgroundSyncDeadline = TimeSpan.FromMinutes(5);
 

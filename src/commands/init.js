@@ -11,7 +11,9 @@ const {
   readJson,
   writeJson,
   chmod600IfPossible,
+  openLock,
 } = require("../lib/fs");
+const { copyRuntimeTree, ensureRuntimeDirectory } = require("../lib/runtime-copy");
 const { resolveMimoNativeDbPath } = require("../lib/install-resolver");
 const { resolveDumateDbPaths } = require("../lib/dumate");
 const { expandHome } = require("../lib/scan-roots");
@@ -1453,6 +1455,7 @@ function normalizePlatform(value) {
 }
 
 function buildNotifyHandler({ trackerDir, packageName }) {
+  const { backendFromUrl, captureClaudeBackend, hashClaudeRange } = require("../lib/claude-backend");
   // Keep this file dependency-free: Node built-ins only.
   // It must never block Codex; it spawns sync in the background and exits 0.
   const queueSignalPath = path.join(trackerDir, "notify.signal");
@@ -1525,6 +1528,14 @@ if (debugEnabled) {
     }
   } catch (_) {}
 }
+
+// Capture before the throttle and before spawning sync. Never persist stdin.
+if (source === 'claude') {
+  try { captureClaudeBackend(trackerDir, JSON.parse(fs.readFileSync(0, 'utf8'))); } catch (_) {}
+}
+${backendFromUrl.toString()}
+${hashClaudeRange.toString()}
+${captureClaudeBackend.toString()}
 
 // Throttle spawn: at most once per 20 seconds.
 try {
@@ -2282,7 +2293,7 @@ async function installLocalTrackerApp({ appDir }) {
   // Copy the current package's runtime (bin + src) into ~/.tokentracker so notify can run sync without npx.
   const packageRoot = path.resolve(__dirname, "../..");
   const srcFrom = path.join(packageRoot, "src");
-  const binFrom = path.join(packageRoot, "bin", "tracker.js");
+  const binFrom = path.join(packageRoot, "bin");
   const packageJsonFrom = path.join(packageRoot, "package.json");
   const nodeModulesFrom = path.join(packageRoot, "node_modules");
   const dashboardDistFrom = path.join(packageRoot, "dashboard", "dist");
@@ -2299,17 +2310,31 @@ async function installLocalTrackerApp({ appDir }) {
   const nodeModulesTo = path.join(appDir, "node_modules");
   const dashboardDistTo = path.join(appDir, "dashboard", "dist");
 
-  await fs.rm(appDir, { recursive: true, force: true }).catch(() => {});
-  await ensureDir(appDir);
-  await fs.cp(srcFrom, srcTo, { recursive: true });
-  await ensureDir(binToDir);
-  await fs.copyFile(binFrom, binTo);
-  await fs.chmod(binTo, 0o755).catch(() => {});
-  await fs.copyFile(packageJsonFrom, path.join(appDir, "package.json")).catch(() => {});
-  if (await isDir(dashboardDistFrom)) {
-    await fs.cp(dashboardDistFrom, dashboardDistTo, { recursive: true });
+  // Serialize installers: init and desktop startup can overlap. In particular,
+  // one refresh must not prune another writer's atomic temporary files.
+  await ensureDir(path.dirname(appDir));
+  const deadline = Date.now() + 120_000;
+  let lock;
+  while (!(lock = await openLock(`${appDir}.install.lock`, { quietIfLocked: true }))) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for local runtime installation");
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  await copyRuntimeDependencies({ from: nodeModulesFrom, to: nodeModulesTo });
+  try {
+    await ensureRuntimeDirectory(appDir);
+    await copyRuntimeTree(srcFrom, srcTo);
+    await copyRuntimeTree(binFrom, binToDir);
+    await fs.chmod(binTo, 0o755).catch(() => {});
+    if (await isDir(dashboardDistFrom)) {
+      await ensureRuntimeDirectory(path.dirname(dashboardDistTo));
+      await copyRuntimeTree(dashboardDistFrom, dashboardDistTo);
+    } else {
+      await fs.rm(path.dirname(dashboardDistTo), { recursive: true, force: true });
+    }
+    await copyRuntimeDependencies({ from: nodeModulesFrom, to: nodeModulesTo });
+    await copyRuntimeTree(packageJsonFrom, path.join(appDir, "package.json"));
+  } finally {
+    await lock.release();
+  }
 }
 
 async function pathsPointToSameLocation(a, b) {
@@ -2418,15 +2443,13 @@ function readFirstSyncTotals(trackerDir) {
 }
 
 async function copyRuntimeDependencies({ from, to }) {
-  try {
-    const st = await fs.stat(from);
-    if (!st.isDirectory()) return;
-  } catch (_e) {
+  if (!(await isDir(from))) {
+    await fs.rm(to, { recursive: true, force: true });
     return;
   }
 
   try {
-    await fs.cp(from, to, { recursive: true });
+    await copyRuntimeTree(from, to);
   } catch (_e) {
     // Best-effort: missing dependencies will fall back to npx at notify time.
   }

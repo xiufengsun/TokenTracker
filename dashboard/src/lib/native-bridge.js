@@ -22,12 +22,17 @@ if (typeof window !== "undefined") {
     if (typeof d !== "boolean") return;
     nativeSystemDark = d;
     // Defensive: also write .dark directly so the page reflects the change
-    // even before React re-renders. ThemeProvider's applyThemeToDOM will
-    // converge on the same value moments later.
+    // even before React re-renders — but only when the dashboard follows the
+    // system. When the user pinned light/dark, the push merely refreshes the
+    // cache; writing the class here would hijack the pinned theme and React
+    // would never revert it (resolvedTheme does not change).
     try {
-      const root = document.documentElement;
-      if (d) root.classList.add("dark");
-      else root.classList.remove("dark");
+      const theme = localStorage.getItem("tokentracker-theme") || "system";
+      if (theme === "system") {
+        const root = document.documentElement;
+        if (d) root.classList.add("dark");
+        else root.classList.remove("dark");
+      }
     } catch { /* ignore */ }
     nativeSystemListeners.forEach((cb) => {
       try { cb(d); } catch { /* ignore listener errors */ }

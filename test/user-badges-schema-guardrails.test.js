@@ -47,7 +47,7 @@ test("read RPCs are revoked from public and granted to project_admin only", () =
   assert.match(sql, /REVOKE EXECUTE ON FUNCTION public\.user_badges_full\(uuid, boolean\) FROM anon, authenticated, PUBLIC/);
   assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.user_badges_compact\(uuid\[\]\) TO project_admin/);
   assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.user_badges_full\(uuid, boolean\) TO project_admin/);
-  assert.match(sql, /REVOKE EXECUTE ON FUNCTION public\.user_badges_refresh\(\) FROM anon, authenticated, PUBLIC/);
+  assert.match(sql, /REVOKE EXECUTE ON FUNCTION public\.user_badges_refresh_v2\(\) FROM anon, authenticated, PUBLIC/);
 });
 
 test("tier upsert is monotonic and timestamps are set-once", () => {
@@ -96,8 +96,24 @@ test("momentum compares ADJACENT ISO weeks with a prior-week floor", () => {
 
 test("refresh claims the shared lock and reads the rollup + live tail", () => {
   assert.match(sql, /leaderboard_refresh_try_claim\('badges', 300\)/);
-  assert.match(sql, /tokentracker_leaderboard_rollup_daily/);
-  assert.match(sql, /leaderboard_hourly_dedup\(v_through, now\(\)\)/);
+  assert.match(sql, /tokentracker_leaderboard_rollup_meta_v2/);
+  assert.match(sql, /tokentracker_leaderboard_rollup_daily_v2/);
+  assert.match(sql, /leaderboard_hourly_dedup_v2\(v_through, now\(\)\)/);
+  assert.match(sql, /WHERE r\.day < \(v_through AT TIME ZONE 'UTC'\)::date/);
+  assert.match(sql, /RAISE EXCEPTION 'leaderboard v2 rollup is not initialized'/);
+  assert.doesNotMatch(sql, /FROM (?:public\.)?tokentracker_leaderboard_rollup_(?:meta|daily)\s/);
+  assert.doesNotMatch(sql, /FROM (?:public\.)?leaderboard_hourly_dedup\(/);
+});
+
+test("maintained-rollup migration matches the canonical refresh and stays privileged", () => {
+  const migration = fs.readFileSync(path.join(__dirname,
+    "../migrations/20261012120001_refresh-badges-from-maintained-rollup.sql"), "utf8");
+  const refresh = /CREATE OR REPLACE FUNCTION public\.user_badges_refresh_v2\(\)[\s\S]*?\$func\$;/;
+  assert.equal(migration.match(refresh)?.[0], sql.match(refresh)?.[0]);
+  assert.match(migration, /REVOKE EXECUTE ON FUNCTION public\.user_badges_refresh_v2\(\) FROM anon, authenticated, PUBLIC/);
+  assert.match(migration, /GRANT EXECUTE ON FUNCTION public\.user_badges_refresh_v2\(\) TO project_admin/);
+  assert.match(migration, /SET work_mem TO '48MB'/);
+  assert.match(migration, /SET max_parallel_workers_per_gather TO '0'/);
 });
 
 test("catalog seeds exactly the twelve cloud badges with 4-tier thresholds", () => {

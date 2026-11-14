@@ -70,9 +70,7 @@ describe("UsageOverview", () => {
     expect(screen.getByTitle(copy("usage.overview.scope_account_tip"))).toBeVisible();
   });
 
-  it("switches the data scope in place when both scopes are live", async () => {
-    const user = userEvent.setup();
-    const onAccountScopeChange = vi.fn();
+  it("hides the segmented scope switcher when scopes fold into the device select", () => {
     render(
       <UsageOverview
         period="day"
@@ -84,19 +82,20 @@ describe("UsageOverview", () => {
         to="2026-07-16"
         accountView
         accountScopeSwitchable
-        onAccountScopeChange={onAccountScopeChange}
+        deviceOptions={[
+          { value: "__scope:local__", label: copy("usage.overview.scope_local") },
+          { value: "d1", label: "MacBook" },
+          { value: "", label: copy("usage.overview.scope_account") },
+        ]}
+        selectedDevice=""
+        onDeviceChange={() => {}}
       />,
     );
 
-    const group = screen.getByRole("group", { name: copy("usage.overview.scope_switch_aria") });
-    expect(group).toBeVisible();
-    expect(screen.queryByTitle(copy("usage.overview.scope_local_tip"))).toBeVisible();
-    expect(screen.queryByTitle(copy("usage.overview.scope_account_tip"))).toBeVisible();
-
-    await user.click(screen.getByTitle(copy("usage.overview.scope_local_tip")));
-    expect(onAccountScopeChange).toHaveBeenCalledWith("local");
-    await user.click(screen.getByTitle(copy("usage.overview.scope_account_tip")));
-    expect(onAccountScopeChange).toHaveBeenCalledWith(null);
+    expect(screen.queryByRole("group", { name: copy("usage.overview.scope_switch_aria") })).toBeNull();
+    // Badge is redundant when the select already lists Account-wide.
+    expect(screen.queryByTitle(copy("usage.overview.scope_account_tip"))).toBeNull();
+    expect(screen.getByLabelText(copy("usage.overview.scope_switch_aria"))).toBeVisible();
   });
 
   it("closes stale session details when the local import ledger changes", async () => {
@@ -976,8 +975,7 @@ describe("UsageOverview", () => {
   });
 
 
-  it("keeps the TRAE partial-cost notice visible beside combined totals in collapsed and expanded views", async () => {
-    const user = userEvent.setup();
+  it("does not show a TRAE partial-cost notice on the usage overview", () => {
     render(
       <UsageOverview
         period="month"
@@ -1005,39 +1003,9 @@ describe("UsageOverview", () => {
         ]}
       />,
     );
-    const notice = copy("usage.overview.trae_notice_body");
-    expect(screen.getByText(notice)).toBeVisible();
-    for (const provider of [/TRAE:/i, /CODEX:/i, /All tools:/i]) {
-      await act(async () => {
-        await user.click(screen.getByRole("button", { name: provider }));
-      });
-      expect(screen.getByText(notice)).toBeVisible();
-    }
-  });
-
-  it("does not apply the international TRAE partial-cost notice to TRAE-CN or unrelated sources", () => {
-    const props = {
-      period: "month",
-      periods: [],
-      summaryLabel: "Total",
-      summaryValue: "100",
-    };
-    const fleet = (source) => [{
-      source,
-      label: source.toUpperCase(),
-      totalPercent: "100.00",
-      usage: 100,
-      models: [{ id: "gpt-5", name: "gpt-5", share: 100, usage: 100, cost: 0.01 }],
-    }];
-    const { rerender } = render(<UsageOverview {...props} fleetData={fleet("trae-cn")} />);
-    const showSource = (source) => {
-      rerender(<UsageOverview {...props} fleetData={fleet(source)} />);
-    };
-    expect(screen.queryByText(copy("usage.overview.trae_notice_body"))).toBeNull();
-    showSource("trae");
-    expect(screen.getByText(copy("usage.overview.trae_notice_body"))).toBeVisible();
-    showSource("codex");
-    expect(screen.queryByText(copy("usage.overview.trae_notice_body"))).toBeNull();
+    expect(screen.queryByText(/TRAE cost is partial/i)).toBeNull();
+    expect(screen.queryByText(/费用不完整/)).toBeNull();
+    expect(screen.queryByText(/費用不完整/)).toBeNull();
   });
 
   it("keeps request-only providers out of the card grid and shows one notice row", () => {

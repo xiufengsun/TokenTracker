@@ -820,6 +820,28 @@ export async function getUsageLimits(
   return fetchLocalJson(PATHS.usageLimits, params, options);
 }
 
+export type CursorConnection = {
+  status: "disconnected" | "pending" | "connected" | "expired" | "failed" | "cancelled";
+  attemptId?: string;
+  authUrl?: string;
+  expiresAt?: number | string;
+};
+
+export async function updateCursorConnection(
+  action?: "start" | "poll" | "cancel" | "disconnect",
+  attemptId?: string,
+): Promise<CursorConnection> {
+  if (!isLocalhostHost()) throw new Error("Cursor connections require the local dashboard");
+  const response = await fetch("/functions/tokentracker-cursor-connection", {
+    method: action ? "POST" : "GET",
+    headers: { Accept: "application/json", "Content-Type": "application/json", ...(await getLocalApiAuthHeaders()) },
+    ...(action ? { body: JSON.stringify({ action, attemptId }) } : {}),
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(`Request failed with HTTP ${response.status}`);
+  return response.json();
+}
+
 /**
  * Saves a provider API key in TokenTracker's own 0600 store (never the launch
  * environment). Only the local backend implements this endpoint; the key is

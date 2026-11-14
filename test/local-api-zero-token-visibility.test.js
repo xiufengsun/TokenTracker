@@ -82,3 +82,18 @@ test("usage-model-breakdown threads conversation_count through for request-only 
     await fs.promises.rm(tmp, { recursive: true, force: true });
   }
 });
+
+test("Claude custom usage remains visible with unknown pricing in the local model API", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-custom-cost-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const queuePath = path.join(dir, "queue.jsonl");
+  const tokens = { input_tokens: 100, output_tokens: 10, total_tokens: 110 };
+  await writeQueue(queuePath, [{ source: "claude", model: "claude-sonnet-4-6", hour_start: "2026-11-01T12:00:00.000Z", ...tokens,
+    backend_usage: [{ backend: "custom", backend_origin: "https://gateway.example", ...tokens }] }]);
+  const result = await callEndpoint(queuePath, "/functions/tokentracker-usage-model-breakdown?from=2026-11-01&to=2026-11-01");
+  const model = result.sources.find((s) => s.source === "claude").models[0];
+  assert.equal(model.model, "claude-sonnet-4-6");
+  assert.equal(model.totals.total_tokens, 110);
+  assert.equal(model.pricing.status, "unpriced");
+  assert.equal(Number(model.totals.total_cost_usd), 0);
+});

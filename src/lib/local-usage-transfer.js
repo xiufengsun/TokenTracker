@@ -7,6 +7,8 @@ const crypto = require("node:crypto");
 const { openLock, writeFileAtomic } = require("./fs");
 const { isAccountLevelSource } = require("./source-metadata");
 
+const { backendFromUrl, TOKEN_FIELDS: BACKEND_TOKEN_FIELDS } = require("./claude-backend");
+
 const SCHEMA = "tokentracker.local-usage.v1";
 const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_STATE_BYTES = 64 * 1024 * 1024;
@@ -15,7 +17,7 @@ const TOKEN_FIELDS = ["input_tokens", "output_tokens", "cached_input_tokens", "c
   "reasoning_output_tokens", "total_tokens", "billable_total_tokens", "conversation_count",
   ...["long_context_", "priority_", "priority_long_context_", "ultrafast_", "ultrafast_long_context_"].flatMap((prefix) =>
     ["input_tokens", "output_tokens", "cached_input_tokens", "cache_creation_input_tokens", "reasoning_output_tokens"].map((field) => prefix + field))];
-const ROW_FIELDS = new Set(["source", "model", "hour_start", "total_cost_usd", ...TOKEN_FIELDS]);
+const ROW_FIELDS = new Set(["source", "model", "hour_start", "total_cost_usd", "backend_usage", ...TOKEN_FIELDS]);
 const validId = (id) => typeof id === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(id);
 const validTime = (value) => typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 const digest = (value) => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -46,6 +48,25 @@ function cleanRow(row, strict = false) {
   if (Object.hasOwn(row, "total_cost_usd")) {
     if (!Number.isFinite(row.total_cost_usd) || row.total_cost_usd < 0) fail("invalid_snapshot");
     result.total_cost_usd = row.total_cost_usd;
+  }
+  if (row.backend_usage !== undefined) {
+    if (row.source !== "claude" || !Array.isArray(row.backend_usage)) fail("invalid_snapshot");
+    const sums = {};
+    result.backend_usage = row.backend_usage.map((part) => {
+      if (!part || typeof part !== "object") fail("invalid_snapshot");
+      const identity = backendFromUrl(part.backend_origin);
+      if (part.backend !== identity.backend || part.backend_origin !== identity.backend_origin ||
+          Object.keys(part).some((key) => !["backend", "backend_origin", ...BACKEND_TOKEN_FIELDS].includes(key))) fail("invalid_snapshot");
+      const clean = { ...identity };
+      for (const field of BACKEND_TOKEN_FIELDS) {
+        const value = part[field] ?? 0;
+        if (!Number.isSafeInteger(value) || value < 0) fail("invalid_snapshot");
+        sums[field] = (sums[field] || 0) + value;
+        if (sums[field] > (result[field] || 0)) fail("invalid_snapshot");
+        clean[field] = value;
+      }
+      return clean;
+    });
   }
   return result;
 }

@@ -3501,6 +3501,77 @@ test("parseCursorApiIncremental treats Cursor CSV as authoritative and replaces 
   }
 });
 
+test("parseCursorApiIncremental keeps request-only rows as 1-request records (issue #998)", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-cursor-request-only-"));
+  try {
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+
+    const result = await parseCursorApiIncremental({
+      records: [
+        {
+          date: "2026-10-01T08:00:00.000Z",
+          model: "grok-bot-automation",
+          kind: "Included",
+          inputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+        },
+      ],
+      cursors,
+      queuePath,
+      source: "cursor",
+    });
+    assert.equal(result.eventsAggregated, 1);
+
+    const queued = await readJsonLines(queuePath);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].conversation_count, 1);
+    assert.equal(queued[0].total_tokens, 0);
+    assert.equal(
+      cursors.hourly.buckets["cursor|grok-bot-automation|2026-10-01T08:00:00.000Z"].totals
+        .conversation_count,
+      1,
+    );
+    assert.equal(cursors.cursorApi.lastRecordTimestamp, "2026-10-01T08:00:00.000Z");
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseCursorApiIncremental still skips all-zero rows without a model identity", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-cursor-degenerate-"));
+  try {
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+
+    const result = await parseCursorApiIncremental({
+      records: [
+        {
+          date: "2026-10-01T08:00:00.000Z",
+          model: "",
+          kind: "Included",
+          inputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+        },
+      ],
+      cursors,
+      queuePath,
+      source: "cursor",
+    });
+    assert.equal(result.eventsAggregated, 0);
+    assert.equal(result.bucketsQueued, 0);
+    assert.equal((await readJsonLines(queuePath)).length, 0);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("parseCursorApiIncremental preserves history older than a windowed/truncated export", async () => {
   // Guard (2026-06 audit): the wipe-then-refill design assumes the Cursor
   // export is full-history. If the endpoint ever returns a windowed export
@@ -3904,8 +3975,29 @@ test("readZcodeDbMessages preserves legacy history before native model_usage beg
       id: "legacy-covered-by-native",
       time: { created: 1787105605912, completed: 1787105665912 },
     };
+    // ZCode renamed the assistant-message field providerID -> providerId
+    // (lowercase d, ~2026-09, issue #1008). Post-rename rows only carry the new
+    // spelling and must still count as native history; the bundled sub-agent
+    // blocklist (#216) keeps applying to the new spelling.
+    const legacyRenamedField = {
+      id: "legacy-renamed-field",
+      sessionID: "session-real",
+      role: "assistant",
+      providerId: "account:bigmodel-coding-plan",
+      modelId: "GLM-5.3",
+      time: { created: 1784000000000, completed: 1784000060000 },
+      tokens: { input: 50, output: 8, reasoning: 0, cache: { read: 12, write: 0 } },
+    };
+    const legacyRenamedSubagent = {
+      ...legacyRenamedField,
+      id: "legacy-renamed-subagent",
+      providerId: "openai",
+      modelId: "gpt-5",
+    };
     const beforeJson = JSON.stringify(legacyBeforeNative).replace(/'/g, "''");
     const coveredJson = JSON.stringify(legacyCoveredByNative).replace(/'/g, "''");
+    const renamedJson = JSON.stringify(legacyRenamedField).replace(/'/g, "''");
+    const renamedSubagentJson = JSON.stringify(legacyRenamedSubagent).replace(/'/g, "''");
     runSqliteWrite(dbPath, `
       CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL);
       CREATE TABLE message (
@@ -3933,6 +4025,8 @@ test("readZcodeDbMessages preserves legacy history before native model_usage beg
       INSERT INTO session VALUES ('session-real', '/real/project');
       INSERT INTO message VALUES
         ('legacy-before-native', 'session-real', 1781514000000, 1781514060000, '${beforeJson}'),
+        ('legacy-renamed-field', 'session-real', 1784000000000, 1784000060000, '${renamedJson}'),
+        ('legacy-renamed-subagent', 'session-real', 1784000060000, 1784000120000, '${renamedSubagentJson}'),
         ('legacy-covered-by-native', 'session-real', 1787105605912, 1787105665912, '${coveredJson}');
       INSERT INTO model_usage VALUES
         ('native', 'logical-native', 0, 'session-real', 'builtin:zai-start-plan', 'GLM-5.3',
@@ -3940,9 +4034,15 @@ test("readZcodeDbMessages preserves legacy history before native model_usage beg
     `);
 
     const rows = readZcodeDbMessages(dbPath);
-    assert.deepEqual(rows.map((row) => row.id), ["legacy-before-native", "native"]);
+    assert.deepEqual(rows.map((row) => row.id), [
+      "legacy-before-native",
+      "legacy-renamed-field",
+      "native",
+    ]);
     assert.equal(rows[0].data.modelID, "GLM-5.2");
-    assert.equal(rows[1].data.modelID, "GLM-5.3");
+    assert.equal(rows[1].data.modelId, "GLM-5.3");
+    assert.equal(rows[1].data.providerId, "account:bigmodel-coding-plan");
+    assert.equal(rows[2].data.modelID, "GLM-5.3");
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
@@ -4759,7 +4859,7 @@ test("parseRolloutIncremental persists selected-model state and bills an observe
   }
 });
 
-test("parseRolloutIncremental backfills unknown into dominant known model", async () => {
+test("parseRolloutIncremental every-code backfills unknown into dominant known model", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-rollout-"));
   try {
     const rolloutPath = path.join(tmp, "rollout-test.jsonl");
@@ -4822,7 +4922,7 @@ test("parseRolloutIncremental backfills unknown into dominant known model", asyn
 
     await fs.writeFile(rolloutPath, lines.join("\n") + "\n", "utf8");
 
-    const res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath });
+    const res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath, source: "every-code" });
     assert.equal(res.bucketsQueued, 2);
 
     const queued = await readJsonLines(queuePath);
@@ -4841,7 +4941,7 @@ test("parseRolloutIncremental backfills unknown into dominant known model", asyn
   }
 });
 
-test("parseRolloutIncremental chooses dominant model deterministically on tie", async () => {
+test("parseRolloutIncremental every-code chooses dominant model deterministically on tie", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-rollout-"));
   try {
     const rolloutPath = path.join(tmp, "rollout-test.jsonl");
@@ -4898,7 +4998,7 @@ test("parseRolloutIncremental chooses dominant model deterministically on tie", 
 
     await fs.writeFile(rolloutPath, lines.join("\n") + "\n", "utf8");
 
-    const res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath });
+    const res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath, source: "every-code" });
     assert.equal(res.bucketsQueued, 2);
 
     const queued = await readJsonLines(queuePath);
@@ -5157,7 +5257,7 @@ test("parseRolloutIncremental retracts prior every-code alignment when target ch
   }
 });
 
-test("parseRolloutIncremental retracts unknown when known model appears later", async () => {
+test("parseRolloutIncremental every-code retracts unknown when known model appears later", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-rollout-"));
   try {
     const rolloutPath = path.join(tmp, "rollout-test.jsonl");
@@ -5195,7 +5295,7 @@ test("parseRolloutIncremental retracts unknown when known model appears later", 
     ];
     await fs.writeFile(rolloutPath, lines.join("\n") + "\n", "utf8");
 
-    let res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath });
+    let res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath, source: "every-code" });
     assert.equal(res.bucketsQueued, 1);
 
     let queued = await readJsonLines(queuePath);
@@ -5209,7 +5309,7 @@ test("parseRolloutIncremental retracts unknown when known model appears later", 
     ];
     await fs.appendFile(rolloutPath, append.join("\n") + "\n", "utf8");
 
-    res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath });
+    res = await parseRolloutIncremental({ rolloutFiles: [rolloutPath], cursors, queuePath, source: "every-code" });
     assert.equal(res.bucketsQueued, 2);
 
     queued = await readJsonLines(queuePath);
@@ -12730,6 +12830,15 @@ test("listAntigravitySessionFiles discovers transcripts across sibling 2.0 brain
       "logs",
       "transcript.jsonl",
     );
+    const insidersTranscript = path.join(
+      tmp,
+      "antigravity-insiders",
+      "brain",
+      "session-insiders",
+      ".system_generated",
+      "logs",
+      "transcript.jsonl",
+    );
     const cliTranscript = path.join(
       tmp,
       "antigravity-cli",
@@ -12739,7 +12848,7 @@ test("listAntigravitySessionFiles discovers transcripts across sibling 2.0 brain
       "logs",
       "transcript.jsonl",
     );
-    for (const p of [legacyTranscript, ideTranscript, cliTranscript]) {
+    for (const p of [legacyTranscript, ideTranscript, insidersTranscript, cliTranscript]) {
       await fs.mkdir(path.dirname(p), { recursive: true });
       await fs.writeFile(p, "");
     }
@@ -12747,14 +12856,18 @@ test("listAntigravitySessionFiles discovers transcripts across sibling 2.0 brain
     const dirs = [
       path.join(tmp, "antigravity", "brain"),
       path.join(tmp, "antigravity-ide", "brain"),
+      path.join(tmp, "antigravity-insiders", "brain"),
       path.join(tmp, "antigravity-cli", "brain"),
       path.join(tmp, "antigravity-missing", "brain"),
     ];
     const results = await Promise.all(dirs.map((d) => listAntigravitySessionFiles(d)));
     const all = results.flat();
 
-    assert.deepEqual(all.sort(), [cliTranscript, ideTranscript, legacyTranscript].sort());
-    assert.deepEqual(results[3], []);
+    assert.deepEqual(
+      all.sort(),
+      [cliTranscript, ideTranscript, insidersTranscript, legacyTranscript].sort(),
+    );
+    assert.deepEqual(results[4], []);
 
     const inventory = await listAntigravityTranscriptsWithStatus(tmp);
     assert.deepEqual(inventory.files.sort(), all.sort());
@@ -12765,7 +12878,10 @@ test("listAntigravitySessionFiles discovers transcripts across sibling 2.0 brain
       tmp,
       new Set([cliTranscript]),
     );
-    assert.deepEqual(partialInventory.files.sort(), [legacyTranscript, ideTranscript].sort());
+    assert.deepEqual(
+      partialInventory.files.sort(),
+      [legacyTranscript, ideTranscript, insidersTranscript].sort(),
+    );
     assert.equal(partialInventory.complete, false);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });

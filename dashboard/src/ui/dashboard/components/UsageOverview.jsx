@@ -265,7 +265,6 @@ export function UsageOverview({
   onDeviceChange,
   accountView = false,
   accountScopeSwitchable = false,
-  onAccountScopeChange = null,
 }) {
   const tabs = normalizePeriods(periods);
   const dateLocale = getDateFnsLocale(getCopyLocale());
@@ -386,13 +385,6 @@ export function UsageOverview({
     (provider) =>
       String(provider?.source || provider?.label || "").trim().toLowerCase() === "kiro",
   );
-  // TRAE cost leaves out input without a cache split (docs/trae.md). Keep the
-  // caveat visible with the combined totals, including cloud data, which has
-  // no per-bucket marker.
-  const traeContributes = providers.some(
-    (provider) =>
-      String(provider?.source || provider?.label || "").trim().toLowerCase() === "trae",
-  );
   const allModels = useMemo(() => buildAllModels(fleetData), [fleetData]);
   const allUsage = allModels.reduce((sum, model) => sum + (Number(model.usage) || 0), 0);
   const allCost = providers.reduce((sum, provider) => sum + (Number(provider.usd) || 0), 0);
@@ -484,50 +476,13 @@ export function UsageOverview({
             })}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Data-scope control (issue 979): with cloud sync on, this card renders
-                account-scope data that can silently differ from this machine's
-                numbers, so label the scope instead of letting an unpriced cloud
-                row read as a local pricing bug. Where both scopes are live the
-                badge becomes a view-only switcher — flipping it re-renders the
-                other scope without touching the cloud-sync preference, so
-                uploads keep running while the page shows this machine only.
-                Local scope stays unlabeled when the switcher is unavailable —
-                it is the default for signed-out visitors and share views. */}
-            {accountScopeSwitchable && onAccountScopeChange ? (
-              <div
-                role="group"
-                aria-label={copy("usage.overview.scope_switch_aria")}
-                className="inline-flex shrink-0 items-center h-8 rounded-md bg-oai-gray-100 dark:bg-oai-gray-800 p-0.5"
-              >
-                <button
-                  type="button"
-                  aria-pressed={!accountView}
-                  title={copy("usage.overview.scope_local_tip")}
-                  onClick={() => onAccountScopeChange("local")}
-                  className={`inline-flex items-center h-7 px-2.5 text-xs font-medium rounded-md transition-colors duration-200 ${
-                    !accountView
-                      ? "bg-oai-white dark:bg-oai-gray-600 shadow-sm text-oai-black dark:text-oai-white"
-                      : "text-oai-gray-500 dark:text-oai-gray-400 hover:text-oai-black dark:hover:text-oai-white"
-                  }`}
-                >
-                  {copy("usage.overview.scope_local")}
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={accountView}
-                  title={copy("usage.overview.scope_account_tip")}
-                  onClick={() => onAccountScopeChange(null)}
-                  className={`inline-flex items-center h-7 px-2.5 text-xs font-medium rounded-md transition-colors duration-200 ${
-                    accountView
-                      ? "bg-oai-white dark:bg-oai-gray-600 shadow-sm text-oai-black dark:text-oai-white"
-                      : "text-oai-gray-500 dark:text-oai-gray-400 hover:text-oai-black dark:hover:text-oai-white"
-                  }`}
-                >
-                  {copy("usage.overview.scope_account")}
-                </button>
-              </div>
-            ) : null}
-            {!(accountScopeSwitchable && onAccountScopeChange) && accountView ? (
+            {/* Data-scope labeling (issue 979 / unify with device filter):
+                When both local and account scopes are live, DashboardPage folds
+                This device / Account-wide into the device Select below — no
+                separate segmented control. On public hosts (pinned cloud) keep
+                the static Account-wide badge so the card still names its scope.
+                Local scope stays unlabeled for signed-out / share views. */}
+            {!accountScopeSwitchable && accountView ? (
               <span
                 title={copy("usage.overview.scope_account_tip")}
                 className="inline-flex shrink-0 items-center h-8 px-2.5 text-xs font-medium rounded-md bg-oai-gray-100 dark:bg-oai-gray-800 text-oai-gray-700 dark:text-oai-gray-300"
@@ -540,7 +495,11 @@ export function UsageOverview({
                 value={selectedDevice}
                 onValueChange={onDeviceChange}
                 options={deviceOptions}
-                ariaLabel={copy("dashboard.device_filter.aria")}
+                ariaLabel={
+                  accountScopeSwitchable
+                    ? copy("usage.overview.scope_switch_aria")
+                    : copy("dashboard.device_filter.aria")
+                }
                 matchTriggerWidth
                 className="h-8 px-3 text-xs font-medium rounded-md border-oai-gray-300 dark:border-oai-gray-700 bg-oai-white dark:bg-oai-gray-900 text-oai-black dark:text-oai-white hover:border-oai-brand hover:text-oai-brand hover:[&_svg]:text-oai-brand transition-colors duration-200"
               />
@@ -601,12 +560,6 @@ export function UsageOverview({
                 <span className="text-xl font-bold text-oai-brand">{summaryCostValue}</span>
               )}
             </div>
-          )}
-          {traeContributes && (
-            <p className="mx-auto mt-3 max-w-xl text-[11px] leading-snug text-oai-gray-500 dark:text-oai-gray-400">
-              <span className="font-medium">{copy("usage.overview.trae_notice_title")}.</span>{" "}
-              {copy("usage.overview.trae_notice_body")}
-            </p>
           )}
           {periodRangeLabel ? (
             <div className="mt-3 flex flex-col items-center gap-1 text-[11px] leading-snug text-oai-gray-400 dark:text-oai-gray-500">

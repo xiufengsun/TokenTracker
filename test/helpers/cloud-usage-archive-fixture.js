@@ -13,9 +13,14 @@ function functionSql(sql, name) {
 // Canonical function shape and weekend boundary were read back from the linked
 // production project on 2026-10-04. Only test setup defines this dependency;
 // the archive migration refuses to overwrite the installed canonical function.
+// The deepseek-v4.1-flash and deepseek-flash arms extend that readback so the
+// OpenRouter / Command Code / WorkBuddy id rides the same Beijing peak/off-peak
+// calendar: '%deepseek-v4-flash%' does not match it because the ".1" breaks the
+// substring run.
 const canonicalTier = `CREATE FUNCTION public.leaderboard_pricing_tier(p_model text,p_hour_start timestamptz)
   RETURNS text LANGUAGE sql IMMUTABLE AS $f$ SELECT CASE
-    WHEN lower(p_model) LIKE '%deepseek-v4-flash%' OR lower(p_model) LIKE '%deepseek-v4-pro%' THEN CASE
+    WHEN lower(p_model) LIKE '%deepseek-v4-flash%' OR lower(p_model) LIKE '%deepseek-v4.1-flash%'
+      OR lower(p_model) LIKE '%deepseek-flash%' OR lower(p_model) LIKE '%deepseek-v4-pro%' THEN CASE
       WHEN p_hour_start >= timestamptz '2026-08-22T16:00:00Z'
         AND extract(dow FROM ((p_hour_start AT TIME ZONE 'UTC')+interval '8 hours')) IN (0,6) THEN 'off_peak'
       WHEN extract(hour FROM p_hour_start AT TIME ZONE 'UTC')>=1 AND extract(hour FROM p_hour_start AT TIME ZONE 'UTC')<4

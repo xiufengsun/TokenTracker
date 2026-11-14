@@ -13,8 +13,10 @@ import { getLeaderboard } from "../lib/api";
 import { runCloudUsageSyncNow } from "../lib/cloud-sync";
 import { CLOUD_LEADERBOARD_REFRESHED_EVENT } from "../lib/cloud-sync-prefs";
 import { LeaderboardPage } from "./LeaderboardPage.jsx";
+import { copy } from "../lib/copy";
 
 const openLoginModalMock = vi.hoisted(() => vi.fn());
+const statsModalMock = vi.hoisted(() => ({ load: vi.fn(), render: vi.fn(), unmount: vi.fn() }));
 const insforgeAuthMock = vi.hoisted(() => ({
   signedIn: true,
   loading: false,
@@ -49,6 +51,23 @@ vi.mock("../contexts/InsforgeAuthContext.jsx", () => ({
 vi.mock("../hooks/useCurrency.js", () => ({
   useCurrency: () => ({ currency: "USD", rate: 1 }),
 }));
+
+vi.mock("../hooks/use-community-stats.js", () => ({
+  useCommunityStats: () => ({ status: "ready", tokenFloor: 1000, totalEntries: 10 }),
+}));
+
+vi.mock("../components/leaderboard/CommunityStatsModal.jsx", () => {
+  statsModalMock.load();
+  return {
+    CommunityStatsModal: (props) => {
+      statsModalMock.render(props);
+      React.useEffect(() => () => { statsModalMock.unmount(); }, []);
+      return props.isOpen ? <div role="dialog" aria-label={copy("leaderboard.community.modal.title")}>
+        <button onClick={props.onClose}>{copy("shared.dialog.close")}</button>
+      </div> : null;
+    },
+  };
+});
 
 vi.mock("../components/LeaderboardSkeleton.jsx", () => ({
   LeaderboardSkeleton: () => <div data-testid="leaderboard-skeleton" />,
@@ -101,6 +120,26 @@ describe("LeaderboardPage window-session cache reuse", () => {
     insforgeAuthMock.loading = false;
     insforgeAuthMock.user = { id: "user-1" };
     window.localStorage.clear();
+  });
+
+  it("loads global metrics only when opened and unmounts them when closed", async () => {
+    const contextKey = getLeaderboardPreloadContextKey({ accessMode: "cloud", baseUrl: "https://edge.example", mockEnabled: false, userId: "user-1" });
+    publishLeaderboardPreloadState(preloadedData, { contextKey });
+    getLeaderboard.mockReturnValue(new Promise(() => {}));
+    renderLeaderboard();
+    await act(async () => { await vi.dynamicImportSettled(); });
+    expect(statsModalMock.load).not.toHaveBeenCalled();
+    expect(statsModalMock.render).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Global Metrics" })).not.toBeInTheDocument();
+
+    await act(async () => { await userEvent.click(screen.getByTitle("View global community stats")); });
+    await screen.findByRole("dialog", { name: "Global Metrics" });
+    expect(statsModalMock.load).toHaveBeenCalledTimes(1);
+    expect(statsModalMock.render).toHaveBeenCalledWith(expect.objectContaining({ isOpen: true }));
+
+    await act(async () => { await userEvent.click(screen.getByRole("button", { name: "Close dialog" })); });
+    expect(screen.queryByRole("dialog", { name: "Global Metrics" })).not.toBeInTheDocument();
+    expect(statsModalMock.unmount).toHaveBeenCalledTimes(1);
   });
 
   it("shows paid identity on desktop and mobile without stacking the GitHub frame or changing ranks", () => {

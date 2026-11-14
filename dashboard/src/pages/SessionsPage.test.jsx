@@ -193,6 +193,14 @@ const makeThreadSession = (overrides) => ({
 });
 
 describe("SessionsPage", () => {
+  it("shows unknown-only Claude session cost as Unpriced instead of free", async () => {
+    getSessions.mockResolvedValue({ ...response, session_count: 1, returned_count: 1,
+      sessions: [{ ...response.sessions[0], cost_usd: 0, cost_is_partial: true }] });
+    render(<SessionsPage />);
+    expect((await screen.findAllByText("Unpriced")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("≥$0.00")).not.toBeInTheDocument();
+  });
+
   it("shows a structural skeleton while the initial sessions request is pending", () => {
     getSessions.mockReturnValue(new Promise(() => {}));
     render(<SessionsPage />);
@@ -326,6 +334,27 @@ describe("SessionsPage", () => {
     expect(screen.getByText("Review release")).toBeInTheDocument();
     await chooseSelect("Filter by session source", "DeepSeek Harness");
     expect(screen.getByText("DSH session")).toBeInTheDocument();
+    expect(screen.queryByText("Review release")).not.toBeInTheDocument();
+  });
+
+  it("filters pi sessions from the source picker and URL", async () => {
+    const pi = {
+      ...zcodeRow,
+      session_hash: "pi-row",
+      source: "pi",
+      title: "Pi session",
+      model: "claude-sonnet-4-5",
+      resume_command: "pi --session 01a1bc31-0000-7000-8000-000000000001",
+    };
+    getSessions.mockResolvedValue({ ...response, sessions: [...response.sessions, pi] });
+    window.history.replaceState(null, "", "/sessions?source=pi");
+    render(<SessionsPage />);
+    expect(await screen.findByText("Pi session")).toBeInTheDocument();
+    expect(screen.queryByText("Review release")).not.toBeInTheDocument();
+    await chooseSelect("Filter by session source", "All tools");
+    expect(screen.getByText("Review release")).toBeInTheDocument();
+    await chooseSelect("Filter by session source", "Pi");
+    expect(screen.getByText("Pi session")).toBeInTheDocument();
     expect(screen.queryByText("Review release")).not.toBeInTheDocument();
   });
 

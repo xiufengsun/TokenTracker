@@ -257,6 +257,7 @@ export default async function billing(req: Request): Promise<Response> {
       let next: CloudOrder;
       if (old.retry_order_id) {
         next = await ownedOrder(old.retry_order_id);
+        while (next.retry_order_id) next = await ownedOrder(next.retry_order_id);
       } else {
         if (old.status === "paid" || old.provider_order_id) throw new BillingError("checkout_already_paid", 409);
         const attempts = await queryWaffoBindings(old, waffoConfig());
@@ -273,8 +274,11 @@ export default async function billing(req: Request): Promise<Response> {
         });
         next = object(restarted.order) as unknown as CloudOrder;
       }
-      if (!['pending', 'ready'].includes(next.status)) {
-        return json({ order: { id: next.id, status: next.status } });
+      if (!['pending', 'ready'].includes(next.status) || Date.parse(next.expires_at) <= Date.now()) {
+        const target = new URL(req.url);
+        target.searchParams.set("action", "order");
+        target.searchParams.set("id", next.id);
+        return await billing(new Request(target, { headers: req.headers }));
       }
       const target = new URL(req.url);
       target.searchParams.set("action", "checkout");
@@ -486,6 +490,7 @@ export default async function billing(req: Request): Promise<Response> {
           p_user_id: userId, p_order_id: current.id,
           p_provider_checkout_id: checkout.sessionId || null,
           p_provider_price_id: checkout.priceId || null, p_checkout_url: checkout.checkoutUrl,
+          p_provider_checkout_expires_at: checkout.expiresAt,
         });
       return json({
         order: {

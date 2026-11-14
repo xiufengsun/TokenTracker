@@ -47,12 +47,61 @@
       "cache_write": 0,
       "note": "Cline's own gateway namespaces (`cline-free/*` free tier, `cline-pass/*` flat-rate Cline Pass). Cline's shipped model catalog declares pricing 0 for every id in both namespaces, so a turn there has no marginal per-token cost — same convention as PI_SUBSCRIPTION_SOURCES. The fuzzy entries at the top of `fuzzy` route both prefixes here BEFORE the model names can match a public rate (`cline-pass/glm-5.3` must not bill GLM-5.3 list price, `cline-free/deepseek-v4.1-flash` must not bill DeepSeek). Verified against Cline 0.0.32 (/Applications/Cline.app model catalog + `usageDelta` cost, which stays 0 for both namespaces). A Cline turn that DOES report a positive per-call cost is honoured first because `cline` is listed in SOURCES_WITH_AUTHORITATIVE_COST in pricing/index.js. Remove or re-point these entries when Cline publishes per-token pricing for either namespace."
     },
+    "claude-fable-5-2": {
+      "input": 8,
+      "output": 40,
+      "cache_read": 0.2,
+      "cache_write": 10,
+      "note": "Claude Fable 5.2 standard tier, verified 2026-11-10: https://platform.claude.com/docs/en/about-claude/pricing and https://platform.claude.com/docs/en/models/fable-5-2/overview. $8 / $40 per MTok input/output. cache_read is the published cache-hit rate ($0.20 / MTok, 0.025x base input \u2014 not the usual 0.1x). cache_write is the published 5-minute cache-write rate ($10 / MTok, 1.25x); the 1-hour write is $16 / MTok and cannot fit this single field. Channel prefixes (anthropic/, bedrock/, vertex_ai/, azure_ai/, openrouter/, github_copilot/, \u2026) do not change the rate. Fast mode is a separate SKU at $16/$80 \u2014 see claude-fable-5-2-fast. Floating -latest aliases are NOT pinned here."
+    },
+    "claude-fable-5.2": {
+      "input": 8,
+      "output": 40,
+      "cache_read": 0.2,
+      "cache_write": 10,
+      "note": "Dotted spelling of claude-fable-5-2 (OpenRouter anthropic/claude-fable-5.2, github_copilot/claude-fable-5.2). Same standard-tier rates, verified 2026-11-10: https://platform.claude.com/docs/en/about-claude/pricing. Its own exact key because normalizeClaudeModel only hyphenates sonnet/opus/haiku, so a dotted fable id never reaches claude-fable-5-2."
+    },
+    "anthropic/claude-fable-5.2": {
+      "input": 8,
+      "output": 40,
+      "cache_read": 0.2,
+      "cache_write": 10,
+      "note": "OpenRouter id for Claude Fable 5.2 (https://openrouter.ai/anthropic/claude-fable-5.2). Same standard-tier rates as claude-fable-5-2, verified 2026-11-10. Kept exact so a lookup without the claude source normalizer (which is what strips provider prefixes) still hits."
+    },
+    "anthropic/claude-fable-5.2-20261109": {
+      "input": 8,
+      "output": 40,
+      "cache_read": 0.2,
+      "cache_write": 10,
+      "note": "OpenRouter dated snapshot of anthropic/claude-fable-5.2 (canonical_slug anthropic/claude-fable-5.2-20261109, released 2026-11-09). Same standard-tier rates, verified 2026-11-10: https://platform.claude.com/docs/en/about-claude/pricing. The Anthropic model page itself publishes no dated snapshot id."
+    },
+    "anthropic/claude-fable-5-2": {
+      "input": 8,
+      "output": 40,
+      "cache_read": 0.2,
+      "cache_write": 10,
+      "note": "Hyphenated provider-qualified id for Claude Fable 5.2 (models.dev anthropic/claude-fable-5-2). Same standard-tier rates, verified 2026-11-10. Channel prefix does not change billing."
+    },
+    "claude-fable-5-2-fast": {
+      "input": 16,
+      "output": 80,
+      "cache_read": 0.4,
+      "cache_write": 20,
+      "note": "Claude Fable 5.2 fast mode, a separate SKU (Foundry deployment id claude-fable-5-2-fast; also speed=fast on the Claude API). Input/output are the published fast rates, 2x standard: $16 / $80 per MTok, verified 2026-11-10 at https://platform.claude.com/docs/en/about-claude/pricing and https://platform.claude.com/docs/en/build-with-claude/fast-mode. Those pages publish no fast-mode cache dollar amounts; they say prompt-caching multipliers apply on top of fast-mode pricing, so cache_read/cache_write use the same Fable 5.2 multipliers as the standard tier (0.025x \u2192 $0.40, 5-minute 1.25x \u2192 $20) rather than a published fast cache price. The 1-hour fast write (2x \u2192 $32) cannot fit this single field. Do not bill this id at the $8/$40 standard rate."
+    },
+    "claude-fable-5.2-fast": {
+      "input": 16,
+      "output": 80,
+      "cache_read": 0.4,
+      "cache_write": 20,
+      "note": "Dotted spelling of claude-fable-5-2-fast (vercel/anthropic/claude-fable-5.2-fast, anthropic/claude-fable-5.2-fast). Same fast-mode rates as claude-fable-5-2-fast, verified 2026-11-10. Its own exact key because the dotted form is not rewritten to the hyphenated one."
+    },
     "claude-fable-5": {
       "input": 10,
       "output": 50,
       "cache_read": 1,
       "cache_write": 12.5,
-      "note": "Fable 5 \u2014 Anthropic's top tier above Opus. Not yet in LiteLLM. $10/$50 per MTok; cache_read 0.1x, cache_write 1.25x. Remove once LiteLLM carries it."
+      "note": "Fable 5 \u2014 Anthropic's top tier above Opus. Not yet in LiteLLM. $10/$50 per MTok; cache_read 0.1x, cache_write 1.25x. Remove once LiteLLM carries it. Fable 5.2 is a cheaper separate SKU \u2014 see claude-fable-5-2."
     },
     "claude-opus-5": {
       "input": 5,
@@ -334,6 +383,30 @@
       "output": 3,
       "cache_read": 0.05,
       "note": "LiteLLM entry (sourced from https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing, cached 2026-10-31): $0.50/$3 per MTok, $0.05 cache read, no published cache-write rate. Same rate the edge table already pins; promoted so curated/edge parity guards the key (issue #929)."
+    },
+    "gemini-3.5-flash": {
+      "input": 1.5,
+      "output": 9,
+      "cache_read": 0.15,
+      "note": "Google Gemini 3.5 Flash Global Standard list rate: $1.50/$9.00 per MTok, $0.15 cache read (output includes thinking). No published per-token cache-write rate (context-cache storage is billed separately per hour). Verified 2026-11-08 from https://cloud.google.com/model-garden/pricing; matches the existing LiteLLM snapshot. Promoted so curated/edge stay in parity after the Antigravity 3.x-flash remap was removed (issue #1063). Do not remap this id to gemini-2.5-flash — that SKU is $0.30/$2.50/$0.03."
+    },
+    "gemini-3.8-flash": {
+      "input": 0.75,
+      "output": 3.75,
+      "cache_read": 0.075,
+      "note": "Google Gemini 3.8 Flash Global Standard introductory list rate through 2026-12-31: $0.75/$3.75 per MTok, $0.075 cache read (output includes thinking). Starting 2027-01-01 the published standard list is $1.50/$7.50/$0.15. No published per-token cache-write rate (context-cache storage is billed separately per hour). Verified 2026-11-08 from https://cloud.google.com/model-garden/pricing and https://aistudio.google.com/docs/pricing (issue #1063). Do not remap these ids to gemini-2.5-flash — that SKU is $0.30/$2.50/$0.03."
+    },
+    "gemini-3.7-flash": {
+      "input": 0.75,
+      "output": 3.75,
+      "cache_read": 0.075,
+      "note": "Google Gemini 3.7 Flash Global Standard introductory list rate through 2026-12-31: $0.75/$3.75 per MTok, $0.075 cache read (output includes thinking). Starting 2027-01-01 the published standard list is $1.50/$7.50/$0.15. No published per-token cache-write rate (context-cache storage is billed separately per hour). Verified 2026-11-08 from https://cloud.google.com/model-garden/pricing and https://aistudio.google.com/docs/pricing (issue #1063). Do not remap these ids to gemini-2.5-flash — that SKU is $0.30/$2.50/$0.03."
+    },
+    "gemini-3.6-flash": {
+      "input": 0.75,
+      "output": 3.75,
+      "cache_read": 0.075,
+      "note": "Google Gemini 3.6 Flash Global Standard introductory list rate through 2026-12-31: $0.75/$3.75 per MTok, $0.075 cache read (output includes thinking). Starting 2027-01-01 the published standard list is $1.50/$7.50/$0.15. No published per-token cache-write rate (context-cache storage is billed separately per hour). Verified 2026-11-08 from https://cloud.google.com/model-garden/pricing and https://aistudio.google.com/docs/pricing (issue #1063). Do not remap these ids to gemini-2.5-flash — that SKU is $0.30/$2.50/$0.03."
     },
     "MiniMax-M2.7": {
       "input": 0.3,
@@ -731,6 +804,20 @@
       "cache_write": 0.1,
       "note": "StepFun Step 3.5 Flash incl. dated snapshots like step-3.5-flash-2603 (issue #283). Official platform.stepfun.ai pricing: $0.10 / $0.02 (cache hit) / $0.30 per MTok in/read/out. No published cache-write surcharge, so cache_write = input."
     },
+    "grok-4.7": {
+      "input": 2.0,
+      "output": 6.0,
+      "cache_read": 0.5,
+      "cache_write": 0,
+      "note": "xAI grok-4.7 short-context rates (docs.x.ai/developers/pricing, verified 2026-11-03): $2 / $0.50 / $6 per MTok input/cached/output below 200k prompt tokens. Same numbers as cursor-grok-4.7, kept as its own key so the bare API id resolves outside the Cursor normalizer. No cache-write rate is published, so cache_write stays 0 like the other Grok entries. Requests whose prompt reaches 200k tokens are billed entirely at the long-context rates ($4 / $1 / $12); the single flat rate here cannot express that tier."
+    },
+    "grok-4.7-build-fast": {
+      "input": 4.0,
+      "output": 12.0,
+      "cache_read": 1.0,
+      "cache_write": 0,
+      "note": "Grok 4.7 Fast as served in Grok Build (model id grok-4.7-build-fast in ZCode). xAI documents it as 2x the standard grok-4.7 token rates, 1.5x for long-context requests: $4 / $1 / $12 per MTok input/cached/output below 200k prompt tokens, $6 / $1.50 / $18 once the prompt reaches 200k (docs.x.ai/developers/pricing, verified 2026-11-03). It is not on the public xAI API and Grok Build's free tier excludes it. Same short-context numbers as cursor-grok-4.7-fast; the Cursor normalizer only rewrites the cursor source, so this id needs its own key. No cache-write rate is published, so cache_write stays 0. The flat rate is the short-context rate; the single-rate table cannot express the long-context tier."
+    },
     "grok-4.5-build": {
       "input": 2.0,
       "output": 6.0,
@@ -866,6 +953,14 @@
       "ref": "gpt-5.6-sol"
     },
     {
+      "match": "gemini-4-argon",
+      "ref": "gemini-4-argon"
+    },
+    {
+      "match": "gemini-4.argon",
+      "ref": "gemini-4-argon"
+    },
+    {
       "match": "kiro",
       "ref": "kiro-cli-agent"
     },
@@ -888,6 +983,22 @@
     {
       "match": "haiku-5.5",
       "ref": "claude-haiku-5.5"
+    },
+    {
+      "match": "fable-5-2-fast",
+      "ref": "claude-fable-5-2-fast"
+    },
+    {
+      "match": "fable-5.2-fast",
+      "ref": "claude-fable-5.2-fast"
+    },
+    {
+      "match": "fable-5-2",
+      "ref": "claude-fable-5-2"
+    },
+    {
+      "match": "fable-5.2",
+      "ref": "claude-fable-5.2"
     },
     {
       "match": "claude-opus-5-fast",

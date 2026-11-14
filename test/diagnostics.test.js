@@ -158,3 +158,30 @@ test("diagnostics does not migrate legacy root", async () => {
   await fs.stat(legacyRoot);
   await assert.rejects(() => fs.stat(path.join(home, ".tokentracker")));
 });
+
+test("collected TRAE CN diagnostics redact the home and never include auth payloads", async (t) => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-trae-diagnostics-"));
+  const restore = withHome(tmp);
+  const saved = { home: process.env.TOKENTRACKER_TRAE_CN_HOME, enabled: process.env.TOKENTRACKER_TRAE_CN_USAGE };
+  try {
+    process.env.TOKENTRACKER_TRAE_CN_HOME = path.join(tmp, "Trae CN");
+    process.env.TOKENTRACKER_TRAE_CN_USAGE = "1";
+    const storage = path.join(process.env.TOKENTRACKER_TRAE_CN_HOME, "User", "globalStorage", "storage.json");
+    await fs.mkdir(path.dirname(storage), { recursive: true });
+    await fs.writeFile(storage, JSON.stringify({ "iCubeAuthInfo://icube.cloudide": {
+      token: "diagnostics-jwt-canary", refreshToken: "diagnostics-refresh-canary", account: "private-account-canary",
+    } }));
+    t.mock.method(globalThis, "fetch", () => assert.fail("diagnostics must not contact TRAE"));
+    const report = await collectTrackerDiagnostics({ home: tmp });
+    assert.equal(report.trae_cn.auth, "readable");
+    assert.ok(report.trae_cn.storage_path.startsWith("~"));
+    assert.doesNotMatch(JSON.stringify(report), /canary/);
+  } finally {
+    restore();
+    if (saved.home === undefined) delete process.env.TOKENTRACKER_TRAE_CN_HOME;
+    else process.env.TOKENTRACKER_TRAE_CN_HOME = saved.home;
+    if (saved.enabled === undefined) delete process.env.TOKENTRACKER_TRAE_CN_USAGE;
+    else process.env.TOKENTRACKER_TRAE_CN_USAGE = saved.enabled;
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});

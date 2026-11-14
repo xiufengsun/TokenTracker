@@ -1,4 +1,5 @@
 "use strict";
+const { createBackendResolver, mergeBackendUsage, claudeLines } = require("./claude-backend");
 
 // Metadata-only session analytics sidecar.
 //
@@ -39,6 +40,7 @@ const { USD_TICKS_PER_USD, normalizeGrokUsage } = require("./grok-usage");
 const wsl = require("./wsl-probe");
 const { discoverKimiWireFiles, kimiSessionDependencies, readKimiSessions } = require("./kimi-session");
 const { discoverOmpSessionFiles, ompSessionDependencies, readOmpSessions } = require("./omp-session");
+const { discoverPiSessionFiles, piSessionDependencies, piSessionProbe, digestIssues, readPiSessions } = require("./pi-session");
 const { discoverDshSessionFiles, readDshSessions } = require("./dsh-session");
 const {
   appendUniqueDirs,
@@ -94,7 +96,15 @@ const {
 // v27 adds oh-my-pi (omp) sessions from ~/.omp/agent/sessions/**/*.jsonl.
 // v28 records per-minute usage buckets for Claude and Grok, so date ranges
 // recompute in-range tokens/cost instead of falling back to lifetime totals.
-const SIDECAR_VERSION = 28;
+// v29 adds DSH request timing and first-response samples from step/stream metadata.
+// v29 adds DSH request timing and first-response samples from step/stream metadata.
+// v30 drops DSH v1 failed-finish chunks (error/aborted) from request samples.
+// v29 cached those retries as clean timings; unchanged logs must be rebuilt.
+// v31 adds pi (@mariozechner/pi-coding-agent) sessions from
+// ~/.pi/agent/sessions/**/*.jsonl, with pi-subagents fork transcripts folded into
+// their parent session. A new source always takes the next number: bumping the
+// version invalidates every cached row, so one must never be reused.
+const SIDECAR_VERSION = 31;
 // Invalidate only Codex token summaries; other sources keep their cached rows.
 const CODEX_USAGE_VERSION = 1;
 const EDIT_TOOLS = new Set([
@@ -146,6 +156,7 @@ function tokenTotals(usage) {
 }
 
 function addTotals(target, delta) {
+  mergeBackendUsage(target, delta);
   for (const key of ["input_tokens", "cached_input_tokens", "cache_creation_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens"]) {
     target[key] = finite(target[key]) + finite(delta?.[key]);
   }
@@ -226,6 +237,7 @@ function normalizeModelUsageRows(rows) {
       };
       byModel.set(model, row);
     }
+    mergeBackendUsage(row, value);
     for (const field of MODEL_USAGE_SUM_FIELDS) row[field] += finite(value?.[field]);
     row.performance = mergePerformance(row.performance, value?.performance);
     if (Array.isArray(value?.selected_models)) {
@@ -266,7 +278,7 @@ function normalizeModelUsageRows(rows) {
 // most of it the long_context_* counters for sessions with no requests over
 // OPENAI_LONG_CONTEXT_INPUT_THRESHOLD in src/lib/pricing/index.js.
 function serializeModelUsageRow(row) {
-  const out = { model: row.model };
+  const out = { model: row.model, ...(row.backend_usage ? { backend_usage: row.backend_usage } : {}) };
   for (const field of MODEL_USAGE_SUM_FIELDS) {
     const value = finite(row[field]);
     if (value !== 0) out[field] = value;
@@ -299,7 +311,7 @@ function repriceSessionRecord(record) {
     let hasUnpricedUsage = false;
     for (const row of modelUsage) {
       row.cost_usd = computeRowCost({ source: record.source, ...row });
-      row.pricing = getModelPricingInfo(row.model, { source: record.source });
+      row.pricing = getModelPricingInfo(row.model, { ...row, source: record.source });
       if (row.total_tokens > 0 && row.pricing.status === "unpriced") hasUnpricedUsage = true;
     }
     record.model_usage = modelUsage;
@@ -366,7 +378,7 @@ function modelUsageForAggregation(record) {
   }
   const priced = rows.map((row) => denseModelUsageRow({
     ...row,
-    pricing: getModelPricingInfo(row.model, { source: record.source }),
+    pricing: getModelPricingInfo(row.model, { ...row, source: record.source }),
     cost_usd: Number.isFinite(Number(row.cost_usd))
       ? Number(row.cost_usd)
       : computeRowCost({ source: record.source, ...row }),
@@ -548,7 +560,7 @@ function isRecoverableSessionReadError(error) {
   return ["ENOENT", "EACCES", "EPERM", "EISDIR", "EIO", "ESTALE"].includes(error?.code);
 }
 
-async function scanClaudeSession(filePath) {
+async function scanClaudeSession(filePath, { trackerDir, legacyOffsets = {} } = {}) {
   // Native and WSL mounts can disappear independently after discovery. Keep
   // the surviving mirror instead of dropping the whole logical session.
   const filePaths = readableSessionPaths(filePath);
@@ -600,9 +612,8 @@ async function scanClaudeSession(filePath) {
   for (const currentFilePath of filePaths) {
     const currentRecordHashes = new Set();
     try {
-      const input = fs.createReadStream(currentFilePath, { encoding: "utf8" });
-      const lines = readline.createInterface({ input, crlfDelay: Infinity });
-      for await (const line of lines) {
+      const backend = trackerDir ? createBackendResolver(currentFilePath, trackerDir, { legacyOffset: legacyOffsets[currentFilePath] || 0 }) : null;
+      for await (const { line, start, end } of claudeLines(currentFilePath)) {
         if (filePaths.length > 1) {
           const recordHash = crypto.createHash("sha256").update(line).digest("base64url");
           if (priorRecordHashes.has(recordHash)) continue;
@@ -649,6 +660,8 @@ async function scanClaudeSession(filePath) {
         if (candidateModel) model = candidateModel;
         currentTurnModel = model;
         const usage = normalizeClaudeUsage(obj.message.usage);
+        const identity = backend && usage.total_tokens > 0 ? backend(obj, start, end) : null;
+        if (identity) usage.backend_usage = [{ ...usage, ...identity }];
         addTotals(tokens, usage);
         if (usage.total_tokens > 0) {
           const modelUsage = modelUsageByModel.get(model) || { model, ...emptyTotals(), usage_events: 0 };
@@ -2004,6 +2017,27 @@ async function scanOmpSession(filePath) {
   return rows[0] || null;
 }
 
+async function scanPiSessions(filePaths) {
+  // Batch the whole pi inventory so `pi --fork` copies, which replay their
+  // parent's entry ids, are counted once across sessions (same contract as the
+  // hourly pi reader's seenIds set).
+  const rows = await readPiSessions(Array.isArray(filePaths) ? filePaths : [filePaths]);
+  return rows.map(({ identity, files, title, ...row }) => finalizeRecord({
+    ...row,
+    title: cleanSessionTitle(title),
+    version: SIDECAR_VERSION,
+    source: "pi",
+    session_hash: sessionHash("pi", identity),
+    project_key: projectKey(row.project_ref, files[0]),
+    ...sessionStorageUsage(files),
+  }));
+}
+
+async function scanPiSession(filePath) {
+  const rows = await scanPiSessions([filePath]);
+  return rows[0] || null;
+}
+
 async function scanDshSessions(filePaths) {
   // Batch the whole inventory: a seeded Harness session replays its parent's
   // message ids, so cross-file identity is resolved before any row is emitted
@@ -2148,7 +2182,15 @@ async function discoverSessionFiles(home, env = process.env, deps = {}) {
     ? { ...env, HOME: home }
     : { HOME: home, OMP_HOME: path.join(home, ".omp") };
   const omp = discoverOmpSessionFiles(ompEnv, incomplete);
-  return { claude, codex: groupCodexFiles([...codex, ...archived]), grok, zcode, opencode, kimi, omp, dsh, incomplete };
+  // pi keeps the same gate as omp: a caller-supplied fixture home must never
+  // pick up the logged-in user's transcripts through PI_CODING_AGENT_DIR, which
+  // pi itself also honors. Pointing the resolver at the asked-for home keeps
+  // Usage and Sessions agreeing on one inventory.
+  const piEnv = usingMachineHome
+    ? { ...env, HOME: home }
+    : { HOME: home, TOKENTRACKER_PI_AGENT_DIR: path.join(home, ".pi", "agent") };
+  const pi = discoverPiSessionFiles(piEnv, incomplete);
+  return { claude, codex: groupCodexFiles([...codex, ...archived]), grok, zcode, opencode, kimi, omp, dsh, pi, incomplete };
 }
 
 // Warn once per unreadable directory per process: the dashboard polls this
@@ -2258,6 +2300,21 @@ function analyticsEntryStatKey(source, filePath) {
   if (source === "omp") {
     return `${sessionStat}|metadata:${filesSignature(ompSessionDependencies([filePaths].flat()))}`;
   }
+  if (source === "pi") {
+    // The overall sidecar signature already covers piSessionDependencies, but
+    // the per-entry reuse below compares this key alone. Without the nested
+    // transcripts, a pi-subagents child that gained usage would leave the entry
+    // stat key unchanged and the previous pi rows would be reused.
+    //
+    // Traversal problems are part of the key for the same reason: a transcript
+    // that cannot be listed is invisible to the dependency list, so an unreadable
+    // child appearing would otherwise leave the key untouched and reuse stale
+    // totals. With the note in the key the batch is rescanned, where the strict
+    // read surfaces it as an incomplete scan and keeps the last complete rows.
+    const probe = piSessionProbe([filePaths].flat());
+    const issues = probe.issues.length > 0 ? `|issues:${digestIssues(probe.issues)}` : "";
+    return `${sessionStat}|metadata:${filesSignature(probe.deps)}${issues}`;
+  }
   if (source === "grok") {
     const primary = filePaths[0];
     return `${sessionStat}|summary:${sessionFileStatKey(grokSummaryPathFor(primary)) || "missing"}|signals:${sessionFileStatKey(grokSignalsPathFor(primary)) || "missing"}`;
@@ -2343,6 +2400,10 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   const retryOmpScan = fs.existsSync(incompleteOmpPath);
   const incompleteDshPath = `${metaPath}.dsh-incomplete`;
   const retryDshScan = fs.existsSync(incompleteDshPath);
+  const incompletePiPath = `${metaPath}.pi-incomplete`;
+  const retryPiScan = fs.existsSync(incompletePiPath);
+  let provenanceMeta = null;
+  try { provenanceMeta = JSON.parse(fs.readFileSync(metaPath, "utf8")); } catch { /* first scan */ }
   let previousMeta = null;
   if (!force) {
     try {
@@ -2352,7 +2413,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
         // `recheck` deliberately skips the TTL so Refresh always re-walks the
         // directories; the per-file stat reuse below still avoids re-parsing.
         !recheck &&
-        !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION &&
+        !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && !retryPiScan && previousMeta.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION &&
         Number.isFinite(checkedAt) &&
         Date.now() - checkedAt < Math.max(0, Number(cacheTtlMs) || 0)
       ) {
@@ -2386,6 +2447,8 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     ...kimiSessionDependencies(discovered.kimi),
     ...discovered.omp,
     ...ompSessionDependencies(discovered.omp),
+    ...discovered.pi,
+    ...piSessionDependencies(discovered.pi),
     ...discovered.dsh,
     ...discovered.grok,
     ...discovered.grok.map(grokSummaryPathFor),
@@ -2399,7 +2462,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   // transcript, so a transient read/parse failure can recover without waiting
   // for the file itself to change.
   const retrySkippedOnRecheck = recheck && Number(previousMeta?.skipped_files) > 0;
-  if (!force && !retrySkippedOnRecheck && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.signature === signature) {
+  if (!force && !retrySkippedOnRecheck && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && !retryPiScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.signature === signature) {
     const cached = readSidecarWithMeta(sidecarPath, previousMeta);
     // A missing/corrupt sidecar reads as an empty list. The source signature
     // can still match, so only an explicit refresh used to notice the loss;
@@ -2430,6 +2493,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     ...(discovered.kimi.length ? [{ source: "kimi", filePath: discovered.kimi, scan: scanKimiSessions }] : []),
     ...(discovered.omp.length ? [{ source: "omp", filePath: discovered.omp, scan: scanOmpSessions }] : []),
     ...(discovered.dsh.length ? [{ source: "dsh", filePath: discovered.dsh, scan: scanDshSessions }] : []),
+    ...(discovered.pi.length ? [{ source: "pi", filePath: discovered.pi, scan: scanPiSessions }] : []),
   ];
   // Files we could not turn into a row (permission denied, half-written line,
   // vanished mid-scan). Swallowing these silently made sessions disappear with
@@ -2441,6 +2505,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   let incompleteKimiScan = false;
   let incompleteOmpScan = false;
   let incompleteDshScan = false;
+  let incompletePiScan = false;
   for (const entry of entries) {
     const cacheKey = sessionFileCacheKey(entry.source, entry.filePath);
     const statKey = analyticsEntryStatKey(entry.source, entry.filePath);
@@ -2452,11 +2517,12 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       if (entry.source === "kimi") incompleteKimiScan = true;
       if (entry.source === "omp") incompleteOmpScan = true;
       if (entry.source === "dsh") incompleteDshScan = true;
+      if (entry.source === "pi") incompletePiScan = true;
       continue;
     }
     let rows = null;
-    if (!force && !(entry.source === "codex" && previousMeta?.codex_usage_version !== CODEX_USAGE_VERSION) && !(entry.source === "zcode" && retryZcodeScan) && !(entry.source === "opencode" && retryOpencodeScan) && !(entry.source === "kimi" && retryKimiScan) && !(entry.source === "omp" && retryOmpScan) && !(entry.source === "dsh" && retryDshScan) && previousFiles[cacheKey]?.stat_key === statKey) {
-      if (entry.source === "zcode" || entry.source === "opencode" || entry.source === "kimi" || entry.source === "omp" || entry.source === "dsh") {
+    if (!force && !(entry.source === "codex" && previousMeta?.codex_usage_version !== CODEX_USAGE_VERSION) && !(entry.source === "zcode" && retryZcodeScan) && !(entry.source === "opencode" && retryOpencodeScan) && !(entry.source === "kimi" && retryKimiScan) && !(entry.source === "omp" && retryOmpScan) && !(entry.source === "dsh" && retryDshScan) && !(entry.source === "pi" && retryPiScan) && previousFiles[cacheKey]?.stat_key === statKey) {
+      if (entry.source === "zcode" || entry.source === "opencode" || entry.source === "kimi" || entry.source === "omp" || entry.source === "dsh" || entry.source === "pi") {
         // One db scans to many cached rows; recover them all from the previous
         // pass. An empty recovery means the sidecar lost its rows — rescan.
         const cached = previousRows.filter((row) => row?.source === entry.source);
@@ -2468,7 +2534,12 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     }
     if (!rows) {
       try {
-        const scanned = await entry.scan(entry.filePath);
+        const legacyOffsets = {};
+        if (entry.source === "claude") {
+          const sizes = provenanceMeta?.files?.[cacheKey]?.stat_key?.split("|") || [];
+          entry.filePath.forEach((file, index) => { legacyOffsets[file] = Number(sizes[index]?.split(":")[0]) || 0; });
+        }
+        const scanned = await entry.scan(entry.filePath, { trackerDir: path.dirname(sidecarPath), legacyOffsets });
         rows = Array.isArray(scanned) ? scanned.filter(Boolean) : (scanned ? [scanned] : []);
         // Batch sources count the files they had to give up on themselves.
         // A dsh batch is one deduplicated inventory, so a single unreadable log
@@ -2491,6 +2562,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
         if (entry.source === "kimi") incompleteKimiScan = true;
         if (entry.source === "omp") incompleteOmpScan = true;
         if (entry.source === "dsh") incompleteDshScan = true;
+        if (entry.source === "pi") incompletePiScan = true;
         if (!process.env.NODE_TEST_CONTEXT) {
           console.warn(`[session-analytics] skipped ${entry.source} session file: ${error?.message || error}`);
         }
@@ -2504,7 +2576,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       // so key each by the db path plus its session id; a bare session id as a
       // separate path element would be path.resolve()d against the process cwd
       // and never match across runs.
-      row._cache_key = (entry.source === "zcode" || entry.source === "opencode" || entry.source === "kimi" || entry.source === "omp" || entry.source === "dsh") && (row.session_id || row.session_hash)
+      row._cache_key = (entry.source === "zcode" || entry.source === "opencode" || entry.source === "kimi" || entry.source === "omp" || entry.source === "dsh" || entry.source === "pi") && (row.session_id || row.session_hash)
         ? `${cacheKey}#${sessionHash(entry.source, row.session_id || row.session_hash)}`
         : cacheKey;
       sessions.push(row);
@@ -2532,6 +2604,14 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     await writeAtomic(incompleteOmpPath, "1\n");
     sessions.push(...readSidecar(sidecarPath).filter((row) => row.source === "omp" && row.version === SIDECAR_VERSION));
   }
+  if (incompletePiScan) {
+    await writeAtomic(incompletePiPath, "1\n");
+    // pi forks replay their parent's entry ids, so ownership depends on the
+    // whole inventory: keep the last complete batch rather than mixing partial
+    // re-attribution with cached rows.
+    sessions.push(...readSidecar(sidecarPath).filter((row) =>
+      row.source === "pi" && row.version === SIDECAR_VERSION));
+  }
   if (incompleteDshScan) {
     await writeAtomic(incompleteDshPath, "1\n");
     // Replay ownership depends on the entire inventory. A readable fork may
@@ -2543,7 +2623,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   sessions.sort((a, b) => String(b.ended_at || "").localeCompare(String(a.ended_at || "")));
   // A failed database scan is an incomplete inventory. Keep the last complete
   // snapshot and signature so an unchanged database is retried next build.
-  if (incompleteDirs.length === 0 && !incompleteZcodeScan && !incompleteOpencodeScan && !incompleteKimiScan && !incompleteOmpScan && !incompleteDshScan) {
+  if (incompleteDirs.length === 0 && !incompleteZcodeScan && !incompleteOpencodeScan && !incompleteKimiScan && !incompleteOmpScan && !incompleteDshScan && !incompletePiScan) {
     const content = sessions.map(serializeSessionRecord).join("\n") + (sessions.length ? "\n" : "");
     await writeAtomic(sidecarPath, content);
     const generatedAt = new Date().toISOString();
@@ -2561,6 +2641,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     await fsp.rm(incompleteKimiPath, { force: true });
     await fsp.rm(incompleteOmpPath, { force: true });
     await fsp.rm(incompleteDshPath, { force: true });
+    await fsp.rm(incompletePiPath, { force: true });
   }
   // Non-enumerable so the array still behaves exactly like a plain row list
   // for every existing caller (map/filter/JSON of the rows is unaffected).
@@ -2659,6 +2740,7 @@ function scopeSessionUsage(row, from, to, context) {
     const modelName = previousModelUsage ? previousModelUsage.model : (row.model || bucket.model);
     const model = byModel.get(modelName) || {
       ...(previousModelUsage || {}),
+      backend_usage: undefined,
       model: modelName,
       ...Object.fromEntries(MODEL_USAGE_SUM_FIELDS.filter((field) => field !== "edit_turns").map((field) => [field, 0])),
       usage_events: 0,
@@ -2877,6 +2959,9 @@ function resumeCommandFor(source, sessionId) {
   // command must still be run from the session's project_ref cwd.
   if (source === "grok") return `grok --resume ${id}`;
   if (source === "omp") return `omp --resume ${id}`;
+  // pi: `--session` accepts a full or partial session id, unlike `--resume`,
+  // which opens an interactive picker and so is not copy-paste resumable.
+  if (source === "pi") return `pi --session ${id}`;
   return null;
 }
 
@@ -3269,6 +3354,8 @@ module.exports = {
   scanOmpSession,
   scanDshSessions,
   scanDshSession,
+  scanPiSessions,
+  scanPiSession,
   buildSessionAnalytics,
   summarizeSessions,
   listSessionsForBrowser,

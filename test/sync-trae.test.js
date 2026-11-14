@@ -287,3 +287,18 @@ test("status detects TRAE usage databases with the application key and no login 
     assert.equal(status.providers.trae.entitlement, undefined);
   });
 });
+
+test("local TRAE SQLite usage reads through a relocated app junction without replaying turns", async (t) => {
+  await withIsolatedTrae(t, async ({ home, dbPath, trackerDir }) => {
+    const root = process.env.TOKENTRACKER_TRAE_HOME;
+    const target = path.join(home, "relocated TRAE 数据");
+    fs.renameSync(root, target);
+    fs.symlinkSync(target, root, "junction");
+    assert.ok(fs.statSync(dbPath).isFile());
+    await cmdSync(["--auto", "--source=trae"]);
+    assert.equal(latestTrae(trackerDir).total_tokens, 110);
+    const before = readQueue(trackerDir);
+    await cmdSync(["--auto", "--source=trae"]);
+    assert.deepEqual(readQueue(trackerDir), before);
+  });
+});

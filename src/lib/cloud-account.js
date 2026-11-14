@@ -216,6 +216,28 @@ function csrfTokenFromRefreshPayload(data) {
   return raw && raw.length > 0 ? raw : null;
 }
 
+function userFromRefreshPayload(data) {
+  if (!data || typeof data !== "object") return null;
+  const raw = data.user && typeof data.user === "object" && !Array.isArray(data.user)
+    ? data.user
+    : data.session && typeof data.session === "object" && data.session.user && typeof data.session.user === "object" && !Array.isArray(data.session.user)
+      ? data.session.user
+      : null;
+  return raw;
+}
+
+function userFromAccessToken(accessToken) {
+  try {
+    const payload = JSON.parse(Buffer.from(String(accessToken).split(".")[1], "base64url").toString("utf8"));
+    if (typeof payload?.sub !== "string" || !payload.sub) return null;
+    const user = { id: payload.sub };
+    if (typeof payload.email === "string" && payload.email) user.email = payload.email;
+    return user;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Perform the actual refresh POST. Throws a classified `AccountAuthError` on
  * every failure so callers can distinguish a transient outage (timeout,
@@ -283,7 +305,8 @@ async function performMint({ root, anonKey, refreshToken, fetchImpl, now, timeou
   const rotated = refreshTokenFromRefreshPayload(data);
   // The caller persists a rotation before its next account read. Key the
   // still-valid access token by that current refresh token, not the consumed one.
-  tokenCache = { cacheKey: `${root}\0${rotated || refreshToken}`, accessToken, expMs };
+  const user = userFromRefreshPayload(data) || userFromAccessToken(accessToken);
+  tokenCache = { cacheKey: `${root}\0${rotated || refreshToken}`, accessToken, expMs, user };
   return {
     accessToken,
     refreshToken: rotated && rotated !== refreshToken ? rotated : null,
@@ -292,6 +315,9 @@ async function performMint({ root, anonKey, refreshToken, fetchImpl, now, timeou
     // relayed (refresh, csrf) pair in sync — a stale relayed csrf breaks the
     // dashboard's cookie-path refresh with 403 Invalid CSRF.
     csrfToken: csrfTokenFromRefreshPayload(data),
+    // The InsForge SDK's refreshSession persists the session only when the
+    // response includes a user object alongside the access token.
+    user,
   };
 }
 
@@ -303,7 +329,7 @@ async function performMint({ root, anonKey, refreshToken, fetchImpl, now, timeou
  *
  * @param {boolean} [throwOnFailure] when true, reject with a classified
  *   `AccountAuthError` instead of resolving to `null`.
- * @returns {Promise<{accessToken: string, refreshToken: string|null, csrfToken: string|null}|null>}
+ * @returns {Promise<{accessToken: string, refreshToken: string|null, csrfToken: string|null, user: object|null}|null>}
  *   null when no refresh token is available or the refresh failed.
  */
 async function mintAccessToken({
@@ -327,7 +353,7 @@ async function mintAccessToken({
     tokenCache.accessToken &&
     tokenCache.expMs - skewMs > now()
   ) {
-    return { accessToken: tokenCache.accessToken, refreshToken: null, csrfToken: null };
+    return { accessToken: tokenCache.accessToken, refreshToken: null, csrfToken: null, user: tokenCache.user || null };
   }
 
   let inflight = mintInflight.get(cacheKey);

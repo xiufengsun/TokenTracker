@@ -26,7 +26,7 @@ test("macOS app launches local CLI on the same fixed port that WKWebView loads",
   );
   assert.match(
     source,
-    /serve --port \\\(Constants\.serverPort\) --no-sync/,
-    "system CLI fallback should explicitly bind Constants.serverPort",
+    /serve --port \\\(Constants\.serverPort\) --no-sync --no-open/,
+    "system CLI fallback should bind the dashboard port without opening a browser",
   );
 });

@@ -2291,6 +2291,104 @@ describe("getUsageLimits", () => {
     }
   });
 
+  it("caches and restores a live read that carries only weekly_scoped windows", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-scoped-only-"));
+    try {
+      const claudeDir = path.join(tmp, ".claude");
+      fs.mkdirSync(claudeDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(claudeDir, ".credentials.json"),
+        JSON.stringify({ claudeAiOauth: { accessToken: "scoped-only-cache-token" } }),
+      );
+      const resetsAt = new Date(Date.now() + 3 * 86400 * 1000).toISOString();
+      const scopedOnlyBody = {
+        // A managed-access (e.g. Fable) account: no fixed window at all — the
+        // only window state lives in the generic limits array.
+        five_hour: null,
+        seven_day: null,
+        seven_day_opus: null,
+        limits: [
+          {
+            kind: "weekly_scoped",
+            group: "weekly",
+            percent: 8,
+            resets_at: resetsAt,
+            scope: { model: { id: null, display_name: "Fable" }, surface: null },
+          },
+        ],
+      };
+
+      // 1) A live read with only scoped windows must still reach the disk cache.
+      const live = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        providerTimeoutMs: 1000,
+        securityRunner() {
+          return { status: 1, stdout: "" };
+        },
+        commandRunner() {
+          return { status: 1, stdout: "" };
+        },
+        fetchImpl(url) {
+          if (typeof url === "string" && url === "https://api.anthropic.com/api/oauth/usage") {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => scopedOnlyBody,
+            });
+          }
+          return pendingUnlessCodexReset(url);
+        },
+      });
+
+      assert.equal(live.claude.error, null);
+      assert.deepEqual(live.claude.weekly_scoped, [
+        { label: "Fable", utilization: 8, resets_at: resetsAt },
+      ]);
+      const cachePath = path.join(tmp, ".tokentracker", "tracker", "claude-usage-limits-cache.json");
+      // A missing file throws here — the "never reached the disk cache"
+      // failure signal; read before asserting so no check-then-use pair
+      // (CodeQL's file-system race rule) exists in the test.
+      const cachedOnDisk = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+      assert.deepEqual(cachedOnDisk.claude.weekly_scoped, [
+        { label: "Fable", utilization: 8, resets_at: resetsAt },
+      ], "a scoped-only live read must reach the disk cache");
+
+      // 2) Age the snapshot out of the fresh TTL so a failed poll has to fall
+      // back to it; the scoped survivor must be restored.
+      cachedOnDisk.claude.cached_at = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+      fs.writeFileSync(cachePath, JSON.stringify(cachedOnDisk));
+      resetUsageLimitsCache();
+      const restored = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        providerTimeoutMs: 1000,
+        securityRunner() {
+          return { status: 1, stdout: "" };
+        },
+        commandRunner() {
+          return { status: 1, stdout: "" };
+        },
+        fetchImpl(url) {
+          if (typeof url === "string" && url === "https://api.anthropic.com/api/oauth/usage") {
+            return Promise.resolve({ ok: false, status: 500, json: async () => ({}) });
+          }
+          return pendingUnlessCodexReset(url);
+        },
+      });
+
+      assert.equal(restored.claude.error, null, "the cached scoped-only read must be served");
+      assert.equal(restored.claude.stale, true);
+      assert.deepEqual(restored.claude.weekly_scoped, [
+        { label: "Fable", utilization: 8, resets_at: resetsAt },
+      ]);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("drops a scoped weekly entry that duplicates a populated seven_day_opus window", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-scoped-opus-"));
@@ -4479,6 +4577,66 @@ describe("fetchAntigravityLimits remote OAuth", () => {
       assert.equal(result.primary_window.used_percent, 42);
       assert.equal(result.account_plan, "Google AI Pro");
       assert.equal(calls[0], "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary");
+      assert.ok(!calls.some((url) => url.includes("oauth2.googleapis.com/token")));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to fetchAvailableModels when the quota summary requires a subscription", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-remote-free-tier-"));
+    try {
+      writeAntigravityOauthToken(tmp);
+      const calls = [];
+      const base = antigravityRemoteFetchImpl({ calls, load: { currentTier: { id: "free-tier" } } });
+      const fetchImpl = async (url, opts) => {
+        const href = String(url);
+        if (href.includes("retrieveUserQuotaSummary")) {
+          calls.push(href);
+          return {
+            ok: false,
+            status: 403,
+            async json() {
+              return { error: { code: 403, details: [{ reason: "SUBSCRIPTION_REQUIRED" }] } };
+            },
+          };
+        }
+        if (href.includes("fetchAvailableModels")) {
+          calls.push(href);
+          return {
+            ok: true,
+            status: 200,
+            async json() {
+              return {
+                models: {
+                  "claude-sonnet-4-6": {
+                    displayName: "Claude Sonnet 4.6 (Thinking)",
+                    quotaInfo: { remainingFraction: 0.7, resetTime: "2026-09-07T00:00:00Z" },
+                  },
+                  "gemini-3.8-flash-high": {
+                    displayName: "Gemini 3.8 Flash (High)",
+                    quotaInfo: { remainingFraction: 0.9, resetTime: "2026-09-07T00:00:00Z" },
+                  },
+                  tab_flash_lite_preview: { quotaInfo: { remainingFraction: 1 } },
+                },
+              };
+            },
+          };
+        }
+        return base(url, opts);
+      };
+      const result = await fetchAntigravityLimits({
+        platform: "linux",
+        home: tmp,
+        commandRunner() { return { status: 1, stdout: "" }; },
+        fetchImpl,
+        nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
+      });
+      assert.equal(result.configured, true);
+      assert.equal(result.error, null);
+      assert.equal(Math.round(result.primary_window.used_percent), 30);
+      assert.equal(Math.round(result.tertiary_window.used_percent), 10);
+      assert.ok(calls.includes("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"));
       assert.ok(!calls.some((url) => url.includes("oauth2.googleapis.com/token")));
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });

@@ -215,8 +215,8 @@ export async function createWaffoCheckout(order: CloudOrder, config: WaffoConfig
       !checkout.pathname.startsWith("/store/")) throw new BillingError("invalid_provider_checkout_url", 502);
   if (config.environment === "sandbox") checkout.searchParams.set("test", "true");
   else if (checkout.searchParams.has("test")) throw new BillingError("invalid_provider_checkout_url", 502);
-  isoDate(result.expiresAt);
-  return { checkoutUrl: checkout.toString(), sessionId, priceId: id };
+  const expiresAt = isoDate(result.expiresAt);
+  return { checkoutUrl: checkout.toString(), sessionId, priceId: id, expiresAt };
 }
 
 export function verifyWaffoWebhook(raw: string, signature: string | null, config: WaffoConfig): WebhookEvent {
@@ -618,6 +618,7 @@ async function closeSingleUnpaidWaffoOrder(order: BoundOrder, targetId: string, 
 export async function closeUnpaidWaffoAttempts(order: BoundOrder, config: WaffoConfig,
   request: Fetcher = fetch): Promise<string[]> {
   const remotes = await providerOrders(order, config, request);
+  if (!remotes.length && await confirmExpiredUnusedWaffoCheckout(order, config, request)) return [];
   if (!remotes.length || order.provider_order_id) throw new BillingError("checkout_confirmation_pending", 409);
   for (const remote of remotes) assertUnpaid(remote, order, config);
   const expected = remotes.map(remote => text(remote.id)).sort();
@@ -656,27 +657,30 @@ export async function closeUnpaidWaffoOrder(order: BoundOrder, config: WaffoConf
 }
 
 // A Back/replacement session exists only after a provider order was created.
-// Local TTL alone is insufficient: require a receipt-bound expired session and
-// two signed, complete empty snapshots before closing an unused checkout.
+// Require an expired session and two complete empty provider snapshots.
+// Without a receipt, no checkout URL was returned to the buyer.
 export async function confirmExpiredUnusedWaffoCheckout(order: BoundOrder, config: WaffoConfig,
   request: Fetcher = fetch, now = Date.now()): Promise<boolean> {
   assertOrder(order, config);
   const expires = Date.parse(String(order.expires_at));
-  if (!['pending', 'ready'].includes(order.status) || !Number.isFinite(expires) || expires > now ||
+  if (!['pending', 'ready', 'closed'].includes(order.status) || !Number.isFinite(expires) || expires > now ||
       order.provider_order_id || order.waffo_order_id) return false;
   const record = object(order);
   if (record.checkout_attempts === 0 && !record.provider_checkout_id && !order.checkout_url) return true;
   const claimed = Date.parse(String(record.checkout_claimed_at));
   const session = record.provider_checkout_id;
-  if (typeof session !== 'string' || !/^cs_[0-9A-Za-z_-]+$/.test(session) ||
-      !Number.isFinite(claimed) || !order.checkout_url) return false;
-  const checkout = new URL(order.checkout_url);
-  if (checkout.protocol !== 'https:' || checkout.hostname !== 'pancake.waffo.ai' || checkout.port ||
-      checkout.username || checkout.password || !checkout.pathname.startsWith('/store/') ||
-      !checkout.pathname.endsWith(`/checkout/${session}`)) return false;
-  // A saved receipt means both bounded provider calls completed successfully.
-  // Allow a full minute beyond those two 15-second calls before expiry cleanup.
-  if (now < claimed + CHECKOUT_TTL_SECONDS * 1000 + 60_000) return false;
+  if (!Number.isFinite(claimed)) return false;
+  if (session || order.checkout_url) {
+    if (typeof session !== 'string' || !/^cs_[0-9A-Za-z_-]+$/.test(session) || !order.checkout_url) return false;
+    const checkout = new URL(order.checkout_url);
+    if (checkout.protocol !== 'https:' || checkout.hostname !== 'pancake.waffo.ai' || checkout.port ||
+        checkout.username || checkout.password || !checkout.pathname.startsWith('/store/') ||
+        !checkout.pathname.endsWith(`/checkout/${session}`)) return false;
+  }
+  // Legacy retries may first create a session just before the local deadline.
+  const sessionExpires = record.provider_checkout_expires_at
+    ? Date.parse(String(record.provider_checkout_expires_at)) : expires + CHECKOUT_TTL_SECONDS * 1000;
+  if (!Number.isFinite(sessionExpires) || now < sessionExpires + 60_000) return false;
   if ((await providerOrders(order, config, request)).length) return false;
   return (await providerOrders(order, config, request)).length === 0;
 }

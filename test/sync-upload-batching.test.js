@@ -266,3 +266,52 @@ test("duplicate observations of one session: newer fetch stamp wins, never dupli
   const dup = batch.sessionStates.find((s) => s.session_id === "dup-1");
   assert.equal(dup.input_tokens, 60, "the newer fetch stamp is the observation delivered");
 });
+
+test("DSH corrected lower and zero snapshots replace old totals before ingest", async (t) => {
+  for (const corrected of [4130, 0]) {
+    const { dir, queuePath, queueStatePath } = tempQueue("tokentracker-dsh-correction-");
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const row = (total) => ({
+      source: "dsh",
+      model: "deepseek-v4.1-flash",
+      hour_start: "2026-05-01T12:00:00.000Z",
+      input_tokens: total,
+      output_tokens: 0,
+      cached_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      reasoning_output_tokens: 0,
+      total_tokens: total,
+      conversation_count: total === 0 ? 0 : 2,
+    });
+    writeQueue(queuePath, [row(8250), row(corrected)]);
+    const batch = await readQueueBatch(queuePath, 0, BATCH_SIZE);
+    assert.equal(batch.buckets.length, 1, "one row per key reaches ingest");
+    assert.equal(batch.buckets[0].total_tokens, corrected, "last snapshot wins, not maximum");
+    const ingest = installIngestMock();
+    try {
+      await drainQueueToCloud({ baseUrl: "https://t.example", deviceToken: "tok", queuePath, queueStatePath, maxBatches: 5, batchSize: BATCH_SIZE });
+      assert.equal(ingest.calls.length, 1);
+      assert.equal(ingest.calls[0].buckets.length, 1);
+      assert.equal(ingest.calls[0].buckets[0].total_tokens, corrected);
+      assert.ok(JSON.parse(fs.readFileSync(queueStatePath, "utf8")).offset >= fs.statSync(queuePath).size);
+    } finally {
+      ingest.restore();
+    }
+  }
+});
+
+test("DSH correction in a later upload batch replaces the earlier snapshot", async (t) => {
+  const { dir, queuePath, queueStatePath } = tempQueue("tokentracker-dsh-correction-batches-");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const row = (total) => ({
+    ...bucketRow("2026-05-01T12:00:00.000Z", total),
+    source: "dsh",
+    model: "deepseek-v4.1-flash",
+  });
+  writeQueue(queuePath, [row(8250), row(4130), row(0)]);
+  const ingest = installIngestMock();
+  t.after(() => ingest.restore());
+  await drainQueueToCloud({ baseUrl: "https://t.example", deviceToken: "tok", queuePath, queueStatePath, maxBatches: 5, batchSize: 1 });
+  assert.deepEqual(ingest.calls.map((call) => call.buckets[0].total_tokens), [8250, 4130, 0]);
+  assert.equal((await readQueueBatch(queuePath, JSON.parse(fs.readFileSync(queueStatePath, "utf8")).offset, 1)).buckets.length, 0);
+});

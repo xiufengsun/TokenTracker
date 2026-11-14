@@ -29,6 +29,7 @@ const unpaidCancelKeys = [];
 const sdkKeys = [];
 let db, server, base, env, failAfterSession = false, sessionCount = 0, cancelCount = 0;
 let failApplyBatch = 0, applyBatchCalls = 0, failAuthorizationOnce = false;
+let failBeforeSession = false;
 const plans = [
   { sku: "cloud_usd_monthly", amount: 499, months: 1, mode: "recurring", variable: "WAFFO_CLOUD_MONTHLY_PRODUCT_ID" },
   { sku: "cloud_usd_yearly", amount: 3999, months: 12, mode: "recurring", variable: "WAFFO_CLOUD_YEARLY_PRODUCT_ID" },
@@ -83,7 +84,9 @@ async function setupDatabase() {
     "20261007120000_cloud-waffo.sql", "20261007130000_cloud-waffo-retry.sql",
     "20261007140000_cloud-waffo-attempts.sql", "20261007150000_cloud-waffo-authorizations.sql",
     "20261007160000_cloud-waffo-sandbox-periods.sql",
-    "20261008120000_self-hosted-access.sql", "20261009120000_cloud-gifts.sql"]) await db.exec(migration(name));
+    "20261008120000_self-hosted-access.sql", "20261009120000_cloud-gifts.sql",
+    "20261106011916_cloud-waffo-unused-checkout-retry.sql",
+    "20261106014534_cloud-checkout-recovery.sql"]) await db.exec(migration(name));
   await db.exec("UPDATE tokentracker_cloud_policy SET phase='active',launch_at=now()-interval '1 hour' WHERE environment='sandbox'");
 }
 
@@ -188,6 +191,7 @@ function providerRequest(input, init) {
     return Response.json({ data: { [field]: rows.slice(offset, offset + 100), [field + "Count"]: rows.length } });
   }
   if (url.pathname === "/v1/actions/checkout/create-session") {
+    if (failBeforeSession) { failBeforeSession = false; return Response.json({}, { status: 502 }); }
     assert.equal(body.productType, undefined); assert.equal(body.withTrial, false);
     assert.equal(body.priceSnapshot, undefined); assert.equal(body.originOrderId, undefined);
     const key = init.headers["X-Idempotency-Key"];
@@ -707,6 +711,112 @@ test("failed fixed and recurring checkouts close their old order and retry a sin
     assert.equal(active.membership.can_upload_cloud, true);
     assert.equal((await localOrder(row.id)).status, "closed");
   }
+});
+
+test("expired unused Waffo sessions restart once without a provider order or payment", async () => {
+  for (const plan of plans) {
+    const owner = await user(); const created = await checkout(owner, plan.sku);
+    const id = created.data.order.id;
+    await db.query(`UPDATE tokentracker_cloud_orders SET expires_at=now()-interval '1 hour',
+      provider_checkout_expires_at=now()-interval '1 hour',checkout_claimed_at=now()-interval '2 hours' WHERE id=$1`, [id]);
+    assert.equal(providerOrders.has(id), false);
+    const before = sessionCount; const cancels = cancelCount; const tokens = customerSessions.size;
+    const request_id = randomUUID();
+    const results = await Promise.all([
+      api("restart-checkout", { id, request_id }, owner),
+      api("restart-checkout", { id, request_id: randomUUID() }, owner),
+    ]);
+    assert.ok(results.every(result => result.response.status === 200), JSON.stringify(results.map(result => result.data)));
+    const next = results[0].data.order;
+    assert.notEqual(next.id, id);
+    assert.equal(results[1].data.order.id, next.id);
+    const old = await localOrder(id); const replacement = await localOrder(next.id);
+    assert.equal(old.status, "closed"); assert.equal(old.retry_order_id, next.id);
+    assert.equal(replacement.sku, plan.sku); assert.equal(replacement.status, "ready");
+    const replay = await api("restart-checkout", { id, request_id }, owner);
+    assert.equal(replay.response.status, 200); assert.equal(replay.data.order.id, next.id);
+    assert.equal(replay.data.order.checkout_url, next.checkout_url);
+    assert.equal(sessionCount, before + 1); assert.equal(cancelCount, cancels);
+    assert.equal(customerSessions.size, tokens);
+    assert.equal((await account(owner)).payments.length, 0);
+    assert.equal((await account(owner)).membership.can_upload_cloud, false);
+    assert.equal((await db.query("SELECT count(*)::int n FROM tokentracker_cloud_orders WHERE user_id=$1", [owner])).rows[0].n, 2);
+  }
+});
+
+test("unused Waffo sessions require an expired receipt before restart", async () => {
+  for (const change of [
+    null,
+    "expires_at=now()-interval '1 hour'",
+    "expires_at=now()-interval '1 hour',checkout_claimed_at=now()-interval '2 hours',provider_checkout_id=NULL",
+  ]) {
+    const owner = await user(); const created = await checkout(owner);
+    const id = created.data.order.id;
+    if (change) await db.query(`UPDATE tokentracker_cloud_orders SET ${change} WHERE id=$1`, [id]);
+    const before = sessionCount;
+    const rejected = await api("restart-checkout", { id, request_id: randomUUID() }, owner);
+    assert.equal(rejected.response.status, 409); assert.equal(rejected.data.error, "checkout_confirmation_pending");
+    assert.equal(sessionCount, before); assert.equal((await localOrder(id)).status, "ready");
+    assert.equal((await localOrder(id)).retry_order_id, null);
+  }
+});
+
+test("an old checkout link recovers the latest order without spending its original retry identity again", async () => {
+  const owner = await user(); const created = await checkout(owner);
+  const expire = id => db.query(`UPDATE tokentracker_cloud_orders SET expires_at=now()-interval '2 hours',
+    provider_checkout_expires_at=now()-interval '2 hours',checkout_claimed_at=now()-interval '3 hours' WHERE id=$1`, [id]);
+  const a = created.data.order.id; await expire(a);
+  const request_id = randomUUID();
+  const first = await api("restart-checkout", { id: a, request_id }, owner);
+  assert.equal(first.response.status, 200);
+  const b = first.data.order.id; await expire(b);
+  const before = sessionCount;
+  const recovered = await api("restart-checkout", { id: a, request_id }, owner);
+  assert.equal(recovered.response.status, 200); assert.equal(recovered.data.order.id, b);
+  assert.equal(recovered.data.order.payment_state, "unpaid"); assert.equal(sessionCount, before);
+  const next = await api("restart-checkout", { id: b, request_id: randomUUID() }, owner);
+  assert.equal(next.response.status, 200);
+  const latest = await api("restart-checkout", { id: a, request_id }, owner);
+  assert.equal(latest.response.status, 200); assert.equal(latest.data.order.id, next.data.order.id);
+  assert.equal(sessionCount, before + 1);
+});
+
+test("expired missing receipts and never-issued drafts can restart without recreating the old session", async () => {
+  for (const missingReceipt of [true, false]) {
+    const owner = await user(); const request = randomUUID();
+    let id;
+    if (missingReceipt) {
+      failAfterSession = true;
+      const created = await checkout(owner, "cloud_usd_yearly_fixed", request);
+      assert.equal(created.response.status, 202); id = created.data.order.id;
+    } else {
+      id = (await db.query("SELECT cloud_create_order($1,'sandbox','waffo','cloud_usd_yearly_fixed',$2) AS r", [owner, request])).rows[0].r.id;
+    }
+    await db.query(`UPDATE tokentracker_cloud_orders SET expires_at=now()-interval '2 hours',
+      checkout_claimed_at=CASE WHEN checkout_attempts>0 THEN now()-interval '3 hours' END WHERE id=$1`, [id]);
+    const before = sessionCount;
+    const restarted = await api("restart-checkout", { id, request_id: randomUUID() }, owner);
+    assert.equal(restarted.response.status, 200, JSON.stringify(restarted.data));
+    assert.notEqual(restarted.data.order.id, id); assert.equal((await localOrder(id)).status, "closed");
+    assert.equal(sessionCount, before + 1);
+    assert.equal(sdkKeys.filter(key => key === `tokentracker-sandbox-checkout-${id}`).length, missingReceipt ? 1 : 0);
+  }
+});
+
+test("late successful checkout creation persists the provider expiry and replay cannot extend it", async () => {
+  const owner = await user(); const request = randomUUID(); failBeforeSession = true;
+  const created = await checkout(owner, "cloud_usd_monthly", request);
+  assert.equal(created.response.status, 202); const id = created.data.order.id;
+  await db.query(`UPDATE tokentracker_cloud_orders SET expires_at=now()+interval '1 minute',
+    checkout_claimed_at=now()-interval '29 minutes' WHERE id=$1`, [id]);
+  const recovered = await checkout(owner, "cloud_usd_monthly", request); assert.equal(recovered.response.status, 200);
+  const receipt = sessions.get(`tokentracker-sandbox-checkout-${id}`);
+  const row = await localOrder(id);
+  assert.equal(new Date(row.expires_at).getTime(), Date.parse(receipt.expiresAt));
+  const replay = await checkout(owner, "cloud_usd_monthly", request); assert.equal(replay.response.status, 200);
+  assert.equal(new Date((await localOrder(id)).expires_at).getTime(), Date.parse(receipt.expiresAt));
+  const rejected = await api("restart-checkout", { id, request_id: randomUUID() }, owner);
+  assert.equal(rejected.response.status, 409); assert.equal(rejected.data.error, "checkout_confirmation_pending");
 });
 
 test("concurrent restart clicks share one successor and one SDK checkout session", async () => {

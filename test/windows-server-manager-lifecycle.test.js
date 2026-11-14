@@ -108,9 +108,9 @@ test("Windows background sync cannot hold the single-flight slot forever", () =>
   const minutes = Number(
     /private static readonly TimeSpan BackgroundSyncDeadline = TimeSpan\.FromMinutes\((\d+)\)/.exec(source)[1],
   );
-  // The local API kills its sync child at SYNC_TIMEOUT_MS (120s), and macOS
-  // caps the same exchange at 130s. Stay above that so a slow but live publish
-  // is never cut short.
+  // The local API answers within SYNC_RESPONSE_WAIT_MS (120s), and macOS caps
+  // the same exchange at 130s. Stay above that so a slow but live publish is
+  // never cut short.
   assert.ok(minutes >= 3, `BackgroundSyncDeadline must exceed the server's own 120s budget, got ${minutes}m`);
 
   const trigger = source.slice(

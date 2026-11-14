@@ -296,3 +296,21 @@ test("export/import preserves ultrafast and ultrafast_long_context subsets (issu
   assert.equal(viewed[0].ultrafast_input_tokens, 150);
   assert.equal(viewed[0].ultrafast_long_context_input_tokens, 40);
 });
+
+test("local transfer preserves Claude backend provenance and rejects unsanitized origins", async (t) => {
+  const tokens = { input_tokens: 90, output_tokens: 10, total_tokens: 100,
+    cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0 };
+  const usage = row(100, { source: "claude", model: "claude-sonnet-4-6",
+    backend_usage: [{ backend: "custom", backend_origin: "https://gateway.example", ...tokens }] });
+  const a = await machine(t, "machine-aaaa", [usage]);
+  const b = await machine(t, "machine-bbbb", []);
+  const snapshot = await a.service.exportSnapshot();
+  await apply(b.service, snapshot);
+  const imported = (await b.service.view([], "local:machine-aaaa"))[0];
+  assert.deepEqual(imported.backend_usage, usage.backend_usage);
+  const { computeRowCost, getModelPricingInfo } = require("../src/lib/pricing");
+  assert.equal(computeRowCost(imported), 0);
+  assert.equal(getModelPricingInfo(imported.model, imported).status, "unpriced");
+  snapshot.rows[0].backend_usage[0].backend_origin += "/secret";
+  await assert.rejects(b.service.preview(snapshot), { code: "invalid_snapshot" });
+});
