@@ -1,0 +1,7 @@
+// Signing identity for personal device builds lives in the gitignored
+// Local.xcconfig next to this file (see README.md). The defaults below build
+// for the simulator without any Apple account.
+TT_BUNDLE_PREFIX = com.example
+DEVELOPMENT_TEAM =
+
+#include? "Local.xcconfig"
