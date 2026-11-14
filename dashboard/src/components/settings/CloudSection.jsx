@@ -7,6 +7,7 @@ import { CloudMembershipCard } from "../cloud/CloudMembershipCard.jsx";
 import { BillingNotice } from "../cloud/CloudBillingParts.jsx";
 import { CloudContextualPrompt } from "../cloud/CloudContextualPrompt.jsx";
 import { ToggleSwitch } from "./Controls.jsx";
+import { InstanceSectionCard } from "./InstanceSectionCard.jsx";
 import { useAccountProfileSettings } from "./useAccountProfileSettings.js";
 import { rebuildCloudDeviceUsage } from "../../lib/cloud-sync";
 import { ConfirmModal } from "../../ui/components/ConfirmModal.jsx";
@@ -23,8 +24,11 @@ function StandaloneCloudSection({ active }) {
 
 function CloudSettingsSection({ settings, active }) {
   return (
-    <CloudMembershipCard showTitle={false} active={active}
-      syncControl={settings.showLocalCloudSync ? <CloudSyncRow settings={settings} /> : null} />
+    <div className="space-y-4">
+      <CloudMembershipCard showTitle={false} active={active}
+        syncControl={settings.showLocalCloudSync ? <CloudSyncRow settings={settings} /> : null} />
+      <InstanceSectionCard />
+    </div>
   );
 }
 
