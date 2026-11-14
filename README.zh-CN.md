@@ -69,6 +69,7 @@ tokentracker status       # 查看 hook 挂接状态
 tokentracker status --json   # 机器可读 JSON（pipe 到 jq、给 AI agent 喂数据）
 tokentracker status --light  # 纯 ASCII 表（CI / SSH 用，无 spinner）
 tokentracker doctor       # 健康检查
+tokentracker update       # 升级 CLI（npm 全局或 Homebrew 安装）
 ```
 
 ### 🍺 Homebrew（macOS）
@@ -83,7 +84,7 @@ brew install --cask xiufengsun/tokentracker/tokentracker
 brew install xiufengsun/tokentracker/tokentracker
 ```
 
-升级：`brew upgrade --cask xiufengsun/tokentracker/tokentracker`。每次新版本发布后，tap 会在一小时内自动跟上。
+升级：App 用 `brew upgrade --cask xiufengsun/tokentracker/tokentracker`，CLI 用 `brew upgrade xiufengsun/tokentracker/tokentracker` 或 `tokentracker update`。每次新版本发布后，tap 会在一小时内自动跟上。
 
 ---
 

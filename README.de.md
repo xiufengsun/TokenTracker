@@ -74,6 +74,7 @@ tokentracker status       # Hook-Status prüfen
 tokentracker status --json     # Maschinenlesbare Ausgabe (für jq, AI-Agenten)
 tokentracker status --light    # Reine ASCII-Tabelle (CI / SSH, kein Spinner)
 tokentracker doctor       # Health Check
+tokentracker update       # CLI aktualisieren (npm global / Homebrew)
 ```
 
 ### 🍺 Homebrew (macOS)
@@ -86,7 +87,7 @@ brew install --cask xiufengsun/tokentracker/tokentracker
 brew install xiufengsun/tokentracker/tokentracker
 ```
 
-Aktualisieren mit `brew upgrade --cask xiufengsun/tokentracker/tokentracker`. Der Tap wird innerhalb einer Stunde nach jedem Release automatisch aktualisiert.
+Aktualisieren: die App mit `brew upgrade --cask xiufengsun/tokentracker/tokentracker`, die CLI mit `brew upgrade xiufengsun/tokentracker/tokentracker` oder `tokentracker update`. Der Tap wird innerhalb einer Stunde nach jedem Release automatisch aktualisiert.
 
 ---
 
