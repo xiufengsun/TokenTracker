@@ -11,6 +11,7 @@ const crypto = require("node:crypto");
 const { ensureDir, writeJson, chmod600IfPossible } = require("./fs");
 const { physicalJsonlRecords } = require("./jsonl-lines");
 const { readSqliteJsonRows, readSqliteJsonRowsAsync } = require("./sqlite-reader");
+const { extractAntigravityGenInfo } = require("./antigravity-usage");
 const wsl = require("./wsl-probe");
 const { resolveInstallPaths } = require("./install-resolver");
 const { expandHome } = require("./scan-roots");
@@ -22216,6 +22217,10 @@ async function listAntigravityTranscriptsWithStatus(geminiHome, knownFiles = nul
   const results = await Promise.all(
     dirs.map((dir) => listAntigravitySessionFilesWithStatus(dir, knownFiles)),
   );
+  const { listAntigravityNativeFiles } = require("./antigravity-native");
+  const native = await Promise.all(dirs.map((dir, index) =>
+    listAntigravityNativeFiles(path.dirname(dir), results[index].files, knownFiles || [])));
+  results.push(...native);
   return {
     files: results.flatMap((result) => result.files),
     complete: results.every((result) => result.complete),
@@ -22230,8 +22235,42 @@ const ANTIGRAVITY_CURSOR_VERSION = 2;
 // Bump when extractAntigravityGenInfo starts reading records it used to
 // discard. Kept apart from the cursor version: a cursor-version mismatch routes
 // to the legacy migration, which treats the cursor as having no per-file ledger.
-const ANTIGRAVITY_EXTRACTOR_REVISION = 1;
+const ANTIGRAVITY_EXTRACTOR_REVISION = 2;
 const ANTIGRAVITY_MAX_CONTRIBUTIONS = 4096;
+
+function antigravityPlannerSteps(buffer) {
+  const steps = new Set();
+  if (!Buffer.isBuffer(buffer)) return steps;
+  for (const line of buffer.toString("utf8").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const event = JSON.parse(trimmed);
+      if (event?.type === "PLANNER_RESPONSE" && Number.isFinite(event.step_index)) steps.add(event.step_index);
+    } catch {
+      // A truncated final line is the cursor boundary, not the end of the file.
+      // Only a complete line that fails to parse ends the readable prefix.
+      if (line.endsWith("\n") || line.endsWith("\r")) break;
+    }
+  }
+  return steps;
+}
+
+// True when an append now covers a generation the previous pass billed from the
+// sibling database. A new planner step that was never supplemented stays incremental.
+function antigravityCoverageChanged(buffer, previous, dbPath) {
+  const supplemented = new Set(Array.isArray(previous?.supplementedSteps) ? previous.supplementedSteps : []);
+  if (!Buffer.isBuffer(buffer) || !previous || !(Number(previous.size) >= 0) || !dbPath || supplemented.size === 0) {
+    return false;
+  }
+  const before = antigravityPlannerSteps(buffer.subarray(0, Number(previous.size)));
+  // The appended planner step sits past the stored cursor, so the whole readable
+  // prefix is compared, not only the lines the previous pass billed.
+  for (const step of antigravityPlannerSteps(buffer)) {
+    if (!before.has(step) && supplemented.has(step)) return true;
+  }
+  return false;
+}
 
 function hashAntigravityTranscript(buffer) {
   if (!Buffer.isBuffer(buffer)) return null;
@@ -22451,11 +22490,29 @@ async function parseAntigravityIncremental({
       .map((entry) => (typeof entry === "string" ? entry : entry?.path))
       .filter(Boolean),
   );
+  // A CLI cascade can gain (or lose) a brain transcript after its native db
+  // was already synced. Move the ledger to the discovered representation so
+  // reconciliation retracts its old contribution instead of billing it twice.
+  for (const filePath of liveFilePaths) {
+    if (fileCursors[filePath]) continue;
+    const dbPath = resolveAntigravityDbPath(filePath);
+    if (!dbPath) continue;
+    const aliases = Object.keys(fileCursors).filter((previousPath) =>
+      !liveFilePaths.has(previousPath) && resolveAntigravityDbPath(previousPath) === dbPath);
+    if (aliases.length === 1) {
+      fileCursors[filePath] = fileCursors[aliases[0]];
+      delete fileCursors[aliases[0]];
+    }
+  }
   const incompleteContributionPaths = new Set();
   const deferredIncompletePaths = new Set();
   let needsFullRebuild = false;
   for (const [filePath, prev] of Object.entries(fileCursors)) {
-    if (!resolveAntigravityDbPath(filePath) || !prev || Number(prev.lastLine || 0) <= 0) {
+    if (
+      !resolveAntigravityDbPath(filePath) ||
+      !prev ||
+      (Number(prev.lastLine || 0) <= 0 && !prev.supplementedSteps)
+    ) {
       continue;
     }
     const isLegacy =
@@ -22494,18 +22551,16 @@ async function parseAntigravityIncremental({
         if (needsFullRebuild) break;
         continue;
       }
-      const prev = cursors.files[filePath];
+      const prev = fileCursors[filePath];
       const st = await fs.stat(filePath).catch(() => null);
       const dbPath = resolveAntigravityDbPath(filePath);
       const dbIdentity = await statAntigravityDatabase(dbPath);
       const sameInode = st && prev.inode === (st.ino || 0);
+      const transcriptBytes = await readAntigravityTranscriptBytes(filePath);
       const transcriptCanAppend =
         sameInode &&
         (Number.isFinite(st.size) ? st.size : 0) >= Number(prev.size || 0) &&
-        antigravityTranscriptPrefixMatches(
-          await readAntigravityTranscriptBytes(filePath),
-          prev,
-        );
+        antigravityTranscriptPrefixMatches(transcriptBytes, prev);
       const sameSource =
         !fileSourceByPath.has(filePath) ||
         (prev.source == null ? defaultSource : prev.source) === fileSourceByPath.get(filePath);
@@ -22522,7 +22577,17 @@ async function parseAntigravityIncremental({
         });
         projectChanged = antigravityProjectAssignmentChanged(prev, projectContext);
       }
-      if (!transcriptCanAppend || !sameDb || staleExtractor || !sameSource || projectChanged) {
+      const coverageChanged =
+        transcriptCanAppend &&
+        antigravityCoverageChanged(transcriptBytes, prev, dbPath);
+      if (
+        !transcriptCanAppend ||
+        !sameDb ||
+        staleExtractor ||
+        !sameSource ||
+        projectChanged ||
+        coverageChanged
+      ) {
         if (!inventoryComplete) {
           deferredIncompletePaths.add(filePath);
         } else {
@@ -22604,7 +22669,11 @@ async function parseAntigravityIncremental({
     // cannot be mistaken for an append. A cursor without this hash is treated
     // conservatively and gets one reconciliation pass.
     const transcriptReadRequired =
-      !sameTranscriptStats || !currentVersion || !prev?.transcriptHash || needsFullRebuild;
+      !sameTranscriptStats || !currentVersion || !prev?.transcriptHash || needsFullRebuild ||
+      // Coverage can only be compared against the bytes. A cursor that billed
+      // uncovered generations must be read again so a later planner step retracts
+      // that supplement instead of being merged on top of it.
+      Boolean(prev?.supplementedSteps);
     if (transcriptReadRequired) {
       transcriptBytes = await readAntigravityTranscriptBytes(filePath);
       const afterReadStat = await fs.stat(filePath).catch(() => null);
@@ -22746,7 +22815,11 @@ async function parseAntigravityIncremental({
         staleExtractor ||
         !sameSource ||
         projectChanged ||
-        (!sameTranscriptContent && !transcriptCanAppend));
+        (!sameTranscriptContent && !transcriptCanAppend) ||
+        // A pure append can turn a previously supplemented generation into a
+        // transcript PLANNER_RESPONSE. The cursor stores no per-step identity,
+        // so the whole ledger is reconciled instead of merging the step twice.
+        (transcriptCanAppend && antigravityCoverageChanged(transcriptBytes, prev, dbPath)));
 
     // Reconciliation reparses the complete transcript. Even when stat metadata
     // looked unchanged, project/SQLite changes can select this path; obtain a
@@ -22820,6 +22893,7 @@ async function parseAntigravityIncremental({
         filePath,
         ...(transcriptBytes ? { rawBuffer: transcriptBytes } : {}),
         lastLine: 0,
+        supplementUncovered: true,
         baselineLine: needsFullRebuild ? 0 : baselineLine,
         watermarkLine: Number(prev?.lastLine || 0),
         initialUsageSource: prev?.usageSource,
@@ -22849,6 +22923,8 @@ async function parseAntigravityIncremental({
         filePath,
         ...(transcriptBytes ? { rawBuffer: transcriptBytes } : {}),
         lastLine,
+        // Even a zero-line cursor may already hold billed native supplements.
+        supplementUncovered: !prev || !sameDb || !canResume,
         baselineLine,
         initialContextTokens,
         initialPrevContext,
@@ -22864,6 +22940,12 @@ async function parseAntigravityIncremental({
         projectKey,
       });
 
+      // An unchanged-db resume skips the supplemental pass but keeps its billed
+      // contributions. Keep their step identities too, until a full walk
+      // recomputes which generations are still absent from the transcript.
+      if (canResume && sameDb && Array.isArray(prev?.supplementedSteps)) {
+        result.supplementedSteps = prev.supplementedSteps;
+      }
       const mergedContributions = { ...(prev?.contributions || {}) };
       for (const [cKey, cVal] of Object.entries(result.contributions || {})) {
         if (!mergedContributions[cKey]) {
@@ -22947,8 +23029,13 @@ async function parseAntigravityIncremental({
       lastPlannerModel: result.lastPlannerModel,
       usageSource: result.usageSource,
       dbReadOk: result.dbReadOk !== false,
+      // Only a cursor that supplemented uncovered generations needs its transcript
+      // reread on an unchanged stat. Drop the marker once the transcript catches up.
+      ...(result.supplementedSteps ? { supplementedSteps: result.supplementedSteps } : {}),
       contributions: contributionState.contributions,
-      contributionsComplete: contributionState.complete,
+      // Merging new deltas does not recover entries discarded by an earlier cap.
+      contributionsComplete: contributionState.complete &&
+        (needsFullRebuild || needsReconcile || isLegacy || prev?.contributionsComplete !== false),
       updatedAt: new Date().toISOString(),
     };
 
@@ -22982,169 +23069,9 @@ async function parseAntigravityIncremental({
   return { filesProcessed, eventsAggregated, bucketsQueued, projectBucketsQueued };
 }
 
-function decodeAntigravityVarint(buf, offset) {
-  if (!Buffer.isBuffer(buf) || !Number.isSafeInteger(offset) || offset < 0) {
-    throw new RangeError("invalid Antigravity protobuf offset");
-  }
-  const start = offset;
-  let res = 0;
-  for (let count = 0; count < 10; count++) {
-    if (offset >= buf.length) throw new RangeError("truncated Antigravity protobuf varint");
-    const b = buf[offset++];
-    // 64 bits is nine 7-bit groups plus one bit of a tenth byte.
-    if (count === 9 && b > 1) throw new RangeError("Antigravity protobuf varint exceeds 64 bits");
-    res += (b & 0x7f) * 2 ** (count * 7);
-    if (!(b & 0x80)) {
-      if (Number.isSafeInteger(res)) return [res, offset];
-      // Antigravity writes 2^64 - 1 in fields the extractor never reads. The
-      // float sum has already lost precision, so re-read the bytes exactly.
-      let exact = 0n;
-      for (let i = start; i < offset; i++) {
-        exact |= BigInt(buf[i] & 0x7f) << BigInt((i - start) * 7);
-      }
-      return [exact, offset];
-    }
-  }
-  throw new RangeError("overlong Antigravity protobuf varint");
-}
-
-function findAntigravityProtoFields(buf) {
-  if (!Buffer.isBuffer(buf)) throw new RangeError("invalid Antigravity protobuf payload");
-  const fields = [];
-  let offset = 0;
-  while (offset < buf.length) {
-    const [tag, next] = decodeAntigravityVarint(buf, offset);
-    if (typeof tag !== "number") throw new RangeError("unsafe Antigravity protobuf field tag");
-    offset = next;
-    const fieldNum = Math.floor(tag / 8);
-    const wireType = tag & 7;
-    if (fieldNum <= 0) throw new RangeError("invalid Antigravity protobuf field number");
-    if (wireType === 0) {
-      // May be a BigInt; token reads use Number.isSafeInteger, so it is never billed.
-      const [val, vNext] = decodeAntigravityVarint(buf, offset);
-      offset = vNext;
-      fields.push({ num: fieldNum, val });
-    } else if (wireType === 2) {
-      const [len, lNext] = decodeAntigravityVarint(buf, offset);
-      offset = lNext;
-      if (len > buf.length - offset) {
-        throw new RangeError("truncated Antigravity protobuf field");
-      }
-      fields.push({ num: fieldNum, val: buf.subarray(offset, offset + len) });
-      offset += len;
-    } else if (wireType === 1) {
-      if (buf.length - offset < 8) throw new RangeError("truncated Antigravity protobuf field");
-      offset += 8;
-    } else if (wireType === 5) {
-      if (buf.length - offset < 4) throw new RangeError("truncated Antigravity protobuf field");
-      offset += 4;
-    } else {
-      throw new RangeError("unsupported Antigravity protobuf wire type");
-    }
-  }
-  return fields;
-}
-
-function extractAntigravityGenInfo(buf) {
-  try {
-    const root = findAntigravityProtoFields(buf);
-    const f1 = root.find((f) => f.num === 1)?.val;
-    if (!f1) return null;
-
-    const inner = findAntigravityProtoFields(f1);
-    let model = null;
-    const f19 = inner.find((f) => f.num === 19)?.val;
-    if (f19) model = Buffer.from(f19).toString("utf8").trim();
-
-    let contextTokens = 0;
-    const f9 = inner.find((f) => f.num === 9)?.val;
-    if (f9) {
-      const f10 = findAntigravityProtoFields(f9).find((f) => f.num === 10)?.val;
-      if (f10) {
-        const tok = findAntigravityProtoFields(f10).find((f) => f.num === 1)?.val;
-        if (Number.isSafeInteger(tok)) contextTokens = tok;
-      }
-    }
-
-    let lastStepIndex = null;
-    for (const f of inner) {
-      if (f.num !== 20 || !f.val) continue;
-      const kv = findAntigravityProtoFields(f.val);
-      const k = kv.find((x) => x.num === 1)?.val;
-      const v = kv.find((x) => x.num === 2)?.val;
-      if (k && Buffer.from(k).toString("utf8") === "last_step_index" && v) {
-        const rawStepIndex = Buffer.from(v).toString("utf8").trim();
-        if (/^\d+$/.test(rawStepIndex)) {
-          const parsed = Number(rawStepIndex);
-          if (Number.isSafeInteger(parsed)) lastStepIndex = parsed;
-        }
-      }
-    }
-
-    let uncachedInput;
-    let cachedInput;
-    let outputTokens;
-    let textOutput;
-    let reasoningOutput;
-    let hasUsageMetadata = false;
-
-    const f4 = inner.find((f) => f.num === 4)?.val;
-    if (f4) {
-      // Antigravity internal usage message layout (Field 4):
-      // - f4.1: system / tool instruction prefix tokens (per-model fixed prefix)
-      // - f4.2: user / prompt tokens for this turn
-      // - f4.3: total output tokens checksum (f4.9 text + f4.10 reasoning)
-      // - f4.5: cached prompt tokens (cache read)
-      // - f4.9: text output tokens
-      // - f4.10: reasoning / thought tokens
-      const f4fields = findAntigravityProtoFields(f4);
-      const sTok = f4fields.find((f) => f.num === 1)?.val;
-      const pTok = f4fields.find((f) => f.num === 2)?.val;
-      const cTok = f4fields.find((f) => f.num === 5)?.val;
-      const oTok = f4fields.find((f) => f.num === 3)?.val;
-      const tTok = f4fields.find((f) => f.num === 9)?.val;
-      const rTok = f4fields.find((f) => f.num === 10)?.val;
-      if (
-        Number.isSafeInteger(sTok) ||
-        Number.isSafeInteger(pTok) ||
-        Number.isSafeInteger(cTok) ||
-        Number.isSafeInteger(oTok) ||
-        Number.isSafeInteger(tTok) ||
-        Number.isSafeInteger(rTok)
-      ) {
-        hasUsageMetadata = true;
-        const sysTokens = Number.isSafeInteger(sTok) ? sTok : 0;
-        const promptTokens = Number.isSafeInteger(pTok) ? pTok : 0;
-        uncachedInput = sysTokens + promptTokens;
-        cachedInput = Number.isSafeInteger(cTok) ? cTok : 0;
-        outputTokens = Number.isSafeInteger(oTok) ? oTok : 0;
-        textOutput = Number.isSafeInteger(tTok) ? tTok : 0;
-        reasoningOutput = Number.isSafeInteger(rTok) ? rTok : 0;
-      }
-    }
-
-    return {
-      model,
-      contextTokens,
-      lastStepIndex,
-      ...(hasUsageMetadata
-        ? {
-            uncachedInput,
-            cachedInput,
-            outputTokens,
-            textOutput,
-            reasoningOutput,
-            hasUsageMetadata: true,
-          }
-        : {}),
-    };
-  } catch (_error) {
-    return null;
-  }
-}
-
 function resolveAntigravityDbPath(transcriptPath) {
   if (!transcriptPath || typeof transcriptPath !== "string") return null;
+  if (/[/\\]conversations[/\\][^/\\]+\.db$/.test(transcriptPath)) return transcriptPath;
   const m = transcriptPath.match(/^(.*)[/\\]brain[/\\]([^/\\]+)[/\\]\.system_generated[/\\]logs[/\\]transcript.*\.jsonl$/);
   if (!m) return null;
   return path.join(m[1], "conversations", `${m[2]}.db`);
@@ -23218,6 +23145,7 @@ async function parseAntigravityFile({
   initialModel,
   initialLastPlannerModel,
   initialUsageSource,
+  supplementUncovered = !(Number(lastLine) > 0),
   hourlyState,
   touchedBuckets,
   source,
@@ -23225,26 +23153,20 @@ async function parseAntigravityFile({
   projectTouchedBuckets,
   projectRef,
   projectKey,
+  onUsage,
 }) {
-  const raw = Buffer.isBuffer(rawBuffer)
+  const nativeSession = filePath.endsWith(".db")
+    ? await require("./antigravity-native").readAntigravityNativeSession(filePath) : null;
+  const raw = nativeSession ? nativeSession.events.map(JSON.stringify).join("\n") : Buffer.isBuffer(rawBuffer)
     ? rawBuffer.toString("utf8")
     : await fs.readFile(filePath, "utf8").catch(() => null);
   if (raw === null) {
     throw new Error(`Antigravity transcript could not be read: ${filePath}`);
   }
-  if (!raw.trim()) {
-    return {
-      lastLine: 0,
-      eventsAggregated: 0,
-      contextTokens: 0,
-      previousContextTokens: 0,
-      currentModel: null,
-      lastPlannerModel: null,
-      usageSource: "estimated",
-      dbReadOk: true,
-      contributions: {},
-    };
-  }
+  // An empty transcript is not an empty cascade when a sibling database still
+  // holds usage. Fall through so those generations are billed below; a transcript
+  // that already covers a step remains the only representation of that step.
+  const transcriptIsEmpty = !nativeSession && !raw.trim();
 
   const allLines = raw
     .split(/\r?\n/)
@@ -23258,7 +23180,8 @@ async function parseAntigravityFile({
   let eventsAggregated = 0;
   const contributions = {};
   const dbPath = resolveAntigravityDbPath(filePath);
-  const stepMap = dbPath ? readAntigravityConversationDb(dbPath) : null;
+  const stepMap = nativeSession ? new Map(nativeSession.events.map((event) => [event.step_index, event.native_usage]))
+    : dbPath ? readAntigravityConversationDb(dbPath) : null;
   // Resume cached context-token total + model so historical lines (i < lastLine)
   // don't need to be re-tokenized on every sync. Falls back to a full re-walk
   // when the cached state is missing (legacy cursor) or the file rotated.
@@ -23305,6 +23228,7 @@ async function parseAntigravityFile({
       typeof initialLastPlannerModel === "string" ? initialLastPlannerModel : cachedModel;
   }
   let lastCompletedLine = Math.min(Number.isFinite(lastLine) ? lastLine : 0, lines.length);
+  let supplementedSteps = null;
 
   for (let i = scanStart; i < lines.length; i++) {
     const line = lines[i];
@@ -23326,7 +23250,7 @@ async function parseAntigravityFile({
     }
 
     const eventContextTokens = antigravityContextTokens(parsed);
-    const dbTurn =
+    const dbTurn = nativeSession ? parsed.native_usage :
       parsed.type === "PLANNER_RESPONSE" && stepMap && Number.isFinite(parsed.step_index)
         ? stepMap.get(parsed.step_index)
         : null;
@@ -23388,9 +23312,10 @@ async function parseAntigravityFile({
 
         delta.input_tokens = uncached;
         delta.cached_input_tokens = cached;
+        delta.cache_creation_input_tokens = dbTurn.cacheWrite || 0;
         delta.output_tokens = output;
         delta.reasoning_output_tokens = reasoning;
-        delta.total_tokens = uncached + cached + output + reasoning;
+        delta.total_tokens = uncached + cached + delta.cache_creation_input_tokens + output + reasoning;
         delta.billable_total_tokens = delta.total_tokens;
         delta.conversation_count = 1;
         billedPlanner = delta.total_tokens > 0;
@@ -23444,6 +23369,7 @@ async function parseAntigravityFile({
       };
     }
     addTotals(contributions[cKey].totals, delta);
+    if (typeof onUsage === "function") onUsage({ timestamp, model, ...delta, usage_precision: dbTurn?.hasUsageMetadata ? "reported" : "estimated" });
 
     if (applyBuckets !== false && hourlyState && touchedBuckets) {
       const bucket = getHourlyBucket(hourlyState, source, model, bucketStart);
@@ -23476,6 +23402,90 @@ async function parseAntigravityFile({
     lastCompletedLine = i + 1;
   }
 
+  // Generations the transcript never represented still belong to this cascade.
+  // Every PLANNER_RESPONSE step is covered, including lines before the cursor:
+  // those were billed on an earlier pass. The caller sets supplementUncovered
+  // on a full walk or when the database identity changed; an unchanged resume
+  // already holds the uncovered generations in its ledger.
+  if (!nativeSession && supplementUncovered && stepMap && stepMap.size > 0 && fssync.existsSync(dbPath)) {
+    const coveredSteps = new Set();
+    for (let i = 0; i < lines.length; i++) {
+      try {
+        const event = JSON.parse(lines[i]);
+        if (event?.type === "PLANNER_RESPONSE" && Number.isFinite(event.step_index)) {
+          coveredSteps.add(event.step_index);
+        }
+      } catch {
+        // A malformed record before the cursor did not stop the prefix walk.
+        // One at or after the cursor did, so later planner steps were never
+        // billed and must stay eligible for the supplemental pass.
+        if (i >= lastLine) break;
+      }
+    }
+    const uncovered = [...stepMap.entries()].filter(([step, info]) => info?.hasUsageMetadata && !coveredSteps.has(step));
+    if (uncovered.length) supplementedSteps = uncovered.map(([step]) => step);
+    if (uncovered.length) {
+      const nativeEvents = await require("./antigravity-native").readAntigravityNativeSession(dbPath);
+      const byStep = new Map((nativeEvents?.events || []).map((event) => [event.step_index, event]));
+      for (const [step, dbTurn] of uncovered) {
+        const event = byStep.get(step);
+        const timestamp = event?.created_at;
+        const bucketStart = timestamp ? toUtcHalfHourStart(timestamp) : null;
+        if (!timestamp || !bucketStart) continue;
+        const uncached = dbTurn.uncachedInput || 0;
+        const cached = dbTurn.cachedInput || 0;
+        const reasoning = dbTurn.reasoningOutput || 0;
+        let output = 0;
+        if (Number.isFinite(dbTurn.textOutput) && dbTurn.textOutput > 0) output = dbTurn.textOutput;
+        else if (Number.isFinite(dbTurn.outputTokens)) output = Math.max(0, dbTurn.outputTokens - reasoning);
+        const delta = initTotals();
+        delta.input_tokens = uncached;
+        delta.cached_input_tokens = cached;
+        delta.cache_creation_input_tokens = dbTurn.cacheWrite || 0;
+        delta.output_tokens = output;
+        delta.reasoning_output_tokens = reasoning;
+        delta.total_tokens = uncached + cached + delta.cache_creation_input_tokens + output + reasoning;
+        delta.billable_total_tokens = delta.total_tokens;
+        delta.conversation_count = 1;
+        if (delta.total_tokens <= 0) continue;
+        const model = normalizeAntigravityTranscriptModel(dbTurn.model) || currentModel || "antigravity-unknown";
+        const cKey = `${source}|${model}|${bucketStart}|${projectKey || ""}`;
+        if (!contributions[cKey]) {
+          contributions[cKey] = {
+            source, model, bucketStart,
+            projectKey: projectKey || null, projectRef: projectRef || null, totals: initTotals(),
+          };
+        }
+        addTotals(contributions[cKey].totals, delta);
+        if (typeof onUsage === "function") onUsage({ timestamp, model, ...delta, usage_precision: "reported" });
+        if (applyBuckets !== false && hourlyState && touchedBuckets) {
+          const bucket = getHourlyBucket(hourlyState, source, model, bucketStart);
+          addTotals(bucket.totals, delta);
+          touchedBuckets.add(bucketKey(source, model, bucketStart));
+          if (projectKey && projectState && projectTouchedBuckets) {
+            const projectBucket = getProjectBucket(projectState, projectKey, source, bucketStart, projectRef);
+            addTotals(projectBucket.totals, delta);
+            projectTouchedBuckets.add(projectBucketKey(projectKey, source, bucketStart));
+          }
+        }
+        eventsAggregated += 1;
+      }
+    }
+  }
+  if (transcriptIsEmpty && Object.keys(contributions).length === 0 && !dbReadFailed) {
+    return {
+      lastLine: 0,
+      eventsAggregated: 0,
+      contextTokens: 0,
+      previousContextTokens: 0,
+      currentModel: null,
+      lastPlannerModel: null,
+      usageSource: hasSqliteMetadata ? "sqlite" : "estimated",
+      dbReadOk: !dbPath || stepMap !== null,
+      contributions: {},
+    };
+  }
+
   return {
     lastLine: lastCompletedLine,
     eventsAggregated,
@@ -23485,6 +23495,7 @@ async function parseAntigravityFile({
     lastPlannerModel,
     usageSource: hasSqliteMetadata ? "sqlite" : "estimated",
     dbReadOk: !dbPath || stepMap !== null,
+    ...(supplementedSteps ? { supplementedSteps } : {}),
     contributions,
   };
 }
@@ -23493,8 +23504,10 @@ async function readAntigravityDefaultModel(filePath) {
   try {
     // filePath: …/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript.jsonl
     // Go up 5 levels to reach the variant root (e.g. …/antigravity-cli/)
-    let dir = filePath;
-    for (let i = 0; i < 5; i++) dir = path.dirname(dir);
+    let dir = filePath.endsWith(".db") ? path.dirname(path.dirname(filePath)) : filePath;
+    if (!filePath.endsWith(".db")) {
+      for (let i = 0; i < 5; i++) dir = path.dirname(dir);
+    }
     const raw = await fs.readFile(path.join(dir, "settings.json"), "utf8");
     const settings = JSON.parse(raw);
     if (settings.model && typeof settings.model === "string") {
@@ -26663,6 +26676,7 @@ module.exports = {
   resolveAntigravityDbPath,
   extractAntigravityGenInfo,
   readAntigravityConversationDb,
+  parseAntigravityFile,
 
   // Trae SOLO (ByteDance AI IDE)
   resolveTraePath,

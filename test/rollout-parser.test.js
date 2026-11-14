@@ -13223,7 +13223,7 @@ function buildAntigravityTestProto({
   model,
   contextTokens,
   lastStepIndex,
-  systemTokens,
+  modelEnum,
   uncachedInput,
   cachedInput,
   outputTokens,
@@ -13239,7 +13239,7 @@ function buildAntigravityTestProto({
     parts.push(f9);
   }
   if (
-    Number.isFinite(systemTokens) ||
+    Number.isFinite(modelEnum) ||
     Number.isFinite(uncachedInput) ||
     Number.isFinite(cachedInput) ||
     Number.isFinite(outputTokens) ||
@@ -13247,12 +13247,12 @@ function buildAntigravityTestProto({
     Number.isFinite(reasoningOutput)
   ) {
     const f4Parts = [];
-    if (Number.isFinite(systemTokens)) f4Parts.push(encodeAntigravityTestVi(1, systemTokens));
+    if (Number.isFinite(modelEnum)) f4Parts.push(encodeAntigravityTestVi(1, modelEnum));
     if (Number.isFinite(uncachedInput)) f4Parts.push(encodeAntigravityTestVi(2, uncachedInput));
     if (Number.isFinite(outputTokens)) f4Parts.push(encodeAntigravityTestVi(3, outputTokens));
     if (Number.isFinite(cachedInput)) f4Parts.push(encodeAntigravityTestVi(5, cachedInput));
-    if (Number.isFinite(textOutput)) f4Parts.push(encodeAntigravityTestVi(9, textOutput));
-    if (Number.isFinite(reasoningOutput)) f4Parts.push(encodeAntigravityTestVi(10, reasoningOutput));
+    if (Number.isFinite(textOutput)) f4Parts.push(encodeAntigravityTestVi(10, textOutput));
+    if (Number.isFinite(reasoningOutput)) f4Parts.push(encodeAntigravityTestVi(9, reasoningOutput));
     parts.push(encodeAntigravityTestLd(4, Buffer.concat(f4Parts)));
   }
   if (lastStepIndex != null) {
@@ -13485,7 +13485,7 @@ test("extractAntigravityGenInfo does not bill a 64-bit value that lands in a tok
   const info = extractAntigravityGenInfo(proto);
 
   assert.ok(info, "the readable sibling fields must survive");
-  assert.equal(info.uncachedInput, 100);
+  assert.equal(info.uncachedInput, 0); // field 1 is a model enum; field 2 is unsafe
   assert.equal(info.cachedInput, 16319);
 });
 
@@ -13501,17 +13501,17 @@ test("extractAntigravityGenInfo rejects a varint wider than 64 bits", () => {
   assert.equal(extractAntigravityGenInfo(proto), null);
 });
 
-test("extractAntigravityGenInfo includes f4.1 system prompt prefix in uncachedInput", () => {
+test("extractAntigravityGenInfo never bills f4.1 model enum as input tokens", () => {
   const proto = buildAntigravityTestProto({
     model: "gemini-3.8-flash",
     lastStepIndex: 0,
-    systemTokens: 1016,
+    modelEnum: 1016,
     uncachedInput: 2000,
     cachedInput: 5000,
     outputTokens: 200,
   });
   const info = extractAntigravityGenInfo(proto);
-  assert.equal(info.uncachedInput, 3016); // 1016 system + 2000 prompt
+  assert.equal(info.uncachedInput, 2000);
   assert.equal(info.cachedInput, 5000);
   assert.equal(info.outputTokens, 200);
 });
@@ -15517,6 +15517,115 @@ test("parseAntigravityIncremental rebuilds a capped ledger synced before the ext
     });
     assert.equal(again.bucketsQueued, 0, "the rebuild runs once");
     assert.equal((await readJsonLines(queuePath)).length, rows);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseAntigravityIncremental rebuilds a capped ledger when an append covers a supplemented step", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-antigravity-capped-coverage-"));
+  try {
+    const { transcriptPath, queuePath } = await setupAntigravitySqliteSession(tmp, {
+      protos: [
+        buildAntigravityTestProto({
+          model: "gemini-3.8-flash", lastStepIndex: 0, uncachedInput: 1000,
+          cachedInput: 2000, outputTokens: 200, textOutput: 150, reasoningOutput: 50,
+        }),
+        buildAntigravityTestProto({
+          model: "gemini-3.8-flash", lastStepIndex: 4, uncachedInput: 10,
+          outputTokens: 5, textOutput: 5,
+        }),
+      ],
+      lines: antigravityPlannerLines([
+        {
+          userStep: 0, userAt: "2026-04-05T14:00:00.000Z", userContent: "hello",
+          plannerStep: 1, plannerAt: "2026-04-05T14:01:00.000Z",
+          plannerContent: "response", thinking: "reasoning",
+        },
+      ]),
+    });
+    const cursors = { version: 1, files: {}, updatedAt: null };
+    await parseAntigravityIncremental({ sessionFiles: [transcriptPath], cursors, queuePath });
+    const cursor = cursors.files[transcriptPath];
+    cursor.contributionsComplete = false;
+    const discarded = bucketKey("antigravity", "gemini-3.8-flash", "2026-04-05T13:00:00.000Z");
+    cursors.hourly.buckets[discarded] = {
+      totals: {
+        input_tokens: 90, cached_input_tokens: 0, cache_creation_input_tokens: 0,
+        output_tokens: 10, reasoning_output_tokens: 0, total_tokens: 100,
+        billable_total_tokens: 100, total_cost_usd: 0, conversation_count: 1,
+      },
+      queuedKey: null,
+    };
+    await fs.appendFile(transcriptPath, "\n" + JSON.stringify({
+      type: "USER_INPUT", step_index: 2, created_at: "2026-04-05T14:01:30.000Z", content: "continue",
+    }) + "\n");
+    await parseAntigravityIncremental({ sessionFiles: [transcriptPath], cursors, queuePath });
+    assert.equal(cursors.files[transcriptPath].contributionsComplete, false,
+      "an ordinary append cannot restore discarded ledger entries");
+    await fs.appendFile(transcriptPath, "\n" + JSON.stringify({
+      type: "PLANNER_RESPONSE", step_index: 5, created_at: "2026-04-05T14:02:00.000Z", content: "later",
+    }) + "\n");
+
+    const beforeDeferred = JSON.stringify(cursors.files[transcriptPath]);
+    const queueBeforeDeferred = await fs.readFile(queuePath, "utf8");
+    const deferred = await parseAntigravityIncremental({
+      sessionFiles: [transcriptPath], cursors, queuePath, inventoryComplete: false,
+    });
+    assert.equal(deferred.bucketsQueued, 0);
+    assert.equal(JSON.stringify(cursors.files[transcriptPath]), beforeDeferred);
+    assert.equal(await fs.readFile(queuePath, "utf8"), queueBeforeDeferred);
+
+    await parseAntigravityIncremental({ sessionFiles: [transcriptPath], cursors, queuePath });
+
+    assert.equal(cursors.hourly.buckets[discarded]?.totals?.total_tokens ?? 0, 0);
+    const latest = new Map();
+    for (const row of await readJsonLines(queuePath)) latest.set(row.hour_start, row);
+    assert.equal(latest.get("2026-04-05T14:00:00.000Z").total_tokens, 3200 + 15);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseAntigravityIncremental keeps an ordinary append incremental when nothing was supplemented", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-antigravity-ordinary-append-"));
+  try {
+    const { transcriptPath, queuePath } = await setupAntigravitySqliteSession(tmp, {
+      protos: [
+        buildAntigravityTestProto({
+          model: "gemini-3.8-flash", lastStepIndex: 0, uncachedInput: 1000,
+          cachedInput: 2000, outputTokens: 200, textOutput: 150, reasoningOutput: 50,
+        }),
+      ],
+      lines: antigravityPlannerLines([
+        {
+          userStep: 0, userAt: "2026-04-05T14:00:00.000Z", userContent: "hello",
+          plannerStep: 1, plannerAt: "2026-04-05T14:01:00.000Z",
+          plannerContent: "response", thinking: "reasoning",
+        },
+      ]),
+    });
+    const cursors = { version: 1, files: {}, updatedAt: null };
+    await parseAntigravityIncremental({ sessionFiles: [transcriptPath], cursors, queuePath });
+    const cursor = cursors.files[transcriptPath];
+    assert.equal(cursor.supplementedSteps, undefined);
+    cursor.contributionsComplete = false;
+    const discarded = bucketKey("antigravity", "gemini-3.8-flash", "2026-04-05T13:00:00.000Z");
+    cursors.hourly.buckets[discarded] = {
+      totals: {
+        input_tokens: 90, cached_input_tokens: 0, cache_creation_input_tokens: 0,
+        output_tokens: 10, reasoning_output_tokens: 0, total_tokens: 100,
+        billable_total_tokens: 100, total_cost_usd: 0, conversation_count: 1,
+      },
+      queuedKey: null,
+    };
+    await fs.appendFile(transcriptPath, "\n" + JSON.stringify({
+      type: "PLANNER_RESPONSE", step_index: 2, created_at: "2026-04-05T15:00:00.000Z", content: "later",
+    }) + "\n");
+
+    await parseAntigravityIncremental({ sessionFiles: [transcriptPath], cursors, queuePath });
+
+    assert.equal(cursors.hourly.buckets[discarded].totals.total_tokens, 100);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
