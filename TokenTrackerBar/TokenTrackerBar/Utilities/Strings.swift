@@ -35,6 +35,9 @@ enum Strings {
     static var retryButton: String { t("Retry", "重试", "重試", "再試行", "다시 시도") }
     static var openDashboard: String { t("Open Dashboard", "打开仪表盘", "開啟儀表盤", "ダッシュボードを開く", "대시보드 열기") }
     static var menuDynamicIsland: String { t("Dynamic Island", "灵动岛", "靈動島", "ダイナミックアイランド", "다이나믹 아일랜드") }
+    static var menuIslandPlacement: String { t("Appearance Placement", "外观位置", "外觀位置", "表示位置", "외형 위치") }
+    static var menuPlacementIsland: String { t("Dynamic Island", "灵动岛", "靈動島", "ダイナミックアイランド", "다이나믹 아일랜드") }
+    static var menuPlacementEdge: String { t("Edge", "贴边", "貼邊", "エッジ", "가장자리") }
     static var menuIconStyle: String { t("Icon Style", "图标样式", "圖標樣式", "アイコンスタイル", "아이콘 스타일") }
     static var quitButton: String { t("Quit", "退出", "退出", "終了", "종료") }
     static var justNow: String { t("just now", "刚刚", "剛剛", "たった今", "방금") }
