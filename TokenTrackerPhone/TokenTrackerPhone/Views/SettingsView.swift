@@ -254,7 +254,7 @@ struct SettingsView: View {
     private func machineRow(_ machine: CloudMachineItem, renameTarget: AccountDeviceRow?) -> some View {
         HStack(spacing: 12) {
             Image(systemName: machine.platformSymbol)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Color.secondary)
                 .frame(width: 18, height: 18)
 
@@ -482,7 +482,7 @@ struct SettingsView: View {
                 Label {
                     Text("Source Code")
                 } icon: {
-                    BrandProviderIcon(provider: "github", size: 15)
+                    BrandProviderIcon(provider: "github", size: 16)
                 }
                 .settingsRowLabel()
             }
