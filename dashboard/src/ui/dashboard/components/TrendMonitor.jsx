@@ -194,8 +194,8 @@ function getBarSegments(row) {
 // Bar kinds:
 //   - "real":      row carries a positive observed value; render stacked segments.
 //   - "real_zero": row is observed but value is 0 (truly idle period); render a flat baseline.
-//   - "predicted": row is `future`; render interpolated/extrapolated height as a faint preview.
-//   - "unsynced":  row is `missing`; render interpolated/extrapolated height as a faint preview.
+//   - "predicted": row is `future`; render interpolated/extrapolated height as a muted gray preview.
+//   - "unsynced":  row is `missing`; render interpolated/extrapolated height as a muted gray preview.
 function getBarKind(row, value) {
   if (row?.future) return "predicted";
   if (row?.missing) return "unsynced";
@@ -203,10 +203,12 @@ function getBarKind(row, value) {
   return "real_zero";
 }
 
-const PREVIEW_OPACITY = 0.35;
+const PREVIEW_OPACITY = 0.9;
 const BASELINE_HEIGHT_PX = 2;
 const PREVIEW_MIN_HEIGHT_PX = 4;
 
+// Renders one trend column: real rows stack colored segments, predicted and
+// unsynced gaps render a flat muted-gray estimate bar, real-zero rows a 2px baseline.
 // Memoized so hover state in the parent (tooltip) doesn't re-render every
 // bar on each mouseenter/mouseleave — props are all stable across hovers.
 const TrendBar = React.memo(function TrendBar({
@@ -286,7 +288,11 @@ const TrendBar = React.memo(function TrendBar({
             data-trend-kind={kind}
             className={cn(
               "h-full w-full group-hover:brightness-110 transition-all",
-              kind === "real" ? "" : "bg-oai-gray-100 dark:bg-oai-gray-800",
+              kind === "real"
+                ? ""
+                : isPreview
+                  ? "bg-oai-gray-500"
+                  : "bg-oai-gray-100 dark:bg-oai-gray-800",
             )}
             style={{
               opacity: isPreview ? PREVIEW_OPACITY : 1,
@@ -472,15 +478,12 @@ export function TrendMonitor({
     () => (Array.isArray(rows) && rows.length ? rows : []),
     [rows],
   );
-  const hasPredictions = React.useMemo(
-    () => series.some((row) => row?.future),
-    [series],
-  );
-
   // rawValues: real observations (incl. 0) pass through; missing/future are null.
   // seriesValues: zero-padded view used for y-axis scaling so gaps don't skew the max.
   // interpolatedValues: per-index predicted height for missing/future gaps.
-  const { rawValues, seriesValues, scale, interpolatedValues } = React.useMemo(() => {
+  // A row count is not an observation: all-missing and all-future ranges have
+  // nothing to estimate, and interpolating them yields zeros that are not data.
+  const { rawValues, seriesValues, scale, interpolatedValues, hasObservations } = React.useMemo(() => {
     const raw = series.map(readRowValue);
     const padded = raw.map((v) => (v == null ? 0 : v));
     return {
@@ -488,8 +491,13 @@ export function TrendMonitor({
       seriesValues: padded,
       scale: getTrendMonitorScale(padded, { clipOutliers: period !== "total" }),
       interpolatedValues: computeInterpolatedSeries(raw),
+      hasObservations: raw.some((value) => value !== null),
     };
   }, [series, period]);
+  const hasPredictions = React.useMemo(
+    () => hasObservations && series.some((row) => row?.future || row?.missing),
+    [hasObservations, series],
+  );
 
   const { currency, rate } = useCurrency();
   const { formatTokens, formatTokensTooltip } = useTokenFormat();
@@ -662,7 +670,7 @@ export function TrendMonitor({
             className={cn("flex items-end gap-0.5 relative z-0", chartHeightClass)}
             onMouseLeave={handleChartMouseLeave}
           >
-            {seriesValues.length > 0 ? (
+            {hasObservations ? (
               seriesValues.map((value, index) => {
                 const row = series[index];
                 const isGap = row?.missing || row?.future;
@@ -698,7 +706,7 @@ export function TrendMonitor({
           </div>
         </div>
 
-        {isZoom && seriesValues.length > 0 && (
+        {isZoom && hasObservations && (
           <div className="flex gap-0.5 select-none">
             {series.map((row, index) => {
               const last = seriesValues.length - 1;
@@ -721,12 +729,12 @@ export function TrendMonitor({
 
         {hasPredictions && (
           <div
-            className="flex items-center justify-end gap-1.5 text-[10px] font-medium text-oai-gray-400 dark:text-oai-gray-500"
+            className="flex items-center justify-end gap-1.5 text-[10px] font-medium text-oai-gray-500 dark:text-oai-gray-500"
             data-trend-prediction-legend="true"
           >
             <span
               aria-hidden="true"
-              className="h-2.5 w-3 rounded-[2px] bg-oai-gray-100 dark:bg-oai-gray-800 opacity-50"
+              className="h-2.5 w-3 rounded-[2px] bg-oai-gray-500 opacity-90"
             />
             <span>~ {copy("trend.monitor.predicted")}</span>
           </div>
