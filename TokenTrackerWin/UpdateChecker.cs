@@ -83,6 +83,14 @@ internal sealed class UpdateChecker
     /// </summary>
     public async Task<CheckOutcome> CheckAsync(bool silent)
     {
+        // Update work must not resume on the WinForms SynchronizationContext.
+        // An await started on the tray/UI thread posts its continuation via
+        // Control.BeginInvoke; after QuitRequested tears the host down — or if
+        // the context's control never got a handle — that throw is fatal and
+        // aborts the process mid-update (#1115).
+        if (SynchronizationContext.Current is not null)
+            return await Task.Run(() => CheckAsync(silent)).ConfigureAwait(false);
+
         if (State is UpdateState.Checking or UpdateState.Downloading or UpdateState.Installing)
             return CheckOutcome.Skipped;
         if (silent && !AutoUpdatePolicy.IsEnabled())
@@ -100,7 +108,7 @@ internal sealed class UpdateChecker
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            var release = await _releaseClient.FetchLatestAsync(cts.Token);
+            var release = await _releaseClient.FetchLatestAsync(cts.Token).ConfigureAwait(false);
             var latest = release.Version;
             if (CompareVersions(CurrentVersion, latest) < 0)
             {
@@ -147,6 +155,9 @@ internal sealed class UpdateChecker
     /// </summary>
     public async Task<bool> DownloadAndInstallAsync()
     {
+        if (SynchronizationContext.Current is not null)
+            return await Task.Run(() => DownloadAndInstallAsync()).ConfigureAwait(false);
+
         if (State != UpdateState.UpdateAvailable || _setupUrl is null) return false;
 
         SetState(UpdateState.Downloading);
@@ -156,7 +167,7 @@ internal sealed class UpdateChecker
         string setupPath;
         try
         {
-            setupPath = await DownloadSetupAsync(_setupUrl, _setupSize, LatestVersion ?? "unknown");
+            setupPath = await DownloadSetupAsync(_setupUrl, _setupSize, LatestVersion ?? "unknown").ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -167,7 +178,7 @@ internal sealed class UpdateChecker
 
         // Verify BEFORE Process.Start: the size check inside ResumableDownloader
         // cannot catch a mis-stitched resume (the length is correct by construction).
-        if (!await VerifySetupIntegrityAsync(setupPath))
+        if (!await VerifySetupIntegrityAsync(setupPath).ConfigureAwait(false))
         {
             SetState(UpdateState.UpdateAvailable);   // the discarded file is re-downloaded on retry
             return false;
@@ -224,7 +235,7 @@ internal sealed class UpdateChecker
                 Changed?.Invoke();
             },
             onRetry: (attempt, error) =>
-                Diag.Log("update", $"download retry {attempt}: {error.Message}"));
+                Diag.Log("update", $"download retry {attempt}: {error.Message}")).ConfigureAwait(false);
 
         Diag.Log("update", $"downloaded setup -> {dest}");
         return dest;
@@ -261,7 +272,7 @@ internal sealed class UpdateChecker
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var body = await Http.GetStringAsync(_checksumsUrl, cts.Token);
+            var body = await Http.GetStringAsync(_checksumsUrl, cts.Token).ConfigureAwait(false);
             expected = UpdateIntegrity.FindDigest(body, SetupAssetName);
         }
         catch (Exception ex)
@@ -284,7 +295,7 @@ internal sealed class UpdateChecker
         string actual;
         try
         {
-            actual = await UpdateIntegrity.ComputeSha256Async(setupPath);
+            actual = await UpdateIntegrity.ComputeSha256Async(setupPath).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -323,21 +334,33 @@ internal sealed class UpdateChecker
     // ── Install + relaunch ─────────────────────────────────────────────
 
     /// <summary>
+    /// Build the detached <c>cmd /c</c> argument for a silent upgrade.
+    /// <c>&amp;&amp;</c> relaunches only if the installer exits 0, so a failed
+    /// upgrade does not start the old exe and loop (#1115). <c>/FORCECLOSEAPPLICATIONS</c>
+    /// asks Inno to kill a still-running host or EmbeddedServer\node.exe that
+    /// holds file locks. <c>--startup</c> keeps the relaunch in the tray (#1096).
+    /// The leading-quote shape matches the argument this method has always
+    /// passed to <c>cmd /c</c>; only the operator and flags change.
+    /// Use the <c>--startup</c> literal (same value as LaunchAtStartup.StartupArgument)
+    /// because TokenTrackerWin.Tests compiles this file without LaunchAtStartup.cs.
+    /// </summary>
+    internal static string BuildSilentInstallerArguments(string setupPath, string appExe)
+        => $"/c \"\"{setupPath}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /FORCECLOSEAPPLICATIONS && start \"\" \"{appExe}\" --startup\"";
+
+    /// <summary>
     /// Run the installer fully silently and restart this exe once it finishes. The
     /// <c>cmd</c> we spawn is detached from this process (and from the server's job
-    /// object), so it survives the tray quitting; the installer's <c>CloseApplications</c>
-    /// is the backstop for any instance still holding a file lock. We restart via the
-    /// current exe path so an in-place upgrade relaunches the same install location.
+    /// object), so it survives the tray quitting; the installer's
+    /// <c>CloseApplications=force</c> and this command's <c>/FORCECLOSEAPPLICATIONS</c>
+    /// are the backstop for any instance still holding a file lock. We restart via
+    /// the current exe path so an in-place upgrade relaunches the same install location.
     /// </summary>
     private static void LaunchSilentInstaller(string setupPath)
     {
         var appExe = Environment.ProcessPath
                      ?? Path.Combine(AppContext.BaseDirectory, "TokenTracker.exe");
 
-        // cmd /c ""<setup>" /VERYSILENT ... & start "" "<app>""
-        // The setup runs inline (cmd waits for it); then `start` relaunches the app detached.
-        var arguments =
-            $"/c \"\"{setupPath}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART & start \"\" \"{appExe}\"\"";
+        var arguments = BuildSilentInstallerArguments(setupPath, appExe);
 
         var psi = new ProcessStartInfo
         {
