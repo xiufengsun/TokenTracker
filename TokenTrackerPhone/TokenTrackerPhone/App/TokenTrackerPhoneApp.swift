@@ -13,6 +13,7 @@ struct TokenTrackerPhoneApp: App {
             scenario.configurePreferences(prefs)
             let store = SessionStore(restore: false, initialSession: scenario.initialSession)
             let ws = WorkspaceModel(
+                sessions: store,
                 client: ScenarioCloudClient(scenario: scenario),
                 nowProvider: { scenario.fixedNow }
             )

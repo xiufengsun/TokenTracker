@@ -83,8 +83,12 @@ final class WorkspaceModel: ObservableObject {
         self.modelGeneration = generationProvider()
     }
 
+    convenience init(sessions: SessionStore, client: any CloudDataProviding, nowProvider: @escaping () -> Date = Date.init) {
+        self.init(client: client, nowProvider: nowProvider, generationProvider: { sessions.sessionGeneration })
+    }
+
     convenience init(sessions: SessionStore) {
-        self.init(client: CloudAPIClient(sessions: sessions), generationProvider: { sessions.sessionGeneration })
+        self.init(sessions: sessions, client: CloudAPIClient(sessions: sessions))
     }
 
     func refresh() async {

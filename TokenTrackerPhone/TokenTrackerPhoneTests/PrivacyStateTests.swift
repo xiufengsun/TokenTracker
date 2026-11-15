@@ -176,3 +176,23 @@ extension PrivacyStateTests {
         XCTAssertTrue(source.isKeyWindow)
     }
 }
+
+#if DEBUG
+extension PrivacyStateTests {
+    func testScenarioSignOutReleasesCoverOnlyAfterCurrentContentReset() async {
+        let scenario = SimulatorLaunchScenario.settings
+        let sessions = SessionStore(restore: false, initialSession: scenario.initialSession)
+        let model = WorkspaceModel(sessions: sessions, client: ScenarioCloudClient(scenario: scenario), nowProvider: { scenario.fixedNow })
+        await model.refresh()
+        let coordinator = PresentationPrivacyGuard<EmptyView>.Coordinator()
+        coordinator.observe(sessions)
+        sessions.signOutLocally()
+        XCTAssertTrue(coordinator.transitioning)
+        model.reset()
+        coordinator.renderedGeneration = model.contentGeneration
+        coordinator.completeDismissal(for: sessions.sessionGeneration)
+        XCTAssertEqual(model.contentGeneration, sessions.sessionGeneration)
+        XCTAssertFalse(coordinator.transitioning)
+    }
+}
+#endif
