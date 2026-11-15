@@ -191,6 +191,23 @@ struct TrackedToolBudget: Codable, Equatable, Identifiable {
 }
 
 @MainActor
+protocol PhoneAuthenticationPolicy {
+    var isAvailable: Bool { get }
+    func authenticate() async -> Bool
+}
+
+@MainActor
+struct DeviceAuthenticationPolicy: PhoneAuthenticationPolicy {
+    var isAvailable: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) }
+    func authenticate() async -> Bool {
+        let context = LAContext()
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) else { return false }
+        return (try? await context.evaluatePolicy(.deviceOwnerAuthentication,
+            localizedReason: "Unlock TokenTracker to view your synced usage and spend.")) ?? false
+    }
+}
+
+@MainActor
 final class PhonePreferences: ObservableObject {
     @Published var appearance: AppAppearanceMode {
         didSet { defaults.set(appearance.rawValue, forKey: Keys.appearance) }
@@ -238,6 +255,8 @@ final class PhonePreferences: ObservableObject {
         didSet { persistToolBudgets() }
     }
 
+    @Published private(set) var authenticationError: String?
+    private let authentication: any PhoneAuthenticationPolicy
     private let defaults: UserDefaults
 
     private enum Keys {
@@ -256,7 +275,8 @@ final class PhonePreferences: ObservableObject {
         static let toolBudgets = "tt.phone.toolBudgets"
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, authentication: (any PhoneAuthenticationPolicy)? = nil) {
+        self.authentication = authentication ?? DeviceAuthenticationPolicy()
         self.defaults = defaults
         self.appearance = AppAppearanceMode(rawValue: defaults.string(forKey: Keys.appearance) ?? "") ?? .system
         self.currency = PhoneCurrency(rawValue: defaults.string(forKey: Keys.currency) ?? "") ?? .usd
@@ -324,19 +344,32 @@ final class PhonePreferences: ObservableObject {
         UserDefaults.standard.set(tokenUnitScale.rawValue, forKey: TokenFormatter.unitSystemDefaultsKey)
     }
 
-    func authenticateWithBiometrics() async -> Bool {
-        let context = LAContext()
-        var error: NSError?
-        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
-            return true
+    static func targetText(_ value: Double) -> String { String(value) }
+
+    func setLockEnabled(_ enabled: Bool) async {
+        guard !enabled || authentication.isAvailable else {
+            authenticationError = "Set up a device passcode in Settings before enabling app lock."
+            return
         }
-        do {
-            return try await context.evaluatePolicy(
-                .deviceOwnerAuthentication,
-                localizedReason: "Unlock TokenTracker to view your synced usage and spend."
-            )
-        } catch {
+        guard await authenticateWithBiometrics() else { return }
+        requireBiometricUnlock = enabled
+    }
+
+    func authenticateWithBiometrics() async -> Bool {
+        guard authentication.isAvailable else {
+            authenticationError = "Device authentication is unavailable. Restore your device passcode in Settings, or sign out below."
             return false
         }
+        let success = await authentication.authenticate()
+        authenticationError = success ? nil : "Authentication did not complete. Try again or sign out."
+        return success
+    }
+}
+
+/// Authentication only opens the generation it was requested for. A cold
+/// launch and every new account start with no authenticated generation.
+enum PrivacyLockPolicy {
+    static func isLocked(enabled: Bool, generation: Int, unlockedGeneration: Int?) -> Bool {
+        enabled && unlockedGeneration != generation
     }
 }

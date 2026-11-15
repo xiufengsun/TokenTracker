@@ -47,13 +47,19 @@ struct RootContainerView: View {
     @ObservedObject var workspace: WorkspaceModel
 
     @State private var showPairCLISheet = false
-    @State private var isLocked = false
+    @State private var unlockedGeneration: Int?
+    @State private var lockEpoch = 0
+    private var isLocked: Bool {
+        PrivacyLockPolicy.isLocked(enabled: prefs.requireBiometricUnlock,
+            generation: sessions.sessionGeneration, unlockedGeneration: unlockedGeneration)
+    }
     @State private var isAuthenticating = false
 
     var body: some View {
         ZStack {
             if sessions.isSignedIn {
                 authenticatedShell
+                    .id(sessions.sessionGeneration)
             } else {
                 SignInView()
             }
@@ -61,32 +67,39 @@ struct RootContainerView: View {
             // App-switcher privacy shield & optional biometric lock
             if sessions.isSignedIn && ((scenePhase != .active && prefs.hideSwitcherSnapshot) || isLocked) {
                 privacyOverlay
-                    .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.2), value: sessions.isSignedIn)
+        .background {
+            PresentationPrivacyGuard(sessions: sessions,
+                shielded: sessions.isSignedIn && (isLocked || (scenePhase != .active && (prefs.hideSwitcherSnapshot || prefs.requireBiometricUnlock))),
+                protectInactive: sessions.isSignedIn && (prefs.hideSwitcherSnapshot || prefs.requireBiometricUnlock),
+                shield: privacyOverlay)
+        }
         .sheet(isPresented: $showPairCLISheet) {
             PairCLIDeviceSheet(workspace: workspace)
         }
         .task {
             // A cold launch must honor the lock too, not only a return from background.
             if sessions.isSignedIn && prefs.requireBiometricUnlock {
-                isLocked = true
+                unlockedGeneration = nil
+                lockEpoch += 1
                 await unlock()
             }
         }
         .onChange(of: sessions.sessionGeneration) { _, _ in
+            showPairCLISheet = false
             workspace.reset()
-            if !sessions.isSignedIn {
-                isLocked = false
-            } else {
+            unlockedGeneration = nil
+            lockEpoch += 1
+            if sessions.isSignedIn {
                 Task { await workspace.refresh() }
             }
         }
         .onChange(of: scenePhase) { oldPhase, newPhase in
             guard sessions.isSignedIn else { return }
             if newPhase == .background && prefs.requireBiometricUnlock {
-                isLocked = true
+                unlockedGeneration = nil
+                lockEpoch += 1
             }
             if newPhase == .active {
                 if isLocked {
@@ -104,7 +117,11 @@ struct RootContainerView: View {
         guard isLocked, !isAuthenticating else { return }
         isAuthenticating = true
         defer { isAuthenticating = false }
-        if await prefs.authenticateWithBiometrics() { isLocked = false }
+        let generation = sessions.sessionGeneration
+        let epoch = lockEpoch
+        if await prefs.authenticateWithBiometrics(), generation == sessions.sessionGeneration, epoch == lockEpoch, scenePhase == .active {
+            unlockedGeneration = generation
+        }
     }
 
     @ViewBuilder
@@ -172,6 +189,10 @@ struct RootContainerView: View {
                     .font(.title3.weight(.bold))
 
                 if isLocked {
+                    if let error = prefs.authenticationError {
+                        Text(error).multilineTextAlignment(.center).padding()
+                    }
+                    Button("Sign out") { sessions.signOutLocally() }
                     Button {
                         Task { await unlock() }
                     } label: {

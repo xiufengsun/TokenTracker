@@ -275,7 +275,7 @@ struct PulseView: View {
                     }
                 }
 
-                if workspace.horizon == .today && prefs.dailySpendTargetUsd > 0 {
+                if workspace.horizon == .today && prefs.dailySpendTargetUsd > 0 && !prefs.discreteAmounts && snapshot.selectedDeviceId == nil {
                     let fraction = cost / prefs.dailySpendTargetUsd
                     let remaining = prefs.windowMeterStyle == .remaining
                     let barPct = remaining ? max(0, (1 - fraction) * 100) : min(100, fraction * 100)
@@ -286,14 +286,14 @@ struct PulseView: View {
                     ) ?? snapshot.now
                     let pace = LimitPace.compute(
                         usedFraction: min(max(fraction, 0), 1),
-                        windowSeconds: 86_400,
+                        windowSeconds: DayKey.dayDuration(snapshot.now),
                         secondsUntilReset: max(0, endOfDay.timeIntervalSince(snapshot.now)),
                         remainingMode: remaining
                     )
 
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text("Daily target \(prefs.formatCost(prefs.dailySpendTargetUsd, masked: false))")
+                            Text("Daily target \(prefs.formatCost(prefs.dailySpendTargetUsd, masked: nil))")
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.secondary)
                             Spacer()
@@ -324,10 +324,10 @@ struct PulseView: View {
     @ViewBuilder
     private func pacingGlanceBridge(_ snapshot: PhoneWorkspaceSnapshot) -> some View {
         let profiles = snapshot.providerPacingProfiles(budgets: prefs.toolBudgets)
-        let hottest = profiles.first(where: { $0.hottestBudgetFraction != nil })
+        let hottest = (!prefs.discreteAmounts && snapshot.selectedDeviceId == nil) ? profiles.first(where: { $0.hottestBudgetFraction != nil }) : nil
         let burst5h = snapshot.trailingFiveHourTokens
 
-        if burst5h > 0 || hottest != nil || snapshot.sevenDayCostUsd > 0 {
+        if snapshot.pacingAvailable && (burst5h > 0 || hottest != nil || snapshot.sevenDayCostUsd > 0) {
             Button {
                 workspace.selectedTab = .limits
             } label: {
@@ -500,7 +500,7 @@ struct PulseView: View {
     private func isCompletelyEmpty(_ snapshot: PhoneWorkspaceSnapshot) -> Bool {
         snapshot.periodSummary.totals.displayTokens == 0
             && snapshot.periodSummary.totals.conversationCount == 0
-            && snapshot.todaySummary.rolling.last30d.totals.billableTotalTokens == 0
+            && snapshot.todaySummary?.rolling.last30d.totals.billableTotalTokens == 0
             && (snapshot.rankedProviders.isEmpty)
     }
 }

@@ -55,6 +55,10 @@ enum UsageHorizon: String, CaseIterable, Identifiable {
 }
 
 enum DayKey {
+    static func dayDuration(_ date: Date, calendar: Calendar = .localGregorian) -> TimeInterval {
+        calendar.dateInterval(of: .day, for: date)!.duration
+    }
+
     static func string(_ date: Date, calendar: Calendar = .localGregorian) -> String {
         let formatter = DateFormatter()
         formatter.calendar = calendar
@@ -275,7 +279,7 @@ struct PhoneWorkspaceSnapshot: Equatable {
     var now: Date
 
     var periodSummary: UsageSummaryResponse
-    var todaySummary: UsageSummaryResponse
+    var todaySummary: UsageSummaryResponse?
     var daily30d: PhoneDailyUsageResponse? = nil
     var todayHourly: PhoneHourlyUsageResponse? = nil
     var yesterdayHourly: PhoneHourlyUsageResponse? = nil
@@ -287,12 +291,20 @@ struct PhoneWorkspaceSnapshot: Equatable {
     var cloudAccount: CloudAccountStatusResponse? = nil
     var cloudMachines: CloudMachineListResponse? = nil
 
+    /// Coarse availability gate: never present partial pacing as a complete zero.
+    var pacingAvailable: Bool {
+        todaySummary != nil && daily30d != nil && todayHourly != nil
+            && yesterdayHourly != nil && weeklyBreakdown != nil && monthlyBreakdown != nil
+    }
+
+    var accountTargetsAvailable: Bool { selectedDeviceId == nil && pacingAvailable }
+
     var periodCostUsd: Double {
         Double(periodSummary.totals.totalCostUsd ?? "") ?? 0
     }
 
     var todayCostUsd: Double {
-        Double(todaySummary.totals.totalCostUsd ?? "") ?? 0
+        Double(todaySummary?.totals.totalCostUsd ?? "") ?? 0
     }
 
     var sevenDayCostUsd: Double {
@@ -314,7 +326,7 @@ struct PhoneWorkspaceSnapshot: Equatable {
     }
 
     var averageDailyCost30d: Double {
-        let active = max(todaySummary.rolling.last30d.activeDays, 1)
+        let active = max(todaySummary?.rolling.last30d.activeDays ?? 0, 1)
         return thirtyDayCostUsd / Double(active)
     }
 
@@ -356,6 +368,7 @@ struct PhoneWorkspaceSnapshot: Equatable {
     }
 
     func providerPacingProfiles(budgets: [String: TrackedToolBudget]) -> [ProviderPacingProfile] {
+        guard weeklyBreakdown != nil, monthlyBreakdown != nil else { return [] }
         let weeklyBySource = Dictionary(uniqueKeysWithValues: Self.rankProviders(from: weeklyBreakdown).map { ($0.source.lowercased(), $0) })
         let monthlyBySource = Dictionary(uniqueKeysWithValues: Self.rankProviders(from: monthlyBreakdown).map { ($0.source.lowercased(), $0) })
 

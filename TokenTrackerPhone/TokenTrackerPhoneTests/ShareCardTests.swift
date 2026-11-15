@@ -40,7 +40,7 @@ final class ShareCardDataTests: XCTestCase {
         XCTAssertEqual(card(.week).periodFrom, "2026-11-09")
         XCTAssertEqual(card(.week).issueLabel, "NOV 2026")
         XCTAssertEqual(card(.month).periodTo, "2026-11-30")
-        XCTAssertEqual(card(.total).issueLabel, "ALL TIME")
+        XCTAssertEqual(card(.total).issueLabel, "LAST 24 MONTHS")
     }
 
     func testTotalsComeFromThePeriodSummaryOnly() {

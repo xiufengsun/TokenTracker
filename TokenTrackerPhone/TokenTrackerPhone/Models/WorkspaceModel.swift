@@ -230,6 +230,9 @@ final class WorkspaceModel: ObservableObject {
                 todaySummaryRes.error,
                 dailyRes.error,
                 todayHourlyRes.error,
+                yesterdayHourlyRes.error,
+                weeklyBreakdownRes.error,
+                monthlyBreakdownRes.error,
                 periodBreakdownRes.error,
                 heatmapRes.error,
             ].compactMap { $0 }
@@ -250,7 +253,7 @@ final class WorkspaceModel: ObservableObject {
 
             let resolvedTodaySummary = (horizon == .today)
                 ? periodSummary
-                : (todaySummaryRes.value ?? periodSummary)
+                : todaySummaryRes.value
 
             snapshot = PhoneWorkspaceSnapshot(
                 horizon: horizon,

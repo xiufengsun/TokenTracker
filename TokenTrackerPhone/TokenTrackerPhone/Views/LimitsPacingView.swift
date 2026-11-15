@@ -17,10 +17,17 @@ struct LimitsPacingView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         headerControlBar
 
-                        if let snapshot = workspace.visibleSnapshot ?? workspace.snapshot {
-                            accountRollingWindowsCard(snapshot)
-                            providerWindowsSection(snapshot)
-                                .id("tools")
+                        if let snapshot = workspace.visibleSnapshot {
+                            if let warning = workspace.warningBanner { Text(warning).font(.caption) }
+                            if snapshot.selectedDeviceId != nil {
+                                Text("Selected computer · account targets unavailable. Select All Computers in Pulse to compare account targets.").font(.caption)
+                            }
+                            if snapshot.pacingAvailable {
+                                accountRollingWindowsCard(snapshot)
+                                providerWindowsSection(snapshot).id("tools")
+                            } else {
+                                Text("Pacing unavailable — some usage details could not load. Pull down to retry.")
+                            }
                             cloudArchitectureBoundaryCard
                                 .id("footer")
                         } else if case .failed(let message) = workspace.phase {
@@ -100,11 +107,11 @@ struct LimitsPacingView: View {
         let remaining = prefs.windowMeterStyle == .remaining
         let cal = Calendar.localGregorian
         let endOfToday = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: snapshot.now)) ?? snapshot.now
-        let rolling = snapshot.todaySummary.rolling
+        let rolling = snapshot.todaySummary!.rolling
 
         return TelemetrySurface(padding: 18) {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Account")
+                Text(snapshot.selectedDeviceId == nil ? "Account" : "Selected computer")
                     .font(.headline)
 
                 windowRow(
@@ -122,10 +129,10 @@ struct LimitsPacingView: View {
                 windowRow(
                     title: "Today",
                     value: prefs.formatCost(snapshot.todayCostUsd),
-                    detail: "\(prefs.formatTokens(snapshot.todaySummary.totals.displayTokens)) tokens · resets midnight",
-                    target: prefs.dailySpendTargetUsd,
+                    detail: "\(prefs.formatTokens(snapshot.todaySummary!.totals.displayTokens)) tokens · resets midnight",
+                    target: snapshot.accountTargetsAvailable ? prefs.dailySpendTargetUsd : nil,
                     used: snapshot.todayCostUsd,
-                    pace: (window: 86_400, reset: endOfToday, now: snapshot.now),
+                    pace: (window: DayKey.dayDuration(snapshot.now), reset: endOfToday, now: snapshot.now),
                     remainingMode: remaining
                 )
 
@@ -135,7 +142,7 @@ struct LimitsPacingView: View {
                     title: "Last 7 days",
                     value: prefs.formatCost(snapshot.sevenDayCostUsd),
                     detail: "\(prefs.formatTokens(rolling.last7d.totals.billableTotalTokens)) tokens · \(rolling.last7d.activeDays)/7 days active",
-                    target: prefs.weeklySpendTargetUsd,
+                    target: snapshot.accountTargetsAvailable ? prefs.weeklySpendTargetUsd : nil,
                     used: snapshot.sevenDayCostUsd,
                     pace: nil,
                     remainingMode: remaining
@@ -147,7 +154,7 @@ struct LimitsPacingView: View {
                     title: "Last 30 days",
                     value: prefs.formatCost(snapshot.thirtyDayCostUsd),
                     detail: "\(prefs.formatCost(snapshot.averageDailyCost30d))/active day · \(rolling.last30d.activeDays)/30 days active",
-                    target: prefs.monthlySpendTargetUsd,
+                    target: snapshot.accountTargetsAvailable ? prefs.monthlySpendTargetUsd : nil,
                     used: snapshot.thirtyDayCostUsd,
                     pace: nil,
                     remainingMode: remaining
@@ -179,7 +186,7 @@ struct LimitsPacingView: View {
         pace: (window: Double, reset: Date, now: Date)?,
         remainingMode: Bool
     ) -> some View {
-        let hasTarget = (target ?? 0) > 0
+        let hasTarget = !prefs.discreteAmounts && (target ?? 0) > 0
         let fraction = hasTarget ? used / (target ?? 1) : 0
         let clampedUsed = min(max(fraction, 0), 1)
         let displayPercent = remainingMode ? (1 - clampedUsed) * 100 : clampedUsed * 100
@@ -229,7 +236,7 @@ struct LimitsPacingView: View {
 
     private func targetCaption(target: Double, fraction: Double, remainingMode: Bool) -> some View {
         let pct = Int(((remainingMode ? max(0, 1 - fraction) : fraction) * 100).rounded())
-        return Text("\(pct)% \(remainingMode ? "left" : "used") of \(prefs.formatCost(target, masked: false))")
+        return Text("\(pct)% \(remainingMode ? "left" : "used") of \(prefs.formatCost(target, masked: nil))")
             .font(.caption.weight(.semibold).monospacedDigit())
             .foregroundStyle(Palette.paceColor(fraction: fraction))
             .lineLimit(1)
@@ -269,13 +276,13 @@ struct LimitsPacingView: View {
                 }
             } else {
                 ForEach(profiles) { profile in
-                    providerPacingCard(profile, now: snapshot.now)
+                    providerPacingCard(profile, now: snapshot.now, showCaps: snapshot.accountTargetsAvailable && !prefs.discreteAmounts)
                 }
             }
         }
     }
 
-    private func providerPacingCard(_ profile: ProviderPacingProfile, now: Date) -> some View {
+    private func providerPacingCard(_ profile: ProviderPacingProfile, now: Date, showCaps: Bool) -> some View {
         let remaining = prefs.windowMeterStyle == .remaining
         let budget = profile.budget
 
@@ -314,11 +321,11 @@ struct LimitsPacingView: View {
                         }
                     }
 
-                    if let weeklyCap = budget?.weeklyBudgetUsd, weeklyCap > 0 {
+                    if showCaps, let weeklyCap = budget?.weeklyBudgetUsd, weeklyCap > 0 {
                         capMeter(title: "7-day cap", used: profile.sevenDayCostUsd, cap: weeklyCap, remaining: remaining)
                     }
 
-                    if let monthlyCap = budget?.monthlyBudgetUsd, monthlyCap > 0 {
+                    if showCaps, let monthlyCap = budget?.monthlyBudgetUsd, monthlyCap > 0 {
                         capMeter(title: "30-day cap", used: profile.thirtyDayCostUsd, cap: monthlyCap, remaining: remaining)
                     }
 
@@ -359,7 +366,7 @@ struct LimitsPacingView: View {
         let pct = remaining ? max(0, (1 - frac) * 100) : min(100, frac * 100)
         return VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Text("\(title) \(prefs.formatCost(cap, masked: false))")
+                Text("\(title) \(prefs.formatCost(cap, masked: nil))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -423,7 +430,7 @@ private struct AccountSpendTargetsSheet: View {
                     targetField(title: "7 Days (USD)", placeholder: "Off", text: $weeklyText)
                     targetField(title: "30 Days (USD)", placeholder: "Off", text: $monthlyText)
                 } header: {
-                    Text("Account")
+                    Text(snapshot.selectedDeviceId == nil ? "Account" : "Selected computer")
                 } footer: {
                     Text("Stored on this iPhone. Leave blank to turn off.")
                 }
@@ -456,9 +463,9 @@ private struct AccountSpendTargetsSheet: View {
                 }
             }
             .onAppear {
-                dailyText = prefs.dailySpendTargetUsd > 0 ? String(format: "%.0f", prefs.dailySpendTargetUsd) : ""
-                weeklyText = prefs.weeklySpendTargetUsd > 0 ? String(format: "%.0f", prefs.weeklySpendTargetUsd) : ""
-                monthlyText = prefs.monthlySpendTargetUsd > 0 ? String(format: "%.0f", prefs.monthlySpendTargetUsd) : ""
+                dailyText = prefs.dailySpendTargetUsd > 0 ? PhonePreferences.targetText(prefs.dailySpendTargetUsd) : ""
+                weeklyText = prefs.weeklySpendTargetUsd > 0 ? PhonePreferences.targetText(prefs.weeklySpendTargetUsd) : ""
+                monthlyText = prefs.monthlySpendTargetUsd > 0 ? PhonePreferences.targetText(prefs.monthlySpendTargetUsd) : ""
             }
         }
         .presentationDetents([.medium])
@@ -561,8 +568,8 @@ private struct ToolBudgetEditorSheet: View {
             }
             .onAppear {
                 if let existing = prefs.toolBudgets[source.lowercased()] {
-                    weeklyUsd = existing.weeklyBudgetUsd.map { String(format: "%.0f", $0) } ?? ""
-                    monthlyUsd = existing.monthlyBudgetUsd.map { String(format: "%.0f", $0) } ?? ""
+                    weeklyUsd = existing.weeklyBudgetUsd.map { PhonePreferences.targetText($0) } ?? ""
+                    monthlyUsd = existing.monthlyBudgetUsd.map { PhonePreferences.targetText($0) } ?? ""
                     if let iso = existing.nextRenewalISO, let d = ISO8601DateFormatter().date(from: iso) {
                         trackRenewal = true
                         renewalDate = d

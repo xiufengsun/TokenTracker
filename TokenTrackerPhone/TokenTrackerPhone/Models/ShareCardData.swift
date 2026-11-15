@@ -239,7 +239,7 @@ extension ShareCardData {
     /// `formatIssueLabel`.
     var issueLabel: String {
         switch period {
-        case .total: return "ALL TIME"
+        case .total: return "LAST 24 MONTHS"
         case .day: return periodTo.replacingOccurrences(of: "-", with: ".")
         case .week, .month: return Self.shortDate(periodTo)
         }

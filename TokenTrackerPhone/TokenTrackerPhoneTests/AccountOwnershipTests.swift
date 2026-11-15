@@ -165,6 +165,10 @@ private final class OwnershipGate<T> {
 @MainActor
 private final class OwnershipProvider: CloudDataProviding {
     var tokens = 1
+    var failingDay: String?
+    var failingBreakdownFrom: String?
+    var failingHourlyDay: String?
+    var observedDevices: [String?] = []
     var machinesGate: OwnershipGate<CloudMachineListResponse>?
     var actionGate: OwnershipGate<Void>?
     var profileGate: OwnershipGate<PublicVisibilityState>?
@@ -174,12 +178,22 @@ private final class OwnershipProvider: CloudDataProviding {
     var summaryCalls = 0
     func summary(from: String, to: String, deviceId: String?) async throws -> UsageSummaryResponse {
         summaryCalls += 1
+        observedDevices.append(deviceId)
+        if from == to, from == failingDay { throw URLError(.badServerResponse) }
         if let gate = summaryGate { summaryGate = nil; return try await gate.wait() }
         return UsageSummaryResponse(totals: TokenTotals(totalTokens: tokens))
     }
     func daily(from: String, to: String, deviceId: String?) async throws -> PhoneDailyUsageResponse { .init() }
-    func hourly(day: String, deviceId: String?) async throws -> PhoneHourlyUsageResponse { .init() }
-    func modelBreakdown(from: String, to: String, deviceId: String?) async throws -> ModelBreakdownResponse { .init() }
+    func hourly(day: String, deviceId: String?) async throws -> PhoneHourlyUsageResponse {
+        observedDevices.append(deviceId)
+        if day == failingHourlyDay { throw URLError(.badServerResponse) }
+        return .init()
+    }
+    func modelBreakdown(from: String, to: String, deviceId: String?) async throws -> ModelBreakdownResponse {
+        observedDevices.append(deviceId)
+        if from == failingBreakdownFrom { throw URLError(.badServerResponse) }
+        return .init()
+    }
     func heatmap(weeks: Int, to: String, deviceId: String?) async throws -> HeatmapResponse {
         if let gate = heatmapGate { heatmapGate = nil; return try await gate.wait() }; return HeatmapResponse(weeks: [])
     }
@@ -199,6 +213,30 @@ private final class OwnershipProvider: CloudDataProviding {
 }
 @MainActor
 final class WorkspaceOwnershipTests: XCTestCase {
+    func testFailedTodayNeverBorrowsMonthAndPacingFailuresWarn() async {
+        let now = DayKey.date("2026-11-15")!
+        for failure in ["today", "week", "month", "yesterday"] {
+            let provider = OwnershipProvider()
+            provider.tokens = 120
+            switch failure {
+            case "today": provider.failingDay = DayKey.string(now)
+            case "week": provider.failingBreakdownFrom = DayKey.daysAgo(6, now: now)
+            case "month": provider.failingBreakdownFrom = DayKey.daysAgo(29, now: now)
+            default: provider.failingHourlyDay = DayKey.daysAgo(1, now: now)
+            }
+            let model = WorkspaceModel(client: provider, nowProvider: { now })
+            model.horizon = .month
+            model.selectedDeviceId = "computer-A"
+            await model.refresh()
+            XCTAssertEqual(model.phase, .loaded)
+            XCTAssertNotNil(model.warningBanner)
+            XCTAssertEqual(model.snapshot?.pacingAvailable, false)
+            XCTAssertEqual(model.snapshot?.periodSummary.totals.totalTokens, 120)
+            if failure == "today" { XCTAssertNil(model.snapshot?.todaySummary) }
+            XCTAssertTrue(provider.observedDevices.allSatisfy { $0 == "computer-A" })
+        }
+    }
+
     private func complete(_ operation: @escaping @MainActor () async throws -> Void, cancelled: Bool = false) -> (Task<Void, Never>, XCTestExpectation) {
         let done = expectation(description: "operation finished")
         let task = Task { @MainActor in

@@ -335,10 +335,12 @@ struct SettingsView: View {
                     .settingsRowLabel()
             }
 
-            Toggle(isOn: $prefs.requireBiometricUnlock) {
+            Toggle(isOn: Binding(get: { prefs.requireBiometricUnlock }, set: { enabled in Task { await prefs.setLockEnabled(enabled) } })) {
                 Label("Require Face ID / Passcode", systemImage: "faceid")
                     .settingsRowLabel()
             }
+
+            if let error = prefs.authenticationError { Text(error).font(.caption) }
 
             if let profile = workspace.publicProfile {
                 Button {
