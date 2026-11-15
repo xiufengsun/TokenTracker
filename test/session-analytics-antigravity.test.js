@@ -22,15 +22,15 @@ function bytes(n, value) {
   const b = Buffer.isBuffer(value) ? value : Buffer.from(value);
   return Buffer.concat([vi(n * 8 + 2), vi(b.length), b]);
 }
-const stamp = () => number(1, Date.parse(AT) / 1000);
+const stamp = (at = AT) => number(1, Date.parse(at) / 1000);
 // ModelUsageStats wire contract: model=1, input=2, output=3,
 // cache-write=4, cache-read=5, thinking=9, response=10, response-id=11.
-function generation(input = 100, response = "response-a", linked = true) {
+function generation(input = 100, response = "response-a", linked = true, at = AT) {
   return bytes(1, Buffer.concat([
     bytes(19, "claude-opus-4-6"),
     bytes(4, Buffer.concat([number(1, 1026), number(2, input), number(3, 30), number(4, 5),
       number(5, 200), number(9, 10), number(10, 20), bytes(11, response)])),
-    bytes(9, bytes(4, stamp())),
+    bytes(9, bytes(4, stamp(at))),
     ...(linked ? [bytes(20, Buffer.concat([bytes(1, "last_step_index"), bytes(2, "0")]))] : []),
   ]));
 }
@@ -447,26 +447,35 @@ test("an empty transcript cursor retracts supplemented usage once the planner st
   assert.equal(appended.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335);
 });
 
-test("a previously scanned Antigravity directory stays incomplete on a temporary ENOENT", async (t) => {
-  const { home, root } = fixture(t, { transcript: true });
-  const brain = path.join(root, "brain");
-  const conversations = path.join(root, "conversations");
-  const complete = await buildSessionAnalytics({ home, force: true });
-  assert.equal(complete.find((row) => row.source === "antigravity").total_tokens, 335);
-  const sidecar = resolveSessionSidecarPath(home);
-  const metaPath = sidecar + ".meta.json";
-  const recorded = JSON.parse(fs.readFileSync(metaPath, "utf8")).antigravity_files;
-  assert.equal(recorded.some((file) => file.includes(path.join("brain", ID))), true);
-  const sidecarBefore = fs.readFileSync(sidecar, "utf8");
-  const metaBefore = fs.readFileSync(metaPath, "utf8");
-  fs.rmSync(brain, { recursive: true, force: true });
-  fs.rmSync(conversations, { recursive: true, force: true });
-  const retained = await buildSessionAnalytics({ home, cacheTtlMs: 0 });
-  assert.equal(retained.find((row) => row.source === "antigravity").total_tokens, 335);
-  assert.equal(retained.incompleteDirs.length, 1);
-  assert.equal(fs.readFileSync(sidecar, "utf8"), sidecarBefore);
-  assert.equal(fs.readFileSync(metaPath, "utf8"), metaBefore);
-});
+for (const force of [false, true]) {
+  test("a previously scanned Antigravity directory stays incomplete on a temporary ENOENT, force=" + force, async (t) => {
+    const { home, root, db } = fixture(t, { transcript: true });
+    const brain = path.join(root, "brain");
+    const conversations = path.join(root, "conversations");
+    const complete = await buildSessionAnalytics({ home, force: true });
+    assert.equal(complete.find((row) => row.source === "antigravity").total_tokens, 335);
+    const sidecar = resolveSessionSidecarPath(home);
+    const metaPath = sidecar + ".meta.json";
+    const recorded = JSON.parse(fs.readFileSync(metaPath, "utf8")).antigravity_files;
+    assert.equal(recorded.some((file) => file.includes(path.join("brain", ID))), true);
+    const sidecarBefore = fs.readFileSync(sidecar, "utf8");
+    const metaBefore = fs.readFileSync(metaPath, "utf8");
+    fs.renameSync(brain, brain + "-offline");
+    fs.renameSync(conversations, conversations + "-offline");
+    const retained = await buildSessionAnalytics({ home, force, cacheTtlMs: 0 });
+    assert.equal(retained.find((row) => row.source === "antigravity")?.total_tokens, 335);
+    assert.equal(retained.incompleteDirs.length, 1);
+    assert.equal(fs.readFileSync(sidecar, "utf8"), sidecarBefore);
+    assert.equal(fs.readFileSync(metaPath, "utf8"), metaBefore);
+
+    fs.renameSync(brain + "-offline", brain);
+    fs.renameSync(conversations + "-offline", conversations);
+    runSql(db, "UPDATE gen_metadata SET data=X'" + generation(150).toString("hex") + "'");
+    const recovered = await buildSessionAnalytics({ home, force, cacheTtlMs: 0 });
+    assert.equal(recovered.find((row) => row.source === "antigravity").total_tokens, 385);
+    assert.equal(recovered.incompleteDirs.length, 0);
+  });
+}
 
 test("a never-installed Antigravity variant stays an empty inventory", async (t) => {
   const { home } = fixture(t);
@@ -570,6 +579,69 @@ test("unlinked native usage survives an empty transcript, restart and project re
   assert.equal(fs.readFileSync(queuePath, "utf8"), before);
   assert.equal((await readAntigravitySessions([transcript]))[0].tokens.total_tokens, 335);
 });
+
+test("a zero-line unlinked capped ledger defers incomplete discovery and rebuilds after a database change", async (t) => {
+  const { home, db, file } = fixture(t, { transcript: true, empty: true });
+  fs.writeFileSync(file, "");
+  const count = 4097;
+  const start = Date.parse("2026-01-01T00:00:00Z");
+  const values = Array.from({ length: count }, (_, index) => {
+    const at = new Date(start + index * 30 * 60_000).toISOString();
+    return "(" + index + ", X'" + generation(1, "unlinked-" + index, false, at).toString("hex") + "')";
+  });
+  runSql(db, "INSERT INTO gen_metadata VALUES " + values.join(","));
+  const cursors = {};
+  const first = await hourly(home, [file], cursors);
+  const expected = count * 236;
+  assert.equal(first.rows.reduce((sum, row) => sum + row.total_tokens, 0), expected);
+  assert.equal(cursors.files[file].lastLine, 0);
+  assert.equal(cursors.files[file].supplementedSteps, undefined);
+  assert.equal(cursors.files[file].contributionsComplete, false);
+  assert.equal(Object.keys(cursors.files[file].contributions).length, 4096);
+
+  runSql(db, "PRAGMA user_version = 1");
+  const cursorBefore = JSON.stringify(cursors.files[file]);
+  const queueBefore = fs.readFileSync(first.queuePath, "utf8");
+  const deferred = await parseAntigravityIncremental({
+    sessionFiles: [file], cursors, queuePath: first.queuePath, source: "antigravity", inventoryComplete: false,
+  });
+  assert.equal(deferred.bucketsQueued, 0);
+  assert.equal(JSON.stringify(cursors.files[file]), cursorBefore);
+  assert.equal(fs.readFileSync(first.queuePath, "utf8"), queueBefore);
+
+  const rebuilt = await hourly(home, [file], cursors);
+  assert.equal(rebuilt.rows.reduce((sum, row) => sum + row.total_tokens, 0), expected);
+  const saved = fs.readFileSync(first.queuePath, "utf8");
+  await hourly(home, [file], JSON.parse(JSON.stringify(cursors)));
+  assert.equal(fs.readFileSync(first.queuePath, "utf8"), saved);
+});
+
+for (const reportedFirst of [false, true]) {
+  test("context-only aliases resolve reported usage before step linkage, reportedFirst=" + reportedFirst, async (t) => {
+    const { home, db, file } = fixture(t, { transcript: true, empty: true });
+    const contextOnly = bytes(1, Buffer.concat([
+      bytes(19, "claude-opus-4-6"), bytes(4, bytes(11, "same-response")),
+      bytes(9, bytes(10, number(1, 100))),
+      bytes(20, Buffer.concat([bytes(1, "last_step_index"), bytes(2, "0")])),
+    ]));
+    const records = [contextOnly.toString("hex"), shiftStep(generation(100, "same-response"), 4)];
+    if (reportedFirst) records.reverse();
+    runSql(db, "INSERT INTO gen_metadata VALUES " + records.map((hex, index) => "(" + index + ", X'" + hex + "')").join(","));
+    let cursors = {};
+    const first = await hourly(home, [file], cursors);
+    assert.equal(first.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335);
+    cursors = JSON.parse(JSON.stringify(cursors));
+    fs.appendFileSync(file, JSON.stringify({ type: "PLANNER_RESPONSE", step_index: 5, created_at: AT, content: SECRET }) + "\n");
+    const appended = await hourly(home, [file], cursors);
+    assert.equal(appended.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335);
+    const [session] = await readAntigravitySessions([file]);
+    const [native] = await readAntigravitySessions([db]);
+    assert.equal(session.tokens.total_tokens, native.tokens.total_tokens);
+    assert.equal(session.usage_precision, "reported");
+    assert.equal(session.model_calls, 1);
+    assert.equal(JSON.stringify(session).includes(SECRET), false);
+  });
+}
 
 for (const initialSteps of [[], [1], [1, 5]]) {
   test("response identity is shared across supplementation and appended aliases: " + initialSteps, async (t) => {

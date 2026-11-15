@@ -22605,11 +22605,7 @@ async function parseAntigravityIncremental({
   const deferredIncompletePaths = new Set();
   let needsFullRebuild = false;
   for (const [filePath, prev] of Object.entries(fileCursors)) {
-    if (
-      !resolveAntigravityDbPath(filePath) ||
-      !prev ||
-      (Number(prev.lastLine || 0) <= 0 && !prev.supplementedSteps)
-    ) {
+    if (!resolveAntigravityDbPath(filePath) || !prev) {
       continue;
     }
     const isLegacy =
@@ -23207,6 +23203,7 @@ function readAntigravityConversationDb(dbPath) {
 
     const stepMap = new Map();
     stepMap.generations = new Map();
+    const linkedGenerations = [];
     for (const r of rows) {
       if (!r || typeof r.hex !== "string" || !r.hex.startsWith("X'")) continue;
       const buf = Buffer.from(r.hex.slice(2, -1), "hex");
@@ -23215,10 +23212,12 @@ function readAntigravityConversationDb(dbPath) {
       const identity = antigravityGenerationIdentity(info, r.idx);
       info.generationIdentity = identity;
       if (info.hasUsageMetadata && !stepMap.generations.has(identity)) stepMap.generations.set(identity, info);
-      // Only explicit linkage may associate a generation with transcript steps.
-      if (info.lastStepIndex != null) {
-        stepMap.set(info.lastStepIndex + 1, stepMap.generations.get(identity) || info);
-      }
+      if (info.lastStepIndex != null) linkedGenerations.push(info);
+    }
+    // Resolve aliases only after all reported generations are known. An earlier
+    // context-only record must share the later reported counters for its ID.
+    for (const info of linkedGenerations) {
+      stepMap.set(info.lastStepIndex + 1, stepMap.generations.get(info.generationIdentity) || info);
     }
     // Empty step and generation maps still mean a successful read. Keep them
     // distinct from null, which signals a transient failure and must be retried.

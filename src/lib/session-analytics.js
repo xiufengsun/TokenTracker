@@ -2452,8 +2452,9 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       }
     } catch { /* first run */ }
   }
-  const knownAntigravityFiles = Array.isArray(previousMeta?.antigravity_files)
-    ? previousMeta.antigravity_files.filter((filePath) => typeof filePath === "string") : [];
+  // Force bypasses cached rows, but must retain knowledge of tracked installs.
+  const knownAntigravityFiles = Array.isArray(provenanceMeta?.antigravity_files)
+    ? provenanceMeta.antigravity_files.filter((filePath) => typeof filePath === "string") : [];
   const discovered = await discoverSessionFiles(home, process.env, { knownAntigravityFiles });
   // Incomplete discovery (an unreadable projects/ or sessions/ dir): never let
   // a partial inventory replace a complete snapshot. Serve the last complete
@@ -2462,8 +2463,8 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   const incompleteDirs = Array.isArray(discovered.incomplete) ? discovered.incomplete : [];
   if (incompleteDirs.length > 0) {
     warnIncompleteDiscovery(incompleteDirs);
-    if (!force && previousMeta?.version === SIDECAR_VERSION) {
-      const cached = readSidecarWithMeta(sidecarPath, previousMeta);
+    if (provenanceMeta?.version === SIDECAR_VERSION) {
+      const cached = readSidecarWithMeta(sidecarPath, provenanceMeta);
       Object.defineProperty(cached, "incompleteDirs", { value: incompleteDirs, enumerable: false });
       return cached;
     }
