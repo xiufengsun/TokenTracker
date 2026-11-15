@@ -1,3 +1,5 @@
+import { copy } from "./copy";
+
 export const DEFAULT_MENU_BAR_ITEMS = ["todayTokens", "todayCost"];
 
 // Sentinel slot id meaning "show nothing in this slot" (issue 379). Always a
@@ -34,7 +36,7 @@ export const FALLBACK_MENU_BAR_ITEMS = [
   { id: "antigravityClaude5h", label: "Antigravity Claude 5h Limit", shortLabel: "Ag Cl 5h", category: "limits" },
   { id: "antigravityGeminiWeekly", label: "Antigravity Gemini 7d Limit", shortLabel: "Ag Gm 7d", category: "limits" },
   { id: "antigravityGemini5h", label: "Antigravity Gemini 5h Limit", shortLabel: "Ag Gm 5h", category: "limits" },
-  { id: "antigravityArgonWeekly", label: "Antigravity Argon 7d Limit", shortLabel: "Ag Argon 7d", category: "limits" },
+  { id: "antigravityArgonWeekly", get label() { return copy("menubar.metric.antigravity_argon_weekly"); }, get shortLabel() { return copy("menubar.metric.antigravity_argon_weekly_short"); }, category: "limits" },
 ];
 
 export function normalizeMenuBarItems(ids, availableItems = FALLBACK_MENU_BAR_ITEMS, maxItems = 2) {

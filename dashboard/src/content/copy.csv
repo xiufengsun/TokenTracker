@@ -647,6 +647,8 @@ menubar.metric.codex_7d,ui,WidgetsPage,MenuBarDisplayCard,metric_codex_7d,"Codex
 menubar.metric.codex_credits,ui,WidgetsPage,MenuBarDisplayCard,metric_codex_credits,"Codex Credit Limit",,active
 menubar.metric.codex_spark_5h,ui,WidgetsPage,MenuBarDisplayCard,metric_codex_spark_5h,"Codex Spark 5h Limit",,active
 menubar.metric.codex_spark_7d,ui,WidgetsPage,MenuBarDisplayCard,metric_codex_spark_7d,"Codex Spark 7d Limit",,active
+menubar.metric.antigravity_argon_weekly,ui,WidgetsPage,MenuBarDisplayCard,metric_antigravity_argon_weekly,"Antigravity Argon 7d Limit",,active
+menubar.metric.antigravity_argon_weekly_short,ui,WidgetsPage,MenuBarDisplayCard,metric_antigravity_argon_weekly_short,"Ag Argon 7d",,active
 share.modal.title,share,DashboardPage,ShareModal,title,"Share your stats",,active
 share.modal.subtitle,share,DashboardPage,ShareModal,subtitle,"Generate a poster-style card and share anywhere.",,active
 share.modal.close,share,DashboardPage,ShareModal,close,"Close",,active

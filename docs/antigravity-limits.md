@@ -7,8 +7,9 @@ tokens still require signing in again.
 
 When an `agy` CLI is running, TokenTracker reads the CLI's saved login with
 `agy --settings '{"disableSlashCommands":false}' -p /usage --output-format json`.
-On Windows it can also use the standard
-installed CLI when the process is closed. This read-only command is used only
+Only the default per-user installation is executed: `~/.local/bin/agy` on macOS
+and Linux, or `%LOCALAPPDATA%\agy\bin\agy.exe` on Windows. On Windows it can
+also use the installed CLI when the process is closed. This read-only command is used only
 with agy 1.1.11 or newer; slash-command handling is enabled for that invocation
 without changing the user's settings. Older or unavailable CLIs fall back to the
 existing credential, language-server and cache paths.
