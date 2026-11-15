@@ -22,6 +22,7 @@ const SOURCE_IDENTICAL_KEY_ALLOWLIST = [
   /^landing[.]v2[.]install[.]os_/,
   /^landing[.]v2[.]nav[.]github$/,
   /^heatmap[.]legend[.]utc$/,
+  /^heatmap[.]view[.](?:claude|codex)$/, // Product names.
   /^leaderboard[.]range(?:_loading)?$/,
   /^leaderboard[.]column[.]/,
   /^leaderboard[.]community[.]modal[.]global_spend_detail$/,
