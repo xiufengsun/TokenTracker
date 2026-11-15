@@ -3793,23 +3793,30 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           }
         }
         // Read-modify-write under the shared config lock so a concurrent proxy
-        // save cannot interleave and silently revert either change.
-        await withConfigLock(async () => {
-          const current = readConfig();
-          if (official) {
-            // Persist the official selection explicitly: merely deleting the
-            // override would let a custom TOKENTRACKER_INSFORGE_BASE_URL in the
-            // environment become active again while the UI reports success.
-            current.baseUrl = DEFAULT_BASE_URL;
-            current.anonKey = DEFAULT_ANON_KEY;
-            delete current.dashboardUrl;
-          } else {
-            current.baseUrl = requested;
-            current.anonKey = typeof body?.anonKey === "string" ? body.anonKey.trim() : "";
-            current.dashboardUrl = requested;
-          }
-          await writeConfig(current);
-        });
+        // save cannot interleave and silently revert either change. Write
+        // failures surface as a JSON 500 (same contract as proxy-config),
+        // not an unhandled rejection.
+        try {
+          await withConfigLock(async () => {
+            const current = readConfig();
+            if (official) {
+              // Persist the official selection explicitly: merely deleting the
+              // override would let a custom TOKENTRACKER_INSFORGE_BASE_URL in the
+              // environment become active again while the UI reports success.
+              current.baseUrl = DEFAULT_BASE_URL;
+              current.anonKey = DEFAULT_ANON_KEY;
+              delete current.dashboardUrl;
+            } else {
+              current.baseUrl = requested;
+              current.anonKey = typeof body?.anonKey === "string" ? body.anonKey.trim() : "";
+              current.dashboardUrl = requested;
+            }
+            await writeConfig(current);
+          });
+        } catch (error) {
+          json(res, { ok: false, error: error?.message || "failed to save instance config" }, 500);
+          return true;
+        }
         json(res, { ok: true, ...describe() });
         return true;
       }
