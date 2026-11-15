@@ -256,6 +256,8 @@ final class PhonePreferences: ObservableObject {
     }
 
     @Published private(set) var authenticationError: String?
+    private var authenticationAttempt = 0
+    private var lockChangeAttempt = 0
     private let authentication: any PhoneAuthenticationPolicy
     private let defaults: UserDefaults
 
@@ -344,23 +346,33 @@ final class PhonePreferences: ObservableObject {
         UserDefaults.standard.set(tokenUnitScale.rawValue, forKey: TokenFormatter.unitSystemDefaultsKey)
     }
 
+    var showsSpendComparisons: Bool { !discreteAmounts }
+
     static func targetText(_ value: Double) -> String { String(value) }
 
     func setLockEnabled(_ enabled: Bool) async {
+        lockChangeAttempt += 1
+        let attempt = lockChangeAttempt
+        // Even rejected newer intent invalidates older authentication/error writes.
+        authenticationAttempt += 1
         guard !enabled || authentication.isAvailable else {
             authenticationError = "Set up a device passcode in Settings before enabling app lock."
             return
         }
-        guard await authenticateWithBiometrics() else { return }
+        let authenticated = await authenticateWithBiometrics()
+        guard attempt == lockChangeAttempt, authenticated else { return }
         requireBiometricUnlock = enabled
     }
 
     func authenticateWithBiometrics() async -> Bool {
+        authenticationAttempt += 1
+        let attempt = authenticationAttempt
         guard authentication.isAvailable else {
             authenticationError = "Device authentication is unavailable. Restore your device passcode in Settings, or sign out below."
             return false
         }
         let success = await authentication.authenticate()
+        guard attempt == authenticationAttempt else { return false }
         authenticationError = success ? nil : "Authentication did not complete. Try again or sign out."
         return success
     }

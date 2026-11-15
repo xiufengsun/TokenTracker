@@ -430,7 +430,7 @@ private struct AccountSpendTargetsSheet: View {
                     targetField(title: "7 Days (USD)", placeholder: "Off", text: $weeklyText)
                     targetField(title: "30 Days (USD)", placeholder: "Off", text: $monthlyText)
                 } header: {
-                    Text(snapshot.selectedDeviceId == nil ? "Account" : "Selected computer")
+                    Text("Account")
                 } footer: {
                     Text("Stored on this iPhone. Leave blank to turn off.")
                 }

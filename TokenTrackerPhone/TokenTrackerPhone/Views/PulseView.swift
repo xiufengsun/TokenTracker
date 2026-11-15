@@ -222,7 +222,7 @@ struct PulseView: View {
         let totals = snapshot.periodSummary.totals
         let cost = snapshot.periodCostUsd
         let dailyAvg = snapshot.averageDailyCost30d
-        let showTodayVsAvg = workspace.horizon == .today && dailyAvg > 0.01 && cost > 0
+        let showTodayVsAvg = prefs.showsSpendComparisons && workspace.horizon == .today && dailyAvg > 0.01 && cost > 0
 
         return TelemetrySurface(padding: 20) {
             VStack(alignment: .leading, spacing: 16) {

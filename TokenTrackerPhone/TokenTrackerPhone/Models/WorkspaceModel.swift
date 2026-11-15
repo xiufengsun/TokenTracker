@@ -38,6 +38,7 @@ final class WorkspaceModel: ObservableObject {
     private var loadTask: Task<Void, Never>?
     private let nowProvider: () -> Date
     private let generationProvider: @MainActor () -> Int
+    var contentGeneration: Int { modelGeneration }
     private var modelGeneration: Int
     private var resetEpoch = 0
     private var loadEpoch = 0

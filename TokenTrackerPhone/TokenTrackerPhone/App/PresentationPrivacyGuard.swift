@@ -7,6 +7,7 @@ import Combine
 /// on for switcher snapshots; willResignActive installs an opaque cover inline.
 struct PresentationPrivacyGuard<Shield: View>: UIViewRepresentable {
     let sessions: SessionStore
+    let contentGeneration: Int
     let shielded: Bool
     let protectInactive: Bool
     let shield: Shield
@@ -22,6 +23,7 @@ struct PresentationPrivacyGuard<Shield: View>: UIViewRepresentable {
     }
     func updateUIView(_ uiView: Anchor, context: Context) {
         let c = context.coordinator
+        c.renderedGeneration = contentGeneration
         c.protectInactive = protectInactive
         c.desired = shielded
         c.host.rootView = AnyView(shield)
@@ -29,7 +31,8 @@ struct PresentationPrivacyGuard<Shield: View>: UIViewRepresentable {
         c.updateVisibility()
     }
     static func dismantleUIView(_ uiView: Anchor, coordinator: Coordinator) {
-        coordinator.cover?.isHidden = true
+        coordinator.hideCover()
+        coordinator.subscriptions.removeAll()
         coordinator.cover = nil
     }
 
@@ -44,7 +47,15 @@ struct PresentationPrivacyGuard<Shield: View>: UIViewRepresentable {
         var protectInactive = false
         var desired = false
         var generation = 0
-        var transitioning = false
+        var pendingGeneration: Int?
+        var dismissedGeneration: Int?
+        var renderedGeneration = 0
+        var transitioning: Bool {
+            guard let pendingGeneration else { return false }
+            return renderedGeneration != pendingGeneration || dismissedGeneration != pendingGeneration
+        }
+        weak var previousKeyWindow: UIWindow?
+        let hiddenAccessibility = NSMapTable<UIWindow, NSNumber>.weakToStrongObjects()
         var inactive = UIApplication.shared.applicationState != .active
         var mustCover: Bool { desired || transitioning || (inactive && protectInactive) }
         let host = UIHostingController(rootView: AnyView(Color(.systemBackground).ignoresSafeArea()))
@@ -66,11 +77,41 @@ struct PresentationPrivacyGuard<Shield: View>: UIViewRepresentable {
             guard let cover, let scene = cover.windowScene else { return }
             let highest = scene.windows.filter { $0 !== cover }.map { $0.windowLevel.rawValue }.max() ?? 0
             cover.windowLevel = UIWindow.Level(rawValue: max(UIWindow.Level.alert.rawValue, highest) + 1)
-            cover.isHidden = false
+            if cover.isHidden { previousKeyWindow = scene.windows.first(where: { $0.isKeyWindow && $0 !== cover }) }
+            for window in scene.windows where window !== cover {
+                if hiddenAccessibility.object(forKey: window) == nil {
+                    hiddenAccessibility.setObject(NSNumber(value: window.accessibilityElementsHidden), forKey: window)
+                }
+                window.endEditing(true)
+                window.accessibilityElementsHidden = true
+            }
+            host.view.accessibilityViewIsModal = true
+            cover.accessibilityViewIsModal = true
+            let newlyShown = cover.isHidden
+            cover.makeKeyAndVisible()
+            if newlyShown { UIAccessibility.post(notification: .screenChanged, argument: host.view) }
+        }
+
+        func hideCover() {
+            guard let cover else { return }
+            let restoreKey = cover.isKeyWindow
+            cover.isHidden = true
+            for window in hiddenAccessibility.keyEnumerator().allObjects.compactMap({ $0 as? UIWindow }) {
+                if let old = hiddenAccessibility.object(forKey: window) { window.accessibilityElementsHidden = old.boolValue }
+            }
+            hiddenAccessibility.removeAllObjects()
+            if restoreKey { (previousKeyWindow ?? source)?.makeKey() }
+            previousKeyWindow = nil
         }
 
         func updateVisibility() {
-            if mustCover { showCover() } else { cover?.isHidden = true }
+            if mustCover { showCover() } else { hideCover() }
+        }
+
+        func completeDismissal(for generation: Int) {
+            guard generation == self.generation else { return }
+            dismissedGeneration = generation
+            updateVisibility()
         }
 
         func observe(_ sessions: SessionStore) {
@@ -99,17 +140,11 @@ struct PresentationPrivacyGuard<Shield: View>: UIViewRepresentable {
                 self.generation = sessions.sessionGeneration
                 // Published emits before the account changes. Cover first, then
                 // dismiss the entire controller chain without animation.
-                self.transitioning = true
+                let expected = self.generation
+                self.pendingGeneration = expected
+                self.dismissedGeneration = nil
                 self.showCover()
-                let reveal = { [weak self] in
-                    // Keep the cover through both UIKit dismissal and the
-                    // SwiftUI transaction replacing the account's subtree.
-                    DispatchQueue.main.async {
-                        guard let self else { return }
-                        self.transitioning = false
-                        self.updateVisibility()
-                    }
-                }
+                let reveal: () -> Void = { [weak self] in self?.completeDismissal(for: expected) }
                 if let root = self.source?.rootViewController, root.presentedViewController != nil {
                     root.dismiss(animated: false, completion: reveal)
                 } else { reveal() }

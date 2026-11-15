@@ -70,7 +70,7 @@ struct RootContainerView: View {
             }
         }
         .background {
-            PresentationPrivacyGuard(sessions: sessions,
+            PresentationPrivacyGuard(sessions: sessions, contentGeneration: workspace.contentGeneration,
                 shielded: sessions.isSignedIn && (isLocked || (scenePhase != .active && (prefs.hideSwitcherSnapshot || prefs.requireBiometricUnlock))),
                 protectInactive: sessions.isSignedIn && (prefs.hideSwitcherSnapshot || prefs.requireBiometricUnlock),
                 shield: privacyOverlay)
