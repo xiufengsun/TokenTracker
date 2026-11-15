@@ -23332,7 +23332,9 @@ async function parseAntigravityFile({
     try {
       const event = JSON.parse(lines[i]);
       const info = event.type === "PLANNER_RESPONSE" && stepMap?.get(event.step_index);
-      if (info?.hasUsageMetadata) seenGenerations.add(info.generationIdentity);
+      if (info?.hasUsageMetadata && event.created_at && toUtcHalfHourStart(event.created_at)) {
+        seenGenerations.add(info.generationIdentity);
+      }
     } catch { /* same readable-prefix behavior as the parser */ }
   }
 
@@ -23366,7 +23368,9 @@ async function parseAntigravityFile({
         lastCompletedLine = i + 1;
         continue;
       }
-      seenGenerations.add(identity);
+      // A malformed timestamp cannot consume a generation: a later alias
+      // or the native supplemental pass must still be able to account for it.
+      if (parsed.created_at && toUtcHalfHourStart(parsed.created_at)) seenGenerations.add(identity);
     }
     const dbContextTokens = dbTurn && dbTurn.contextTokens > 0 ? dbTurn.contextTokens : 0;
     if (dbTurn && dbTurn.model) {
@@ -23517,7 +23521,7 @@ async function parseAntigravityFile({
   }
 
   // Generations the transcript never represented still belong to this cascade.
-  // Every PLANNER_RESPONSE step is covered, including lines before the cursor:
+  // Only timestamp-valid PLANNER_RESPONSE steps are covered, including lines before the cursor:
   // those were billed on an earlier pass. The caller sets supplementUncovered
   // on a full walk or when the database identity changed; an unchanged resume
   // already holds the uncovered generations in its ledger.
@@ -23526,7 +23530,8 @@ async function parseAntigravityFile({
     for (let i = 0; i < lines.length; i++) {
       try {
         const event = JSON.parse(lines[i]);
-        if (event?.type === "PLANNER_RESPONSE" && Number.isFinite(event.step_index)) {
+        if (event?.type === "PLANNER_RESPONSE" && Number.isFinite(event.step_index) &&
+            event.created_at && toUtcHalfHourStart(event.created_at)) {
           coveredSteps.add(event.step_index);
         }
       } catch {

@@ -642,3 +642,32 @@ test("an observed empty database remains required on a forced refresh", async (t
   const rows = await buildSessionAnalytics({ home, force: true });
   assert.equal(rows.skippedFiles, 1);
 });
+
+for (const invalidAt of [undefined, "invalid"]) {
+  test("unbillable response aliases remain eligible for native fallback and later valid aliases: " + invalidAt, async (t) => {
+    const { home, db, file } = fixture(t, { transcript: true });
+    runSql(db, "INSERT INTO gen_metadata VALUES (1, X'" + shiftStep(generation(), 4).toString("hex") + "')");
+    const planner = (step, at) => JSON.stringify({ type: "PLANNER_RESPONSE", step_index: step, created_at: at, content: SECRET }) + "\n";
+    const invalid = planner(1, invalidAt);
+    const valid = planner(5, AT);
+    const tokens = (result) => result.rows.reduce((sum, row) => sum + row.total_tokens, 0);
+    // A fresh full parse must not let the first invalid alias consume the ID.
+    fs.writeFileSync(file, invalid + valid);
+    assert.equal((await readAntigravitySessions([file]))[0].tokens.total_tokens, 335);
+    fs.writeFileSync(file, invalid);
+    let cursors = {};
+    let result = await hourly(home, [db], cursors);
+    assert.equal(tokens(result), 335);
+    result = await hourly(home, [file], cursors);
+    assert.equal(tokens(result), 335);
+    assert.equal((await readAntigravitySessions([file]))[0].tokens.total_tokens, 335);
+    cursors = JSON.parse(JSON.stringify(cursors));
+    fs.appendFileSync(file, valid);
+    result = await hourly(home, [file], cursors);
+    assert.equal(tokens(result), 335);
+    assert.equal((await readAntigravitySessions([file]))[0].tokens.total_tokens, 335);
+    const before = fs.readFileSync(result.queuePath, "utf8");
+    await hourly(home, [file], JSON.parse(JSON.stringify(cursors)));
+    assert.equal(fs.readFileSync(result.queuePath, "utf8"), before);
+  });
+}
