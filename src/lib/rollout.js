@@ -22342,7 +22342,8 @@ function antigravityPlannerSteps(buffer) {
     if (!trimmed) continue;
     try {
       const event = JSON.parse(trimmed);
-      if (event?.type === "PLANNER_RESPONSE" && Number.isFinite(event.step_index)) steps.add(event.step_index);
+      if (event?.type === "PLANNER_RESPONSE" && Number.isFinite(event.step_index) &&
+          event.created_at && toUtcHalfHourStart(event.created_at)) steps.add(event.step_index);
     } catch {
       // A truncated final line is the cursor boundary, not the end of the file.
       // Only a complete line that fails to parse ends the readable prefix.

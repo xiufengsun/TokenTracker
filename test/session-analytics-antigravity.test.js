@@ -648,7 +648,8 @@ for (const invalidAt of [undefined, "invalid"]) {
     const { home, db, file } = fixture(t, { transcript: true });
     runSql(db, "INSERT INTO gen_metadata VALUES (1, X'" + shiftStep(generation(), 4).toString("hex") + "')");
     const planner = (step, at) => JSON.stringify({ type: "PLANNER_RESPONSE", step_index: step, created_at: at, content: SECRET }) + "\n";
-    const invalid = planner(1, invalidAt);
+    // Both aliases already occur in the persisted prefix, but neither was billed.
+    const invalid = planner(1, invalidAt) + planner(5, invalidAt);
     const valid = planner(5, AT);
     const tokens = (result) => result.rows.reduce((sum, row) => sum + row.total_tokens, 0);
     // A fresh full parse must not let the first invalid alias consume the ID.
