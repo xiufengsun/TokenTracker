@@ -39,7 +39,7 @@ async function discoverAntigravitySessions(roots, incomplete, knownFiles = null)
   return [...new Set(found)].sort();
 }
 
-async function readAntigravitySessions(files) {
+async function readAntigravitySessions(files, { requiredDatabases = [] } = {}) {
   const rows = [];
   const seen = new Set();
   for (const file of [...new Set(files)]) {
@@ -48,6 +48,9 @@ async function readAntigravitySessions(files) {
     if (seen.has(key)) continue;
     seen.add(key);
     const db = resolveAntigravityDbPath(file);
+    if (requiredDatabases.includes(db) && !fs.existsSync(db)) {
+      throw new Error("Previously observed Antigravity database is unavailable");
+    }
     const native = db && fs.existsSync(db) ? await readAntigravityNativeSession(db) : null;
     const events = [];
     const transcript = file.endsWith(".db") ? null : await fs.promises.readFile(file);
@@ -55,7 +58,7 @@ async function readAntigravitySessions(files) {
       applyBuckets: false, source: "antigravity", onUsage: (event) => events.push(event) });
     // A database read failure must retain the previous complete sidecar, rather
     // than replacing reported usage with a text-length estimate.
-    if (db && fs.existsSync(db) && !result.dbReadOk) throw new Error("Antigravity database is unavailable");
+    if (db && (native || requiredDatabases.includes(db) || fs.existsSync(db)) && !result.dbReadOk) throw new Error("Antigravity database is unavailable");
     let cwd = native?.cwd || null;
     if (!cwd && variant === "antigravity-cli") {
       const cliRoot = path.dirname(path.dirname(db));

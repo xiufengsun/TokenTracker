@@ -109,7 +109,7 @@ const SIDECAR_VERSION = 32;
 // Invalidate only Codex token summaries; other sources keep their cached rows.
 const CODEX_USAGE_VERSION = 1;
 // Repair Antigravity metadata without invalidating every provider's cached rows.
-const ANTIGRAVITY_SESSION_VERSION = 1;
+const ANTIGRAVITY_SESSION_VERSION = 2;
 const EDIT_TOOLS = new Set([
   "apply_patch",
   "edit",
@@ -2068,8 +2068,17 @@ function defineSkippedFileCount(rows, skippedFiles) {
   return rows;
 }
 
-async function scanAntigravitySessions(files) {
-  const rows = await readAntigravitySessions(Array.isArray(files) ? files : [files]);
+async function scanAntigravitySessions(files, { requiredAntigravityDatabases = [], previousAntigravityRows = [] } = {}) {
+  files = Array.isArray(files) ? files : [files];
+  const requiredDatabases = [...requiredAntigravityDatabases];
+  // Migrate dependency knowledge from sidecars written before explicit tracking.
+  for (const db of antigravitySessionDependencies(files).filter((file) => file.endsWith(".db"))) {
+    if (previousAntigravityRows.some((row) => row.source === "antigravity"
+      && row.session_id === path.basename(db, ".db")
+      && row.antigravity_variant === path.basename(path.dirname(path.dirname(db)))
+      && ["reported", "mixed"].includes(row.usage_precision))) requiredDatabases.push(db);
+  }
+  const rows = await readAntigravitySessions(files, { requiredDatabases });
   return rows.map(({ identity, files: dependencies, title, ...row }) => finalizeRecord({
     ...row, title: cleanSessionTitle(title), version: SIDECAR_VERSION, source: "antigravity",
     session_hash: sessionHash("antigravity", identity),
@@ -2548,7 +2557,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       continue;
     }
     let rows = null;
-    if (!force && !(entry.source === "codex" && previousMeta?.codex_usage_version !== CODEX_USAGE_VERSION) && !(entry.source === "zcode" && retryZcodeScan) && !(entry.source === "opencode" && retryOpencodeScan) && !(entry.source === "kimi" && retryKimiScan) && !(entry.source === "omp" && retryOmpScan) && !(entry.source === "dsh" && retryDshScan) && !(entry.source === "pi" && retryPiScan) && !(entry.source === "antigravity" && retryAntigravityScan) && previousFiles[cacheKey]?.stat_key === statKey) {
+    if (!force && !(entry.source === "codex" && previousMeta?.codex_usage_version !== CODEX_USAGE_VERSION) && !(entry.source === "zcode" && retryZcodeScan) && !(entry.source === "opencode" && retryOpencodeScan) && !(entry.source === "kimi" && retryKimiScan) && !(entry.source === "omp" && retryOmpScan) && !(entry.source === "dsh" && retryDshScan) && !(entry.source === "pi" && retryPiScan) && !(entry.source === "antigravity" && (retryAntigravityScan || previousMeta?.antigravity_session_version !== ANTIGRAVITY_SESSION_VERSION)) && previousFiles[cacheKey]?.stat_key === statKey) {
       if (entry.source === "zcode" || entry.source === "opencode" || entry.source === "kimi" || entry.source === "omp" || entry.source === "dsh" || entry.source === "pi" || entry.source === "antigravity") {
         // One db scans to many cached rows; recover them all from the previous
         // pass. An empty recovery means the sidecar lost its rows — rescan.
@@ -2566,7 +2575,12 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
           const sizes = provenanceMeta?.files?.[cacheKey]?.stat_key?.split("|") || [];
           entry.filePath.forEach((file, index) => { legacyOffsets[file] = Number(sizes[index]?.split(":")[0]) || 0; });
         }
-        const scanned = await entry.scan(entry.filePath, { trackerDir: path.dirname(sidecarPath), legacyOffsets });
+        const scanned = await entry.scan(entry.filePath, { trackerDir: path.dirname(sidecarPath), legacyOffsets,
+          ...(entry.source === "antigravity" ? {
+            requiredAntigravityDatabases: provenanceMeta?.antigravity_observed_databases || [],
+            previousAntigravityRows: readSidecar(sidecarPath),
+          } : {}),
+        });
         rows = Array.isArray(scanned) ? scanned.filter(Boolean) : (scanned ? [scanned] : []);
         // Batch sources count the files they had to give up on themselves.
         // A dsh batch is one deduplicated inventory, so a single unreadable log
@@ -2665,6 +2679,11 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       codex_usage_version: incompleteCodexUsage ? 0 : CODEX_USAGE_VERSION,
       antigravity_session_version: ANTIGRAVITY_SESSION_VERSION,
       antigravity_files: discovered.antigravity,
+      antigravity_observed_databases: [...new Set([
+        ...(provenanceMeta?.antigravity_observed_databases || []),
+        ...antigravitySessionDependencies(discovered.antigravity)
+          .filter((file) => file.endsWith(".db") && fs.existsSync(file)),
+      ])],
       signature,
       generated_at: generatedAt,
       checked_at: generatedAt,

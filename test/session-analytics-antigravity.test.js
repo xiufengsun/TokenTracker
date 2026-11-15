@@ -25,13 +25,13 @@ function bytes(n, value) {
 const stamp = () => number(1, Date.parse(AT) / 1000);
 // ModelUsageStats wire contract: model=1, input=2, output=3,
 // cache-write=4, cache-read=5, thinking=9, response=10, response-id=11.
-function generation(input = 100, response = "response-a") {
+function generation(input = 100, response = "response-a", linked = true) {
   return bytes(1, Buffer.concat([
     bytes(19, "claude-opus-4-6"),
     bytes(4, Buffer.concat([number(1, 1026), number(2, input), number(3, 30), number(4, 5),
       number(5, 200), number(9, 10), number(10, 20), bytes(11, response)])),
     bytes(9, bytes(4, stamp())),
-    bytes(20, Buffer.concat([bytes(1, "last_step_index"), bytes(2, "0")])),
+    ...(linked ? [bytes(20, Buffer.concat([bytes(1, "last_step_index"), bytes(2, "0")]))] : []),
   ]));
 }
 function fixture(t, { variant = "antigravity-cli", transcript = false, empty = false } = {}) {
@@ -540,4 +540,105 @@ test("the local Sessions endpoint exposes Antigravity details and CLI resume wit
   } finally {
     os.homedir = originalHome;
   }
+});
+
+
+test("unlinked native usage survives an empty transcript, restart and project reconciliation", async (t) => {
+  const { home, root, db } = fixture(t);
+  runSql(db, "UPDATE gen_metadata SET data = X'" + generation(100, "unlinked", false).toString("hex") + "'");
+  fs.mkdirSync(path.join(home, ".git"));
+  fs.writeFileSync(path.join(home, ".git", "config"), '[remote "origin"]\n url = https://github.com/acme/alpha.git\n');
+  let cursors = {};
+  const queuePath = path.join(home, "usage.jsonl");
+  const projectQueuePath = path.join(home, "project.jsonl");
+  const parse = (file) => parseAntigravityIncremental({
+    sessionFiles: [file], cursors, queuePath, projectQueuePath,
+    publicRepoResolver: async () => ({ projectKey: "acme/alpha", projectRef: "https://github.com/acme/alpha", status: "public_verified" }),
+  });
+  await parse(db);
+  const transcript = path.join(root, "brain", ID, ".system_generated", "logs", "transcript.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, "");
+  await parse(transcript);
+  for (const file of [queuePath, projectQueuePath]) {
+    const rows = fs.readFileSync(file, "utf8").trim().split("\n").map(JSON.parse);
+    assert.equal(rows.at(-1).total_tokens, 335);
+  }
+  const before = fs.readFileSync(queuePath, "utf8");
+  cursors = JSON.parse(JSON.stringify(cursors));
+  await parse(transcript);
+  assert.equal(fs.readFileSync(queuePath, "utf8"), before);
+  assert.equal((await readAntigravitySessions([transcript]))[0].tokens.total_tokens, 335);
+});
+
+for (const initialSteps of [[], [1], [1, 5]]) {
+  test("response identity is shared across supplementation and appended aliases: " + initialSteps, async (t) => {
+    const { home, db, file } = fixture(t, { transcript: true });
+    runSql(db, "INSERT INTO gen_metadata VALUES (1, X'" + shiftStep(generation(), 4) + "')");
+    const planner = (step) => JSON.stringify({ type: "PLANNER_RESPONSE", step_index: step, created_at: AT, content: SECRET }) + "\n";
+    fs.writeFileSync(file, initialSteps.map(planner).join(""));
+    let cursors = {};
+    let result = await hourly(home, [db], cursors);
+    assert.equal(result.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335);
+    result = await hourly(home, [file], cursors);
+    assert.equal(result.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335);
+    for (const step of [5, 1].filter((step) => !initialSteps.includes(step))) {
+      cursors = JSON.parse(JSON.stringify(cursors));
+      fs.appendFileSync(file, planner(step));
+      result = await hourly(home, [file], cursors);
+      assert.equal(result.rows.reduce((sum, row) => sum + row.total_tokens, 0), 335);
+    }
+    assert.equal((await readAntigravitySessions([file]))[0].tokens.total_tokens, 335);
+    const before = fs.readFileSync(result.queuePath, "utf8");
+    await hourly(home, [file], JSON.parse(JSON.stringify(cursors)));
+    assert.equal(fs.readFileSync(result.queuePath, "utf8"), before);
+  });
+}
+
+for (const legacy of [false, true]) {
+  test("missing observed database retains complete sidecar across reload, force and recheck: " + legacy, async (t) => {
+    const { home, db } = fixture(t, { transcript: true });
+    await buildSessionAnalytics({ home, force: true });
+    const sidecar = resolveSessionSidecarPath(home);
+    const metaPath = sidecar + ".meta.json";
+    if (legacy) {
+      const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+      delete meta.antigravity_observed_databases;
+      meta.antigravity_session_version = 1;
+      fs.writeFileSync(metaPath, JSON.stringify(meta));
+    }
+    const before = fs.readFileSync(sidecar, "utf8");
+    const metaBefore = fs.readFileSync(metaPath, "utf8");
+    const dbBytes = fs.readFileSync(db);
+    fs.unlinkSync(db);
+    for (const options of [{ recheck: true }, { force: true }, { recheck: true }]) {
+      delete require.cache[require.resolve("../src/lib/session-analytics")];
+      const build = require("../src/lib/session-analytics").buildSessionAnalytics;
+      const rows = await build({ home, ...options });
+      assert.equal(rows.find((row) => row.source === "antigravity").total_tokens, 335);
+      assert.equal(rows.skippedFiles, 1);
+      assert.equal(fs.readFileSync(sidecar, "utf8"), before);
+      assert.equal(fs.readFileSync(metaPath, "utf8"), metaBefore);
+      assert.equal(fs.existsSync(metaPath + ".antigravity-incomplete"), true);
+    }
+    fs.writeFileSync(db, dbBytes);
+    assert.equal((await buildSessionAnalytics({ home, recheck: true })).skippedFiles, 0);
+    assert.equal(fs.existsSync(metaPath + ".antigravity-incomplete"), false);
+  });
+}
+
+test("a transcript that never had an observed database can still estimate", async (t) => {
+  const { home, db } = fixture(t, { transcript: true });
+  fs.unlinkSync(db);
+  const rows = await buildSessionAnalytics({ home, force: true });
+  assert.equal(rows.find((row) => row.source === "antigravity").usage_precision, "estimated");
+});
+
+
+test("an observed empty database remains required on a forced refresh", async (t) => {
+  const { home, db } = fixture(t, { transcript: true, empty: true });
+  await buildSessionAnalytics({ home, force: true });
+  fs.unlinkSync(db);
+  const rows = await buildSessionAnalytics({ home, force: true });
+  assert.equal(rows.skippedFiles, 1);
 });

@@ -11,7 +11,7 @@ const crypto = require("node:crypto");
 const { ensureDir, writeJson, chmod600IfPossible } = require("./fs");
 const { physicalJsonlRecords } = require("./jsonl-lines");
 const { readSqliteJsonRows, readSqliteJsonRowsAsync } = require("./sqlite-reader");
-const { extractAntigravityGenInfo } = require("./antigravity-usage");
+const { extractAntigravityGenInfo, antigravityGenerationIdentity } = require("./antigravity-usage");
 const wsl = require("./wsl-probe");
 const { resolveInstallPaths } = require("./install-resolver");
 const { expandHome } = require("./scan-roots");
@@ -22331,7 +22331,7 @@ const ANTIGRAVITY_CURSOR_VERSION = 2;
 // Bump when extractAntigravityGenInfo starts reading records it used to
 // discard. Kept apart from the cursor version: a cursor-version mismatch routes
 // to the legacy migration, which treats the cursor as having no per-file ledger.
-const ANTIGRAVITY_EXTRACTOR_REVISION = 2;
+const ANTIGRAVITY_EXTRACTOR_REVISION = 3;
 const ANTIGRAVITY_MAX_CONTRIBUTIONS = 4096;
 
 function antigravityPlannerSteps(buffer) {
@@ -23205,21 +23205,22 @@ function readAntigravityConversationDb(dbPath) {
     if (!Array.isArray(rows)) return null;
 
     const stepMap = new Map();
+    stepMap.generations = new Map();
     for (const r of rows) {
       if (!r || typeof r.hex !== "string" || !r.hex.startsWith("X'")) continue;
       const buf = Buffer.from(r.hex.slice(2, -1), "hex");
       const info = extractAntigravityGenInfo(buf);
-      if (
-        info &&
-        info.lastStepIndex != null &&
-        (info.hasUsageMetadata || info.contextTokens > 0)
-      ) {
-        stepMap.set(info.lastStepIndex + 1, info);
+      if (!info || !(info.hasUsageMetadata || info.contextTokens > 0)) continue;
+      const identity = antigravityGenerationIdentity(info, r.idx);
+      info.generationIdentity = identity;
+      if (info.hasUsageMetadata && !stepMap.generations.has(identity)) stepMap.generations.set(identity, info);
+      // Only explicit linkage may associate a generation with transcript steps.
+      if (info.lastStepIndex != null) {
+        stepMap.set(info.lastStepIndex + 1, stepMap.generations.get(identity) || info);
       }
     }
-    // An empty map means the database was read successfully but has no usable
-    // metadata yet. Keep it distinct from null, which signals a transient read
-    // failure and must be retried on the next sync.
+    // Empty step and generation maps still mean a successful read. Keep them
+    // distinct from null, which signals a transient failure and must be retried.
     return stepMap;
   } catch (_) {
     return null;
@@ -23303,7 +23304,7 @@ async function parseAntigravityFile({
     };
   }
   const sqliteCursor = initialUsageSource === "sqlite";
-  const hasSqliteMetadata = Boolean(stepMap && stepMap.size > 0);
+  const hasSqliteMetadata = Boolean(stepMap && (stepMap.size > 0 || stepMap.generations?.size > 0));
   const resumed =
     canResume &&
     (cachedTokens > 0 || cachedModel !== null) &&
@@ -23325,6 +23326,15 @@ async function parseAntigravityFile({
   }
   let lastCompletedLine = Math.min(Number.isFinite(lastLine) ? lastLine : 0, lines.length);
   let supplementedSteps = null;
+  const seenGenerations = new Set();
+  // Reconstruct dedup state from the persisted transcript prefix on resumes.
+  for (let i = 0; i < scanStart; i++) {
+    try {
+      const event = JSON.parse(lines[i]);
+      const info = event.type === "PLANNER_RESPONSE" && stepMap?.get(event.step_index);
+      if (info?.hasUsageMetadata) seenGenerations.add(info.generationIdentity);
+    } catch { /* same readable-prefix behavior as the parser */ }
+  }
 
   for (let i = scanStart; i < lines.length; i++) {
     const line = lines[i];
@@ -23350,6 +23360,14 @@ async function parseAntigravityFile({
       parsed.type === "PLANNER_RESPONSE" && stepMap && Number.isFinite(parsed.step_index)
         ? stepMap.get(parsed.step_index)
         : null;
+    if (dbTurn?.hasUsageMetadata) {
+      const identity = nativeSession ? parsed.generation_identity : dbTurn.generationIdentity;
+      if (seenGenerations.has(identity)) {
+        lastCompletedLine = i + 1;
+        continue;
+      }
+      seenGenerations.add(identity);
+    }
     const dbContextTokens = dbTurn && dbTurn.contextTokens > 0 ? dbTurn.contextTokens : 0;
     if (dbTurn && dbTurn.model) {
       const norm = normalizeAntigravityTranscriptModel(dbTurn.model);
@@ -23503,7 +23521,7 @@ async function parseAntigravityFile({
   // those were billed on an earlier pass. The caller sets supplementUncovered
   // on a full walk or when the database identity changed; an unchanged resume
   // already holds the uncovered generations in its ledger.
-  if (!nativeSession && supplementUncovered && stepMap && stepMap.size > 0 && fssync.existsSync(dbPath)) {
+  if (!nativeSession && supplementUncovered && stepMap && (stepMap.size > 0 || stepMap.generations?.size > 0) && fssync.existsSync(dbPath)) {
     const coveredSteps = new Set();
     for (let i = 0; i < lines.length; i++) {
       try {
@@ -23518,13 +23536,18 @@ async function parseAntigravityFile({
         if (i >= lastLine) break;
       }
     }
-    const uncovered = [...stepMap.entries()].filter(([step, info]) => info?.hasUsageMetadata && !coveredSteps.has(step));
-    if (uncovered.length) supplementedSteps = uncovered.map(([step]) => step);
+    const coveredGenerations = new Set([...coveredSteps].map((step) => stepMap.get(step)?.generationIdentity));
+    const uncovered = [...stepMap.generations.entries()]
+      .filter(([identity, info]) => info.hasUsageMetadata && !coveredGenerations.has(identity));
+    const uncoveredIds = new Set(uncovered.map(([identity]) => identity));
+    const supplementalLinks = [...stepMap.entries()]
+      .filter(([, info]) => uncoveredIds.has(info.generationIdentity)).map(([step]) => step);
+    if (supplementalLinks.length) supplementedSteps = supplementalLinks;
     if (uncovered.length) {
       const nativeEvents = await require("./antigravity-native").readAntigravityNativeSession(dbPath);
-      const byStep = new Map((nativeEvents?.events || []).map((event) => [event.step_index, event]));
-      for (const [step, dbTurn] of uncovered) {
-        const event = byStep.get(step);
+      const byIdentity = new Map((nativeEvents?.events || []).map((event) => [event.generation_identity, event]));
+      for (const [identity, dbTurn] of uncovered) {
+        const event = byIdentity.get(identity);
         const timestamp = event?.created_at;
         const bucketStart = timestamp ? toUtcHalfHourStart(timestamp) : null;
         if (!timestamp || !bucketStart) continue;

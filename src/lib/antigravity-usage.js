@@ -164,4 +164,8 @@ function extractAntigravityGenInfo(buf) {
   }
 }
 
-module.exports = { decodeAntigravityVarint, findAntigravityProtoFields, extractAntigravityGenInfo };
+function antigravityGenerationIdentity(info, index) {
+  return info.responseId || `generation:${index}`;
+}
+
+module.exports = { antigravityGenerationIdentity, decodeAntigravityVarint, findAntigravityProtoFields, extractAntigravityGenInfo };

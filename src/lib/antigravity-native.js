@@ -5,7 +5,7 @@ const path = require("node:path");
 const { fileURLToPath } = require("node:url");
 const { readSqliteJsonRowsAsync } = require("./sqlite-reader");
 const wsl = require("./wsl-probe");
-const { findAntigravityProtoFields: fields, extractAntigravityGenInfo } = require("./antigravity-usage");
+const { findAntigravityProtoFields: fields, extractAntigravityGenInfo, antigravityGenerationIdentity } = require("./antigravity-usage");
 
 function field(buffer, number) {
   if (!Buffer.isBuffer(buffer)) return null;
@@ -80,7 +80,7 @@ async function readAntigravityNativeSnapshot(dbPath, originalPath) {
     const info = extractAntigravityGenInfo(buffer);
     if (!info) throw new Error("Unreadable Antigravity generation metadata");
     if (!info.hasUsageMetadata) continue;
-    const identity = info.responseId || `generation:${row.idx}`;
+    const identity = antigravityGenerationIdentity(info, row.idx);
     if (seen.has(identity)) continue;
     seen.add(identity);
     const stepIndex = info.lastStepIndex == null ? row.idx : info.lastStepIndex + 1;
@@ -90,7 +90,7 @@ async function readAntigravityNativeSnapshot(dbPath, originalPath) {
       at = createdAt || fs.statSync(originalPath).mtime.toISOString();
       timestampEstimated = true;
     }
-    events.push({ type: "PLANNER_RESPONSE", step_index: stepIndex, created_at: at, native_usage: info });
+    events.push({ type: "PLANNER_RESPONSE", step_index: stepIndex, created_at: at, generation_identity: identity, native_usage: info });
   }
   return { events, cwd, createdAt, timestampEstimated };
 }
