@@ -30,6 +30,14 @@ function errorMessage(error) {
   return key ? copy(key) : copy("settings.instance.error.generic");
 }
 
+// Bare domains are the natural way people type an address; treat them as
+// https instead of rejecting them server-side.
+function normalizeBaseUrlInput(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed || trimmed.includes("://")) return trimmed;
+  return `https://${trimmed}`;
+}
+
 /**
  * Cloud instance target: point the local client at a self-hosted InsForge
  * deployment instead of the official cloud. Only renders when the local
@@ -47,6 +55,7 @@ export function InstanceSectionCard({ signedIn = false } = {}) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [pendingSwitch, setPendingSwitch] = useState(null);
+  const [health, setHealth] = useState(null);
   // Live mirror of the effective probe target (field value or official URL):
   // async completions compare against this instead of the render-time closure.
   const currentTargetRef = useRef("");
@@ -57,6 +66,23 @@ export function InstanceSectionCard({ signedIn = false } = {}) {
     currentTargetRef.current = config.custom ? config.baseUrl : config.officialUrl;
     setAnonKey("");
   }, [available, config.baseUrl, config.custom, config.officialUrl]);
+
+  // One silent probe of the active server on load, so a downed self-hosted
+  // instance is visible at a glance instead of surfacing as vague login or
+  // sync failures elsewhere.
+  useEffect(() => {
+    if (!available || !config.baseUrl) return undefined;
+    let active = true;
+    setHealth(null);
+    test(config.baseUrl)
+      .then((result) => {
+        if (active) setHealth(result.reachable ? "reachable" : "unreachable");
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [available, config.baseUrl, test]);
 
   // A pending availability check is not the same as an unavailable API: show
   // the card's loading line while the probe is in flight so Settings does not
@@ -112,7 +138,8 @@ export function InstanceSectionCard({ signedIn = false } = {}) {
   };
 
   const runTest = async () => {
-    const target = baseUrl.trim() || config.officialUrl;
+    const target = normalizeBaseUrlInput(baseUrl) || config.officialUrl;
+    if (target !== baseUrl) setBaseUrl(target);
     currentTargetRef.current = target;
     setTesting(true);
     setTestResult(null);
@@ -157,6 +184,21 @@ export function InstanceSectionCard({ signedIn = false } = {}) {
               ? copy("settings.instance.badge.selfHosted")
               : copy("settings.instance.badge.official")}
           </span>
+          {health ? (
+            <span
+              className={`inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium ${
+                health === "reachable"
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-red-600 dark:text-red-400"
+              }`}
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${health === "reachable" ? "bg-emerald-500" : "bg-red-500"}`}
+                aria-hidden
+              />
+              {copy(health === "reachable" ? "settings.instance.health.ok" : "settings.instance.health.unreachable")}
+            </span>
+          ) : null}
         </div>
         {!editing ? (
           <Button
@@ -189,7 +231,7 @@ export function InstanceSectionCard({ signedIn = false } = {}) {
                 // An edited address invalidates any earlier probe result, and
                 // in-flight completions compare against this ref, not the
                 // stale closure value.
-                currentTargetRef.current = event.target.value.trim() || config.officialUrl;
+                currentTargetRef.current = normalizeBaseUrlInput(event.target.value) || config.officialUrl;
                 setTestResult(null);
               }}
               placeholder={config.officialUrl}
@@ -221,7 +263,11 @@ export function InstanceSectionCard({ signedIn = false } = {}) {
               size="sm"
               variant="primary"
               disabled={busy || applied || !baseUrl.trim()}
-              onClick={() => request({ baseUrl: baseUrl.trim(), anonKey })}
+              onClick={() => {
+                const target = normalizeBaseUrlInput(baseUrl);
+                if (target !== baseUrl) setBaseUrl(target);
+                request({ baseUrl: target, anonKey });
+              }}
             >
               {busy || applied ? (
                 <>
