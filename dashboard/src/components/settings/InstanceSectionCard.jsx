@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Loader2, Server } from "lucide-react";
 import { copy } from "../../lib/copy";
 import { resetInsforgeClientForInstanceChange } from "../../lib/insforge-config";
@@ -33,12 +33,16 @@ export function InstanceSectionCard() {
   const [applied, setApplied] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  // Live mirror of the effective probe target (field value or official URL):
+  // async completions compare against this instead of the render-time closure.
+  const currentTargetRef = useRef("");
 
   useEffect(() => {
     if (!available) return;
     setBaseUrl(config.custom ? config.baseUrl : "");
+    currentTargetRef.current = config.custom ? config.baseUrl : config.officialUrl;
     setAnonKey("");
-  }, [available, config.baseUrl, config.custom]);
+  }, [available, config.baseUrl, config.custom, config.officialUrl]);
 
   // A pending availability check is not the same as an unavailable API: show
   // the card's loading line while the probe is in flight so Settings does not
@@ -75,16 +79,18 @@ export function InstanceSectionCard() {
 
   const runTest = async () => {
     const target = baseUrl.trim() || config.officialUrl;
+    currentTargetRef.current = target;
     setTesting(true);
     setTestResult(null);
     setError(null);
     try {
       const result = await test(target);
-      // Discard a result that no longer matches the field: a slow probe for a
-      // previous address must not read as validation for the current one.
-      if ((baseUrl.trim() || config.officialUrl) === target) setTestResult(result);
+      // Discard a result that no longer matches the field: the closure's
+      // baseUrl is stale after the await, so compare against a ref that the
+      // input's onChange keeps current.
+      if (currentTargetRef.current === target) setTestResult(result);
     } catch (reason) {
-      if ((baseUrl.trim() || config.officialUrl) === target) setError(errorMessage(reason));
+      if (currentTargetRef.current === target) setError(errorMessage(reason));
     } finally {
       setTesting(false);
     }
@@ -146,7 +152,10 @@ export function InstanceSectionCard() {
               value={baseUrl}
               onChange={(event) => {
                 setBaseUrl(event.target.value);
-                // An edited address invalidates any earlier probe result.
+                // An edited address invalidates any earlier probe result, and
+                // in-flight completions compare against this ref, not the
+                // stale closure value.
+                currentTargetRef.current = event.target.value.trim() || config.officialUrl;
                 setTestResult(null);
               }}
               placeholder={config.officialUrl}

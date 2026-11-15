@@ -3855,11 +3855,14 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       let httpStatus = null;
       let errorCode = "unreachable";
       try {
-        // Deliberate server-side fetch of a loopback-validated, local-auth'd
-        // user-provided address on a loopback-only server (this is the whole
-        // point of the probe: the browser cannot fetch it through CORS), so
-        // the URL is untrusted input only in the CodeQL sense.
-        // codeql[js/server-side-request-forgery]
+        // Deliberate server-side fetch of a user-provided address on a
+        // loopback-only server, called only through isAuthorizedLocalMutation.
+        // The target is normalizeInstanceBaseUrl-validated — https on any
+        // host, or http on loopback only — and this probe is the whole point
+        // of the endpoint: the browser cannot fetch the target itself
+        // (self-hosted instances rarely allow the dashboard origin via CORS).
+        // The CodeQL SSRF alert on this line therefore needs a maintainer
+        // dismissal in the Code Scanning UI rather than an inline comment.
         const response = await fetch(target, {
           method: "GET",
           redirect: "manual",
