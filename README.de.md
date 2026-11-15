@@ -188,7 +188,7 @@ Aktualisieren mit `brew upgrade --cask xiufengsun/tokentracker/tokentracker`. De
 | **Grok Build** (xAI) | ✅ Auto | SessionEnd-Hook + passiver `updates.jsonl` / `signals.json`-Scan (`~/.grok/sessions/**/`) |
 | **Kilo CLI** (kilo.ai) | ✅ Auto | Passiver SQLite-Reader (`~/.local/share/kilo/kilo.db`, OpenCode-Fork-Schema) |
 | **Kilo Code** (VS Code Extension) | ✅ Auto | Passiver `ui_messages.json`-Reader (Cursor/Code/CodeBuddy/Windsurf globalStorage) |
-| **Antigravity** | ✅ Auto | Passiver Transcript-Reader (`~/.gemini/{antigravity,antigravity-ide,antigravity-cli}/brain/**/transcript.jsonl`) |
+| **Antigravity** | ✅ Auto | Passiver Transcript-Reader (`~/.gemini/{antigravity,antigravity-ide,antigravity-insiders,antigravity-cli}/brain/**/transcript.jsonl`, plus T3-Code-Profile unter `~/.t3/userdata/providers/antigravity/*/antigravity-acp/`) |
 | **pi** (`@mariozechner/pi-coding-agent`) | ✅ Auto | Passiver Reader (`~/.pi/agent/sessions/**/*.jsonl`) |
 | **Dots** | ✅ Auto | Über pis Provider-Split geroutet (`pi-dots` source, derselbe passive Reader) — kein eigener Hook |
 | **Prime Agent** | ✅ Auto | Metadatenbasierter passiver Usage-Reader (`~/.prime/agent/sessions/*.jsonl`) |
@@ -301,6 +301,7 @@ Die meisten Nutzer brauchen das nie – die Standardwerte sind sinnvoll. Für fo
 | `TOKENTRACKER_GROK_HOME` | Grok Build-Verzeichnis für Grok-Integration und Skills-Manager | `~/.grok` |
 | `GROK_HOME` | Legacy-Grok-Build-Verzeichnis, falls `TOKENTRACKER_GROK_HOME` nicht gesetzt | `~/.grok` |
 | `TOKENTRACKER_ANTIGRAVITY_HOME` | Einzelnes Antigravity-Skills-Verzeichnis erzwingen (sonst Auto-Erkennung von `~/.gemini/antigravity` + `~/.gemini/antigravity-ide`) | auto |
+| `TOKENTRACKER_T3_HOME` | T3-Code-Zustandsverzeichnis überschreiben, in dem Antigravity-(`agy`)-Profile automatisch entdeckt werden | `~/.t3` |
 
 ### 🐧 WSL-Erkennung unter Windows (WSL Auto-Discovery)
 
