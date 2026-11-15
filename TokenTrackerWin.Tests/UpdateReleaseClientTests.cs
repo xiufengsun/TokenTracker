@@ -318,6 +318,49 @@ public sealed class UpdateReleaseClientTests
         Assert.Equal(1, calls);
     }
 
+    [Fact]
+    public async Task SimultaneousChecksAdmitOnlyOneReleaseRequest()
+    {
+        const int callers = 16;
+        var calls = 0;
+        var skipped = 0;
+        var rejected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var start = new Barrier(callers);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var response = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var http = new HttpClient(new Handler(async (_, cancellationToken) =>
+        {
+            Interlocked.Increment(ref calls);
+            entered.TrySetResult();
+            return await response.Task.WaitAsync(cancellationToken);
+        }));
+        var checker = new UpdateChecker(http);
+        var checks = Enumerable.Range(0, callers).Select(_ => Task.Factory.StartNew(async () =>
+        {
+            if (!start.SignalAndWait(TimeSpan.FromSeconds(10)))
+                throw new TimeoutException("Concurrent update checks did not start together");
+            var outcome = await checker.CheckAsync(silent: false);
+            if (outcome == UpdateChecker.CheckOutcome.Skipped && Interlocked.Increment(ref skipped) == callers - 1)
+                rejected.TrySetResult();
+            return outcome;
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap()).ToArray();
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            // All rejected callers can finish while the admitted request is blocked.
+            await rejected.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(UpdateChecker.UpdateState.Checking, checker.State);
+        }
+        finally
+        {
+            response.TrySetResult(ApiRelease());
+        }
+        var results = await Task.WhenAll(checks).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(1, calls);
+        Assert.Equal(1, results.Count(result => result == UpdateChecker.CheckOutcome.UpdateAvailable));
+        Assert.Equal(callers - 1, results.Count(result => result == UpdateChecker.CheckOutcome.Skipped));
+    }
+
     private static bool IsApi(HttpRequestMessage request) => request.RequestUri!.Host == "api.github.com";
 
     private static HttpResponseMessage ApiRelease(bool includeInstaller = true)
