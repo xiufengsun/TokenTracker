@@ -1278,3 +1278,44 @@ test("parseQoderNewIncremental leaves a true Auto session as auto and reclassifi
   assert.equal(cursors.qoderNew.messages["jsonl:sess-reparse|m-reparse"].model, "dfmodel");
 });
 
+
+test("runtime-config switching back to Auto resets explicit attribution across syncs", async (t) => {
+  const tmp = tempDir();
+  const { dir, queuePath } = tempQueue();
+  t.after(() => { fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(dir, { recursive: true, force: true }); });
+  const sessionFile = path.join(tmp, "proj", "switch-auto.jsonl");
+  const config = (model, timestamp) => ({ type: "runtime-config", sessionId: "switch-auto", model, timestamp });
+  const usage = (id, timestamp) => ({ type: "assistant", uuid: id, sessionId: "switch-auto", timestamp,
+    message: { id, role: "assistant", model: "auto", usage: { input_tokens: 4, output_tokens: 1, billable: true } } });
+  const rows = [config("dfmodel", "2026-11-10T08:00:00Z"), usage("first", "2026-11-10T08:01:00Z")];
+  const cursors = {};
+  const parse = () => parseQoderNewIncremental({ sessionFiles: [sessionFile], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew" });
+  writeJsonl(sessionFile, rows);
+  await parse();
+  rows.push(config("auto", "2026-11-10T08:02:00Z"), usage("second", "2026-11-10T08:03:00Z"));
+  writeJsonl(sessionFile, rows);
+  await parse();
+  assert.equal(cursors.qoderNew.messages["jsonl:switch-auto|first"].model, "dfmodel");
+  assert.equal(cursors.qoderNew.messages["jsonl:switch-auto|second"].model, "auto");
+  assert.equal((await parse()).eventsAggregated, 0);
+});
+
+for (const timestamp of [undefined, "invalid-date"]) {
+  test(`unorderable runtime-config (${timestamp}) cannot rewrite earlier Auto usage`, async (t) => {
+    const tmp = tempDir();
+    const { dir, queuePath } = tempQueue();
+    t.after(() => { fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(dir, { recursive: true, force: true }); });
+    const sessionFile = path.join(tmp, "proj", "undated.jsonl");
+    const assistant = { type: "assistant", uuid: "m", sessionId: "undated", timestamp: "2026-11-10T08:01:00Z",
+      message: { id: "m", role: "assistant", model: "auto", usage: { input_tokens: 4, output_tokens: 1, billable: true } } };
+    const cursors = {};
+    const parse = () => parseQoderNewIncremental({ sessionFiles: [sessionFile], cursors, queuePath, sourceKey: "qoder", cursorKey: "qoderNew" });
+    writeJsonl(sessionFile, [assistant]);
+    await parse();
+    writeJsonl(sessionFile, [assistant, { type: "runtime-config", sessionId: "undated", model: "dfmodel", timestamp }]);
+    assert.equal((await parse()).eventsAggregated, 0);
+    assert.equal(cursors.qoderNew.messages["jsonl:undated|m"].model, "auto");
+    assert.equal(queueRows(queuePath).length, 1);
+    assert.equal((await parse()).eventsAggregated, 0);
+  });
+}

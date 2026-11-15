@@ -7042,7 +7042,7 @@ function qoderRuntimeConfigModel(record) {
     "",
   );
   const model = normalizeModelInput(stripped);
-  return model && !isQoderGenericAutoModel(model) ? model : null;
+  return model || null;
 }
 
 function qoderRuntimeSessionId(record) {
@@ -7076,7 +7076,8 @@ function collectQoderRuntimeModels(files) {
       const model = qoderRuntimeConfigModel(record);
       const sessionId = qoderRuntimeSessionId(record);
       if (!model || !sessionId) continue;
-      const ts = qoderNewTimestampMs(record) || lineIdx;
+      const ts = qoderNewTimestampMs(record);
+      if (!ts) continue; // Undated configs cannot be ordered against timestamped usage.
       const list = bySession.get(sessionId) || [];
       list.push({ ts, model, lineIdx, filePath });
       bySession.set(sessionId, list);
@@ -7094,6 +7095,7 @@ function resolveQoderRuntimeModel(record, runtimeModels, fallbackModel) {
   const events = sessionId ? runtimeModels.get(sessionId) : null;
   if (!events || events.length === 0) return fallbackModel;
   const ts = qoderNewTimestampMs(record);
+  if (!ts) return fallbackModel;
   let chosen = null;
   for (const ev of events) {
     if (ts && ev.ts > ts) break;
