@@ -22521,19 +22521,24 @@ function resetAntigravityBucketsForRebuild({
   }
 }
 
-async function parseAntigravityIncremental({
-  sessionFiles,
-  cursors,
-  queuePath,
-  projectQueuePath,
-  onProgress,
-  source,
-  publicRepoResolver,
-  // Source-wide rebuilds may retract sessions absent from sessionFiles. Only
-  // permit that when discovery explicitly completed; direct parser callers
-  // retain the historical complete-inventory default for compatibility.
-  inventoryComplete = true,
-}) {
+async function parseAntigravityIncremental(options) {
+  return parseAntigravityIncrementalPass(options);
+}
+
+async function parseAntigravityIncrementalPass(options, rebuildSource = false) {
+  const {
+    sessionFiles,
+    cursors,
+    queuePath,
+    projectQueuePath,
+    onProgress,
+    source,
+    publicRepoResolver,
+    // Source-wide rebuilds may retract sessions absent from sessionFiles. Only
+    // permit that when discovery explicitly completed; direct parser callers
+    // retain the historical complete-inventory default for compatibility.
+    inventoryComplete = true,
+  } = options;
   await ensureDir(path.dirname(queuePath));
   let filesProcessed = 0;
   let eventsAggregated = 0;
@@ -22603,7 +22608,7 @@ async function parseAntigravityIncremental({
   }
   const incompleteContributionPaths = new Set();
   const deferredIncompletePaths = new Set();
-  let needsFullRebuild = false;
+  let needsFullRebuild = rebuildSource;
   for (const [filePath, prev] of Object.entries(fileCursors)) {
     if (!resolveAntigravityDbPath(filePath) || !prev) {
       continue;
@@ -22913,6 +22918,15 @@ async function parseAntigravityIncremental({
         // transcript PLANNER_RESPONSE. The cursor stores no per-step identity,
         // so the whole ledger is reconciled instead of merging the step twice.
         (transcriptCanAppend && antigravityCoverageChanged(transcriptBytes, prev, dbPath)));
+
+    // The database can change after preflight. A capped ledger cannot safely
+    // subtract its own history, even if reconciliation was only selected here.
+    if (needsReconcile && prev.contributionsComplete === false) {
+      if (!inventoryComplete) continue;
+      // No queues or cursors have been published. Discard this pass's private
+      // work and rebuild the whole source once; that pass cannot reconcile.
+      return parseAntigravityIncrementalPass(options, true);
+    }
 
     // Reconciliation reparses the complete transcript. Even when stat metadata
     // looked unchanged, project/SQLite changes can select this path; obtain a

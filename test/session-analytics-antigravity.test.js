@@ -34,6 +34,10 @@ function generation(input = 100, response = "response-a", linked = true, at = AT
     ...(linked ? [bytes(20, Buffer.concat([bytes(1, "last_step_index"), bytes(2, "0")]))] : []),
   ]));
 }
+function unlinkedGenerationRow(index) {
+  const at = new Date(Date.UTC(2026, 0, 1) + index * 30 * 60_000).toISOString();
+  return "(" + index + ", X'" + generation(1, "unlinked-" + index, false, at).toString("hex") + "')";
+}
 function fixture(t, { variant = "antigravity-cli", transcript = false, empty = false } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tt-antigravity-session-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -57,9 +61,9 @@ function fixture(t, { variant = "antigravity-cli", transcript = false, empty = f
   }
   return { home, root, db, file };
 }
-async function hourly(home, files, cursors = {}) {
+async function hourly(home, files, cursors = {}, options = {}) {
   const queuePath = path.join(home, "usage.jsonl");
-  const result = await parseAntigravityIncremental({ sessionFiles: files, cursors, queuePath, source: "antigravity" });
+  const result = await parseAntigravityIncremental({ ...options, sessionFiles: files, cursors, queuePath, source: "antigravity" });
   const latest = new Map(fs.readFileSync(queuePath, "utf8").trim().split("\n").filter(Boolean).map((l) => {
     const row = JSON.parse(l); return [row.source + "|" + row.model + "|" + row.hour_start, row];
   }));
@@ -584,11 +588,7 @@ test("a zero-line unlinked capped ledger defers incomplete discovery and rebuild
   const { home, db, file } = fixture(t, { transcript: true, empty: true });
   fs.writeFileSync(file, "");
   const count = 4097;
-  const start = Date.parse("2026-01-01T00:00:00Z");
-  const values = Array.from({ length: count }, (_, index) => {
-    const at = new Date(start + index * 30 * 60_000).toISOString();
-    return "(" + index + ", X'" + generation(1, "unlinked-" + index, false, at).toString("hex") + "')";
-  });
+  const values = Array.from({ length: count }, (_, index) => unlinkedGenerationRow(index));
   runSql(db, "INSERT INTO gen_metadata VALUES " + values.join(","));
   const cursors = {};
   const first = await hourly(home, [file], cursors);
@@ -615,6 +615,65 @@ test("a zero-line unlinked capped ledger defers incomplete discovery and rebuild
   await hourly(home, [file], JSON.parse(JSON.stringify(cursors)));
   assert.equal(fs.readFileSync(first.queuePath, "utf8"), saved);
 });
+
+for (const scenario of ["complete", "incomplete", "read-failure"]) {
+  test("a capped-ledger database change after preflight is safe: " + scenario, async (t) => {
+    const { home, root, db, file } = fixture(t, { transcript: true, empty: true });
+    fs.writeFileSync(file, "");
+    const control = path.join(root, "conversations", "control.db");
+    fs.copyFileSync(db, control);
+    runSql(control, "INSERT INTO gen_metadata VALUES (0, X'" + generation(100, "control-response").toString("hex") + "')");
+    const count = 4097;
+    runSql(db, "INSERT INTO gen_metadata VALUES " + Array.from({ length: count }, (_, index) => unlinkedGenerationRow(index)).join(","));
+    const files = [control, file];
+    const cursors = {};
+    const first = await hourly(home, files, cursors);
+    assert.equal(first.rows.reduce((sum, row) => sum + row.total_tokens, 0), count * 236 + 335);
+    assert.equal(cursors.files[file].contributionsComplete, false);
+    const cursorBefore = JSON.stringify(cursors.files[file]);
+    const stateBefore = JSON.stringify(cursors);
+    const queueBefore = fs.readFileSync(first.queuePath, "utf8");
+
+    // This earlier file updates the private working state before the capped
+    // file discovers a database change. A restart must discard that work too.
+    runSql(control, "UPDATE gen_metadata SET data=X'" + generation(150, "control-response").toString("hex") + "'");
+    const stat = fs.promises.stat;
+    const readFile = fs.promises.readFile;
+    let transcriptStats = 0, writes = 0;
+    t.mock.method(fs.promises, "stat", async function (target, ...args) {
+      const result = await stat.call(this, target, ...args);
+      // First stat: preflight. Second stat: main loop, after preflight passed.
+      if (target === file && ++transcriptStats === 2) {
+        runSql(db, "INSERT INTO gen_metadata VALUES " + unlinkedGenerationRow(count));
+        writes++;
+      }
+      return result;
+    });
+    if (scenario === "read-failure") {
+      t.mock.method(fs.promises, "readFile", async function (target, ...args) {
+        if (writes && target === control) throw Object.assign(new Error("fixture read failure"), { code: "EACCES" });
+        return readFile.call(this, target, ...args);
+      });
+      await assert.rejects(hourly(home, files, cursors), /changed while being read/);
+      assert.equal(writes, 1);
+      assert.equal(JSON.stringify(cursors), stateBefore);
+      assert.equal(fs.readFileSync(first.queuePath, "utf8"), queueBefore);
+      return;
+    }
+
+    const inventoryComplete = scenario === "complete";
+    const raced = await hourly(home, files, cursors, { inventoryComplete });
+    assert.equal(writes, 1);
+    assert.equal(raced.rows.reduce((sum, row) => sum + row.total_tokens, 0), (count + (inventoryComplete ? 1 : 0)) * 236 + 385);
+    assert.equal(raced.result.filesProcessed, inventoryComplete ? 2 : 1);
+    if (!inventoryComplete) assert.equal(JSON.stringify(cursors.files[file]), cursorBefore);
+    const recovered = await hourly(home, files, cursors);
+    assert.equal(recovered.rows.reduce((sum, row) => sum + row.total_tokens, 0), (count + 1) * 236 + 385);
+    const saved = fs.readFileSync(first.queuePath, "utf8");
+    await hourly(home, files, JSON.parse(JSON.stringify(cursors)));
+    assert.equal(fs.readFileSync(first.queuePath, "utf8"), saved);
+  });
+}
 
 for (const reportedFirst of [false, true]) {
   test("context-only aliases resolve reported usage before step linkage, reportedFirst=" + reportedFirst, async (t) => {
