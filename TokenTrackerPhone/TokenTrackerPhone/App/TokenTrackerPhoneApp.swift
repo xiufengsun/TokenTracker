@@ -75,9 +75,9 @@ struct RootContainerView: View {
                 await unlock()
             }
         }
-        .onChange(of: sessions.session?.user.id) { _, newId in
-            if newId == nil {
-                workspace.reset()
+        .onChange(of: sessions.sessionGeneration) { _, _ in
+            workspace.reset()
+            if !sessions.isSignedIn {
                 isLocked = false
             } else {
                 Task { await workspace.refresh() }

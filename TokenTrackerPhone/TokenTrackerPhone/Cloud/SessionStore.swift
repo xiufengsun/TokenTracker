@@ -25,6 +25,13 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    var sessionGeneration: Int { generation }
+
+    func validateGeneration(_ expected: Int) throws {
+        try Task.checkCancellation()
+        guard generation == expected else { throw CancellationError() }
+    }
+
     var isSignedIn: Bool { session != nil }
 
     /// Starts a new session from a sign-in response.
@@ -40,10 +47,19 @@ final class SessionStore: ObservableObject {
     }
 
     /// A non-expiring access token, refreshing first when needed.
-    func validAccessToken(forceRefresh: Bool = false) async throws -> String {
+    func validAccessToken(forceRefresh: Bool = false, expectedGeneration: Int? = nil) async throws -> String {
+        let owner = expectedGeneration ?? generation
+        try validateGeneration(owner)
         guard let current = session else { throw CloudError.signedOut }
         if !forceRefresh && !current.accessTokenNeedsRefresh() { return current.accessToken }
-        return try await refresh().accessToken
+        do {
+            let refreshed = try await refresh()
+            try validateGeneration(owner)
+            return refreshed.accessToken
+        } catch {
+            try validateGeneration(owner)
+            throw error
+        }
     }
 
     private func refresh() async throws -> CloudSession {
@@ -57,7 +73,7 @@ final class SessionStore: ObservableObject {
         let task = Task<CloudSession, Error> { @MainActor [auth] in
             do {
                 let response = try await auth.refresh(refreshToken: refreshToken)
-                guard self.generation == owner else { throw CloudError.signedOut }
+                try self.validateGeneration(owner)
                 let next = CloudSession(
                     accessToken: response.accessToken,
                     refreshToken: response.refreshToken ?? refreshToken,

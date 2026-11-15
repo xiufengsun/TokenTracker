@@ -2,6 +2,7 @@ import Foundation
 
 /// Protocol seam so the live Cloud client and deterministic Simulator showcase
 /// scenarios drive the exact same product view models without inventing fake endpoints.
+@MainActor
 protocol CloudDataProviding {
     func summary(from: String, to: String, deviceId: String?) async throws -> UsageSummaryResponse
     func daily(from: String, to: String, deviceId: String?) async throws -> PhoneDailyUsageResponse
@@ -20,6 +21,7 @@ protocol CloudDataProviding {
 
 /// Client for existing TokenTracker Cloud edge functions.
 /// Every usage read is gated server-side by `cloud_account_access`.
+@MainActor
 struct CloudAPIClient: CloudDataProviding {
     let sessions: SessionStore
     var urlSession: URLSession = .shared
@@ -104,15 +106,17 @@ struct CloudAPIClient: CloudDataProviding {
     }
 
     func updatePublicVisibility(_ patch: PublicVisibilityPatch) async throws -> PublicVisibilityState {
+        let owner = sessions.sessionGeneration
         let body = try JSONEncoder().encode(patch)
         let _: PublicVisibilityState = try await request(
             "tokentracker-public-visibility",
             method: "POST",
             params: [:],
             includeTimeZone: false,
-            body: body
+            body: body,
+            expectedGeneration: owner
         )
-        return try await publicVisibility()
+        return try await request("tokentracker-public-visibility", params: [:], includeTimeZone: false, expectedGeneration: owner)
     }
 
     func authorizeCLIDevice(userCode: String) async throws {
@@ -127,7 +131,7 @@ struct CloudAPIClient: CloudDataProviding {
         )
     }
 
-    static func normalizeCLICode(_ raw: String) -> String {
+    nonisolated static func normalizeCLICode(_ raw: String) -> String {
         let alnum = raw.uppercased().filter { $0.isLetter || $0.isNumber }
         guard alnum.count == 8 else { return raw.uppercased().trimmingCharacters(in: .whitespacesAndNewlines) }
         return "\(alnum.prefix(4))-\(alnum.suffix(4))"
@@ -140,8 +144,11 @@ struct CloudAPIClient: CloudDataProviding {
         method: String = "GET",
         params: [String: String],
         includeTimeZone: Bool = true,
-        body: Data? = nil
+        body: Data? = nil,
+        expectedGeneration: Int? = nil
     ) async throws -> T {
+        let owner = expectedGeneration ?? sessions.sessionGeneration
+        try sessions.validateGeneration(owner)
         do {
             return try await attempt(
                 slug,
@@ -149,7 +156,8 @@ struct CloudAPIClient: CloudDataProviding {
                 params: params,
                 includeTimeZone: includeTimeZone,
                 body: body,
-                forceRefresh: false
+                forceRefresh: false,
+                owner: owner
             )
         } catch CloudError.signedOut {
             return try await attempt(
@@ -158,7 +166,8 @@ struct CloudAPIClient: CloudDataProviding {
                 params: params,
                 includeTimeZone: includeTimeZone,
                 body: body,
-                forceRefresh: true
+                forceRefresh: true,
+                owner: owner
             )
         }
     }
@@ -169,9 +178,11 @@ struct CloudAPIClient: CloudDataProviding {
         params: [String: String],
         includeTimeZone: Bool,
         body: Data?,
-        forceRefresh: Bool
+        forceRefresh: Bool,
+        owner: Int
     ) async throws -> T {
-        let token = try await sessions.validAccessToken(forceRefresh: forceRefresh)
+        let token = try await sessions.validAccessToken(forceRefresh: forceRefresh, expectedGeneration: owner)
+        try sessions.validateGeneration(owner)
         var (data, status) = try await send(
             CloudConfig.functionURL(slug),
             method: method,
@@ -180,6 +191,7 @@ struct CloudAPIClient: CloudDataProviding {
             body: body,
             token: token
         )
+        try sessions.validateGeneration(owner)
         if status == 404 {
             (data, status) = try await send(
                 CloudConfig.legacyFunctionURL(slug),
@@ -190,6 +202,7 @@ struct CloudAPIClient: CloudDataProviding {
                 token: token
             )
         }
+        try sessions.validateGeneration(owner)
         guard (200...299).contains(status) else {
             throw CloudError.from(status: status, body: data)
         }
@@ -234,6 +247,10 @@ struct CloudAPIClient: CloudDataProviding {
             let (data, response) = try await urlSession.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw CloudError.invalidResponse }
             return (data, http.statusCode)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
         } catch let error as CloudError {
             throw error
         } catch {

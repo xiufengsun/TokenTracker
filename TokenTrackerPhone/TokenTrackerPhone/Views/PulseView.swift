@@ -134,10 +134,15 @@ struct PulseView: View {
     }
 
     private func openShare(variant: ShareCardVariant) async {
+        let owner = workspace.operationOwnership()
         guard let snapshot = shareableSnapshot else { return }
         preparingShare = true
         defer { preparingShare = false }
-        let heatmap = await workspace.shareHeatmap()
+        let heatmap: HeatmapResponse?
+        do {
+            heatmap = try await workspace.shareHeatmap()
+            try workspace.validateOwnership(owner)
+        } catch { return }
         let data = ShareCardData.build(
             snapshot: snapshot,
             heatmap: heatmap,
