@@ -22286,8 +22286,29 @@ async function listAntigravitySessionFiles(brainDir) {
   return (await listAntigravitySessionFilesWithStatus(brainDir)).files;
 }
 
-async function listAntigravityTranscriptsWithStatus(geminiHome, knownFiles = null) {
-  const dirs = resolveAntigravityBrainDirs(geminiHome);
+function dedupeAntigravityBrainDirs(dirs) {
+  const seen = new Set();
+  const out = [];
+  for (const dir of dirs || []) {
+    if (!dir || typeof dir !== "string") continue;
+    let key;
+    try {
+      key = fssync.realpathSync(dir);
+    } catch (_err) {
+      key = path.resolve(dir);
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(dir);
+  }
+  return out;
+}
+
+async function listAntigravityTranscriptsWithStatus(geminiHome, knownFiles = null, extraBrainDirs = []) {
+  const dirs = dedupeAntigravityBrainDirs([
+    ...resolveAntigravityBrainDirs(geminiHome),
+    ...(Array.isArray(extraBrainDirs) ? extraBrainDirs : []),
+  ]);
   const results = await Promise.all(
     dirs.map((dir) => listAntigravitySessionFilesWithStatus(dir, knownFiles)),
   );

@@ -120,6 +120,11 @@ const {
   extractTraeCnToken,
 } = require("../lib/trae-cn-config");
 const wsl = require("../lib/wsl-probe");
+const {
+  T3_ANTIGRAVITY_REL,
+  discoverT3AntigravityBrainDirs,
+  formatAntigravityHostStatus,
+} = require("../lib/antigravity-discovery");
 const { getWslMode, isInvalidWslMode, shouldProbeWsl, discoverWslHome } = wsl;
 const { resolveInstallPaths, resolveZcodeNativeDbPath, resolveMimoNativeDbPath } = require("../lib/install-resolver");
 const {
@@ -728,6 +733,21 @@ async function cmdStatus(argv = []) {
       antigravityActive.push(`WSL: ${geminiPaths.wsl}`);
     }
   }
+  const extraT3Parents = [];
+  if (process.platform === "win32" && shouldProbeWsl(process.env)) {
+    const wslT3Home = discoverWslHome(".t3");
+    if (wslT3Home) extraT3Parents.push(path.join(wslT3Home, T3_ANTIGRAVITY_REL));
+  }
+  const antigravityHost = await discoverT3AntigravityBrainDirs({
+    home,
+    env: process.env,
+    parents: extraT3Parents,
+  });
+  const antigravityHostLines = formatAntigravityHostStatus(antigravityHost.reports);
+  for (const line of antigravityHostLines) {
+    if (line.startsWith("T3: ")) antigravityActive.push(line);
+  }
+  const antigravityHostNotes = antigravityHostLines.filter((line) => !line.startsWith("T3: "));
   const antigravityInstalled = antigravityActive.length > 0;
 
   // Codex CLI (passive sessions scan). Mirrors the sync resolution exactly
@@ -1404,6 +1424,7 @@ async function cmdStatus(argv = []) {
       antigravityInstalled
         ? `- Antigravity: brain found (${antigravityActive.join(" | ")})`
         : null,
+      ...antigravityHostNotes.map((line) => `- Antigravity: ${line}`),
       (!geminiCliInstalled && !antigravityInstalled && geminiInstalledStatus)
         ? `- Gemini CLI / Antigravity: home found (${geminiActive.join(" | ")})`
         : null,
