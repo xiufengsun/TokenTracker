@@ -15,6 +15,7 @@ const fs = require("node:fs/promises");
 const fssync = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { shouldProbeNative } = require("./wsl-probe");
 
 const T3_ANTIGRAVITY_REL = path.join("userdata", "providers", "antigravity");
 const ACP_BRAIN_REL = path.join("antigravity-acp", "brain");
@@ -67,6 +68,7 @@ async function discoverT3AntigravityBrainDirs({
   home = os.homedir(),
   env = process.env,
   parents = null,
+  platform = process.platform,
 } = {}) {
   const searchParents = [];
   const seenParents = new Set();
@@ -79,7 +81,9 @@ async function discoverT3AntigravityBrainDirs({
     searchParents.push(resolved);
   };
 
-  addParent(resolveT3AntigravityParent({ home, env }));
+  if (platform !== "win32" || shouldProbeNative(env)) {
+    addParent(resolveT3AntigravityParent({ home, env }));
+  }
   if (Array.isArray(parents)) {
     for (const parent of parents) addParent(parent);
   }
@@ -108,7 +112,10 @@ async function discoverT3AntigravityBrainDirs({
       let st;
       try {
         st = await fs.stat(brainDir);
-      } catch (_err) {
+      } catch (err) {
+        if (err?.code !== "ENOENT" && err?.code !== "ENOTDIR") {
+          reports.push({ path: brainDir, state: "unreadable", error: err?.code || "error", brainDirs: [] });
+        }
         continue;
       }
       if (!st.isDirectory()) continue;
@@ -135,14 +142,32 @@ function hostDiscoveryIncomplete(reports, knownFiles = null) {
   const known = knownFiles instanceof Set ? knownFiles : new Set(knownFiles || []);
   for (const report of reports || []) {
     if (report.state === "unreadable") return true;
-    if (report.state === "absent") {
-      const parent = report.path;
-      if (Array.from(known).some((filePath) => pathWithin(filePath, parent))) {
-        return true;
-      }
+    // A previously tracked profile can disappear even while its parent and
+    // other profiles remain readable. Do not reconcile away its ledger.
+    const tracked = Array.from(known).filter((filePath) => pathWithin(filePath, report.path));
+    if (tracked.some((filePath) => !(report.brainDirs || []).some((root) => pathWithin(filePath, root)))) {
+      return true;
     }
   }
   return false;
+}
+
+// Compare the combined native/WSL/T3 inventory by physical path, retaining
+// the existing cursor's spelling so adding an alias does not replay usage.
+function mergeAntigravityInventories(inventories, knownFiles = null) {
+  const knownByRealpath = new Map();
+  for (const filePath of knownFiles || []) {
+    const key = realpathOrSelf(filePath);
+    if (!knownByRealpath.has(key)) knownByRealpath.set(key, filePath);
+  }
+  const files = new Map();
+  for (const inventory of inventories || []) {
+    for (const filePath of inventory.files || []) {
+      const key = realpathOrSelf(filePath);
+      if (!files.has(key)) files.set(key, knownByRealpath.get(key) || filePath);
+    }
+  }
+  return Array.from(files.values());
 }
 
 function formatAntigravityHostStatus(reports) {
@@ -172,6 +197,7 @@ module.exports = {
   discoverT3AntigravityBrainDirs,
   formatAntigravityHostStatus,
   hostDiscoveryIncomplete,
+  mergeAntigravityInventories,
   pathWithin,
   resolveT3AntigravityParent,
   resolveT3Home,

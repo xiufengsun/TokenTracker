@@ -13,6 +13,7 @@ const {
   discoverT3AntigravityBrainDirs,
   formatAntigravityHostStatus,
   hostDiscoveryIncomplete,
+  mergeAntigravityInventories,
   resolveT3AntigravityParent,
   resolveT3Home,
 } = require("../src/lib/antigravity-discovery");
@@ -182,11 +183,18 @@ describe("discoverT3AntigravityBrainDirs", () => {
     assert.deepEqual(result.brainDirs, [defaultFound.brainDir, extraFound.brainDir].sort());
   });
 
-  it("marks an unreadable parent incomplete, including when a known session lived there", async () => {
+  it("marks an unreadable parent incomplete, including when a known session lived there", async (t) => {
     const home = await makeSandbox();
     const found = await writeBrain(t3HomeOf(home), "profile-aaa", "conv-1");
     const parent = path.join(t3HomeOf(home), T3_ANTIGRAVITY_REL);
-    await fs.chmod(parent, 0o000);
+    // chmod does not revoke directory access on Windows (or for root).
+    const readdir = fs.readdir;
+    t.mock.method(fs, "readdir", async (target, ...args) => {
+      if (path.resolve(target) === path.resolve(parent)) {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+      return readdir.call(fs, target, ...args);
+    });
 
     const result = await discoverT3AntigravityBrainDirs({ home, env: {} });
     assert.deepEqual(result.brainDirs, []);
@@ -203,7 +211,6 @@ describe("discoverT3AntigravityBrainDirs", () => {
     assert.match(status[0], /T3 parent unreadable/);
     assert.match(status[0], /EACCES|EPERM/);
 
-    await fs.chmod(parent, 0o755);
   });
 });
 
@@ -276,5 +283,50 @@ describe("listAntigravityTranscriptsWithStatus extra roots", () => {
     assert.ok(queued.length >= 1);
     assert.equal(queued[0].source, "antigravity");
     assert.ok(queued[0].total_tokens > 0);
+  });
+});
+
+describe("T3 discovery safety regressions", () => {
+  it("marks profile stat failures and temporarily missing tracked profiles incomplete", async (t) => {
+    const home = await makeSandbox();
+    const missing = await writeBrain(t3HomeOf(home), "profile-missing", "old");
+    const visible = await writeBrain(t3HomeOf(home), "profile-visible", "new");
+    const stat = fs.stat;
+    const mock = t.mock.method(fs, "stat", async (target, ...args) => {
+      if (path.resolve(target) === path.resolve(missing.brainDir)) {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+      return stat.call(fs, target, ...args);
+    });
+    const denied = await discoverT3AntigravityBrainDirs({ home, env: {} });
+    assert.deepEqual(denied.brainDirs, [visible.brainDir]);
+    assert.equal(hostDiscoveryIncomplete(denied.reports, [missing.transcript]), true);
+    mock.mock.restore();
+    await fs.rm(path.dirname(missing.brainDir), { recursive: true });
+    const disappeared = await discoverT3AntigravityBrainDirs({ home, env: {} });
+    assert.equal(hostDiscoveryIncomplete(disappeared.reports, [missing.transcript]), true);
+  });
+
+  it("deduplicates native/T3 aliases while retaining the known cursor path", async () => {
+    const home = await makeSandbox();
+    const found = await writeBrain(t3HomeOf(home), "profile", "conv");
+    const aliasRoot = path.join(home, "gemini-alias");
+    await fs.symlink(found.brainDir, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+    const aliasFile = path.join(aliasRoot, path.relative(found.brainDir, found.transcript));
+    assert.deepEqual(mergeAntigravityInventories([{ files: [found.transcript] }, { files: [aliasFile] }]), [found.transcript]);
+    assert.deepEqual(mergeAntigravityInventories([{ files: [found.transcript] }, { files: [aliasFile] }], [aliasFile]), [aliasFile]);
+  });
+
+  it("honors wsl-only while still scanning explicitly supplied WSL parents", async () => {
+    const home = await makeSandbox();
+    await writeBrain(t3HomeOf(home), "native", "native");
+    const wslHome = await makeSandbox();
+    const wsl = await writeBrain(wslHome, "linux", "linux");
+    const result = await discoverT3AntigravityBrainDirs({ home, platform: "win32",
+      env: { TOKENTRACKER_WSL_MODE: "wsl-only" }, parents: [path.join(wslHome, T3_ANTIGRAVITY_REL)] });
+    assert.deepEqual(result.brainDirs, [wsl.brainDir]);
+    assert.equal(result.reports.length, 1);
+    const none = await discoverT3AntigravityBrainDirs({ home, platform: "win32", env: { TOKENTRACKER_WSL_MODE: "wsl-only" } });
+    assert.deepEqual(none.brainDirs, []);
   });
 });

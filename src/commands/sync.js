@@ -17,6 +17,7 @@ const {
   T3_ANTIGRAVITY_REL,
   discoverT3AntigravityBrainDirs,
   hostDiscoveryIncomplete,
+  mergeAntigravityInventories,
 } = require("../lib/antigravity-discovery");
 const {
   ensureDir,
@@ -1356,15 +1357,7 @@ async function cmdSync(argv, context = {}) {
       antigravityInventoryComplete =
         fileSets.every((set) => set.complete) &&
         !hostDiscoveryIncomplete(hostDiscovery.reports, knownAntigravityFiles);
-      const seen = new Set();
-      for (const set of fileSets) {
-        for (const f of set.files) {
-          if (!seen.has(f)) {
-            seen.add(f);
-            antigravityFiles.push(f);
-          }
-        }
-      }
+      antigravityFiles = mergeAntigravityInventories(fileSets, knownAntigravityFiles);
     }
     let antigravityResult = { filesProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
     if (antigravityFiles.length > 0) {
