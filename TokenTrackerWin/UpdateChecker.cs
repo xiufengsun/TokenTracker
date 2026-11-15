@@ -63,6 +63,7 @@ internal sealed class UpdateChecker
     public DateTimeOffset? ApiRetryAt => _releaseClient.ApiRetryAt;
 
     private readonly UpdateReleaseClient _releaseClient;
+    private readonly object _operationLock = new();
 
     public UpdateChecker(HttpClient? releaseHttp = null) => _releaseClient = new(releaseHttp ?? Http);
 
@@ -91,8 +92,6 @@ internal sealed class UpdateChecker
         if (SynchronizationContext.Current is not null)
             return await Task.Run(() => CheckAsync(silent)).ConfigureAwait(false);
 
-        if (State is UpdateState.Checking or UpdateState.Downloading or UpdateState.Installing)
-            return CheckOutcome.Skipped;
         if (silent && !AutoUpdatePolicy.IsEnabled())
         {
             Diag.Log("update", "silent check skipped: automatic updates disabled");
@@ -104,7 +103,14 @@ internal sealed class UpdateChecker
             return CheckOutcome.Skipped;
         }
 
-        SetState(UpdateState.Checking);
+        // Admission and its busy state must be one atomic transition: checks
+        // and downloads now run on worker threads, not a serialized UI context.
+        lock (_operationLock)
+        {
+            if (State is UpdateState.Checking or UpdateState.Downloading or UpdateState.Installing)
+                return CheckOutcome.Skipped;
+            SetState(UpdateState.Checking);
+        }
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -158,9 +164,11 @@ internal sealed class UpdateChecker
         if (SynchronizationContext.Current is not null)
             return await Task.Run(() => DownloadAndInstallAsync()).ConfigureAwait(false);
 
-        if (State != UpdateState.UpdateAvailable || _setupUrl is null) return false;
-
-        SetState(UpdateState.Downloading);
+        lock (_operationLock)
+        {
+            if (State != UpdateState.UpdateAvailable || _setupUrl is null) return false;
+            SetState(UpdateState.Downloading);
+        }
         ProgressPercent = 0;
         Changed?.Invoke();
 
