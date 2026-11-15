@@ -13,6 +13,7 @@ const { physicalJsonlRecords } = require("./jsonl-lines");
 const { readSqliteJsonRows, readSqliteJsonRowsAsync } = require("./sqlite-reader");
 const wsl = require("./wsl-probe");
 const { resolveInstallPaths } = require("./install-resolver");
+const multiInstallParser = require("./multi-install-parser");
 const { expandHome } = require("./scan-roots");
 const {
   consumeUsageDelta,
@@ -1127,7 +1128,7 @@ async function parseClaudeIncremental({
 
   const skipOmoIds = omoResponseIds instanceof Set
     ? omoResponseIds
-    : collectOmoClaudeResponseIds(env);
+    : await collectOmoClaudeResponseIds(env);
   // One-time rewind so Claude lines previously dropped by the #788 sdk-ts
   // filter are reconsidered under the positive-match rule. Already-counted
   // rows stay deduped by claudeHashes; matched OmO mirrors stay skipped.
@@ -5451,32 +5452,32 @@ function isOmOClaudeSdkMirror(obj, omoResponseIds) {
   return Boolean(msgId && omoResponseIds && omoResponseIds.has(msgId));
 }
 
-function collectOmoClaudeResponseIds(env = process.env) {
+async function collectOmoClaudeResponseIds(env = process.env) {
   const ids = new Set();
   const files = [
-    ...resolveOmoSessionFiles(env),
-    ...resolveOmoSubagentFiles(env),
+    ...multiInstallParser.mergeBothFileSources({ resolveFiles: resolveOmoSessionFiles, env }),
+    ...multiInstallParser.mergeBothFileSources({ resolveFiles: resolveOmoSubagentFiles, env }),
   ];
   for (const filePath of files) {
-    let raw;
     try {
-      raw = fssync.readFileSync(filePath, "utf8");
-    } catch (_e) {
-      continue;
-    }
-    if (!raw.includes("responseId")) continue;
-    for (const line of raw.split("\n")) {
-      if (!line.includes("responseId")) continue;
-      let obj;
-      try {
-        obj = JSON.parse(line);
-      } catch (_e) {
-        continue;
-      }
-      const responseId = typeof obj?.message?.responseId === "string"
-        ? obj.message.responseId.trim()
-        : "";
-      if (responseId) ids.add(responseId);
+      const fileIds = new Set();
+      // Use ingestion's physical-record reader: invalid UTF-8 and oversized
+      // records must not suppress usage that OmO itself will never ingest.
+      await scanOmpLikeTranscript(filePath, 0, OMP_LIKE_MAX_RECORD_BYTES, (obj) => {
+        const msg = obj?.type === "message" ? obj.message : null;
+        const usage = msg?.role === "assistant" ? msg.usage : null;
+        if (typeof obj?.id !== "string" || !obj.id || !usage || typeof usage !== "object") return;
+        if (![usage.input, usage.output, usage.cacheRead, usage.cacheWrite,
+          pickUsageInt(usage, ["reasoningTokens", "reasoning"])].some((value) => toNonNegativeInt(value) > 0)) return;
+        const tsMs = ompEntryTimestampMs(msg, obj);
+        const date = new Date(tsMs);
+        if (tsMs == null || !Number.isFinite(date.getTime()) || !toUtcHalfHourStart(date.toISOString())) return;
+        const responseId = typeof msg.responseId === "string" ? msg.responseId.trim() : "";
+        if (responseId) fileIds.add(responseId);
+      });
+      for (const id of fileIds) ids.add(id);
+    } catch (_error) {
+      // An unavailable source is not evidence that its response was counted.
     }
   }
   return ids;
