@@ -185,7 +185,7 @@ brew install xiufengsun/tokentracker/tokentracker
 | **Grok Build** (xAI) | ✅ 자동 | SessionEnd hook + 패시브 `updates.jsonl` / `signals.json` 스캔 (`~/.grok/sessions/**/`) |
 | **Kilo CLI** (kilo.ai) | ✅ 자동 | 패시브 SQLite 리더 (`~/.local/share/kilo/kilo.db`, OpenCode-fork 스키마) |
 | **Kilo Code** (VS Code 확장) | ✅ 자동 | 패시브 `ui_messages.json` 리더 (Cursor/Code/CodeBuddy/Windsurf globalStorage) |
-| **Antigravity** | ✅ 자동 | 패시브 트랜스크립트 리더 (`~/.gemini/{antigravity,antigravity-ide,antigravity-cli}/brain/**/transcript.jsonl`) |
+| **Antigravity** | ✅ 자동 | 패시브 트랜스크립트 리더 (`~/.gemini/{antigravity,antigravity-ide,antigravity-insiders,antigravity-cli}/brain/**/transcript.jsonl`, 그리고 T3 Code 프로필 `~/.t3/userdata/providers/antigravity/*/antigravity-acp/`) |
 | **pi** (`@mariozechner/pi-coding-agent`) | ✅ 자동 | 패시브 리더 (`~/.pi/agent/sessions/**/*.jsonl`) |
 | **Dots** | ✅ 자동 | pi의 provider 분리를 통해 라우팅 (`pi-dots` source, 동일한 패시브 리더 재사용) — 별도 hook 없음 |
 | **Prime Agent** | ✅ 자동 | 메타데이터 전용 패시브 사용량 리더 (`~/.prime/agent/sessions/*.jsonl`) |
@@ -295,6 +295,7 @@ TokenTracker는 사용량 데이터를 로컬에서 처리합니다. 프롬프�
 | `CODEX_HOME` | Codex CLI 디렉토리 오버라이드 | `~/.codex` |
 | `TOKENTRACKER_ACODE_HOME` | AStudio 디렉토리 오버라이드 | `~/.acode` |
 | `GEMINI_HOME` | Gemini CLI 디렉토리 오버라이드 | `~/.gemini` |
+| `TOKENTRACKER_T3_HOME` | Antigravity(`agy`) 프로필을 자동 검색할 T3 Code 상태 디렉터리 재정의 | `~/.t3` |
 
 ---
 

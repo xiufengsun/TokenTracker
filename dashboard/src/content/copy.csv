@@ -799,6 +799,7 @@ limits.provider.copilot,ui,LimitsPage,UsageLimitsPanel,provider_copilot,"GitHub 
 limits.provider.antigravity,ui,LimitsPage,UsageLimitsPanel,provider_antigravity,"Antigravity",,active
 limits.provider.zcode,ui,LimitsPage,UsageLimitsPanel,provider_zcode,"ZCode",,active
 provider.display.omp,ui,*,ProviderDisplay,omp,"oh-my-pi",,active
+provider.display.pi,ui,*,ProviderDisplay,pi,"Pi",,active
 provider.display.omo,ui,*,ProviderDisplay,omo,"OmO",,active
 provider.display.minimax_code,ui,*,ProviderDisplay,minimax_code,"MiniMax Code",,active
 provider.display.command_code,ui,*,ProviderDisplay,command_code,"Command Code",,active

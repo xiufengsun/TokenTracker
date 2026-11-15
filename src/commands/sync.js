@@ -14,6 +14,12 @@ const { multiInstallParse, mergeBothFileSources } = require("../lib/multi-instal
 const { resolveDumateDbPaths, parseDumateIncremental } = require("../lib/dumate");
 const wsl = require("../lib/wsl-probe");
 const {
+  T3_ANTIGRAVITY_REL,
+  discoverT3AntigravityBrainDirs,
+  hostDiscoveryIncomplete,
+  mergeAntigravityInventories,
+} = require("../lib/antigravity-discovery");
+const {
   ensureDir,
   readJson,
   writeJson,
@@ -1315,31 +1321,43 @@ async function cmdSync(argv, context = {}) {
 
     let antigravityFiles = [];
     let antigravityInventoryComplete = true;
-    if (sourceAllowed("antigravity") && geminiPaths) {
+    if (sourceAllowed("antigravity")) {
       const knownAntigravityFiles = new Set(
         Object.keys(cursors.files || {}).filter((filePath) => resolveAntigravityDbPath(filePath)),
       );
+      const extraT3Parents = [];
+      if (process.platform === "win32" && wsl.shouldProbeWsl(process.env)) {
+        const wslT3Home = wsl.discoverWslHome(".t3");
+        if (wslT3Home) {
+          // discoverWslHome(".t3") already returns the T3 state root.
+          extraT3Parents.push(path.join(wslT3Home, T3_ANTIGRAVITY_REL));
+        }
+      }
+      const hostDiscovery = await discoverT3AntigravityBrainDirs({
+        home,
+        env: process.env,
+        parents: extraT3Parents,
+      });
       const fileSets = [];
-      if (geminiPaths.native) {
+      if (geminiPaths?.native) {
         fileSets.push(
           await listAntigravityTranscriptsWithStatus(geminiPaths.native, knownAntigravityFiles),
         );
       }
-      if (geminiPaths.wsl) {
+      if (geminiPaths?.wsl) {
         fileSets.push(
           await listAntigravityTranscriptsWithStatus(geminiPaths.wsl, knownAntigravityFiles),
         );
       }
-      antigravityInventoryComplete = fileSets.every((set) => set.complete);
-      const seen = new Set();
-      for (const set of fileSets) {
-        for (const f of set.files) {
-          if (!seen.has(f)) {
-            seen.add(f);
-            antigravityFiles.push(f);
-          }
-        }
+      if (hostDiscovery.brainDirs.length > 0 || hostDiscoveryIncomplete(hostDiscovery.reports, knownAntigravityFiles)) {
+        fileSets.push(
+          await listAntigravityTranscriptsWithStatus(null, knownAntigravityFiles, hostDiscovery.brainDirs),
+        );
       }
+      antigravityInventoryComplete =
+        fileSets.every((set) => set.complete) &&
+        !hostDiscoveryIncomplete(hostDiscovery.reports, knownAntigravityFiles);
+      antigravityFiles = mergeAntigravityInventories(fileSets, knownAntigravityFiles);
     }
     let antigravityResult = { filesProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
     if (antigravityFiles.length > 0) {

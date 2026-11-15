@@ -13,9 +13,13 @@ enum LoginLaunchPresentationPolicy {
     static func shouldOpenDashboardOnLaunch(
         launchAppleEventPresent: Bool,
         launchedAsLoginItem: Bool,
-        loginItemRegistered: Bool
+        loginItemRegistered: Bool,
+        launchedWithStartupArgument: Bool = false
     ) -> Bool {
-        if launchedAsLoginItem {
+        // Auto-update relaunch passes --startup so it stays quiet like a login
+        // start, even though `open -n` still delivers a regular launch Apple Event
+        // (#1096). Finder/Dock launches do not include that argument.
+        if launchedWithStartupArgument || launchedAsLoginItem {
             return false
         }
         if launchAppleEventPresent {

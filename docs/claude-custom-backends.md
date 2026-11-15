@@ -32,10 +32,14 @@ boundary keeps that prefix outside new attribution during ordinary and forced
 rescans. Existing per-record decisions still win. Local export/import preserves
 the backend token subsets in queue snapshots.
 
-Custom/unknown subsets contribute no estimated dollars to the known-cost
-subtotal. Pricing metadata is explicitly `unpriced`, session costs are marked
-partial, and an unknown-only cost displays “Unpriced”, not a free/$0 claim.
-Existing Anthropic-attributed subsets retain normal model pricing. A
+Custom subsets contribute no estimated dollars to the known-cost subtotal.
+Pricing metadata is explicitly `unpriced`, session costs are marked partial,
+and a custom-only cost displays “Unpriced”, not a free/$0 claim. Anthropic and
+unknown subsets retain normal model pricing: unknown is the provenance of every
+default install that never sets `ANTHROPIC_BASE_URL`, of subagent transcripts
+(no hooks of their own) and of any turn the hooks did not bracket, so it is not
+evidence of a gateway. Pricing it at $0 zeroed all new Claude cost for default
+setups; it is estimated at the model rate exactly as before provenance existed. A
 configured/observed custom endpoint takes precedence over existing Anthropic
 OAuth credentials and live or cached quotas. It produces an explicit “Custom
 backend — Anthropic limits not applicable” card (English and Chinese), with
