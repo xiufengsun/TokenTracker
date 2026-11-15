@@ -334,10 +334,15 @@ internal sealed class UpdateChecker
         var appExe = Environment.ProcessPath
                      ?? Path.Combine(AppContext.BaseDirectory, "TokenTracker.exe");
 
-        // cmd /c ""<setup>" /VERYSILENT ... & start "" "<app>""
+        // cmd /c ""<setup>" /VERYSILENT ... & start "" "<app>" --startup"
         // The setup runs inline (cmd waits for it); then `start` relaunches the app detached.
+        // Pass --startup so Program.Main treats the relaunch like a login start and
+        // stays in the tray (#1096). A manual launch still has no argument, so the
+        // dashboard still opens for double-click / Start menu (#832).
+        // Use the literal (same value as LaunchAtStartup.StartupArgument) because
+        // TokenTrackerWin.Tests compiles this file without LaunchAtStartup.cs.
         var arguments =
-            $"/c \"\"{setupPath}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART & start \"\" \"{appExe}\"\"";
+            $"/c \"\"{setupPath}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART & start \"\" \"{appExe}\" --startup\"";
 
         var psi = new ProcessStartInfo
         {

@@ -43,6 +43,7 @@ describe("session statistics", () => {
     expect(parseSessionFilters("?source=opencode")).toEqual({ source: "opencode", model: "all", from: "", to: "" });
     expect(parseSessionFilters("?source=kimi")).toEqual({ source: "kimi", model: "all", from: "", to: "" });
     expect(parseSessionFilters("?source=omp")).toEqual({ source: "omp", model: "all", from: "", to: "" });
+    expect(parseSessionFilters("?source=pi")).toEqual({ source: "pi", model: "all", from: "", to: "" });
     expect(parseSessionFilters("?source=zcode")).toEqual({ source: "zcode", model: "all", from: "", to: "" });
     expect(parseSessionFilters("?source=other&from=2026-02-30&to=wrong")).toEqual({ source: "all", model: "all", from: "", to: "" });
   });
