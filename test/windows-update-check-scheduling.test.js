@@ -27,13 +27,13 @@ test("Windows tray schedules periodic silent update checks while resident", () =
   );
   assert.match(
     source,
-    /_updateCheckTimer\.Tick \+= \(_, _\) => _ = _updateChecker\.CheckAsync\(silent: true\);\n\s*_updateCheckTimer\.Start\(\);/,
-    "timer ticks must run the same silent check as launch",
+    /_updateCheckTimer\.Tick \+= \(_, _\) => _ = Task\.Run\(\(\) => _updateChecker\.CheckAsync\(silent: true\)\);\n\s*_updateCheckTimer\.Start\(\);/,
+    "timer ticks must run the same silent check as launch, off the WinForms sync context",
   );
   // The launch check stays in place.
   assert.match(
     source,
-    /_ = _updateChecker\.CheckAsync\(silent: true\);\n\s*_updateCheckTimer\.Tick/,
+    /_ = Task\.Run\(\(\) => _updateChecker\.CheckAsync\(silent: true\)\);\n\s*_updateCheckTimer\.Tick/,
     "the launch-time check must be kept alongside the periodic one",
   );
 });
