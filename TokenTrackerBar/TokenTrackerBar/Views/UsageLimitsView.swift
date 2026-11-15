@@ -685,6 +685,7 @@ struct UsageLimitsView: View {
         if let w = a.secondaryWindow { s.append(makeSpec("Cl 5h", w.usedPercent, iso: w.resetAt)) }
         if let w = a.tertiaryWindow { s.append(makeSpec("Gm 7d", w.usedPercent, iso: w.resetAt)) }
         if let w = a.quaternaryWindow { s.append(makeSpec("Gm 5h", w.usedPercent, iso: w.resetAt)) }
+        if let w = a.argonWeeklyWindow { s.append(makeSpec("Argon 7d", w.usedPercent, iso: w.resetAt)) }
         return s
     }
 

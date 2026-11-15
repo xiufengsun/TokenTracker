@@ -2563,24 +2563,25 @@ async function detectAntigravityProcess({
       .filter(Boolean);
   }
 
-  let sawProcess = false;
+  let fallback = null;
   for (const parsed of processes) {
     if (!isAntigravityCommandLine(parsed.command)) continue;
-    sawProcess = true;
     const csrfToken = extractCommandFlag(parsed.command, "--csrf_token") || null;
     const extensionPort = extractFirstNumber(extractCommandFlag(parsed.command, "--extension_server_port"));
-    return {
+    const executable = firstCommandToken(parsed.command);
+    const isAgy = /^agy(?:\.exe)?$/i.test(executable.split(/[\\/]/).pop() || "");
+    const absolute = platform === "win32" ? path.win32.isAbsolute(executable) : path.posix.isAbsolute(executable);
+    const candidate = {
       configured: true,
       pid: parsed.pid,
       csrfToken,
       extensionPort: Number.isFinite(extensionPort) ? extensionPort : null,
+      ...(isAgy && absolute ? { agyExecutable: executable } : {}),
     };
+    if (candidate.agyExecutable) return candidate;
+    fallback ||= candidate;
   }
-
-  if (sawProcess) {
-    return { configured: true, error: "Antigravity CSRF token not found. Restart Antigravity and retry." };
-  }
-  return { configured: false };
+  return fallback || { configured: false };
 }
 
 // Last-good cache for the Antigravity quota summary. Windows without a reset
@@ -2592,14 +2593,16 @@ const antigravityLimitsCache = createLimitsCache({
   maxAgeMs: ANTIGRAVITY_LIMITS_CACHE_MAX_AGE_MS,
   unknownResetTtlMs: ANTIGRAVITY_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS,
   fields: { account_email: "string", account_plan: "string" },
-  windowKeys: ["primary_window", "secondary_window", "tertiary_window", "quaternary_window"],
+  windowKeys: ["primary_window", "secondary_window", "tertiary_window", "quaternary_window", "argon_weekly_window"],
+  sparseWindowKeys: ["argon_weekly_window"],
   cachedFlag: true,
   // The cached annotation is this provider's own marker — no stale flag.
   stale: null,
 });
 
 function hasAntigravityWindow(limits) {
-  return Boolean(limits?.primary_window || limits?.secondary_window || limits?.tertiary_window || limits?.quaternary_window);
+  return Boolean(limits?.primary_window || limits?.secondary_window || limits?.tertiary_window
+    || limits?.quaternary_window || limits?.argon_weekly_window);
 }
 
 function isAntigravityQuotaDisabled() {
@@ -3550,7 +3553,8 @@ function normalizeAntigravityQuotaSummary(body) {
 
   // Map bucketId → window, regardless of which group they live in
   const makeWindow = (remainingFraction, resetTime) => {
-    if (typeof remainingFraction !== "number") return null;
+    if (typeof remainingFraction !== "number" || !Number.isFinite(remainingFraction)
+      || remainingFraction < 0 || remainingFraction > 1) return null;
     return buildWindow({
       usedPercent: Math.round((1 - remainingFraction) * 100),
       resetAt: parseAntigravityDate(resetTime) || (typeof resetTime === "string" ? resetTime : null),
@@ -3572,12 +3576,14 @@ function normalizeAntigravityQuotaSummary(body) {
     tertiary_window: makeWindow(buckets["gemini-weekly"]?.remainingFraction, buckets["gemini-weekly"]?.resetTime),
     quaternary_window: makeWindow(buckets["gemini-5h"]?.remainingFraction, buckets["gemini-5h"]?.resetTime),
   };
+  const argon = makeWindow(buckets["gemini-argon-wtu-weekly"]?.remainingFraction, buckets["gemini-argon-wtu-weekly"]?.resetTime);
+  if (argon) windows.argon_weekly_window = argon;
 
   // If the groups parsed but none of the known bucketIds matched (upstream
   // renamed them), treat it as a parse failure so the caller falls back to
   // GetUserStatus rather than rendering an empty, error-free card.
   if (!windows.primary_window && !windows.secondary_window
-    && !windows.tertiary_window && !windows.quaternary_window) {
+    && !windows.tertiary_window && !windows.quaternary_window && !windows.argon_weekly_window) {
     throw new Error("Could not parse Antigravity quota summary: no known buckets matched.");
   }
 
@@ -3586,6 +3592,47 @@ function normalizeAntigravityQuotaSummary(body) {
     account_plan: null,  // quota summary doesn't include plan info
     ...windows,
   };
+}
+
+function normalizeAntigravityCliUsage(body) {
+  if (body?.status !== "SUCCESS" || body?.num_turns !== 0 || body?.command?.name !== "usage"
+    || !Array.isArray(body?.command?.data?.groups)) {
+    throw new Error("Could not parse Antigravity CLI quota output.");
+  }
+  const groups = body.command.data.groups.map((group) => ({
+    buckets: (Array.isArray(group?.buckets) ? group.buckets : []).map((bucket) => ({
+      bucketId: bucket?.id,
+      remainingFraction: bucket?.remaining_fraction,
+      resetTime: bucket?.reset_time,
+    })),
+  }));
+  return normalizeAntigravityQuotaSummary({ groups });
+}
+
+// v1.1.11 introduced read-only /usage in print mode. Earlier versions may
+// send that text to the model, so reject unknown and older version strings.
+function supportsAntigravityCliUsage(version) {
+  const match = String(version || "").trim().match(/^v?(\d+)\.(\d+)\.(\d+)$/);
+  if (!match) return false;
+  const [major, minor, patch] = match.slice(1).map(Number);
+  return major > 1 || (major === 1 && (minor > 1 || (minor === 1 && patch >= 11)));
+}
+
+async function fetchAntigravityCliUsage(executable, { commandRunner, home, signal, budgetedTimeoutMs } = {}) {
+  const options = { signal, windowsHide: true, cwd: home || os.homedir(), maxBuffer: 1024 * 1024, killProcessGroup: true };
+  const versionTimeout = budgetedTimeoutMs(2000);
+  if (versionTimeout <= 0) return null;
+  const version = await runCommand(commandRunner, executable, ["--version"], { ...options, timeout: versionTimeout });
+  if (version?.error || version?.status !== 0 || !supportsAntigravityCliUsage(version.stdout)) return null;
+  const timeout = budgetedTimeoutMs(12_000);
+  if (timeout <= 0) return null;
+  // Explicitly override a user's disableSlashCommands setting for this one
+  // read-only invocation; otherwise /usage can become an ordinary model prompt.
+  const result = await runCommand(commandRunner, executable,
+    ["--settings", '{"disableSlashCommands":false}', "-p", "/usage", "--output-format", "json"],
+    { ...options, timeout });
+  if (result?.error || result?.status !== 0) throw new Error("Antigravity CLI quota command failed.");
+  return { configured: true, error: null, ...normalizeAntigravityCliUsage(JSON.parse(result.stdout)) };
 }
 
 async function probeAntigravityPort(port, csrfToken, { timeoutMs, requestFn, scheme = "https", signal } = {}) {
@@ -4079,6 +4126,7 @@ async function fetchAntigravityRemoteLimits({
       secondary_window: windows.secondary_window,
       tertiary_window: windows.tertiary_window,
       quaternary_window: windows.quaternary_window,
+      ...(windows.argon_weekly_window ? { argon_weekly_window: windows.argon_weekly_window } : {}),
     };
   };
 
@@ -4153,6 +4201,7 @@ async function antigravityUnavailableResult({ home, nowMs, platform, securityRun
  */
 async function fetchAntigravityLimits({
   home,
+  env,
   commandRunner,
   requestFn,
   fetchImpl = fetch,
@@ -4210,6 +4259,26 @@ async function fetchAntigravityLimits({
     return result;
   };
 
+  // Prefer the current agy CLI login over a possibly unrelated saved IDE
+  // credential. Never merge windows from separate snapshots.
+  let processInfo = { configured: false };
+  try {
+    const timeoutMs = budgetedTimeoutMs(ANTIGRAVITY_PROCESS_SCAN_TIMEOUT_MS);
+    if (timeoutMs > 0) processInfo = await detectAntigravityProcess({ commandRunner, platform, timeoutMs, signal });
+  } catch (_error) {}
+  if (processInfo.agyExecutable) {
+    try {
+      const cli = await fetchAntigravityCliUsage(processInfo.agyExecutable, { commandRunner, home, signal, budgetedTimeoutMs });
+      if (cli && hasAntigravityWindow(cli)) {
+        writeAntigravityLimitsCache(cli, { home, nowMs });
+        return cli;
+      }
+    } catch (_error) {
+      // Do not log the CLI's output, which may contain account information.
+      console.warn("Antigravity CLI quota read failed; trying other sources.");
+    }
+  }
+
   let remoteError = null;
   const remoteTimeoutMs = budgetedTimeoutMs(ANTIGRAVITY_REMOTE_TIMEOUT_MS);
   if (remoteTimeoutMs > 0) {
@@ -4238,17 +4307,24 @@ async function fetchAntigravityLimits({
   }
 
   try {
-    const processScanTimeoutMs = budgetedTimeoutMs(ANTIGRAVITY_PROCESS_SCAN_TIMEOUT_MS);
-    if (processScanTimeoutMs <= 0) {
-      throw new Error(ANTIGRAVITY_BUDGET_EXHAUSTED_MESSAGE);
-    }
-    const processInfo = await detectAntigravityProcess({
-      commandRunner,
-      platform,
-      timeoutMs: processScanTimeoutMs,
-      signal,
-    });
     if (!processInfo.configured) {
+      // Windows agy keeps its login in the OS credential store, which the
+      // remote OAuth reader cannot access. It can answer /usage while closed.
+      if (platform === "win32") {
+        const localAppData = env?.LOCALAPPDATA || path.join(home || os.homedir(), "AppData", "Local");
+        const executable = path.join(localAppData, "agy", "bin", "agy.exe");
+        try {
+          if (fs.statSync(executable).isFile()) {
+            const cli = await fetchAntigravityCliUsage(executable, { commandRunner, home, signal, budgetedTimeoutMs });
+            if (cli && hasAntigravityWindow(cli)) {
+              writeAntigravityLimitsCache(cli, { home, nowMs });
+              return cli;
+            }
+          }
+        } catch (_error) {
+          // Missing install is normal; never print CLI output or credentials.
+        }
+      }
       return antigravityUnavailableResult({
         home,
         nowMs,
@@ -4622,6 +4698,7 @@ async function fetchUsageLimitsUncached({
     hiddenSet.has("antigravity") ? hiddenSentinel : withAbortableProviderTimeout(
       (signal) => fetchAntigravityLimits({
         home,
+        env,
         commandRunner,
         requestFn,
         fetchImpl: providerFetch,

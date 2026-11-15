@@ -419,6 +419,11 @@ enum WidgetSnapshotWriter {
                                          fraction: w.usedPercent / 100.0,
                                          resetsAt: parseISO(w.resetAt)))
             }
+            if let w = limits.antigravity.argonWeeklyWindow {
+                out.append(LimitProvider(source: "antigravity", label: "Antigravity · Argon 7d",
+                                         fraction: w.usedPercent / 100.0,
+                                         resetsAt: parseISO(w.resetAt)))
+            }
         }
 
         // OpenCode Go

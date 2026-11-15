@@ -831,6 +831,7 @@ limits.label.antigravity_claude_weekly,ui,LimitsPage,UsageLimitsPanel,antigravit
 limits.label.antigravity_claude_5h,ui,LimitsPage,UsageLimitsPanel,antigravity_claude_5h,"Cl 5h",,active
 limits.label.antigravity_gemini_weekly,ui,LimitsPage,UsageLimitsPanel,antigravity_gemini_weekly,"Gm 7d",,active
 limits.label.antigravity_gemini_5h,ui,LimitsPage,UsageLimitsPanel,antigravity_gemini_5h,"Gm 5h",,active
+limits.label.antigravity_argon_weekly,ui,LimitsPage,UsageLimitsPanel,antigravity_argon_weekly,"Argon 7d",,active
 limits.label.antigravity_live,ui,LimitsPage,UsageLimitsPanel,antigravity_live,"live",,active
 limits.label.antigravity_cached,ui,LimitsPage,UsageLimitsPanel,antigravity_cached,"cached",,active
 limits.tooltip.antigravity_live,ui,LimitsPage,UsageLimitsPanel,antigravity_live_tooltip,"Real-time limits retrieved from your Antigravity Google account.",,active

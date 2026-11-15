@@ -142,6 +142,7 @@ export const PROVIDER_LIMIT_SPECS = {
         { key: "claude-5h", labelKey: "limits.label.antigravity_claude_5h", window: data.secondary_window },
         { key: "gemini-weekly", labelKey: "limits.label.antigravity_gemini_weekly", window: data.tertiary_window },
         { key: "gemini-5h", labelKey: "limits.label.antigravity_gemini_5h", window: data.quaternary_window },
+        { key: "argon-weekly", labelKey: "limits.label.antigravity_argon_weekly", window: data.argon_weekly_window },
       ];
     },
   },
@@ -377,6 +378,7 @@ export function usageLimitsLabelCopyAnchor() {
     copy("limits.label.antigravity_claude_5h"),
     copy("limits.label.antigravity_gemini_weekly"),
     copy("limits.label.antigravity_gemini_5h"),
+    copy("limits.label.antigravity_argon_weekly"),
     copy("limits.label.copilot_premium"),
     copy("limits.label.copilot_chat"),
     copy("limits.label.zcode_glm52"),

@@ -34,6 +34,7 @@ export const FALLBACK_MENU_BAR_ITEMS = [
   { id: "antigravityClaude5h", label: "Antigravity Claude 5h Limit", shortLabel: "Ag Cl 5h", category: "limits" },
   { id: "antigravityGeminiWeekly", label: "Antigravity Gemini 7d Limit", shortLabel: "Ag Gm 7d", category: "limits" },
   { id: "antigravityGemini5h", label: "Antigravity Gemini 5h Limit", shortLabel: "Ag Gm 5h", category: "limits" },
+  { id: "antigravityArgonWeekly", label: "Antigravity Argon 7d Limit", shortLabel: "Ag Argon 7d", category: "limits" },
 ];
 
 export function normalizeMenuBarItems(ids, availableItems = FALLBACK_MENU_BAR_ITEMS, maxItems = 2) {

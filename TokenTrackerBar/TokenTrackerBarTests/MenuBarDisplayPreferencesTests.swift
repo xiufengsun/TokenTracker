@@ -153,6 +153,21 @@ final class MenuBarDisplayPreferencesTests: XCTestCase {
         XCTAssertFalse(ids.contains(MenuBarDisplayMetric.codex7d.rawValue))
     }
 
+    func testAntigravityArgonMetricRequiresItsOwnWindow() throws {
+        let missing = try decodeResponse(overrides: ["antigravity": ["configured": true]])
+        XCTAssertFalse(MenuBarDisplayPreferences.availableItemIDs(for: missing).contains(MenuBarDisplayMetric.antigravityArgonWeekly.rawValue))
+        let present = try decodeResponse(overrides: ["antigravity": [
+            "configured": true,
+            "argon_weekly_window": ["used_percent": 34, "reset_at": "2030-01-01T00:00:00Z"],
+        ]])
+        XCTAssertTrue(MenuBarDisplayPreferences.availableItemIDs(for: present).contains(MenuBarDisplayMetric.antigravityArgonWeekly.rawValue))
+        XCTAssertEqual(present.utilizationPercent(for: .antigravityArgonWeekly), 34)
+        let reading = present.limitWindowReadings().first { $0.windowKey == "antigravity.argonWeekly" }
+        XCTAssertEqual(reading?.windowLabel, "Argon 7d")
+        XCTAssertEqual(reading?.usedPercent, 34)
+        XCTAssertNotNil(reading?.resetAt)
+    }
+
     func testDevinMetricsAppearOnlyForPresentWindows() throws {
         let limits = try decodeResponse(overrides: [
             "devin": [

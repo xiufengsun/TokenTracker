@@ -394,6 +394,7 @@
   "limits.label.antigravity_claude_5h": "Cl 5h",
   "limits.label.antigravity_claude_weekly": "Cl 7d",
   "limits.label.antigravity_gemini_5h": "Gm 5h",
+  "limits.label.antigravity_argon_weekly": "Argon 7d",
   "limits.label.antigravity_gemini_weekly": "Gm 7d",
   "limits.label.antigravity_live": "live",
   "limits.provenance.fresh": "Live",

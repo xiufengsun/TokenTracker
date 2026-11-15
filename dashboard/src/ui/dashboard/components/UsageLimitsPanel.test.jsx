@@ -1210,6 +1210,16 @@ describe("UsageLimitsPanel", () => {
     expect(screen.getByText("Cursor")).toBeInTheDocument();
   });
 
+  it("shows Argon weekly only when Antigravity reports it", () => {
+    const base = { configured: true, error: null, tertiary_window: { used_percent: 20 } };
+    const { rerender } = render(createElement(UsageLimitsPanel, { order: ["antigravity"], displayMode: "remaining",
+      antigravity: { ...base, argon_weekly_window: { used_percent: 34, reset_at: "2030-01-01T00:00:00Z" } } }));
+    expect(screen.getByText(copy("limits.label.antigravity_argon_weekly"))).toBeInTheDocument();
+    expect(screen.getByText("66%")).toBeInTheDocument();
+    rerender(createElement(UsageLimitsPanel, { order: ["antigravity"], displayMode: "remaining", antigravity: base }));
+    expect(screen.queryByText(copy("limits.label.antigravity_argon_weekly"))).not.toBeInTheDocument();
+  });
+
   it("does not duplicate Antigravity cached status with the generic provenance badge", () => {
     render(
       <UsageLimitsPanel

@@ -1584,7 +1584,8 @@ struct ClawdCompanionView: View {
         }
         generic("antigravity", configured: limits.antigravity.configured, error: limits.antigravity.error, windows: [
             ("Claude weekly", limits.antigravity.primaryWindow), ("Claude 5h", limits.antigravity.secondaryWindow),
-            ("Gemini weekly", limits.antigravity.tertiaryWindow), ("Gemini 5h", limits.antigravity.quaternaryWindow)
+            ("Gemini weekly", limits.antigravity.tertiaryWindow), ("Gemini 5h", limits.antigravity.quaternaryWindow),
+            ("Argon weekly", limits.antigravity.argonWeeklyWindow)
         ])
         if let zcode = limits.zcode {
             generic("zcode", configured: zcode.configured, error: zcode.error, windows: [
