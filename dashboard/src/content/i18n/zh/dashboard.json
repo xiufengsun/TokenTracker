@@ -1052,5 +1052,8 @@
   "cloud.plan.device_fair_use": "日常个人使用不限设备数量，不按设备收费；大量或异常设备接入可能触发同步保护。",
   "leaderboard.profile_modal.window.lifetime": "总额为全历史；活跃天数、日均及用量分布为 {{from}} 至 {{to}}。",
   "leaderboard.profile_modal.window.period": "统计范围为 {{from}} 至 {{to}}。",
-  "leaderboard.profile_modal.window.average": "该窗口花费除以 {{days}} 个日历日，包含无使用量的日期。"
+  "leaderboard.profile_modal.window.average": "该窗口花费除以 {{days}} 个日历日，包含无使用量的日期。",
+  "settings.labs.island_expand_on_hover.label": "悬停直接展开",
+  "settings.labs.island_expand_on_hover.hint": "鼠标移入灵动岛时立即展开完整面板；关闭后为悬停探边、点击展开，防止顶部操作误触。",
+  "settings.labs.island_expand_on_hover.aria": "切换灵动岛悬停直接展开"
 }

@@ -1,5 +1,6 @@
 import XCTest
 
+/// Unit tests for Dynamic Island layout, hover/click interaction, and fullscreen policies.
 final class DynamicIslandLayoutPolicyTests: XCTestCase {
     func testLargeDisplayUsesMaximumPanelHeight() {
         XCTAssertEqual(
@@ -45,6 +46,283 @@ final class DynamicIslandLayoutPolicyTests: XCTestCase {
                 pointerInsideInteractiveRegion: true
             )
         )
+    }
+
+    /// Verifies that `DynamicIslandExpandOnHoverEnabled` defaults to `false` and round-trips in `UserDefaults`.
+    func testExpandOnHoverPreferenceDefaultsToFalseAndPersistsInSuite() throws {
+        let suiteName = "com.tokentracker.tests.island-hover.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertEqual(
+            DynamicIslandInteractionPolicy.expandOnHoverDefaultsKey,
+            "DynamicIslandExpandOnHoverEnabled"
+        )
+        XCTAssertFalse(DynamicIslandInteractionPolicy.isExpandOnHoverEnabled(from: defaults))
+
+        DynamicIslandInteractionPolicy.setExpandOnHoverEnabled(true, in: defaults)
+        XCTAssertTrue(DynamicIslandInteractionPolicy.isExpandOnHoverEnabled(from: defaults))
+
+        DynamicIslandInteractionPolicy.setExpandOnHoverEnabled(false, in: defaults)
+        XCTAssertFalse(DynamicIslandInteractionPolicy.isExpandOnHoverEnabled(from: defaults))
+    }
+
+    /// Verifies that hover peeks when collapsed by default and expands when opted in or already open.
+    func testHoverActionPeeksByDefaultAndExpandsWhenOptedInOrAlreadyExpanded() {
+        XCTAssertEqual(
+            DynamicIslandInteractionPolicy.hoverAction(
+                hovering: true,
+                pointerInsideInteractiveRegion: false,
+                isExpanded: false,
+                expandOnHover: true
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            DynamicIslandInteractionPolicy.hoverAction(
+                hovering: false,
+                pointerInsideInteractiveRegion: true,
+                isExpanded: false,
+                expandOnHover: true
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            DynamicIslandInteractionPolicy.hoverAction(
+                hovering: true,
+                pointerInsideInteractiveRegion: true,
+                isExpanded: false,
+                expandOnHover: false
+            ),
+            .peek
+        )
+        XCTAssertEqual(
+            DynamicIslandInteractionPolicy.hoverAction(
+                hovering: true,
+                pointerInsideInteractiveRegion: true,
+                isExpanded: false,
+                expandOnHover: true
+            ),
+            .expand
+        )
+        // Brief exit and re-entry while already expanded must keep the detail
+        // card open rather than downgrading it to a collapsed hover peek.
+        XCTAssertEqual(
+            DynamicIslandInteractionPolicy.hoverAction(
+                hovering: true,
+                pointerInsideInteractiveRegion: true,
+                isExpanded: true,
+                expandOnHover: false
+            ),
+            .expand
+        )
+    }
+
+    /// Verifies that click-to-expand only triggers while interaction is enabled and the card is collapsed.
+    func testClickExpansionRequiresAcceptedInteractionAndCollapsedIsland() {
+        XCTAssertFalse(
+            DynamicIslandInteractionPolicy.shouldExpandOnClick(
+                acceptsInteraction: false,
+                isExpanded: false
+            )
+        )
+        XCTAssertTrue(
+            DynamicIslandInteractionPolicy.shouldExpandOnClick(
+                acceptsInteraction: true,
+                isExpanded: false
+            )
+        )
+        XCTAssertFalse(
+            DynamicIslandInteractionPolicy.shouldExpandOnClick(
+                acceptsInteraction: true,
+                isExpanded: true
+            )
+        )
+    }
+
+    /// Verifies that hover haptics fire only on the initial collapsed hover-enter transition.
+    func testHoverHapticFiresOnlyOnCollapsedHoverEntryTransition() {
+        XCTAssertTrue(
+            DynamicIslandInteractionPolicy.shouldPerformHoverHaptic(
+                wasHovered: false,
+                isHovered: true,
+                isExpanded: false
+            )
+        )
+        XCTAssertFalse(
+            DynamicIslandInteractionPolicy.shouldPerformHoverHaptic(
+                wasHovered: true,
+                isHovered: true,
+                isExpanded: false
+            )
+        )
+        XCTAssertFalse(
+            DynamicIslandInteractionPolicy.shouldPerformHoverHaptic(
+                wasHovered: false,
+                isHovered: true,
+                isExpanded: true
+            )
+        )
+        XCTAssertFalse(
+            DynamicIslandInteractionPolicy.shouldPerformHoverHaptic(
+                wasHovered: true,
+                isHovered: false,
+                isExpanded: false
+            )
+        )
+    }
+
+    /// Verifies rendered widths and heights across idle, hover-peek, press-tuck, and expanded states.
+    func testNotchNookPeekAndTactilePressVisualGeometry() {
+        XCTAssertEqual(DynamicIslandLayoutPolicy.peekWidthExpansion, 16)
+        XCTAssertEqual(DynamicIslandLayoutPolicy.peekHeightExpansion, 8)
+        XCTAssertEqual(DynamicIslandLayoutPolicy.pressWidthExpansion, 8)
+        XCTAssertEqual(DynamicIslandLayoutPolicy.pressHeightExpansion, 4)
+
+        // Idle: exact notch + wings silhouette.
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.visualCollapsedWidth(collapsedWidth: 200, isHovered: false, isPressing: false),
+            200
+        )
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.visualCollapsedHeight(collapsedHeight: 32, isHovered: false, isPressing: false),
+            32
+        )
+
+        // Hover peek: +16pt width (+8pt per side) and +8pt downward height.
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.visualCollapsedWidth(collapsedWidth: 200, isHovered: true, isPressing: false),
+            216
+        )
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.visualCollapsedHeight(collapsedHeight: 32, isHovered: true, isPressing: false),
+            40
+        )
+
+        // Tactile press on mouseDown: 50% inward tuck (+8pt width, +4pt height).
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.visualCollapsedWidth(collapsedWidth: 200, isHovered: true, isPressing: true),
+            208
+        )
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.visualCollapsedHeight(collapsedHeight: 32, isHovered: true, isPressing: true),
+            36
+        )
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.visualCollapsedWidth(collapsedWidth: 200, isHovered: false, isPressing: true),
+            208
+        )
+
+        // Expanded width respects both expandedWidth and unusually wide wings.
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.visualWidth(collapsedWidth: 200, isExpanded: true, isHovered: true, isPressing: false),
+            DynamicIslandLayoutPolicy.expandedWidth
+        )
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.visualWidth(collapsedWidth: 520, isExpanded: true, isHovered: false, isPressing: false),
+            520
+        )
+    }
+
+    /// Verifies that `hitWidth` and `hitCollapsedHeight` retain full peek bounds during press tuck.
+    func testHitRegionRetainsFullPeekBoundsDuringTactilePressTuck() {
+        // Idle hit rect matches collapsed silhouette.
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.hitWidth(collapsedWidth: 200, isExpanded: false, isHovered: false, isPressing: false),
+            200
+        )
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.hitCollapsedHeight(collapsedHeight: 32, isHovered: false, isPressing: false),
+            32
+        )
+
+        // Hover peek hit rect grows to +16pt width / +8pt height.
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.hitWidth(collapsedWidth: 200, isExpanded: false, isHovered: true, isPressing: false),
+            216
+        )
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.hitCollapsedHeight(collapsedHeight: 32, isHovered: true, isPressing: false),
+            40
+        )
+
+        // Pressing near the outer 4pt rim must keep the full peek hit rect so
+        // the inward visual tuck never drops the pointer outside hitRegion
+        // before mouseUp completes the click.
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.hitWidth(collapsedWidth: 200, isExpanded: false, isHovered: true, isPressing: true),
+            216
+        )
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.hitCollapsedHeight(collapsedHeight: 32, isHovered: true, isPressing: true),
+            40
+        )
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.hitWidth(collapsedWidth: 200, isExpanded: false, isHovered: false, isPressing: true),
+            216
+        )
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.hitCollapsedHeight(collapsedHeight: 32, isHovered: false, isPressing: true),
+            40
+        )
+
+        // Expanded hit width uses the card width.
+        XCTAssertEqual(
+            DynamicIslandLayoutPolicy.hitWidth(collapsedWidth: 200, isExpanded: true, isHovered: true, isPressing: false),
+            DynamicIslandLayoutPolicy.expandedWidth
+        )
+    }
+
+    /// Verifies that upper shoulder and lower corner radii increase monotonically from idle to expanded.
+    func testCornerRadiiInterpolateMonotonicallyAcrossInteractionStates() {
+        let idleTop = DynamicIslandLayoutPolicy.topShoulderRadius(
+            collapsedHeight: 32, isExpanded: false, isHovered: false, isPressing: false
+        )
+        let pressTop = DynamicIslandLayoutPolicy.topShoulderRadius(
+            collapsedHeight: 32, isExpanded: false, isHovered: true, isPressing: true
+        )
+        let peekTop = DynamicIslandLayoutPolicy.topShoulderRadius(
+            collapsedHeight: 32, isExpanded: false, isHovered: true, isPressing: false
+        )
+        let expandedTop = DynamicIslandLayoutPolicy.topShoulderRadius(
+            collapsedHeight: 32, isExpanded: true, isHovered: true, isPressing: false
+        )
+        XCTAssertLessThan(idleTop, pressTop)
+        XCTAssertLessThan(pressTop, peekTop)
+        XCTAssertLessThan(peekTop, expandedTop)
+
+        let idleBottom = DynamicIslandLayoutPolicy.bottomCornerRadius(
+            collapsedHeight: 32, isExpanded: false, isHovered: false, isPressing: false
+        )
+        let pressBottom = DynamicIslandLayoutPolicy.bottomCornerRadius(
+            collapsedHeight: 32, isExpanded: false, isHovered: true, isPressing: true
+        )
+        let peekBottom = DynamicIslandLayoutPolicy.bottomCornerRadius(
+            collapsedHeight: 32, isExpanded: false, isHovered: true, isPressing: false
+        )
+        let expandedBottom = DynamicIslandLayoutPolicy.bottomCornerRadius(
+            collapsedHeight: 32, isExpanded: true, isHovered: true, isPressing: false
+        )
+        XCTAssertLessThan(idleBottom, pressBottom)
+        XCTAssertLessThan(pressBottom, peekBottom)
+        XCTAssertLessThan(peekBottom, expandedBottom)
+    }
+
+    /// Verifies collapse delays and spring response/damping constants for two-stage interaction.
+    func testCollapseDelayAndSpringParametersMatchTwoStageSpec() {
+        XCTAssertEqual(DynamicIslandInteractionPolicy.collapseDelay(isExpanded: false), 0.15)
+        XCTAssertEqual(DynamicIslandInteractionPolicy.collapseDelay(isExpanded: true), 0.25)
+        XCTAssertLessThan(
+            DynamicIslandInteractionPolicy.collapseDelay(isExpanded: false),
+            DynamicIslandInteractionPolicy.collapseDelay(isExpanded: true)
+        )
+
+        XCTAssertEqual(DynamicIslandLayoutPolicy.morphSpringResponse, 0.5)
+        XCTAssertEqual(DynamicIslandLayoutPolicy.morphSpringDamping, 0.85)
+        XCTAssertEqual(DynamicIslandLayoutPolicy.pressSpringResponse, 0.5)
+        XCTAssertEqual(DynamicIslandLayoutPolicy.pressSpringDamping, 0.55)
+        XCTAssertEqual(DynamicIslandLayoutPolicy.collapseSpringResponse, 0.4)
+        XCTAssertEqual(DynamicIslandLayoutPolicy.collapseSpringDamping, 1.0)
     }
 
     func testNotchedRevealStartsBehindHardwareNotchAndExpandsSymmetrically() {

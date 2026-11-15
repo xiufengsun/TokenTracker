@@ -46,17 +46,35 @@ export function LabsSection() {
             }
           />
           {islandEnabled && (
-            <SettingsRow
-              label={copy("settings.labs.island_hide_menubar.label")}
-              hint={copy("settings.labs.island_hide_menubar.hint")}
-              control={
-                <ToggleSwitch
-                  checked={Boolean(nativeSettings?.hideMenuBarIcon)}
-                  onChange={() => setSetting("hideMenuBarIcon", !nativeSettings?.hideMenuBarIcon)}
-                  ariaLabel={copy("settings.labs.island_hide_menubar.aria")}
-                />
-              }
-            />
+            <>
+              <SettingsRow
+                label={copy("settings.labs.island_hide_menubar.label")}
+                hint={copy("settings.labs.island_hide_menubar.hint")}
+                control={
+                  <ToggleSwitch
+                    checked={Boolean(nativeSettings?.hideMenuBarIcon)}
+                    onChange={() => setSetting("hideMenuBarIcon", !nativeSettings?.hideMenuBarIcon)}
+                    ariaLabel={copy("settings.labs.island_hide_menubar.aria")}
+                  />
+                }
+              />
+              <SettingsRow
+                label={copy("settings.labs.island_expand_on_hover.label")}
+                hint={copy("settings.labs.island_expand_on_hover.hint")}
+                control={
+                  <ToggleSwitch
+                    checked={Boolean(nativeSettings?.dynamicIslandExpandOnHover)}
+                    onChange={() =>
+                      setSetting(
+                        "dynamicIslandExpandOnHover",
+                        !nativeSettings?.dynamicIslandExpandOnHover,
+                      )
+                    }
+                    ariaLabel={copy("settings.labs.island_expand_on_hover.aria")}
+                  />
+                }
+              />
+            </>
           )}
         </>
       )}

@@ -265,3 +265,34 @@ test("token number display setting is localized in every translated locale", () 
     }
   }
 });
+
+test("Dynamic Island expand-on-hover setting is localized in every translated locale", () => {
+  const copyCsv = read("dashboard/src/content/copy.csv");
+  assert.match(
+    copyCsv,
+    /^settings\.labs\.island_expand_on_hover\.label,.*"Expand on Hover"/m,
+  );
+  assert.match(
+    copyCsv,
+    /^settings\.labs\.island_expand_on_hover\.hint,.*"Open the full Dynamic Island panel immediately on hover\. When off, hovering peeks the edge and clicking expands\."/m,
+  );
+  assert.match(
+    copyCsv,
+    /^settings\.labs\.island_expand_on_hover\.aria,.*"Toggle expand Dynamic Island on hover"/m,
+  );
+
+  const localeFiles = ["zh", "zh-TW", "ja", "ko", "de"];
+  const keys = [
+    "settings.labs.island_expand_on_hover.label",
+    "settings.labs.island_expand_on_hover.hint",
+    "settings.labs.island_expand_on_hover.aria",
+  ];
+
+  for (const locale of localeFiles) {
+    const dashboard = JSON.parse(read(`dashboard/src/content/i18n/${locale}/dashboard.json`));
+    for (const key of keys) {
+      assert.equal(typeof dashboard[key], "string", `${locale} missing ${key}`);
+      assert.ok(dashboard[key].trim().length > 0, `${locale} has empty ${key}`);
+    }
+  }
+});

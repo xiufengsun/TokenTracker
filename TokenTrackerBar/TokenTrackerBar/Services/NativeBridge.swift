@@ -188,6 +188,7 @@ final class NativeBridge {
         }
     }
 
+    /// Handles synthetic bridge requests when running under an isolated `NativeQAProfile`.
     private func handleQAMessage(_ message: [String: Any], profile: NativeQAProfile) {
         switch message["type"] as? String {
         case "getSettings":
@@ -197,6 +198,7 @@ final class NativeBridge {
                 "menuBarIconStyle": "static", "animatedIcon": false, "toastOnReset": false,
                 "confettiOnReset": false, "autoUpdateEnabled": false, "launchAtLogin": false,
                 "launchAtLoginSupported": false, "dynamicIslandEnabled": false,
+                "dynamicIslandExpandOnHover": false,
                 "dynamicIslandSupported": false, "hideMenuBarIcon": false, "isSyncing": false,
                 "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
                 "updateStatus": NSNull(), "updateBusy": false, "locale": NativeLocalization.currentPreference,
@@ -283,6 +285,7 @@ final class NativeBridge {
 
     // MARK: - State push
 
+    /// Serializes current native app preferences and dispatches `native:settings` to the web view.
     func pushSettings() {
         if let profile = NativeQAProfile.current {
             handleQAMessage(["type": "getSettings"], profile: profile)
@@ -336,6 +339,7 @@ final class NativeBridge {
             "launchAtLogin": launchAtLoginValue,
             "launchAtLoginSupported": launchAtLoginSupported,
             "dynamicIslandEnabled": UserDefaults.standard.bool(forKey: DynamicIslandController.enabledDefaultsKey),
+            "dynamicIslandExpandOnHover": DynamicIslandInteractionPolicy.isExpandOnHoverEnabled(),
             "hideMenuBarIcon": UserDefaults.standard.bool(forKey: StatusBarController.hideMenuBarIconKey),
             // macOS-only feature flag: the Windows bridge never sends this, so
             // the dashboard can gate the Labs toggle on its presence.
@@ -373,6 +377,7 @@ final class NativeBridge {
 
     // MARK: - Setters
 
+    /// Applies a single dashboard-originated setting mutation and notifies native observers.
     private func applySetting(key: String, value: Any?) {
         switch key {
         case "showStats":
@@ -433,6 +438,11 @@ final class NativeBridge {
                 } else if !wasEnabled {
                     StatusBarController.offerHideIconPromptAfterIslandEnabled()
                 }
+                NotificationCenter.default.post(name: .nativeSettingsChanged, object: nil)
+            }
+        case "dynamicIslandExpandOnHover":
+            if let bool = value as? Bool {
+                DynamicIslandInteractionPolicy.setExpandOnHoverEnabled(bool)
                 NotificationCenter.default.post(name: .nativeSettingsChanged, object: nil)
             }
         case "hideMenuBarIcon":
