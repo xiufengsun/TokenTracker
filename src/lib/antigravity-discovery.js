@@ -149,6 +149,12 @@ function hostDiscoveryIncomplete(reports, knownFiles = null) {
       return true;
     }
   }
+  // WSL home discovery may fail before it can produce a parent report. A
+  // previously tracked T3 root without any coverage is not a complete scan.
+  for (const filePath of known) {
+    if (!/[\\/]userdata[\\/]providers[\\/]antigravity[\\/]/.test(filePath)) continue;
+    if (!(reports || []).some((report) => pathWithin(filePath, report.path))) return true;
+  }
   return false;
 }
 

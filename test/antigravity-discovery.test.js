@@ -330,3 +330,13 @@ describe("T3 discovery safety regressions", () => {
     assert.deepEqual(none.brainDirs, []);
   });
 });
+
+it("keeps a failed WSL T3 home probe incomplete when native profiles remain visible", async () => {
+  const home = await makeSandbox();
+  await writeBrain(t3HomeOf(home), "native", "visible");
+  const native = await discoverT3AntigravityBrainDirs({ home, env: {} });
+  const lostWsl = String.raw`\\wsl$\Ubuntu\home\user\.t3\userdata\providers\antigravity\profile\antigravity-acp\brain\old\.system_generated\logs\transcript.jsonl`;
+  assert.equal(hostDiscoveryIncomplete(native.reports, [lostWsl]), true);
+  assert.equal(hostDiscoveryIncomplete([], [lostWsl]), true);
+  assert.equal(hostDiscoveryIncomplete(native.reports, []), false);
+});
