@@ -180,7 +180,8 @@ describe("discoverT3AntigravityBrainDirs", () => {
       env: {},
       parents: [path.join(extraRoot, T3_ANTIGRAVITY_REL), aliasParent],
     });
-    assert.deepEqual(result.brainDirs, [defaultFound.brainDir, extraFound.brainDir].sort());
+    // Compare membership, not platform collation of random temporary paths.
+    assert.deepEqual([...result.brainDirs].sort(), [defaultFound.brainDir, extraFound.brainDir].sort());
   });
 
   it("marks an unreadable parent incomplete, including when a known session lived there", async (t) => {
