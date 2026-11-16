@@ -55,10 +55,14 @@ describe("contextual Cloud panels", () => {
   });
   it.each(["free", "expired"])("hides the %s overview notice for one device or an unknown count", (status) => {
     publishCloudPromptBilling("account", { membership: { ...membership, status }, machine_count: 1 }, userId, now);
+    recordCloudPromptIntent(userId, "sync");
     const view = show({ panel: "overview" });
     expect(screen.queryByRole("status", { name: "Cloud options" })).not.toBeInTheDocument();
     const unknownOwner = `${userId}-unknown-count`;
-    act(() => publishCloudPromptBilling("account", { membership: { ...membership, status } }, unknownOwner, now));
+    act(() => {
+      publishCloudPromptBilling("account", { membership: { ...membership, status } }, unknownOwner, now);
+      recordCloudPromptIntent(unknownOwner, "sync");
+    });
     view.rerender(<MemoryRouter><CloudContextualPrompt userId={unknownOwner} panel="overview" /></MemoryRouter>);
     expect(screen.queryByRole("status", { name: "Cloud options" })).not.toBeInTheDocument();
   });

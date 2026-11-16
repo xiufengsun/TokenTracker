@@ -185,7 +185,8 @@ export function cloudPromotionTargetReason(machineCount, membership, subscriptio
 export function cloudContextualPromptDecision({ userId, intentional = false, scene, membership,
   failure, subscriptions = [], catalog, catalogObservedAt, paymentConflict = false, machineCount, overview = false,
   now = Date.now(), storage = browserStorage() }) {
-  if (userId && overview && Number(machineCount) >= 2 && ["expired", "free"].includes(membership?.status) && !membership.can_upload_cloud &&
+  if (overview && !(Number(machineCount) >= 2)) return null;
+  if (userId && overview && ["expired", "free"].includes(membership?.status) && !membership.can_upload_cloud &&
     membership.environment === "live" && membership.phase === "active" &&
     membership.hosting_mode !== "self_hosted" && catalog?.policy?.hosting_mode !== "self_hosted") {
     const expired = membership.status === "expired";
