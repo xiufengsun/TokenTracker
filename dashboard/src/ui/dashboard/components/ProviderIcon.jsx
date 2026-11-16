@@ -107,6 +107,19 @@ function MinimaxIcon({ size = 16, className = "" }) {
   );
 }
 
+// DeepAI (deepai.org) gateway mark for the DeepAI Code desktop agent. The
+// app ships no published logo asset here, so this is a mono trace of the
+// DeepAI "D" with a signal-node terminal, drawn with currentColor so it
+// matches the other mono provider icons in both themes.
+function DeepaiIcon({ size = 16, className = "" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M3 2h6.75a10 10 0 010 20H3V2zm3.2 3.2v13.6h3.55a6.8 6.8 0 000-13.6H6.2z" />
+      <circle cx="19.9" cy="6.1" r="1.9" />
+    </svg>
+  );
+}
+
 function CopilotIcon({ size = 16, className = "" }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" className={className}>
@@ -376,6 +389,9 @@ const PROVIDER_ICON_MAP = {
   DSH: DeepSeekHarnessIcon,
 
   DUMATE: DumateIcon,
+  DEEPAI: DeepaiIcon,
+  // DeepAI Code ships the DeepAI gateway mark.
+  "DEEPAI-CODE": DeepaiIcon,
   "EVERY-CODE": CodexIcon,
   GEMINI: GeminiIcon,
   GITHUB: GithubIcon,

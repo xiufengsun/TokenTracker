@@ -86,6 +86,11 @@ describe("formatProviderDisplayName", () => {
     expect(formatProviderDisplayName("COMMAND_CODE")).toBe("Command Code");
   });
 
+  it("formats the deepai source as DeepAI Code", () => {
+    expect(formatProviderDisplayName("deepai")).toBe("DeepAI Code");
+    expect(formatProviderDisplayName("DEEPAI")).toBe("DeepAI Code");
+  });
+
   it("uses the registered DeepSeek Harness product name for current and legacy sources", () => {
     expect(formatProviderDisplayName("dsh")).toBe("DeepSeek Harness");
     expect(formatProviderDisplayName("deepseek")).toBe("DeepSeek Harness");
