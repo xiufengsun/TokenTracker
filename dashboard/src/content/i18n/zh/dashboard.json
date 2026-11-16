@@ -1058,5 +1058,7 @@
   "cloud.plan.device_fair_use": "日常个人使用不限设备数量，不按设备收费；大量或异常设备接入可能触发同步保护。",
   "leaderboard.profile_modal.window.lifetime": "总额为全历史；活跃天数、日均及用量分布为 {{from}} 至 {{to}}。",
   "leaderboard.profile_modal.window.period": "统计范围为 {{from}} 至 {{to}}。",
-  "leaderboard.profile_modal.window.average": "该窗口花费除以 {{days}} 个日历日，包含无使用量的日期。"
+  "leaderboard.profile_modal.window.average": "该窗口花费除以 {{days}} 个日历日，包含无使用量的日期。",
+  "dashboard.cost_breakdown.subscription_usage": "订阅用量",
+  "dashboard.cost_breakdown.subscription_usage_hint": "这些是 Grok Bot 的产品用量标识，没有公开的 token 单价，无法按模型估算成本；订阅费用未分摊到这些记录。"
 }

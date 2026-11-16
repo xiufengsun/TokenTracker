@@ -157,6 +157,9 @@ function getModelPricingInfo(model, opts = {}) {
 }
 
 function computeModelPricingInfo(model, opts, sourceKey) {
+  if (sourceKey === "cursor" && /^grok-bot-(default|automation|cua)$/i.test(String(model).trim())) {
+    return { status: "unpriced", source: "cursor_subscription", ...ZERO_PRICING };
+  }
   if (LOCAL_INFERENCE_SOURCES.has(sourceKey) || PI_SUBSCRIPTION_SOURCES.has(sourceKey)) {
     return { status: "free", source: LOCAL_INFERENCE_SOURCES.has(sourceKey) ? "local_inference" : "subscription", ...ZERO_PRICING };
   }

@@ -649,5 +649,7 @@
   "cloud.free.device_scope": "현재 기기의 사용량만 집계",
   "cloud.plan.includes_local": "무료 로컬 기능 모두 포함",
   "cloud.plan.device_sync": "기기 수 제한 없이 사용량 통합·동기화",
-  "cloud.plan.device_fair_use": "일상적인 개인 사용은 기기 수 제한이나 기기별 추가 요금이 없습니다. 대량 또는 비정상적인 기기 연결에는 동기화 보호가 적용될 수 있습니다."
+  "cloud.plan.device_fair_use": "일상적인 개인 사용은 기기 수 제한이나 기기별 추가 요금이 없습니다. 대량 또는 비정상적인 기기 연결에는 동기화 보호가 적용될 수 있습니다.",
+  "dashboard.cost_breakdown.subscription_usage": "구독 사용량",
+  "dashboard.cost_breakdown.subscription_usage_hint": "Grok Bot의 제품 사용량입니다. 공개된 토큰 단가가 없어 모델별 비용을 추정할 수 없습니다. 구독료는 각 기록에 배분하지 않습니다."
 }

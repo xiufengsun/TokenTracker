@@ -2190,3 +2190,5 @@ limits.cursor.connection.manage,dashboard,LimitsPage,CursorConnectionControl,man
 limits.cursor.connection.retry,dashboard,LimitsPage,CursorConnectionControl,retry,Retry connection,,active
 limits.cursor.connection.description,dashboard,LimitsPage,CursorConnectionControl,description,Cursor encrypts its saved sign-in. Connect on Cursor's website to read your usage and limits.,,active
 limits.cursor.connection.privacy,dashboard,LimitsPage,CursorConnectionControl,privacy,Your sign-in credentials stay on this device and are never sent to TokenTracker servers.,,active
+dashboard.cost_breakdown.subscription_usage,ui,DashboardPage,UsageOverview,text,Subscription usage,,active
+dashboard.cost_breakdown.subscription_usage_hint,ui,DashboardPage,UsageOverview,text,Grok Bot reports product usage rather than a priced model. No public per-token rate is available; subscription fees are not allocated to these rows.,,active

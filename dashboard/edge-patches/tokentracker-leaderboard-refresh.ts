@@ -264,6 +264,9 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "composer-2.5-fast": { input: 3, output: 15, cache_read: 0.5 },
   // Google Gemini 4 Argon (Cursor Other Models / Google introductory list rate)
   "gemini-4-argon": { input: 2, output: 10, cache_read: 0.1, cache_write: 0 },
+  "gemini-4-carbon": { input: 2, output: 10, cache_read: 0.1, cache_write: 0 },
+  "gemini-4-hydrogen": { input: 1.5, output: 7.5, cache_read: 0.075, cache_write: 0 },
+  "muse-wonder-1.0": { input: 4, output: 20, cache_read: 0.2, cache_write: 0 },
   // ── Moonshot Kimi ──
   "kimi-for-coding": { input: 0.6, output: 2, cache_read: 0.15 },
   "kimi-k2.5": { input: 0.6, output: 2, cache_read: 0.15 },
@@ -551,8 +554,12 @@ function getModelPricing(model: string, source = "") {
   if (lower.includes("gpt-5.1-codex-mini")) return MODEL_PRICING["gpt-5.1-codex-mini"];
   if (lower.includes("gpt-5.1")) return MODEL_PRICING["gpt-5.1-codex"];
   if (lower.includes("gpt-5")) return MODEL_PRICING["gpt-5"];
-  // gemini-4-argon must precede gemini-3 / gemini-2.5 substring matchers.
+  // Standard Gemini 4 SKUs and their effort levels; other variants have
+  // independent prices, including Carbon Cyber Permissive.
   if (lower.includes("gemini-4-argon") || lower.includes("gemini-4.argon")) return MODEL_PRICING["gemini-4-argon"];
+  const gemini4 = lower.trim().match(/(?:^|\/)gemini-4[.-](carbon|hydrogen)(?:-(?:minimal|low|medium|high|xhigh))?$/);
+  if (gemini4) return MODEL_PRICING[`gemini-4-${gemini4[1]}`];
+  if (/(?:^|\/)muse-wonder-1[.-]0(?:-(?:minimal|low|medium|high|xhigh|extra-high|max))?$/.test(lower)) return MODEL_PRICING["muse-wonder-1.0"];
   // Gemini 3.8/3.7/3.6 Flash introductory Standard rates must precede the
   // gemini-3 catch-all (which bills at gemini-3-flash-preview). Alternate
   // SKUs (cyber, tts, lite, image, live) have different published rates.

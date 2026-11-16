@@ -140,6 +140,13 @@ function normalizeCursorModel(model) {
   const parts = m.split("-");
   const isFast = parts.includes("fast");
 
+  if (/^gemini-4[.-](argon|carbon|hydrogen)(?:-(minimal|low|medium|high|xhigh))?$/.test(m)) {
+    return m.replace(/^gemini-4\./, "gemini-4-").replace(/-(minimal|low|medium|high|xhigh)$/, "");
+  }
+  if (/^muse-wonder-1[.-]0(?:-(minimal|low|medium|high|xhigh|extra-high|max))?$/.test(m)) {
+    return "muse-wonder-1.0";
+  }
+
   if (/^(?:cursor-)?grok-4[.-]7(?:-|$)/.test(m)) {
     return isFast ? "cursor-grok-4.7-fast" : "cursor-grok-4.7";
   }
@@ -367,6 +374,12 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
     return { hit: false, source: "miss", value: null };
   }
 
+  // Gemini 4's Cyber Permissive SKU and future variants must not inherit
+  // the cheaper introductory Standard rate through contained-key matching.
+  const gemini4 = lower.trim().match(/(?:^|\/)gemini-4[.-](carbon|hydrogen)(.*)$/);
+  if (gemini4 && !/^(?:-(?:minimal|low|medium|high|xhigh))?$/.test(gemini4[2])) {
+    return { hit: false, source: "miss", value: null };
+  }
   const curatedDotContainedExact = lookupContainedExactCaseInsensitive(curated.exact, dotForm);
   if (curatedDotContainedExact) {
     return { hit: true, source: "curated:exact-dot", value: curatedDotContainedExact };

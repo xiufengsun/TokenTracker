@@ -649,5 +649,7 @@
   "cloud.free.device_scope": "現在のデバイスの使用量のみを集計",
   "cloud.plan.includes_local": "無料版のすべてのローカル機能を含む",
   "cloud.plan.device_sync": "デバイス台数の制限なし、使用量をまとめて同期",
-  "cloud.plan.device_fair_use": "通常の個人利用ではデバイス台数の制限や台数ごとの追加料金はありません。大量または異常なデバイス接続には同期保護が適用される場合があります。"
+  "cloud.plan.device_fair_use": "通常の個人利用ではデバイス台数の制限や台数ごとの追加料金はありません。大量または異常なデバイス接続には同期保護が適用される場合があります。",
+  "dashboard.cost_breakdown.subscription_usage": "サブスクリプション使用量",
+  "dashboard.cost_breakdown.subscription_usage_hint": "Grok Bot の製品使用量です。公開されたトークン単価がないため、モデル別の費用は推定できません。サブスクリプション料金は各行に配分していません。"
 }

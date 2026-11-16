@@ -665,5 +665,7 @@
   "cloud.free.device_scope": "Nutzungsstatistiken nur für dieses Gerät",
   "cloud.plan.includes_local": "Alle kostenlosen lokalen Funktionen enthalten",
   "cloud.plan.device_sync": "Unbegrenzte Geräte · geräteübergreifende Synchronisierung",
-  "cloud.plan.device_fair_use": "Unbegrenzte Geräte für die alltägliche persönliche Nutzung, ohne Gebühren pro Gerät. Viele oder ungewöhnliche Geräteverbindungen können den Synchronisierungsschutz auslösen."
+  "cloud.plan.device_fair_use": "Unbegrenzte Geräte für die alltägliche persönliche Nutzung, ohne Gebühren pro Gerät. Viele oder ungewöhnliche Geräteverbindungen können den Synchronisierungsschutz auslösen.",
+  "dashboard.cost_breakdown.subscription_usage": "Abo-Nutzung",
+  "dashboard.cost_breakdown.subscription_usage_hint": "Grok Bot meldet Produktnutzung statt eines bepreisten Modells. Es gibt keinen öffentlichen Tokenpreis; Abogebühren werden diesen Zeilen nicht zugeordnet."
 }

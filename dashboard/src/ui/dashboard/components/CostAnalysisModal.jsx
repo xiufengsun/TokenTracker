@@ -171,7 +171,7 @@ export const CostAnalysisModal = React.memo(function CostAnalysisModal({
                               <summary className="cursor-pointer truncate py-1 leading-normal" title={model.name}>{model.name}</summary>
                               <div className="space-y-2 py-2 pr-2 text-xs leading-relaxed">
                                 <p>{model.costSource === "provider_reported" ? copy("dashboard.cost_breakdown.reported") : model.costSource === "mixed" ? copy("dashboard.cost_breakdown.mixed") : copy("dashboard.cost_breakdown.estimated")}</p>
-                                {model.pricing?.status === "unpriced" && model.costSource !== "provider_reported" ? <p>{copy("dashboard.cost_breakdown.unpriced")}</p> : null}
+                                {model.pricing?.status === "unpriced" && model.costSource !== "provider_reported" ? <p>{copy(model.pricing?.source === "cursor_subscription" ? "dashboard.cost_breakdown.subscription_usage_hint" : "dashboard.cost_breakdown.unpriced")}</p> : null}
                                 {model.pricing?.status === "free" ? <p>{copy("dashboard.cost_breakdown.no_token_charge")}</p> : null}
                                 {model.tokens ? <p>{copy("dashboard.cost_breakdown.token_mix", { input: formatCompactNumber(Number(model.tokens.input) || 0), output: formatCompactNumber(Number(model.tokens.output) || 0), read: formatCompactNumber(Number(model.tokens.cached) || 0), write: formatCompactNumber(Number(model.tokens.cacheCreate) || 0) })}</p> : null}
                                 {model.pricing?.status === "priced" ? <p>{copy("dashboard.cost_breakdown.rates", { input: model.pricing.input, output: model.pricing.output, read: model.pricing.cache_read, write: model.pricing.cache_write })}</p> : null}
@@ -181,7 +181,7 @@ export const CostAnalysisModal = React.memo(function CostAnalysisModal({
                               role="cell"
                               className="shrink-0 text-caption text-oai-gray-700 dark:text-oai-gray-300 tabular-nums leading-none"
                             >
-                              {model.costLabel || (model.pricing?.status === "unpriced" ? copy("dashboard.cost_breakdown.unpriced_label") : model.pricing?.status === "free" ? formatUsdCurrency(0, { currency, rate }) : copy("dashboard.cost_breakdown.rate_unknown"))}
+                              {model.costLabel || (model.pricing?.status === "unpriced" ? copy(model.pricing?.source === "cursor_subscription" ? "dashboard.cost_breakdown.subscription_usage" : "dashboard.cost_breakdown.unpriced_label") : model.pricing?.status === "free" ? formatUsdCurrency(0, { currency, rate }) : copy("dashboard.cost_breakdown.rate_unknown"))}
                             </span>
                           </div>
                         ))}
