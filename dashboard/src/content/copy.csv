@@ -1937,6 +1937,12 @@ cloud.checkout.verification_pending,cloud,*,Cloud,text,Payment confirmation is s
 cloud.checkout.duplicate_payment,cloud,*,Cloud,text,Payments were detected on both the original and replacement orders. Review your bills and contact support to resolve the duplicate charge. Do not pay again.,,active
 cloud.action.review_duplicate_payment,cloud,*,Cloud,text,Review duplicate payment,,active
 cloud.prompt.label,cloud,*,Cloud,text,"Cloud options",,active
+cloud.notice.expired.title,cloud,*,Cloud,text,Pro expired,,active
+cloud.notice.expired.body,cloud,*,Cloud,text,Cloud sync is paused. Local tracking continues.,,active
+cloud.notice.free.title,cloud,*,Cloud,text,You're on the free plan,,active
+cloud.notice.free.body,cloud,*,Cloud,text,Sync usage across your devices with Pro.,,active
+cloud.notice.restore,cloud,*,Cloud,text,Restore sync,,active
+cloud.notice.learn,cloud,*,Cloud,text,Explore Pro,,active
 cloud.prompt.dismiss,cloud,*,Cloud,text,"Dismiss Cloud reminder",,active
 cloud.prompt.free,cloud,*,Cloud,text,Local tracking and exports stay free. Daily community uploads and leaderboard participation do not require membership.,,active
 cloud.prompt.sync,cloud,CloudPage,CloudPage,text,"Personal Cloud syncs changed usage across your devices every 15 minutes. Free community uploads continue daily from one selected device.",,active

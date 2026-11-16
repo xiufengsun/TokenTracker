@@ -234,6 +234,7 @@ function ProviderDistributionSkeleton() {
 }
 
 export function UsageOverview({
+  cloudNotice,
   period,
   periods,
   onPeriodChange,
@@ -520,6 +521,8 @@ export function UsageOverview({
             )}
           </div>
         </div>
+
+        {cloudNotice}
 
         {/* Main Stats */}
         <div className="text-center mb-8">

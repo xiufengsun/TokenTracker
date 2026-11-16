@@ -18,6 +18,14 @@ vi.mock("../../../../hooks/useTheme.js", () => ({
 }));
 
 describe("UsageOverview", () => {
+  it("places the Cloud notice inside the usage card above the main number", () => {
+    render(<UsageOverview periods={[]} summaryLabel="Total tokens" summaryValue="42"
+      cloudNotice={<div role="status">{copy("cloud.notice.expired.title")}</div>} />);
+    const notice = screen.getByRole("status");
+    const label = screen.getByText("Total tokens");
+    expect(notice.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(notice.parentElement).toBe(label.parentElement.parentElement);
+  });
   it("labels account-scope data on the usage card", () => {
     render(
       <UsageOverview
