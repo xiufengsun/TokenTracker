@@ -79,7 +79,7 @@ describe("Cloud public routing", () => {
     auth.signedIn = true;
     auth.user = { id: "expired-account" };
     publishCloudPromptBilling("account", { membership: { status: "expired", environment: "live", phase: "active",
-      can_read_cloud: true, can_upload_cloud: false } }, auth.user.id);
+      can_read_cloud: true, can_upload_cloud: false }, machine_count: 2 }, auth.user.id);
     render(<MemoryRouter initialEntries={["/dashboard"]}><App /></MemoryRouter>);
     expect(await screen.findByRole("heading", { name: labels.dashboard })).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Cloud options" })).toHaveTextContent("Pro expired");

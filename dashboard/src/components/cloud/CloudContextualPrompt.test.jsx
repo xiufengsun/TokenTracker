@@ -53,6 +53,15 @@ describe("contextual Cloud panels", () => {
     expect(screen.getAllByRole("link")).toHaveLength(1);
     expect(request).not.toHaveBeenCalled();
   });
+  it.each(["free", "expired"])("hides the %s overview notice for one device or an unknown count", (status) => {
+    publishCloudPromptBilling("account", { membership: { ...membership, status }, machine_count: 1 }, userId, now);
+    const view = show({ panel: "overview" });
+    expect(screen.queryByRole("status", { name: "Cloud options" })).not.toBeInTheDocument();
+    const unknownOwner = `${userId}-unknown-count`;
+    act(() => publishCloudPromptBilling("account", { membership: { ...membership, status } }, unknownOwner, now));
+    view.rerender(<MemoryRouter><CloudContextualPrompt userId={unknownOwner} panel="overview" /></MemoryRouter>);
+    expect(screen.queryByRole("status", { name: "Cloud options" })).not.toBeInTheDocument();
+  });
   it("removes the overview status when membership is restored", () => {
     publishCloudPromptBilling("account", { membership: { ...membership, status: "expired", can_read_cloud: true } }, userId, now);
     show({ panel: "overview" });
