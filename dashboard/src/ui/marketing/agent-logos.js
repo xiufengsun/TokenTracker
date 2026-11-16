@@ -78,7 +78,7 @@ export const AGENT_LOGOS = [
     provider: "trae",
   },
   {
-    id: 44,
+    id: 48,
     nameKey: "provider.display.deepai",
     provider: "deepai",
   },

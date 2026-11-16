@@ -186,6 +186,7 @@
   "provider.display.omo": "OmO",
   "provider.display.minimax_code": "MiniMax Code",
   "provider.display.command_code": "Command Code",
+  "provider.display.deepai": "DeepAI Code",
   "provider.display.deepseek_harness": "DeepSeek Harness",
   "provider.display.cline": "Cline",
   "provider.display.trae": "TRAE",
