@@ -678,5 +678,8 @@
   "cloud.order_cancel.paid": "Diese Bestellung wurde nicht storniert. Prüfen Sie Rechnungen und Mitgliedschaft. Bestätigte Zahlungen behalten ihre bisherigen Leistungen und Aboeinstellungen.",
   "cloud.order_cancel.error": "Die Stornierung konnte nicht bestätigt werden. Rechnungen aktualisieren und erneut prüfen. Nicht erneut bezahlen oder von einer abgeschlossenen Stornierung ausgehen.",
   "cloud.order_cancel.manage": "Unbezahlte Bestellungen verwalten",
-  "cloud.order_cancel.unverified": "Für diese ältere Bestellung fehlen vollständige Prüfnachweise. Die Stornierung kann nicht automatisch bestätigt werden und kann in Bearbeitung bleiben. Nicht bezahlen oder erneut bestellen; Codes bleiben bis zur Klärung gesperrt."
+  "cloud.order_cancel.unverified": "Für diese ältere Bestellung fehlen vollständige Prüfnachweise. Die Stornierung kann nicht automatisch bestätigt werden und kann in Bearbeitung bleiben. Nicht bezahlen oder erneut bestellen; Codes bleiben bis zur Klärung gesperrt.",
+  "cloud.order_cancel.pending_label": "Stornierung läuft",
+  "cloud.order_cancel.unverified_label": "Prüfung erforderlich",
+  "cloud.order_cancel.unknown": "Der Stornierungsstatus ist unbestätigt. Bezahlen Sie nicht über alte Links und erstellen Sie keine neue Bestellung. Prüfen Sie den Status erneut; bis zur Bestätigung kann die Code-Einlösung gesperrt bleiben."
 }

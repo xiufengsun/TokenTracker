@@ -662,5 +662,8 @@
   "cloud.order_cancel.paid": "이 주문은 취소되지 않았습니다. 청구 및 회원 상태를 확인하세요. 확인된 결제의 기존 이용 권한과 구독 설정은 유지됩니다.",
   "cloud.order_cancel.error": "취소 결과를 확인할 수 없습니다. 청구 내역을 새로고침한 후 다시 확인하세요. 다시 결제하거나 취소가 완료되었다고 가정하지 마세요.",
   "cloud.order_cancel.manage": "미결제 주문 관리",
-  "cloud.order_cancel.unverified": "이 과거 주문에는 완전한 확인 기록이 없어 취소 완료를 자동으로 확인할 수 없으며 처리 중 상태가 계속될 수 있습니다. 결제하거나 중복 주문하지 마세요. 확인이 끝날 때까지 코드를 사용할 수 없습니다."
+  "cloud.order_cancel.unverified": "이 과거 주문에는 완전한 확인 기록이 없어 취소 완료를 자동으로 확인할 수 없으며 처리 중 상태가 계속될 수 있습니다. 결제하거나 중복 주문하지 마세요. 확인이 끝날 때까지 코드를 사용할 수 없습니다.",
+  "cloud.order_cancel.pending_label": "취소 처리 중",
+  "cloud.order_cancel.unverified_label": "확인 필요",
+  "cloud.order_cancel.unknown": "취소 결과가 확인되지 않았습니다. 이전 링크로 결제하거나 새 주문을 만들지 마세요. 취소 상태를 다시 확인하세요. 확인이 끝날 때까지 코드를 사용하지 못할 수 있습니다."
 }

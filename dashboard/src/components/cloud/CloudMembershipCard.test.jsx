@@ -940,3 +940,52 @@ it("retains processing intent and hides old payment links after failed refresh a
   expect(screen.getByRole("button", { name: "Check cancellation status" })).toBeVisible();
   expect(screen.queryByRole("link", { name: copy("cloud.action.resume_order") })).not.toBeInTheDocument();
 });
+
+
+it("shows processing status rather than payable pending after accepted intent", async () => {
+  mocks.account = { ...mocks.account, pending_orders: [{ id: orderId, provider: "waffo", status: "ready", created_at: "2026-11-17T08:00:00Z", cancel_requested_at: "2026-11-17T08:01:00Z" }] };
+  show();
+  await openPaymentHistory();
+  expect(screen.getByText(copy("cloud.order_cancel.pending_label"), { exact: true })).toBeVisible();
+  expect(screen.queryByText(copy("cloud.history.pending"), { exact: true })).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: copy("cloud.action.resume_order") })).not.toBeInTheDocument();
+});
+
+it("unknown cancellation outcome hides payment links and retains verification after closing billing", async () => {
+  mocks.account = { ...mocks.account, pending_orders: [{ id: orderId, provider: "waffo", status: "ready", created_at: "2026-11-17T08:00:00Z" }] };
+  mocks.request.mockRejectedValue(new Error("fixture transport timeout; acceptance unknown"));
+  show();
+  await openPaymentHistory();
+  await click(screen.getByRole("button", { name: "Cancel unpaid order" }));
+  await click(screen.getByRole("button", { name: "Request cancellation" }));
+  await screen.findByRole("alert");
+  expect(screen.getByText(copy("cloud.order_cancel.unverified_label"), { exact: true })).toBeVisible();
+  expect(screen.queryByRole("link", { name: copy("cloud.action.resume_order") })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Request cancellation" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Check cancellation status" })).toBeVisible();
+  await click(screen.getByRole("button", { name: copy("shared.dialog.close") }));
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+  await openPaymentHistory();
+  expect(screen.getByRole("button", { name: "Check cancellation status" })).toBeVisible();
+  expect(screen.queryByRole("link", { name: copy("cloud.action.resume_order") })).not.toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(copy("cloud.order_cancel.unknown"));
+});
+
+
+it("lets confirmed account cancellation intent supersede provisional unknown outcome", async () => {
+  mocks.account = { ...mocks.account, pending_orders: [{ id: orderId, provider: "waffo", status: "ready", created_at: "2026-11-17T08:00:00Z" }] };
+  mocks.request.mockRejectedValue(new Error("fixture response lost after server commit"));
+  const view = show();
+  await openPaymentHistory();
+  await click(screen.getByRole("button", { name: "Cancel unpaid order" }));
+  await click(screen.getByRole("button", { name: "Request cancellation" }));
+  await screen.findByRole("alert");
+  expect(screen.getByText(copy("cloud.order_cancel.unverified_label"), { exact: true })).toBeVisible();
+  mocks.account = { ...mocks.account, pending_orders: mocks.account.pending_orders.map((order) => ({ ...order, cancel_requested_at: "2026-11-17T08:01:00Z" })) };
+  view.rerender(<MemoryRouter><CloudMembershipCard /><Location /></MemoryRouter>);
+  expect(screen.getByText(copy("cloud.order_cancel.pending_label"), { exact: true })).toBeVisible();
+  expect(screen.queryByText(copy("cloud.order_cancel.unverified_label"), { exact: true })).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: copy("cloud.action.resume_order") })).not.toBeInTheDocument();
+});

@@ -302,7 +302,7 @@ function RestoreCloudOrder({ recent, pendingOrders, conflictOrders, userId, auth
   const [invalid, setInvalid] = useState(false);
   const [lookupOpen, setLookupOpen] = useState(false);
   const cancelNotice = useRef(null);
-  useEffect(() => { if (cancelOutcome && cancelOutcome !== "processing") cancelNotice.current?.focus(); }, [cancelOutcome]);
+  useEffect(() => { if (["cancelled", "not_cancelled"].includes(cancelOutcome)) cancelNotice.current?.focus(); }, [cancelOutcome]);
   const lookupId = useId();
   const inputRef = useRef(null);
   useEffect(() => {
@@ -316,13 +316,13 @@ function RestoreCloudOrder({ recent, pendingOrders, conflictOrders, userId, auth
   const orders = [...(conflictOrders || []), ...(pendingOrders || []).filter((order) =>
     order.retry_payment_conflict_at || !paidOrderIds.has(order.id.toLowerCase()))].map((order) => {
     const updated = cancellationOrders[order.id];
-    return updated && !order.retry_payment_conflict_at ? { ...order, ...updated } : order;
+    return updated && !order.retry_payment_conflict_at ? { ...order, ...updated, cancel_requested_at: order.cancel_requested_at || updated.cancel_requested_at } : order;
   }).filter(
     (order, index, all) => { return (order.retry_payment_conflict_at || !["closed", "paid"].includes(order.status)) && all.findIndex((item) => item.id === order.id) === index; },
   );
   return (
     <div className="mt-2 space-y-3">
-      {cancelOutcome && cancelOutcome !== "processing" ? <p ref={cancelNotice} tabIndex={-1} role="status" className="text-sm">{copy(cancelOutcome === "cancelled" ? "cloud.order_cancel.done" : "cloud.order_cancel.paid")}</p> : null}
+      {["cancelled", "not_cancelled"].includes(cancelOutcome) ? <p ref={cancelNotice} tabIndex={-1} role="status" className="text-sm">{copy(cancelOutcome === "cancelled" ? "cloud.order_cancel.done" : "cloud.order_cancel.paid")}</p> : null}
       {recent?.request_id && !recent.order_id ? (
         <Link
           to={`/billing/checkout?sku=${encodeURIComponent(recent.sku)}`}
@@ -345,7 +345,7 @@ function RestoreCloudOrder({ recent, pendingOrders, conflictOrders, userId, auth
             if (Number.isInteger(order.amount_cents) && order.amount_cents >= 0 && ["USD", "CNY"].includes(order.currency)) {
               amount = formatCloudMoney(order.amount_cents, order.currency);
             }
-            const status = copy(order.retry_payment_conflict_at ? "cloud.action.review_duplicate_payment" : "cloud.history.pending");
+            const status = copy(order.retry_payment_conflict_at ? "cloud.action.review_duplicate_payment" : order.cancel_requested_at ? "cloud.order_cancel.pending_label" : order.cancel_verification_pending ? "cloud.order_cancel.unverified_label" : "cloud.history.pending");
             return (
             <li key={order.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-3 sm:col-span-3 sm:grid-cols-subgrid">
               <p className="col-start-1 row-start-1 text-sm tabular-nums">{date || status}</p>
@@ -354,7 +354,7 @@ function RestoreCloudOrder({ recent, pendingOrders, conflictOrders, userId, auth
                 {order.provider ? <span>{cloudProviderLabel(order.provider)}</span> : null}
                 {date ? <>{order.provider ? <span aria-hidden>·</span> : null}<span>{status}</span></> : null}
               </div> : null}
-              {!order.cancel_requested_at ? <Link
+              {!order.cancel_requested_at && !order.cancel_verification_pending ? <Link
                 to={`/billing/checkout?order=${encodeURIComponent(order.id)}`}
                 onClick={(event) => {
                   if (order.retry_payment_conflict_at || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
@@ -764,7 +764,7 @@ export function CloudMembershipAccount({ account, auth, loading, error, refresh,
                   outcome,
                   orders: {
                     ...(previous?.scope === cancellationScope ? previous.orders : {}),
-                    [id]: { status: updated.status, cancel_requested_at: updated.cancel_requested_at },
+                    [id]: { status: updated.status, cancel_requested_at: updated.cancel_requested_at, cancel_verification_pending: updated.cancel_verification_pending === true },
                   },
                 }));
               }}

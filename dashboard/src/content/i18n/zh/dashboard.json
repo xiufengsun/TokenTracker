@@ -1071,5 +1071,8 @@
   "cloud.order_cancel.paid": "此订单未被取消。请查看账单及会员状态；已确认的付款保留原有权益和订阅设置。",
   "cloud.order_cancel.error": "暂时无法确认取消结果。请刷新账单后重试，勿重复付款，也不要视为已取消。",
   "cloud.order_cancel.manage": "处理待付款订单",
-  "cloud.order_cancel.unverified": "此旧订单缺少完整核验回执，系统无法自动确认取消完成，可能持续处于处理中。请勿付款或重复下单；核验完成前仍不能兑换会员码。"
+  "cloud.order_cancel.unverified": "此旧订单缺少完整核验回执，系统无法自动确认取消完成，可能持续处于处理中。请勿付款或重复下单；核验完成前仍不能兑换会员码。",
+  "cloud.order_cancel.pending_label": "取消处理中",
+  "cloud.order_cancel.unverified_label": "待核验",
+  "cloud.order_cancel.unknown": "取消结果尚未确认。请勿使用旧链接付款或重新下单。请再次检查取消状态；核验完成前可能仍无法兑换会员码。"
 }

@@ -1130,5 +1130,8 @@
   "cloud.order_cancel.paid": "此訂單未被取消。請查看帳單及會員狀態；已確認的付款保留原有權益和訂閱設定。",
   "cloud.order_cancel.error": "暫時無法確認取消結果。請重新整理帳單後重試，勿重複付款，也不要視為已取消。",
   "cloud.order_cancel.manage": "處理待付款訂單",
-  "cloud.order_cancel.unverified": "此舊訂單缺少完整核驗回執，系統無法自動確認取消完成，可能持續處於處理中。請勿付款或重複下單；核驗完成前仍不能兌換會員碼。"
+  "cloud.order_cancel.unverified": "此舊訂單缺少完整核驗回執，系統無法自動確認取消完成，可能持續處於處理中。請勿付款或重複下單；核驗完成前仍不能兌換會員碼。",
+  "cloud.order_cancel.pending_label": "取消處理中",
+  "cloud.order_cancel.unverified_label": "待核驗",
+  "cloud.order_cancel.unknown": "取消結果尚未確認。請勿使用舊連結付款或重新下單。請再次檢查取消狀態；核驗完成前可能仍無法兌換會員碼。"
 }
