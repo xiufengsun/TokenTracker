@@ -11,7 +11,7 @@ import { CloudActionDialog } from "./CloudActionDialog.jsx";
 
 function normalizedCode(value) { return value.replace(/[\t\n\r\f\v -]/g, "").toUpperCase(); }
 
-export function RedeemProCode({ account, auth, refresh, compact = false, panelContainer = null, layout = "default", dialogOpen, onDialogOpenChange }) {
+export function RedeemProCode({ account, auth, refresh, compact = false, panelContainer = null, layout = "default", dialogOpen, onDialogOpenChange, onManageBilling }) {
   const settingsRow = layout === "settings-row";
   const [internalExpanded, setExpanded] = useState(false);
   const expanded = settingsRow && typeof dialogOpen === "boolean" ? dialogOpen : internalExpanded;
@@ -161,6 +161,7 @@ export function RedeemProCode({ account, auth, refresh, compact = false, panelCo
             {["gift_checkout_pending", "gift_requires_renewal_cancel"].includes(error.code)
               ? <p role="alert" className="text-xs leading-5 text-oai-gray-600 dark:text-oai-gray-300">{cloudBillingErrorText(error, "gift")}</p>
               : <BillingNotice error={error} context="gift" />}
+            {error.code === "gift_checkout_pending" && onManageBilling ? <Button type="button" variant="ghost" size="sm" onClick={onManageBilling}>{copy("cloud.order_cancel.manage")}</Button> : null}
           </div> : null}
           </> : null}
           {gifts.length && !receipt ? <ul aria-label={copy("cloud.gift.history_title")} className="divide-y divide-oai-gray-200 dark:divide-oai-gray-800">

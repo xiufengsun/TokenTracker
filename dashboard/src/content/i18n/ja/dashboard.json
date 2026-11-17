@@ -651,5 +651,16 @@
   "cloud.plan.device_sync": "デバイス台数の制限なし、使用量をまとめて同期",
   "cloud.plan.device_fair_use": "通常の個人利用ではデバイス台数の制限や台数ごとの追加料金はありません。大量または異常なデバイス接続には同期保護が適用される場合があります。",
   "dashboard.cost_breakdown.subscription_usage": "サブスクリプション使用量",
-  "dashboard.cost_breakdown.subscription_usage_hint": "Grok Bot の製品使用量です。公開されたトークン単価がないため、モデル別の費用は推定できません。サブスクリプション料金は各行に配分していません。"
+  "dashboard.cost_breakdown.subscription_usage_hint": "Grok Bot の製品使用量です。公開されたトークン単価がないため、モデル別の費用は推定できません。サブスクリプション料金は各行に配分していません。",
+  "cloud.order_cancel.action": "未払い注文をキャンセル",
+  "cloud.order_cancel.confirm": "キャンセルを申請",
+  "cloud.order_cancel.detail": "この未払い注文のキャンセルを申請しますか？定期購入の自動更新の停止とは異なります。古いリンクから支払わないでください。決済リンクが有効、または決済状況が不明な間は処理中となり、確認が終わるまでコードは利用できません。新しい注文は作成されません。",
+  "cloud.order_cancel.sending": "申請・確認中…",
+  "cloud.order_cancel.processing": "キャンセル処理中です。古いリンクから支払わないでください。決済リンクとすべての決済試行の終了を確認するまでコードは利用できません。有効期限だけではキャンセルは完了しません。",
+  "cloud.order_cancel.check": "キャンセル状況を確認",
+  "cloud.order_cancel.done": "未払い注文をキャンセルしました。コードの利用画面に戻れます。コードは自動では利用されません。",
+  "cloud.order_cancel.paid": "この注文はキャンセルされていません。請求と会員状況を確認してください。確認済みの支払いに対する権利と定期購入設定は保持されます。",
+  "cloud.order_cancel.error": "キャンセル結果を確認できません。請求を更新して再度確認してください。再度支払ったり、キャンセル済みと判断したりしないでください。",
+  "cloud.order_cancel.manage": "未払い注文を管理",
+  "cloud.order_cancel.unverified": "この過去の注文には完全な確認記録がなく、キャンセル完了を自動で確認できません。処理中のままになる場合があります。支払いや重複注文をせず、確認が完了するまでコードを利用しないでください。"
 }

@@ -30,7 +30,7 @@ test.before(async () => {
     '20261007130000_cloud-waffo-retry.sql','20261007140000_cloud-waffo-attempts.sql',
     '20261007150000_cloud-waffo-authorizations.sql','20261007160000_cloud-waffo-sandbox-periods.sql',
     '20261008120000_self-hosted-access.sql','20261009120000_cloud-gifts.sql',
-    '20261106014534_cloud-checkout-recovery.sql']) {
+    '20261106014534_cloud-checkout-recovery.sql','20261117090000_cloud-order-cancellation.sql']) {
     await db.exec(fs.readFileSync(path.join(__dirname,'../migrations',name),'utf8'));
   }
   await db.exec("UPDATE tokentracker_cloud_policy SET phase='active',launch_at=now()-interval '1 hour' WHERE environment='sandbox'");
@@ -167,4 +167,21 @@ test('an expired receipt-bound checkout with two verified empty snapshots no lon
   } finally {
     expiredProviderRef=null;delete env.WAFFO_PRIVATE_KEY;delete env.WAFFO_MERCHANT_ID;delete env.WAFFO_STORE_ID;
   }
+});
+
+test('cancel a never-issued draft then explicitly redeem: cancellation never consumes the code',async()=>{
+  const id=await user(),raw=await code();
+  const made=await db.query("SELECT cloud_create_order($1,'sandbox','waffo','cloud_usd_monthly_fixed',$2) AS r",[id,randomUUID()]);
+  const order=made.rows[0].r;
+  assert.equal((await api(id,'redeem-gift',{code:raw,request_id:randomUUID()})).data.error,'gift_checkout_pending');
+  const cancelled=await api(id,'cancel-order',{id:order.id});assert.equal(cancelled.data.cancellation,'cancelled');
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM tokentracker_cloud_gift_grants WHERE user_id=$1',[id])).rows[0].n,0);
+  const redeemed=await api(id,'redeem-gift',{code:raw,request_id:randomUUID()});assert.equal(redeemed.response.status,200);
+});
+test('gift cleanup cannot bypass a cancellation with an unknown historical checkout',async()=>{
+  const id=await user(),raw=await code();
+  const made=await db.query("SELECT cloud_create_order($1,'sandbox','waffo','cloud_usd_monthly_fixed',$2) AS r",[id,randomUUID()]);
+  await db.query("UPDATE tokentracker_cloud_orders SET cancel_requested_at=now(),checkout_started=true,checkout_tracking_uncertain=true,expires_at=now()-interval '1 hour' WHERE id=$1",[made.rows[0].r.id]);
+  const result=await api(id,'redeem-gift',{code:raw,request_id:randomUUID()});assert.equal(result.response.status,409);assert.equal(result.data.error,'gift_checkout_pending');
+  assert.equal((await db.query('SELECT status FROM tokentracker_cloud_orders WHERE id=$1',[made.rows[0].r.id])).rows[0].status,'pending');
 });

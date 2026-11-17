@@ -86,7 +86,7 @@ async function setupDatabase() {
     "20261007160000_cloud-waffo-sandbox-periods.sql",
     "20261008120000_self-hosted-access.sql", "20261009120000_cloud-gifts.sql",
     "20261106011916_cloud-waffo-unused-checkout-retry.sql",
-    "20261106014534_cloud-checkout-recovery.sql"]) await db.exec(migration(name));
+    "20261106014534_cloud-checkout-recovery.sql", "20261117090000_cloud-order-cancellation.sql"]) await db.exec(migration(name));
   await db.exec("UPDATE tokentracker_cloud_policy SET phase='active',launch_at=now()-interval '1 hour' WHERE environment='sandbox'");
 }
 
@@ -106,7 +106,7 @@ async function databaseGateway(req, res, url, raw) {
         throw Error("isolated authorization audit failure");
       }
       const names = Object.keys(params);
-      const values = names.map(k => k === "p_waffo_order_ids" ? params[k]
+      const values = names.map(k => ["p_waffo_order_ids", "p_attempt_ids"].includes(k) ? params[k]
         : params[k] && typeof params[k] === "object" ? JSON.stringify(params[k]) : params[k]);
       const sql = `SELECT ${identifier(url.pathname.split("/").pop())}(${names.map((k, i) => `${identifier(k)} => $${i + 1}`).join(",")}) AS r`;
       const result = await tx.query(sql, values);
@@ -1479,4 +1479,144 @@ test("a second simulated failure terminates without granting another term or bei
   assert.equal(state.subscriptions[0].status, "canceled"); assert.equal(state.subscriptions[0].next_billed_at, null);
   assert.equal(state.membership.expires_at, paid.membership.expires_at);
   assert.equal((await db.query("SELECT count(*)::int n FROM tokentracker_cloud_waffo_periods WHERE order_id=$1", [row.id])).rows[0].n, 1);
+});
+
+
+// Cancellation fixtures use only this file's isolated database and mock provider.
+async function draftForCancellation(owner) {
+  return (await db.query("SELECT cloud_create_order($1,'sandbox','waffo','cloud_usd_monthly_fixed',$2) AS r",[owner,randomUUID()])).rows[0].r;
+}
+test("cancel draft is owned, idempotent, closes without provider calls or a successor", async () => {
+  const owner=await user(), other=await user(), row=await draftForCancellation(owner);
+  const sessionsBefore=sessionCount, cancelsBefore=cancelCount;
+  assert.equal((await api("cancel-order",{id:row.id},other)).response.status,404);
+  for(let i=0;i<2;i++) {
+    const result=await api("cancel-order",{id:row.id},owner);
+    assert.equal(result.response.status,200);assert.equal(result.data.cancellation,"cancelled");
+  }
+  const saved=await localOrder(row.id);assert.equal(saved.status,"closed");assert.equal(saved.retry_order_id,null);
+  assert.equal(sessionCount,sessionsBefore);assert.equal(cancelCount,cancelsBefore);
+  assert.equal((await db.query("SELECT count(*)::int AS n FROM tokentracker_cloud_orders WHERE user_id=$1",[owner])).rows[0].n,1);
+  assert.equal((await account(owner)).redemption_restriction,null);
+});
+test("issued link cancellation stays processing, repeated request is safe, and no checkout or retry can be created",async()=>{
+  const owner=await user(), made=await checkout(owner), id=made.data.order.id;
+  const sessionsBefore=sessionCount, cancelsBefore=cancelCount;
+  const first=await api("cancel-order",{id},owner);
+  assert.equal(first.response.status,202);assert.equal(first.data.cancellation,"processing");
+  const stamp=(await localOrder(id)).cancel_requested_at.toISOString();
+  assert.equal((await api("cancel-order",{id},owner)).response.status,202);
+  assert.equal((await localOrder(id)).cancel_requested_at.toISOString(),stamp);
+  assert.equal((await api("restart-checkout",{id,request_id:randomUUID()},owner)).response.status,409);
+  const blocked=await checkout(owner,"cloud_usd_monthly",(await localOrder(id)).request_id);
+  assert.equal(blocked.response.status,409);
+  await assert.rejects(draftForCancellation(owner),/cancellation is pending/);
+  const state=await account(owner);assert.equal(state.redemption_restriction,"gift_checkout_pending");
+  assert.equal(state.pending_orders[0].cancel_requested_at,stamp);
+  assert.equal(sessionCount,sessionsBefore);assert.equal(cancelCount,cancelsBefore);
+});
+test("expiry alone, in-flight creation, unknown result and legacy tracking never finalize cancellation",async()=>{
+  for(const condition of ["pending","inflight","uncertain","legacy"]) {
+    const owner=await user(), made=await checkout(owner),id=made.data.order.id;
+    const row=await localOrder(id);
+    await db.query("UPDATE tokentracker_cloud_orders SET expires_at=now()-interval '2 hours',provider_checkout_expires_at=now()-interval '2 hours' WHERE id=$1",[id]);
+    if(condition==="pending") failedAttempt(row,"pending");
+    if(condition==="legacy") await db.query("UPDATE tokentracker_cloud_orders SET checkout_tracking_uncertain=true WHERE id=$1",[id]);
+    if(condition==="inflight"||condition==="uncertain") await db.query("INSERT INTO tokentracker_cloud_checkout_operations(order_id,finished_at,uncertain) VALUES($1,$2,$3)",[id,condition==="inflight"?null:new Date().toISOString(),condition==="uncertain"]);
+    const result=await api("cancel-order",{id},owner);
+    assert.equal(result.response.status,202,condition);assert.equal((await localOrder(id)).status,"ready",condition);
+    assert.equal((await account(owner)).redemption_restriction,"gift_checkout_pending");
+  }
+});
+test("expired fully tracked checkout with confirmed terminal attempts finalizes without canceling a subscription",async()=>{
+  const owner=await user(), made=await checkout(owner,"cloud_usd_monthly_fixed"), id=made.data.order.id;
+  const remote=failedAttempt(await localOrder(id));
+  await db.query("UPDATE tokentracker_cloud_orders SET expires_at=now()-interval '2 hours',provider_checkout_expires_at=now()-interval '2 hours' WHERE id=$1",[id]);
+  const before=cancelCount;
+  const result=await api("cancel-order",{id},owner);
+  assert.equal(result.response.status,200);assert.equal(result.data.cancellation,"cancelled");
+  assert.equal((await localOrder(id)).status,"closed");assert.equal(cancelCount,before);assert.equal(remote.status,"closed");
+  assert.equal((await account(owner)).redemption_restriction,null);
+});
+test("paid provider result wins a cancellation request without changing subscription renewal",async()=>{
+  const owner=await user(), made=await checkout(owner),id=made.data.order.id;
+  const paid=makeRemote(await localOrder(id));const before=cancelCount;
+  const result=await api("cancel-order",{id},owner);
+  assert.equal(result.response.status,200);assert.equal(result.data.cancellation,"not_cancelled");
+  assert.equal((await localOrder(id)).status,"paid");assert.equal(cancelCount,before);
+  const state=await account(owner);assert.equal(state.payments.length,1);assert.equal(state.subscriptions[0].cancel_at_period_end,false);
+  assert.equal((await webhook(notification(paid))).response.status,200);
+  assert.equal((await account(owner)).payments.length,1);
+});
+test("cancellation intent does not suppress a later webhook payment or account reconciliation",async()=>{
+  const owner=await user(), made=await checkout(owner),id=made.data.order.id;
+  assert.equal((await api("cancel-order",{id},owner)).response.status,202);
+  const paid=makeRemote(await localOrder(id));
+  assert.equal((await webhook(notification(paid))).response.status,200);
+  const result=await api("cancel-order",{id},owner);
+  assert.equal(result.data.cancellation,"not_cancelled");assert.equal((await localOrder(id)).status,"paid");
+  assert.equal((await account(owner)).payments.length,1);
+});
+test("cancel-before-operation prevents network start; finalizer rejects changed receipt and attempt evidence",async()=>{
+  const owner=await user(),row=await draftForCancellation(owner);
+  await db.query("SELECT cloud_claim_checkout($1,$2)",[owner,row.id]);
+  assert.equal((await api("cancel-order",{id:row.id},owner)).data.cancellation,"cancelled");
+  const denied=await db.query("SELECT cloud_begin_checkout_operation($1,'sandbox',$2) AS r",[owner,row.id]);assert.equal(denied.rows[0].r.allowed,false);
+  const secondOwner=await user(),made=await checkout(secondOwner),id=made.data.order.id;
+  await api("cancel-order",{id},secondOwner);
+  const current=await localOrder(id);
+  const result=await db.query("SELECT cloud_finalize_order_cancel($1,'sandbox',$2,'cs_wrong',now()-interval '1 hour',ARRAY[]::text[]) AS r",[secondOwner,id]);
+  assert.equal(result.rows[0].r.status,current.status);
+});
+
+test("mixed or malformed provider attempts remain processing without invoking cancellation APIs",async()=>{
+  for(const condition of ["mixed","malformed"]) {
+    const owner=await user(),made=await checkout(owner),id=made.data.order.id,row=await localOrder(id);
+    const first=failedAttempt(row,"closed"),second=failedAttempt(row,"pending");
+    if(condition==="malformed") second.payments[0].status="unknown";
+    providerOrders.set(id,[first,second]);
+    await db.query("UPDATE tokentracker_cloud_orders SET expires_at=now()-interval '2 hours',provider_checkout_expires_at=now()-interval '2 hours' WHERE id=$1",[id]);
+    const before=cancelCount,result=await api("cancel-order",{id},owner);
+    assert.equal(result.response.status,202);assert.equal((await localOrder(id)).status,"ready");assert.equal(cancelCount,before);
+  }
+});
+test("operation receipts remain uncertain after ambiguous failure and duplicate finish cannot clear them",async()=>{
+  const owner=await user(),row=await draftForCancellation(owner);
+  const begun=(await db.query("SELECT cloud_begin_checkout_operation($1,'sandbox',$2) AS r",[owner,row.id])).rows[0].r;
+  assert.equal(begun.allowed,true);
+  const requested=await api("cancel-order",{id:row.id},owner);assert.equal(requested.response.status,202);
+  await db.query("SELECT cloud_finish_checkout_operation($1,'sandbox',$2,$3,true)",[owner,row.id,begun.operation_id]);
+  await db.query("SELECT cloud_finish_checkout_operation($1,'sandbox',$2,$3,false)",[owner,row.id,begun.operation_id]);
+  const receipt=(await db.query("SELECT * FROM tokentracker_cloud_checkout_operations WHERE id=$1",[begun.operation_id])).rows[0];assert.equal(receipt.uncertain,true);
+  assert.equal((await api("cancel-order",{id:row.id},owner)).response.status,202);
+});
+
+test("stale cleanup and retry atomics cannot close or replace a newly cancellation-pending order",async()=>{
+ const owner=await user(),made=await checkout(owner,"cloud_usd_monthly_fixed"),id=made.data.order.id;
+ await db.query("UPDATE tokentracker_cloud_orders SET cancel_requested_at=now(),expires_at=now()-interval '2 hours',provider_checkout_expires_at=now()-interval '2 hours' WHERE id=$1",[id]);
+ const closed=(await db.query("SELECT cloud_close_unpaid_order($1,$2) AS r",[owner,id])).rows[0].r;
+ assert.equal(closed.status,"ready");
+ await assert.rejects(db.query("SELECT cloud_restart_waffo_attempts($1,'sandbox',$2,$3,ARRAY[]::text[]) AS r",[owner,id,randomUUID()]),/cancellation is pending/);
+ assert.equal((await localOrder(id)).status,"ready");assert.equal((await localOrder(id)).retry_order_id,null);
+ assert.equal((await db.query("SELECT count(*)::int AS n FROM tokentracker_cloud_orders WHERE user_id=$1",[owner])).rows[0].n,1);
+});
+test("another already-claimed checkout cannot recover a new provider session during cancellation",async()=>{
+ const owner=await user(),first=await draftForCancellation(owner);
+ // Two pre-existing fixed draft rows, as supported before either has a checkout.
+ const second=await draftForCancellation(owner);
+ assert.notEqual(first.id,second.id);
+ await db.query("SELECT cloud_begin_checkout_operation($1,'sandbox',$2)",[owner,first.id]);
+ await db.query("SELECT cloud_request_order_cancel($1,'sandbox',$2)",[owner,first.id]);
+ const denied=(await db.query("SELECT cloud_begin_checkout_operation($1,'sandbox',$2) AS r",[owner,second.id])).rows[0].r;
+ assert.equal(denied.allowed,false);
+});
+
+test("an already-issued sibling URL cannot be resumed during account cancellation",async()=>{
+ const owner=await user();
+ const a=await checkout(owner,"cloud_usd_monthly_fixed"),b=await checkout(owner,"cloud_usd_yearly_fixed");
+ assert.equal(a.response.status,200);assert.equal(b.response.status,200);
+ assert.equal((await api("cancel-order",{id:a.data.order.id},owner)).response.status,202);
+ const row=await localOrder(b.data.order.id),before=sessionCount;
+ const repeat=await checkout(owner,row.sku,row.request_id);
+ assert.equal(repeat.response.status,409);assert.equal(repeat.data.error,"order_cancel_processing");assert.equal(repeat.data.order,undefined);assert.equal(sessionCount,before);
 });

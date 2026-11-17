@@ -19,6 +19,8 @@ export interface CloudOrder {
   retry_payment_conflict_at?: string | null;
   provider_price_id?: string | null;
   checkout_url: string | null;
+  cancel_requested_at?: string | null;
+  checkout_tracking_uncertain?: boolean;
   status: string;
   expires_at: string;
 }

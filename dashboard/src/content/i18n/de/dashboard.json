@@ -667,5 +667,16 @@
   "cloud.plan.device_sync": "Unbegrenzte Geräte · geräteübergreifende Synchronisierung",
   "cloud.plan.device_fair_use": "Unbegrenzte Geräte für die alltägliche persönliche Nutzung, ohne Gebühren pro Gerät. Viele oder ungewöhnliche Geräteverbindungen können den Synchronisierungsschutz auslösen.",
   "dashboard.cost_breakdown.subscription_usage": "Abo-Nutzung",
-  "dashboard.cost_breakdown.subscription_usage_hint": "Grok Bot meldet Produktnutzung statt eines bepreisten Modells. Es gibt keinen öffentlichen Tokenpreis; Abogebühren werden diesen Zeilen nicht zugeordnet."
+  "dashboard.cost_breakdown.subscription_usage_hint": "Grok Bot meldet Produktnutzung statt eines bepreisten Modells. Es gibt keinen öffentlichen Tokenpreis; Abogebühren werden diesen Zeilen nicht zugeordnet.",
+  "cloud.order_cancel.action": "Unbezahlte Bestellung stornieren",
+  "cloud.order_cancel.confirm": "Stornierung anfordern",
+  "cloud.order_cancel.detail": "Diese unbezahlte Bestellung stornieren? Dies kündigt nicht die automatische Aboverlängerung. Nicht über alte Links bezahlen. Solange ein Zahlungslink gültig oder der Zahlungsstatus unklar ist, bleibt die Stornierung in Bearbeitung. Codes können erst nach der Prüfung eingelöst werden. Es wird keine neue Bestellung erstellt.",
+  "cloud.order_cancel.sending": "Wird übermittelt und geprüft…",
+  "cloud.order_cancel.processing": "Stornierung in Bearbeitung. Nicht über alte Links bezahlen. Codes bleiben gesperrt, bis Zahlungslinks und alle Zahlungsversuche nachweislich beendet sind. Der Zeitablauf allein schließt die Stornierung nicht ab.",
+  "cloud.order_cancel.check": "Stornierungsstatus prüfen",
+  "cloud.order_cancel.done": "Unbezahlte Bestellung storniert. Sie können zur Codeeinlösung zurückkehren. Es wurde kein Code automatisch eingelöst.",
+  "cloud.order_cancel.paid": "Diese Bestellung wurde nicht storniert. Prüfen Sie Rechnungen und Mitgliedschaft. Bestätigte Zahlungen behalten ihre bisherigen Leistungen und Aboeinstellungen.",
+  "cloud.order_cancel.error": "Die Stornierung konnte nicht bestätigt werden. Rechnungen aktualisieren und erneut prüfen. Nicht erneut bezahlen oder von einer abgeschlossenen Stornierung ausgehen.",
+  "cloud.order_cancel.manage": "Unbezahlte Bestellungen verwalten",
+  "cloud.order_cancel.unverified": "Für diese ältere Bestellung fehlen vollständige Prüfnachweise. Die Stornierung kann nicht automatisch bestätigt werden und kann in Bearbeitung bleiben. Nicht bezahlen oder erneut bestellen; Codes bleiben bis zur Klärung gesperrt."
 }

@@ -1119,5 +1119,16 @@
   "leaderboard.profile_modal.window.period": "統計範圍為 {{from}} 至 {{to}}。",
   "leaderboard.profile_modal.window.average": "該視窗花費除以 {{days}} 個日曆日，包含無使用量的日期。",
   "dashboard.cost_breakdown.subscription_usage": "訂閱用量",
-  "dashboard.cost_breakdown.subscription_usage_hint": "這些是 Grok Bot 的產品用量標識，沒有公開的 token 單價，無法按模型估算成本；訂閱費用未分攤到這些記錄。"
+  "dashboard.cost_breakdown.subscription_usage_hint": "這些是 Grok Bot 的產品用量標識，沒有公開的 token 單價，無法按模型估算成本；訂閱費用未分攤到這些記錄。",
+  "cloud.order_cancel.action": "取消待付款訂單",
+  "cloud.order_cancel.confirm": "確認申請取消",
+  "cloud.order_cancel.detail": "確認取消這筆待付款訂單？這不是取消訂閱自動續訂。請勿再使用舊連結付款。付款連結仍有效或付款狀態不明時，會保持取消處理中，核驗結束前仍無法兌換會員碼。不會建立新訂單。",
+  "cloud.order_cancel.sending": "正在提交並核驗…",
+  "cloud.order_cancel.processing": "取消處理中。請勿再用舊連結付款。付款連結及所有付款嘗試核驗終止前，仍無法兌換會員碼；僅到達到期時間不代表取消完成。",
+  "cloud.order_cancel.check": "檢查取消狀態",
+  "cloud.order_cancel.done": "待付款訂單已取消。可以返回兌換會員碼；系統不會自動兌換。",
+  "cloud.order_cancel.paid": "此訂單未被取消。請查看帳單及會員狀態；已確認的付款保留原有權益和訂閱設定。",
+  "cloud.order_cancel.error": "暫時無法確認取消結果。請重新整理帳單後重試，勿重複付款，也不要視為已取消。",
+  "cloud.order_cancel.manage": "處理待付款訂單",
+  "cloud.order_cancel.unverified": "此舊訂單缺少完整核驗回執，系統無法自動確認取消完成，可能持續處於處理中。請勿付款或重複下單；核驗完成前仍不能兌換會員碼。"
 }
