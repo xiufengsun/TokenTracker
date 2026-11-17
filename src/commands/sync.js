@@ -1240,8 +1240,15 @@ async function cmdSync(argv, context = {}) {
           projectQueuePath,
           projectQueueStatePath,
           // Split profiles are filed under their own source; the repair rebuilds
-          // plain "claude" rows only, so it must not count their files again.
-          rootDirs: claudeProjectsDirs.filter((dir) => !claudeProfileSourceByDir.has(dir)),
+          // plain "claude" rows only, so it must not count a NEW split root's
+          // files as "claude". A split root the cursor store already shows as
+          // scanned was counted into "claude" before the split was turned on:
+          // that history stays under "claude" (the repair clears every claude
+          // row and rebuilds it from these roots, so leaving it out would erase
+          // it). Only usage appended from now on goes to the profile.
+          rootDirs: claudeProjectsDirs.filter(
+            (dir) => !claudeProfileSourceByDir.has(dir) || rootPreviouslySuppliedFiles(path.dirname(dir)),
+          ),
         });
       }
     }

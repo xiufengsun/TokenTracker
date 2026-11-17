@@ -405,3 +405,112 @@ test("a batch of only split-profile rows uploads nothing but still advances the 
     await fsp.rm(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------- pending ground-truth repair
+
+// The one-time Claude repair rebuilds every "claude" row from the roots it is
+// given. A root that was already scanned into "claude" before the split was
+// turned on holds history that belongs there ("history stays under claude"), so
+// the repair must still count it, not drop it.
+async function makeGroundTruthRepairPending(home) {
+  const file = path.join(trackerDir(home), "cursors.json");
+  const cursors = JSON.parse(await fsp.readFile(file, "utf8"));
+  const keys = Object.keys(cursors.migrations || {}).filter((key) => key.startsWith("claudeGroundTruthRepair"));
+  assert.ok(keys.length > 0, "the first sync records the repair as done");
+  for (const key of keys) delete cursors.migrations[key];
+  await fsp.writeFile(file, JSON.stringify(cursors), "utf8");
+}
+
+test("a pending repair keeps history that an extra root already added to claude before the split", async () => {
+  await withTempSyncEnv(async (home) => {
+    const { work } = await twoProfiles(home);
+    await writeConfig(home, { scanRoots: { claude: [work] } });
+    await cmdSync([]);
+    assert.deepEqual(await latestTotalsBySource(home), { claude: 450 });
+    await makeGroundTruthRepairPending(home);
+
+    // The repair reads the files as they are on disk, so usage appended just
+    // before this sync is part of the history it keeps under "claude".
+    await writeConfig(home, { scanRoots: { claude: [work] }, splitScanRoots: true });
+    await appendClaudeUsage(path.join(work, "projects", "p2", "s2.jsonl"), { msgId: "m-work-2", input: 20, output: 10 });
+    await cmdSync([]);
+    assert.deepEqual(await latestTotalsBySource(home), { claude: 480 });
+
+    // From here on the split root's new usage goes to its profile.
+    await appendClaudeUsage(path.join(work, "projects", "p2", "s2.jsonl"), { msgId: "m-work-3", input: 6, output: 4 });
+    await cmdSync([]);
+    assert.deepEqual(await latestTotalsBySource(home), { claude: 480, "claude@work": 10 });
+  });
+});
+
+test("a pending repair does not count a new split root's files as plain claude", async () => {
+  await withTempSyncEnv(async (home) => {
+    const { work } = await twoProfiles(home);
+    await writeConfig(home, { scanRoots: { claude: [work] }, splitScanRoots: true });
+
+    await cmdSync([]);
+
+    assert.deepEqual(await latestTotalsBySource(home), { claude: 150, "claude@work": 300 });
+  });
+});
+
+test("the repair finishing does not make a later sync count anything twice", async () => {
+  await withTempSyncEnv(async (home) => {
+    const { work } = await twoProfiles(home);
+    await writeConfig(home, { scanRoots: { claude: [work] } });
+    await cmdSync([]);
+    await makeGroundTruthRepairPending(home);
+    await writeConfig(home, { scanRoots: { claude: [work] }, splitScanRoots: true });
+    await cmdSync([]);
+    const first = await latestTotalsBySource(home);
+
+    await cmdSync([]);
+    await cmdSync([]);
+
+    assert.deepEqual(await latestTotalsBySource(home), first);
+  });
+});
+
+// ---------------------------------------------------------------- stable naming
+
+function profileSourcesByPath(configRoots, extra = {}) {
+  const entries = resolveScanRoots({
+    home: "/h",
+    env: {},
+    config: { scanRoots: { claude: configRoots }, splitScanRoots: true },
+    base: { claude: ["/h/.claude"] },
+    ...extra,
+  }).claude;
+  return Object.fromEntries(entries.filter((entry) => entry.origin !== "native").map((entry) => [entry.path, entry.source]));
+}
+
+test("two roots with the same folder name keep their sources when the configured order changes", () => {
+  const forward = profileSourcesByPath(["/a/.claude-work", "/b/claude-work"]);
+  const reversed = profileSourcesByPath(["/b/claude-work", "/a/.claude-work"]);
+  assert.deepEqual(reversed, forward);
+  assert.deepEqual(forward, {
+    [path.resolve("/a/.claude-work")]: "claude@work",
+    [path.resolve("/b/claude-work")]: "claude@work-2",
+  });
+});
+
+test("a root that sorts later keeps its name when another root with a different name is added", () => {
+  const before = profileSourcesByPath(["/b/.claude-work"]);
+  const after = profileSourcesByPath(["/a/.claude-personal", "/b/.claude-work"]);
+  assert.equal(after[path.resolve("/b/.claude-work")], before[path.resolve("/b/.claude-work")]);
+});
+
+test("a very long folder name is capped so its source stays within the snapshot limit", () => {
+  const name = deriveProfileName(`/h/.claude-${"x".repeat(300)}`, "claude");
+  assert.ok(name.length <= 64, `profile name has ${name.length} characters`);
+  assert.match(name, /^[a-z0-9][a-z0-9._-]*$/);
+  const [source] = Object.values(profileSourcesByPath([`/h/.claude-${"y".repeat(300)}`]));
+  assert.ok(source.length <= 80 + 1 + 80);
+  assert.match(source, /^claude@[a-z0-9][a-z0-9._-]{0,63}$/);
+});
+
+test("a capped name that ends in a separator is trimmed", () => {
+  const name = deriveProfileName(`/h/.claude-${"a".repeat(63)}-bbbb`, "claude");
+  assert.ok(name.length <= 64);
+  assert.doesNotMatch(name, /[-._]$/);
+});

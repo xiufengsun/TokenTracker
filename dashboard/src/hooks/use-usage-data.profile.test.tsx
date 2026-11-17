@@ -73,20 +73,37 @@ describe("useUsageData profile scope", () => {
   });
 
   it("keeps one profile's cached totals out of another profile's view", async () => {
-    vi.mocked(getUsageSummary).mockResolvedValueOnce({ totals: { total_tokens: 300 } } as any);
+    let offline = false;
+    const respond = async (args: any) => {
+      if (offline) throw new Error("offline");
+      return { totals: { total_tokens: args.profile === "claude@work" ? 300 : 7 } };
+    };
+    vi.mocked(getUsageSummary).mockImplementation(respond as any);
+    vi.mocked(getUsageDaily).mockImplementation((async (args: any) => {
+      if (offline) throw new Error("offline");
+      return { data: [] };
+    }) as any);
+
+    // Online: the work profile is fetched, and cached under its own key.
     const first = renderHook(() => useUsageData({ ...base, cacheKey: "p5", profile: "claude@work" }));
     await waitFor(() => expect(first.result.current.summary?.total_tokens).toBe(300));
+    expect(vi.mocked(getUsageSummary).mock.calls[0][0]).toMatchObject({ profile: "claude@work" });
     first.unmount();
+    const stored = () => Object.keys(window.localStorage).filter((key) => key.startsWith("tokentracker.usage.p5."));
+    expect(stored()).toHaveLength(1);
+    expect(stored()[0]).toContain("p-claude@work");
 
-    vi.mocked(getUsageDaily).mockRejectedValueOnce(new Error("offline"));
-    vi.mocked(getUsageSummary).mockRejectedValueOnce(new Error("offline"));
+    // Offline: another profile has no cache of its own and must not borrow work's.
+    offline = true;
     const other = renderHook(() => useUsageData({ ...base, cacheKey: "p5", profile: "claude@personal" }));
     await waitFor(() => expect(other.result.current.loading).toBe(false));
-    expect(other.result.current.summary?.total_tokens ?? null).not.toBe(300);
+    expect(other.result.current.summary).toBeNull();
+    expect(stored()).toHaveLength(1);
+    other.unmount();
 
-    vi.mocked(getUsageDaily).mockRejectedValueOnce(new Error("offline"));
-    vi.mocked(getUsageSummary).mockRejectedValueOnce(new Error("offline"));
+    // Offline again on the work profile: its own cache is still served.
     const again = renderHook(() => useUsageData({ ...base, cacheKey: "p5", profile: "claude@work" }));
     await waitFor(() => expect(again.result.current.summary?.total_tokens).toBe(300));
+    expect(again.result.current.source).toBe("cache");
   });
 });

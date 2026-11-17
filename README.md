@@ -453,6 +453,7 @@ Once usage exists under two or more of these sources, the dashboard shows a **Pr
 
 - It is off unless you set it, and only Claude supports it so far; Codex roots keep feeding `codex`.
 - It applies to usage recorded from now on. History already counted stays under `claude`.
+- Names come from the folder, capped at 64 characters. Roots that share a folder name are numbered in path order (`work`, `work-2`); give roots that must stay apart different folder names, because adding or removing a root with the same name can renumber the others.
 - Split profiles stay on your machine: their rows are **not uploaded** to TokenTracker Cloud, so a profile's folder name never leaves it. Usage in a split profile therefore does not count towards your Cloud totals or the leaderboard.
 
 ## 🛠️ Development

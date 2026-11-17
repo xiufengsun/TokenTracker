@@ -314,3 +314,53 @@ test("local transfer preserves Claude backend provenance and rejects unsanitized
   snapshot.rows[0].backend_usage[0].backend_origin += "/secret";
   await assert.rejects(b.service.preview(snapshot), { code: "invalid_snapshot" });
 });
+
+// Split profiles (scan-roots "splitScanRoots") file usage under "claude@<profile>".
+// Those rows are in queue.jsonl, so export must not choke on them, and a round
+// trip must keep the source name.
+test("export and import accept split-profile sources and keep their names", async (t) => {
+  const work = row(300, { source: "claude@work", model: "claude-sonnet-4-6" });
+  const personal = row(50, { source: "claude@my.profile_2", model: "claude-sonnet-4-6" });
+  const native = row(100, { source: "claude", model: "claude-sonnet-4-6" });
+  const a = await machine(t, "machine-aaaa", [native, work, personal]);
+  const b = await machine(t, "machine-bbbb", []);
+  const snapshot = await a.service.exportSnapshot();
+  assert.deepEqual(snapshot.rows.map((r) => r.source).sort(), ["claude", "claude@my.profile_2", "claude@work"]);
+  assert.equal(total(snapshot.rows), 450);
+  await apply(b.service, snapshot);
+  const imported = await b.service.view([], "local:machine-aaaa");
+  assert.deepEqual(imported.map((r) => r.source).sort(), ["claude", "claude@my.profile_2", "claude@work"]);
+  assert.equal(total(imported), 450);
+});
+
+test("a profile source keeps Claude backend provenance, like plain claude", async (t) => {
+  const tokens = { input_tokens: 90, output_tokens: 10, total_tokens: 100,
+    cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0 };
+  const usage = row(100, { source: "claude@work", model: "claude-sonnet-4-6",
+    backend_usage: [{ backend: "custom", backend_origin: "https://gateway.example", ...tokens }] });
+  const a = await machine(t, "machine-aaaa", [usage]);
+  const b = await machine(t, "machine-bbbb", []);
+  await apply(b.service, await a.service.exportSnapshot());
+  assert.deepEqual((await b.service.view([], "local:machine-aaaa"))[0].backend_usage, usage.backend_usage);
+});
+
+test("a provider other than claude cannot carry backend provenance through a profile source", async (t) => {
+  const tokens = { input_tokens: 90, output_tokens: 10, total_tokens: 100,
+    cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0 };
+  const a = await machine(t, "machine-aaaa", [row(100)]);
+  const b = await machine(t, "machine-bbbb", []);
+  const snapshot = await a.service.exportSnapshot();
+  snapshot.rows[0].source = "codex@work";
+  snapshot.rows[0].backend_usage = [{ backend: "custom", backend_origin: "https://gateway.example", ...tokens }];
+  await assert.rejects(b.service.preview(snapshot), { code: "invalid_snapshot" });
+});
+
+test("malformed profile sources are still rejected", async (t) => {
+  const a = await machine(t, "machine-aaaa", [row(100)]);
+  const b = await machine(t, "machine-bbbb", []);
+  for (const source of ["claude@", "@work", "claude@a@b", "claude@Work", "claude@a/b", "claude@a b", "claude@" + "x".repeat(81)]) {
+    const snapshot = await a.service.exportSnapshot();
+    snapshot.rows[0].source = source;
+    await assert.rejects(b.service.preview(snapshot), { code: "invalid_snapshot" }, source);
+  }
+});

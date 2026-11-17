@@ -19,6 +19,10 @@ const TOKEN_FIELDS = ["input_tokens", "output_tokens", "cached_input_tokens", "c
   ...["long_context_", "priority_", "priority_long_context_", "ultrafast_", "ultrafast_long_context_"].flatMap((prefix) =>
     ["input_tokens", "output_tokens", "cached_input_tokens", "cache_creation_input_tokens", "reasoning_output_tokens"].map((field) => prefix + field))];
 const ROW_FIELDS = new Set(["source", "model", "hour_start", "total_cost_usd", "backend_usage", ...TOKEN_FIELDS]);
+// A provider ("claude"), optionally filed under a split profile ("claude@work",
+// see profile-source.js). Profile names come from sanitizeProfileName() in
+// scan-roots.js, so they may also contain dots.
+const SOURCE_NAME = /^[a-z0-9_-]{1,80}(?:@[a-z0-9._-]{1,80})?$/;
 const validId = (id) => typeof id === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(id);
 const validTime = (value) => typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 const digest = (value) => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -36,7 +40,7 @@ function displayCount(rows) {
 function cleanRow(row, strict = false) {
   if (!row || typeof row !== "object" || Array.isArray(row) ||
       !Number.isSafeInteger(row.total_tokens) || row.total_tokens < 0 ||
-      typeof row.source !== "string" || !/^[a-z0-9_-]{1,80}$/.test(row.source) ||
+      typeof row.source !== "string" || !SOURCE_NAME.test(row.source) ||
       typeof row.model !== "string" || !row.model.trim() || row.model.length > 200 || /[\x00-\x1f]/.test(row.model) ||
       !validTime(row.hour_start) || Date.parse(row.hour_start) % 1_800_000 !== 0 ||
       (strict && Object.keys(row).some((key) => !ROW_FIELDS.has(key)))) fail("invalid_snapshot");

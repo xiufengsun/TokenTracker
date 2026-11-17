@@ -82,3 +82,14 @@ test("the options reach UsageOverview through DashboardView", () => {
     assert.match(view, new RegExp(`${prop}=\\{${prop}\\}`), `DashboardView forwards ${prop}`);
   }
 });
+
+test("the shared refresh key changes with the profile, so a refresh for one profile is not reused for another", () => {
+  const start = page.indexOf("const refreshContextKey = useMemo(");
+  const end = page.indexOf("const refreshUsageStats = useCallback", start);
+  assert.ok(start !== -1 && end > start, "refreshContextKey must exist");
+  const block = page.slice(start, end);
+  const keyParts = block.slice(0, block.indexOf("].join("));
+  assert.match(keyParts, /selectedProfile \|\| "all"/, "the key text includes the profile");
+  const deps = block.slice(block.indexOf("].join("));
+  assert.match(deps, /\bselectedProfile\b/, "the memo depends on the profile");
+});

@@ -138,17 +138,23 @@ test("model-breakdown: only the selected profile's source", async () => {
 });
 
 test("heatmap: the day's cell carries only the selected profile's tokens", async () => {
-  await withQueue(ROWS, async (q) => {
+  // The heatmap grid always ends today, so the rows must be recent: a fixed
+  // date would fall out of the grid and fail the test later on.
+  const recent = new Date();
+  recent.setUTCDate(recent.getUTCDate() - 3);
+  recent.setUTCHours(10, 0, 0, 0);
+  const day = recent.toISOString().slice(0, 10);
+  const rows = ROWS.map((r) => ({ ...r, hour_start: recent.toISOString() }));
+  await withQueue(rows, async (q) => {
     const cellFor = async (extra) => {
-      // The grid always ends today, so ask for a year to reach the test day.
-      const heatmap = await call(q, `/functions/tokentracker-usage-heatmap?weeks=52&tz=UTC${extra}`);
-      const cells = heatmap.weeks.flat().filter(Boolean);
-      return cells.find((c) => c.day === "2026-04-20");
+      const heatmap = await call(q, `/functions/tokentracker-usage-heatmap?weeks=4&tz=UTC${extra}`);
+      const cell = heatmap.weeks.flat().filter(Boolean).find((c) => c.day === day);
+      assert.ok(cell, `the grid must contain ${day}`);
+      return cell;
     };
-    const work = await cellFor("&profile=claude@work");
-    const everyone = await cellFor("");
-    assert.equal(work.total_tokens, 300);
-    assert.equal(everyone.total_tokens, ALL);
+    assert.equal((await cellFor("&profile=claude@work")).total_tokens, 300);
+    assert.equal((await cellFor("&profile=claude")).total_tokens, 100);
+    assert.equal((await cellFor("")).total_tokens, ALL);
   });
 });
 

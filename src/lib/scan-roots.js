@@ -67,11 +67,17 @@ function normalizeSplitScanRoots(raw) {
   return out;
 }
 
+// A profile name is at most this long, so "claude@<name>-<n>" stays inside the
+// source-name limit of the local usage snapshot (local-usage-transfer.js).
+const MAX_PROFILE_NAME_LENGTH = 64;
+
 function sanitizeProfileName(value) {
   return String(value || "")
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^[-._]+|[-._]+$/g, "");
+    .replace(/^[-._]+|[-._]+$/g, "")
+    .slice(0, MAX_PROFILE_NAME_LENGTH)
+    .replace(/[-._]+$/g, "");
 }
 
 // A short, stable profile name from a root's folder: ".claude-work" -> "work",
@@ -86,10 +92,23 @@ function deriveProfileName(rootPath, provider) {
 
 // Give every non-native root of a provider its own source name. Names are made
 // unique ("work", "work-2", ...) so two roots never share a source.
+//
+// Roots are named in path order, not discovery order. The order differs between
+// processes (CLAUDE_CONFIG_DIR is only set in some of them) and changes when the
+// config list is edited, and two roots that share a folder name would otherwise
+// swap "work" and "work-2" from one sync to the next. Path order cannot undo a
+// change in WHICH roots exist, so give roots that must stay apart different
+// folder names.
 function assignProfileSources(provider, entries) {
   const used = new Set();
-  for (const entry of entries) {
-    if (entry.origin === "native") continue;
+  const named = entries
+    .filter((entry) => entry.origin !== "native")
+    .sort((a, b) => {
+      const left = path.resolve(a.path).replace(/\\/g, "/");
+      const right = path.resolve(b.path).replace(/\\/g, "/");
+      return left < right ? -1 : left > right ? 1 : 0;
+    });
+  for (const entry of named) {
     const base = deriveProfileName(entry.path, provider);
     let name = base;
     for (let n = 2; used.has(name); n++) name = `${base}-${n}`;
