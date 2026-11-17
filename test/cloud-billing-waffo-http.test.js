@@ -1,12 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const http = require("node:http");
 const { randomUUID, generateKeyPairSync, createHmac, createSign, createVerify, createHash } = require("node:crypto");
 const { PGlite } = require("@electric-sql/pglite");
 const load = require("./helpers/load-cloud-module");
-const { functionSql } = require("./helpers/cloud-usage-archive-fixture");
+const { installCloudBillingSchema } = require("./helpers/cloud-billing-schema-fixture");
 const handlers = { billing: load("../tokentracker-billing").default,
   webhook: load("../tokentracker-waffo-webhook").default };
 const originalFetch = globalThis.fetch;
@@ -40,7 +38,6 @@ const decimal = amount => (amount / 100).toFixed(2);
 const money = amount => ({ amount: String(amount), currency: "USD", display: decimal(amount) });
 const breakdown = (amount, tax) => ({ currency: "USD", subtotal: decimal(amount), taxAmount: decimal(tax),
   total: decimal(amount + tax), taxCategory: "saas" });
-const migration = name => fs.readFileSync(path.join(__dirname, "../migrations", name), "utf8");
 const identifier = value => {
   if (!/^[a-z_][a-z0-9_]*$/i.test(value)) throw Error("unsupported database identifier");
   return '"' + value + '"';
@@ -54,40 +51,7 @@ function token(sub, role = "authenticated") {
 
 async function setupDatabase() {
   db = new PGlite();
-  await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE project_admin BYPASSRLS;
-    CREATE SCHEMA auth; CREATE TABLE auth.users(id uuid PRIMARY KEY);
-    CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$
-      SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
-    CREATE TABLE tokentracker_devices(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid NOT NULL,
-      device_name text NOT NULL,platform text,machine_id text,revoked_at timestamptz,
-      name_customized boolean NOT NULL DEFAULT false,default_device_name text,created_at timestamptz DEFAULT now());
-    CREATE UNIQUE INDEX active_machine ON tokentracker_devices(user_id,machine_id) WHERE revoked_at IS NULL;
-    CREATE UNIQUE INDEX active_name ON tokentracker_devices(user_id,platform,device_name) WHERE revoked_at IS NULL;
-    CREATE TABLE tokentracker_device_machine(device_id uuid PRIMARY KEY,machine_cluster_id text);
-    CREATE TABLE tokentracker_device_tokens(id uuid PRIMARY KEY,user_id uuid,device_id uuid,token_hash text UNIQUE,
-      revoked_at timestamptz,created_at timestamptz DEFAULT now());
-    CREATE TABLE tokentracker_device_codes(device_code text PRIMARY KEY,user_code text UNIQUE,status text,
-      user_id uuid,expires_at timestamptz,approved_at timestamptz,client_info text,machine_id text);
-    CREATE TABLE tokentracker_hourly(user_id uuid,device_id uuid,hour_start timestamptz,source text,model text,
-      input_tokens bigint,cached_input_tokens bigint,cache_creation_input_tokens bigint,output_tokens bigint,
-      reasoning_output_tokens bigint,total_tokens bigint CHECK(total_tokens>=0),billable_total_tokens bigint,
-      conversations integer,total_cost_usd numeric,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now(),
-      PRIMARY KEY(user_id,device_id,hour_start,source,model));
-    GRANT USAGE ON SCHEMA auth TO project_admin;
-    GRANT SELECT(id) ON auth.users TO project_admin;
-    GRANT ALL ON tokentracker_devices,tokentracker_device_machine,tokentracker_device_tokens,
-      tokentracker_device_codes,tokentracker_hourly TO project_admin;`);
-  await db.exec(functionSql(migration("20260719152022_harden-backend-concurrency.sql"), "refresh_tokentracker_device_identity"));
-  const sessionsSql = migration("20260817120000_account-session-states.sql");
-  await db.exec(sessionsSql.slice(0, sessionsSql.indexOf("-- Leaderboard: account-level sources")));
-  for (const name of ["20261003120000_cloud-subscriptions.sql", "20261004120000_cloud-machine-access.sql",
-    "20261007120000_cloud-waffo.sql", "20261007130000_cloud-waffo-retry.sql",
-    "20261007140000_cloud-waffo-attempts.sql", "20261007150000_cloud-waffo-authorizations.sql",
-    "20261007160000_cloud-waffo-sandbox-periods.sql",
-    "20261008120000_self-hosted-access.sql", "20261009120000_cloud-gifts.sql",
-    "20261106011916_cloud-waffo-unused-checkout-retry.sql",
-    "20261106014534_cloud-checkout-recovery.sql", "20261117090000_cloud-order-cancellation.sql"]) await db.exec(migration(name));
-  await db.exec("UPDATE tokentracker_cloud_policy SET phase='active',launch_at=now()-interval '1 hour' WHERE environment='sandbox'");
+  await installCloudBillingSchema(db);
 }
 
 async function databaseGateway(req, res, url, raw) {
