@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("node:fs/promises");
+const { baseSource } = require("./profile-source");
 const { createReadStream } = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
@@ -50,7 +51,7 @@ function cleanRow(row, strict = false) {
     result.total_cost_usd = row.total_cost_usd;
   }
   if (row.backend_usage !== undefined) {
-    if (row.source !== "claude" || !Array.isArray(row.backend_usage)) fail("invalid_snapshot");
+    if (baseSource(row.source) !== "claude" || !Array.isArray(row.backend_usage)) fail("invalid_snapshot");
     const sums = {};
     result.backend_usage = row.backend_usage.map((part) => {
       if (!part || typeof part !== "object") fail("invalid_snapshot");

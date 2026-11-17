@@ -436,6 +436,23 @@ TokenTracker scans `~/.codex` and `~/.claude` (plus `CODEX_HOME` / `CLAUDE_CONFI
 
 Each Codex root is expected to hold `sessions/` (and optionally `archived_sessions/`), each Claude root a `projects/` directory. Roots are de-duplicated by resolved path, so a profile whose `projects/` is a symlink to another profile's is read once. `tokentracker status` and `tokentracker doctor` list the extra roots and flag any that are missing.
 
+#### Keeping profiles apart
+
+By default every root of a provider adds to one source, so two Claude profiles show up as a single "claude". To see them separately, turn on `splitScanRoots`:
+
+```json
+{
+  "scanRoots": { "claude": ["~/.claude-work", "~/.claude-personal"] },
+  "splitScanRoots": true
+}
+```
+
+Each extra Claude root is then filed under its own source — `claude@work`, `claude@personal` — named after its folder (`.claude-work` → `work`; two roots with the same name become `work` and `work-2`), and the dashboard's per-source breakdown shows one row for each. `~/.claude` itself stays plain `claude`. Use `{ "claude": true }` to name the providers explicitly.
+
+- It is off unless you set it, and only Claude supports it so far; Codex roots keep feeding `codex`.
+- It applies to usage recorded from now on. History already counted stays under `claude`.
+- Split profiles stay on your machine: their rows are **not uploaded** to TokenTracker Cloud, so a profile's folder name never leaves it. Usage in a split profile therefore does not count towards your Cloud totals or the leaderboard.
+
 ## 🛠️ Development
 
 ```bash

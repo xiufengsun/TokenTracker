@@ -209,6 +209,7 @@ const {
   resolveScanRoots,
   scanRootDirState,
 } = require("../lib/scan-roots");
+const { isProfileSource } = require("../lib/profile-source");
 const { resolveRuntimeConfig, isLegacyInsforgeBaseUrl } = require("../lib/runtime-config");
 const { resolveDeviceTokenPresence } = require("../lib/cloud-device-token");
 
@@ -744,6 +745,14 @@ async function cmdSync(argv, context = {}) {
       claudeInstallHomes.map((h) => path.join(h, "projects")),
       extraScanRootPaths(scanRoots.claude).map((h) => path.join(h, "projects")),
     );
+    // splitScanRoots: an extra Claude root files its sessions under its own
+    // source ("claude@work") instead of adding to "claude". Keyed by the same
+    // projects/ path that claudeProjectsDirs holds.
+    const claudeProfileSourceByDir = new Map(
+      scanRoots.claude
+        .filter((entry) => entry.profile && entry.exists)
+        .map((entry) => [path.join(entry.path, "projects"), entry.source]),
+    );
     const xdgDataHome = process.env.XDG_DATA_HOME || path.join(home, ".local", "share");
     const kiloHome = process.env.KILO_HOME || path.join(xdgDataHome, "kilo");
 
@@ -1179,10 +1188,11 @@ async function cmdSync(argv, context = {}) {
     if (sourceAllowed("claude")) {
       const seenClaudeFiles = new Set();
       for (const dir of claudeProjectsDirs) {
+        const profileSource = claudeProfileSourceByDir.get(dir);
         for (const f of await listClaudeProjectFiles(dir)) {
           if (!seenClaudeFiles.has(f)) {
             seenClaudeFiles.add(f);
-            claudeFiles.push(f);
+            claudeFiles.push(profileSource ? { path: f, source: profileSource } : f);
           }
         }
       }
@@ -1229,7 +1239,9 @@ async function cmdSync(argv, context = {}) {
           queueStatePath,
           projectQueuePath,
           projectQueueStatePath,
-          rootDirs: claudeProjectsDirs,
+          // Split profiles are filed under their own source; the repair rebuilds
+          // plain "claude" rows only, so it must not count their files again.
+          rootDirs: claudeProjectsDirs.filter((dir) => !claudeProfileSourceByDir.has(dir)),
         });
       }
     }
@@ -4641,6 +4653,10 @@ async function readQueueBatch(queuePath, startOffset, maxBuckets) {
       if (!hourStart) continue;
       const source = (typeof bucket?.source === "string" ? bucket.source.trim().toLowerCase() : "") || "codex";
       const model = (typeof bucket?.model === "string" ? bucket.model.trim() : "") || "unknown";
+      // A split profile ("claude@work") is local provenance, like backend_usage
+      // below: its name never leaves the machine, and folding it into "claude"
+      // would overwrite the other profile's row for the same hour and model.
+      if (isProfileSource(source)) continue;
       bucket.source = source;
       bucket.model = model;
       // Apply the same legacy-row corrections every local reader applies

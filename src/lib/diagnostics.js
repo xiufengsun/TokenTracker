@@ -106,6 +106,7 @@ async function collectTrackerDiagnostics({
   const describeScanRoots = (entries) => entries.map((entry) => ({
     path: redactValue(entry.path, home),
     origin: entry.origin,
+    ...(entry.profile ? { source: entry.source } : {}),
     exists: entry.exists,
     error: entry.error || null,
   }));

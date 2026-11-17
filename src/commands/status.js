@@ -282,6 +282,20 @@ async function cmdStatus(argv = []) {
   const scanRootsLine = extraScanRoots.length > 0
     ? `- Extra scan roots: ${extraScanRoots.map(describeExtraScanRoot).join(" | ")}`
     : null;
+  // splitScanRoots: name the profiles that are filed apart, and say what that
+  // means — their rows stay on this machine (never uploaded), and Codex roots
+  // cannot be split yet, so a request for it is reported instead of ignored.
+  const splitProfileSources = scanRoots.claude.filter((entry) => entry.profile).map((entry) => entry.source);
+  // Only an explicit { codex: true } is worth a note: "true" means every provider that supports it.
+  const codexSplitAskedFor = Boolean(config?.splitScanRoots) && typeof config.splitScanRoots === "object"
+    && config.splitScanRoots.codex === true;
+  const splitProfilesLines = [];
+  if (splitProfileSources.length > 0) {
+    splitProfilesLines.push(`- Split profiles: ${splitProfileSources.join(", ")} (local only: not uploaded to Cloud; history counted before the split stays under claude)`);
+  }
+  if (codexSplitAskedFor) {
+    splitProfilesLines.push("- Split profiles: Codex is not supported yet; its roots are merged into codex");
+  }
   const { cursors } = await readCursorStateSummary({ trackerDir, cursorsPath });
   const codexRecordOnlyWarning = formatRecordOnlyWarning(countRecordOnlyFiles(cursors));
   const queueState = (await readJson(queueStatePath)) || { offset: 0 };
@@ -1334,6 +1348,7 @@ async function cmdStatus(argv = []) {
       syncSkipLine,
       autoRetryLine,
       scanRootsLine,
+      ...splitProfilesLines,
       `- Codex notify: ${notifyConfigured ? JSON.stringify(codexNotify) : "unset"}`,
       `- AStudio notify: ${acodeConfigured ? JSON.stringify(acodeNotify) : "unset"}`,
       `- Every Code notify: ${everyCodeConfigured ? JSON.stringify(everyCodeNotify) : "unset"}`,

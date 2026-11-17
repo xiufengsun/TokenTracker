@@ -25,6 +25,15 @@
 // Config shape:
 //   { "scanRoots": { "codex": ["~/.local/share/agent/codex"],
 //                    "claude": ["~/.local/share/agent/claude", "~/.claude-native"] } }
+//
+// By default every root of a provider feeds ONE source ("claude", "codex"), so
+// two profiles add up. `splitScanRoots` keeps them apart: each extra root
+// (CLAUDE_CONFIG_DIR / CODEX_HOME / scanRoots) is filed under its own source,
+// "<provider>@<profile>", where the profile is derived from the folder name.
+// The native home keeps the plain provider name.
+//   { "splitScanRoots": true }                          // every provider that supports it
+//   { "splitScanRoots": { "claude": true } }            // only Claude
+// Only Claude supports it so far; Codex roots keep feeding the single "codex" source.
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -32,12 +41,63 @@ const path = require("node:path");
 
 const { readJson } = require("./fs");
 const { resolveTrackerPaths } = require("./tracker-paths");
+const { PROFILE_SOURCE_SEPARATOR, isProfileSource } = require("./profile-source");
 
 const PROVIDERS = Object.freeze({
   codex: Object.freeze({ envVar: "CODEX_HOME" }),
   claude: Object.freeze({ envVar: "CLAUDE_CONFIG_DIR" }),
 });
 const PROVIDER_NAMES = Object.freeze(Object.keys(PROVIDERS));
+
+// Providers whose parser can tell a split profile's rows apart safely. Codex's
+// parser changes behaviour by source name (event dedup, cumulative deltas), so
+// filing its rows under "codex@<profile>" would switch those protections off;
+// it needs its own change and is not split yet.
+const SPLITTABLE_PROVIDERS = Object.freeze(["claude"]);
+
+// Which providers split their extra roots. Accepts true (all providers) or
+// { claude: true, codex: false }. Anything else means "do not split" — a
+// malformed config must not change how usage is filed.
+function normalizeSplitScanRoots(raw) {
+  const out = {};
+  for (const provider of PROVIDER_NAMES) out[provider] = raw === true;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const provider of PROVIDER_NAMES) out[provider] = raw[provider] === true;
+  }
+  return out;
+}
+
+function sanitizeProfileName(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[-._]+|[-._]+$/g, "");
+}
+
+// A short, stable profile name from a root's folder: ".claude-work" -> "work",
+// "claude-native" -> "native". A root whose own name says nothing (".claude")
+// falls back to its parent folder. Only the folder name is used, never a path.
+function deriveProfileName(rootPath, provider) {
+  const base = path.basename(path.resolve(rootPath));
+  const stripped = sanitizeProfileName(base.replace(/^\.+/, "").replace(new RegExp(`^${provider}[-_.]*`, "i"), ""));
+  if (stripped) return stripped;
+  return sanitizeProfileName(path.basename(path.dirname(path.resolve(rootPath)))) || "profile";
+}
+
+// Give every non-native root of a provider its own source name. Names are made
+// unique ("work", "work-2", ...) so two roots never share a source.
+function assignProfileSources(provider, entries) {
+  const used = new Set();
+  for (const entry of entries) {
+    if (entry.origin === "native") continue;
+    const base = deriveProfileName(entry.path, provider);
+    let name = base;
+    for (let n = 2; used.has(name); n++) name = `${base}-${n}`;
+    used.add(name);
+    entry.profile = name;
+    entry.source = `${provider}${PROFILE_SOURCE_SEPARATOR}${name}`;
+  }
+}
 
 // Turn a configured root into a stable absolute path. `~` expands against
 // `home`, and a RELATIVE entry is resolved against `home` too — never against
@@ -154,7 +214,8 @@ function dedupeDirsByRealpath(dirs, deps = {}) {
 //         covered by base.
 //   config.scanRoots.<provider>[] become origin "config".
 //
-// Every entry: { path, realPath, exists, error, origin }. `exists` is a
+// Every entry: { path, realPath, exists, error, origin, profile, source }.
+// `source` is the provider name, or "<provider>@<profile>" for a split root. `exists` is a
 // readable-directory check and `error` carries a stat error code other than
 // absence (see scanRootDirState); non-existent or unreadable configured roots
 // are kept in the list (so cursor-path classification stays stable while a
@@ -168,6 +229,7 @@ function resolveScanRoots({
   deps = {},
 } = {}) {
   const configured = normalizeScanRootsConfig(config && typeof config === "object" ? config.scanRoots : null);
+  const split = normalizeSplitScanRoots(config && typeof config === "object" ? config.splitScanRoots : null);
   const out = {};
   for (const provider of PROVIDER_NAMES) {
     const candidates = [];
@@ -194,8 +256,11 @@ function resolveScanRoots({
         exists: state.exists,
         error: state.error,
         origin: candidate.origin,
+        profile: null,
+        source: provider,
       });
     }
+    if (split[provider] && SPLITTABLE_PROVIDERS.includes(provider)) assignProfileSources(provider, entries);
     out[provider] = entries;
   }
   return out;
@@ -241,8 +306,8 @@ function hasAnyScanChild(root, children, deps = {}) {
 // Human label for status / doctor output.
 function describeScanRootOrigin(entry, provider) {
   if (!entry || entry.origin === "native") return "native";
-  if (entry.origin === "env") return PROVIDERS[provider]?.envVar || "env";
-  return "scanRoots";
+  const origin = entry.origin === "env" ? PROVIDERS[provider]?.envVar || "env" : "scanRoots";
+  return entry.profile ? `${origin}, source ${entry.source}` : origin;
 }
 
 // "" for a readable root, " (missing)" for an absent one, " (unreadable: CODE)"
@@ -261,7 +326,9 @@ async function loadScanRootsConfig({ home = os.homedir() } = {}) {
 }
 
 module.exports = {
+  PROFILE_SOURCE_SEPARATOR,
   PROVIDER_NAMES,
+  SPLITTABLE_PROVIDERS,
   appendUniqueDirs,
   dedupeDirsByRealpath,
   describeScanRootOrigin,
@@ -269,9 +336,12 @@ module.exports = {
   expandHome,
   extraScanRootPaths,
   hasAnyScanChild,
+  isProfileSource,
   loadScanRootsConfig,
   normalizeScanRootsConfig,
+  normalizeSplitScanRoots,
   resolveEnvRoot,
   resolveScanRoots,
   scanRootDirState,
+  deriveProfileName,
 };
