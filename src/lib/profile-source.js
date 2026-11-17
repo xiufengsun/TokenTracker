@@ -25,9 +25,22 @@ function profileOfSource(source) {
   return source.slice(source.indexOf(PROFILE_SOURCE_SEPARATOR) + 1) || null;
 }
 
+// Keeps only the rows filed under one source, named exactly: "claude@work" for
+// a split profile, "claude" for the native ~/.claude. An empty value keeps every
+// row. This is its own ?profile= parameter, not ?source=, because some clients
+// already send ?source=<provider> to the usage endpoints and must keep getting
+// every row.
+function filterRowsByProfile(rows, requested) {
+  const list = Array.isArray(rows) ? rows : [];
+  const wanted = typeof requested === "string" ? requested.trim().toLowerCase() : "";
+  if (!wanted) return list;
+  return list.filter((row) => String(row?.source || "").trim().toLowerCase() === wanted);
+}
+
 module.exports = {
   PROFILE_SOURCE_SEPARATOR,
   baseSource,
+  filterRowsByProfile,
   isProfileSource,
   profileOfSource,
 };

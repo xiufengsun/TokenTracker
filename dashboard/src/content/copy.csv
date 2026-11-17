@@ -1266,6 +1266,9 @@ skills.inventory.source,ui,SkillsPage,SkillDetailPanel,inventory_source,"Source:
 skills.inventory.devices_title,ui,SkillsPage,SkillDetailPanel,inventory_devices_title,"Installed on other devices",,active
 dashboard.device_filter.all,dashboard,DashboardPage,UsageOverview,option_all,"All devices",,active
 dashboard.device_filter.aria,dashboard,DashboardPage,UsageOverview,select_aria,"Filter by device",,active
+dashboard.profile_filter.all,dashboard,DashboardPage,UsageOverview,profile_option_all,"All profiles",,active
+dashboard.profile_filter.aria,dashboard,DashboardPage,UsageOverview,profile_select_aria,"Filter by profile",,active
+dashboard.profile_filter.default,dashboard,DashboardPage,UsageOverview,profile_option_default,"{{provider}} (default)",,active
 dashboard.device_card.title,dashboard,DashboardPage,DeviceUsageCard,title,"By device",,active
 dashboard.device_card.current,dashboard,DashboardPage,DeviceUsageCard,current,"This device",,active
 dashboard.device_card.unnamed,dashboard,DashboardPage,DeviceUsageCard,unnamed,"Unnamed device",,active

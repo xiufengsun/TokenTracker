@@ -15,6 +15,7 @@ const {
   listExcludedSources,
   normalizeUsageScope,
 } = require("./source-metadata");
+const { filterRowsByProfile } = require("./profile-source");
 const { accountSlugFor, fetchAccountUsage, mintAccessToken, invalidateCloudAccountPayloadCache, getCloudAccountSessionGeneration } = require("./cloud-account");
 const { resetCloudDeviceUsage, readCloudUsageReset } = require("./cloud-usage-reset");
 const { getOrCreateMachineId, computeStableMachineId } = require("./machine-id");
@@ -1167,7 +1168,11 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
     // Only offline IDs select a snapshot; other IDs retain the local fallback.
     const device = selected.startsWith("local:") ? selected : "";
     const allRows = url.pathname.startsWith("/functions/tokentracker-usage-") ? await localUsage.view(ownRows, device) : ownRows;
-    return { scope, allRows, rows: filterRowsByUsageScope(allRows, scope), excludedSources: listExcludedSources(allRows, scope) };
+    const scoped = filterRowsByUsageScope(allRows, scope);
+    // ?profile=claude@work (or ?profile=claude for the native ~/.claude)
+    // narrows every usage endpoint to that one source.
+    const rows = filterRowsByProfile(scoped, url.searchParams.get("profile"));
+    return { scope, allRows, rows, excludedSources: listExcludedSources(allRows, scope) };
   }
   const normalizedServerVersion = typeof serverVersion === "string" ? serverVersion.trim() : "";
 

@@ -22,6 +22,17 @@ describe("formatProviderDisplayName", () => {
     expect(formatProviderDisplayName("")).toBe("");
   });
 
+  it("names a split profile as the provider, then the profile as the user wrote it", () => {
+    expect(formatProviderDisplayName("claude@work")).toBe("Claude · work");
+    expect(formatProviderDisplayName("claude@Work-Laptop")).toBe("Claude · Work-Laptop");
+    expect(formatProviderDisplayName("lmstudio@home")).toBe("LM Studio · home");
+  });
+
+  it("leaves a stray @ alone when there is no provider or no profile part", () => {
+    expect(formatProviderDisplayName("claude@")).toBe("Claude@");
+    expect(formatProviderDisplayName("@work")).toBe("@work");
+  });
+
   it("uses the AStudio product name", () => {
     expect(formatProviderDisplayName("acode")).toBe("AStudio");
     expect(formatProviderDisplayName("ACODE")).toBe("AStudio");

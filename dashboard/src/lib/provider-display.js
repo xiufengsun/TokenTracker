@@ -63,6 +63,13 @@ export function formatProviderDisplayName(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
 
+  // A split profile ("claude@work", see src/lib/profile-source.js) reads as
+  // "Claude · work": the provider name, then the profile as the user named it.
+  const at = raw.indexOf("@");
+  if (at > 0 && at < raw.length - 1) {
+    return `${formatProviderDisplayName(raw.slice(0, at))} · ${raw.slice(at + 1)}`;
+  }
+
   const normalized = normalizedProviderKey(raw);
   if (normalized === "primeagent") return "Prime Agent";
   if (normalized.startsWith("primeagent") && normalized.length > "primeagent".length) {

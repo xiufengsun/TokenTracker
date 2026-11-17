@@ -449,6 +449,8 @@ By default every root of a provider adds to one source, so two Claude profiles s
 
 Each extra Claude root is then filed under its own source — `claude@work`, `claude@personal` — named after its folder (`.claude-work` → `work`; two roots with the same name become `work` and `work-2`), and the dashboard's per-source breakdown shows one row for each. `~/.claude` itself stays plain `claude`. Use `{ "claude": true }` to name the providers explicitly.
 
+Once usage exists under two or more of these sources, the dashboard shows a **Profile** selector next to the Day / Week / Month tabs. Pick a profile and the total, the 7-day and 30-day cards, the Daily Breakdown, the trend and the heatmap show only that profile. "All profiles" shows everything and is what the dashboard opens on every visit. The model breakdown cards keep listing every profile so you can compare them. The selector is hidden if you did not turn the split on, and in the account (cloud) view.
+
 - It is off unless you set it, and only Claude supports it so far; Codex roots keep feeding `codex`.
 - It applies to usage recorded from now on. History already counted stays under `claude`.
 - Split profiles stay on your machine: their rows are **not uploaded** to TokenTracker Cloud, so a profile's folder name never leaves it. Usage in a split profile therefore does not count towards your Cloud totals or the leaderboard.
