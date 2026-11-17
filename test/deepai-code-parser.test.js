@@ -10,6 +10,8 @@ const {
   resolveDeepaiCodeSessionsDir,
   resolveDeepaiCodeSessionFiles,
 } = require("../src/lib/rollout");
+const { cmdSync } = require("../src/commands/sync");
+const { withHome } = require("./helpers/with-home");
 
 async function readJsonLines(filePath) {
   let raw;
@@ -287,6 +289,83 @@ test("parseDeepaiCodeIncremental picks up only appended lines on the next sync",
     assert.equal(row.total_tokens, 1120);
     assert.equal(row.conversation_count, 3);
   } finally {
+    await ctx.cleanup();
+  }
+});
+
+test("cmdSync --auto commits project cursors when DeepAI Code only queues project backfill buckets", async () => {
+  const ctx = await setup();
+  const prevEnv = {
+    TOKENTRACKER_DEEPAI_CODE_USERDATA: process.env.TOKENTRACKER_DEEPAI_CODE_USERDATA,
+    TOKENTRACKER_DEEPAI_CODE_AGENT_DIR: process.env.TOKENTRACKER_DEEPAI_CODE_AGENT_DIR,
+    TOKENTRACKER_WSL_MODE: process.env.TOKENTRACKER_WSL_MODE,
+  };
+  const restoreHome = withHome(ctx.tmp);
+  try {
+    process.env.TOKENTRACKER_DEEPAI_CODE_USERDATA = ctx.userdata;
+    delete process.env.TOKENTRACKER_DEEPAI_CODE_AGENT_DIR;
+    process.env.TOKENTRACKER_WSL_MODE = "native-only";
+
+    const repoDir = path.join(ctx.tmp, "work", "deepai-repo");
+    await fs.mkdir(repoDir, { recursive: true });
+    const ts = Date.UTC(2026, 10, 17, 4, 0, 0);
+    await writeSession(ctx.userdata, {
+      cwdDir: "--deepai-repo--",
+      lines: [
+        headerLine(repoDir),
+        assistantLine({ id: "proj-1", input: 200, output: 50, cacheRead: 100, timestamp: ts }),
+      ],
+    });
+
+    const trackerDir = path.join(ctx.tmp, ".tokentracker", "tracker");
+    const queuePath = path.join(trackerDir, "queue.jsonl");
+    const projectQueuePath = path.join(trackerDir, "project.queue.jsonl");
+    const syncOnce = async () => {
+      const diagnostics = {};
+      await cmdSync(["--auto", "--from-notify", "--source=deepai"], {
+        home: ctx.tmp,
+        cursorStoreOptions: { forceV2: true },
+        diagnostics,
+      });
+      return diagnostics;
+    };
+
+    // First auto sync consumes main usage while the cwd has no Git remote yet.
+    const d1 = await syncOnce();
+    assert.equal(d1.cursor_commits, 1);
+    assert.equal(latestRows(await readJsonLines(queuePath)).at(-1)?.total_tokens, 350);
+    assert.equal((await readJsonLines(projectQueuePath)).length, 0);
+
+    // Later the cwd gains a Git remote; totalParsed and totalBuckets are 0,
+    // so only DeepAI project backfill queues buckets.
+    await fs.mkdir(path.join(repoDir, ".git"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoDir, ".git", "config"),
+      '[remote "origin"]\n\turl = https://github.com/acme/deepai-project.git\n',
+    );
+    const queueBeforeBackfill = await fs.readFile(queuePath, "utf8");
+
+    const d2 = await syncOnce();
+    assert.equal(d2.cursor_commits, 1, "auto sync must commit projectSeenIds/projectFileOffsets after DeepAI project backfill");
+    assert.equal(await fs.readFile(queuePath, "utf8"), queueBeforeBackfill);
+
+    const projectRows = await readJsonLines(projectQueuePath);
+    assert.equal(projectRows.length, 1);
+    assert.equal(projectRows[0].source, "deepai");
+    assert.equal(projectRows[0].project_key, "acme/deepai-project");
+    assert.equal(projectRows[0].total_tokens, 350);
+
+    // Next auto sync must be a genuine no-op and never re-queue project history.
+    const projectQueueBeforeRepeat = await fs.readFile(projectQueuePath, "utf8");
+    const d3 = await syncOnce();
+    assert.equal(d3.cursor_commits, 0);
+    assert.equal(await fs.readFile(projectQueuePath, "utf8"), projectQueueBeforeRepeat);
+  } finally {
+    restoreHome();
+    for (const [key, value] of Object.entries(prevEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     await ctx.cleanup();
   }
 });

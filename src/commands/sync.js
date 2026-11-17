@@ -2896,7 +2896,7 @@ async function cmdSync(argv, context = {}) {
 
     // ── DeepAI Code — passive reader for the pi-style sessions it embeds
     // (~/.deepai-code/userdata/deepai/pi/*/sessions/**/*.jsonl) ──
-    let deepaiResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
+    let deepaiResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
     const deepaiFiles = sourceAllowed("deepai")
       ? mergeBothFileSources({ resolveFiles: resolveDeepaiCodeSessionFiles, env: process.env })
       : [];
@@ -3587,6 +3587,7 @@ async function cmdSync(argv, context = {}) {
       !workbuddyAiResult.projectCursorUpdated &&
       !(grokResult.projectBucketsQueued > 0) &&
       !(commandCodeResult.projectBucketsQueued > 0) &&
+      !(deepaiResult.projectBucketsQueued > 0) &&
       !commandCodeResult.schemaMigrated &&
       !codexColdAuditDue &&
       !codexFallbackRetryRan &&
