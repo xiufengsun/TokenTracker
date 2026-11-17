@@ -8,6 +8,15 @@ const literal = value => value == null ? "NULL" : "'" + String(value).replaceAll
 const id = prefix => prefix + randomUUID().replaceAll("-", "");
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+function nativeConnectionEnvironment(inherited) {
+  const env = { ...inherited, PGHOSTADDR: "127.0.0.1", PGPASSFILE: "/dev/null", PGCONNECT_TIMEOUT: "5",
+    PGOPTIONS: "-c lock_timeout=8000 -c statement_timeout=12000 -c idle_in_transaction_session_timeout=15000 -c timezone=UTC" };
+  // libpq treats even PGSERVICE="" as a service lookup, not as disabled.
+  delete env.PGSERVICE;
+  delete env.PGSERVICEFILE;
+  return env;
+}
+
 class PsqlSession {
   constructor() {
     assert.equal(process.env.TOKENTRACKER_NATIVE_POSTGRES, "1", "native tests require explicit opt-in");
@@ -18,9 +27,7 @@ class PsqlSession {
     this.exited = new Promise(resolve => { this.resolveExit = resolve; });
     this.child = spawn("psql", ["-X", "-qAt", "--no-password", "-v", "ON_ERROR_STOP=1",
       "-h", "127.0.0.1", "-p", port, "-U", "postgres", "-d", "tokentracker_cancel_native"], {
-      env: { ...process.env, PGHOSTADDR: "127.0.0.1", PGSERVICE: "", PGSERVICEFILE: "/dev/null",
-        PGPASSFILE: "/dev/null", PGCONNECT_TIMEOUT: "5",
-        PGOPTIONS: "-c lock_timeout=8000 -c statement_timeout=12000 -c idle_in_transaction_session_timeout=15000 -c timezone=UTC" },
+      env: nativeConnectionEnvironment(process.env),
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child.stdout.setEncoding("utf8");
@@ -235,5 +242,5 @@ function registerNativeTests() {
     try { await assert.rejects(untrusted.value(cancelSql(f)), /permission denied/i); } finally { await untrusted.close(); }
   });
 }
-module.exports = { literal, seedOrder, cancelSql, finalizeSql, paymentSql, paidStateSql, assertPaid };
+module.exports = { nativeConnectionEnvironment, literal, seedOrder, cancelSql, finalizeSql, paymentSql, paidStateSql, assertPaid };
 if (require.main === module) registerNativeTests();

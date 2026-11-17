@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { PGlite } = require("@electric-sql/pglite");
 const { installCloudBillingSchema } = require("./helpers/cloud-billing-schema-fixture");
-const { literal, seedOrder, cancelSql, finalizeSql, paymentSql, assertPaid } = require("./native/cloud-order-cancellation-postgres.test.cjs");
+const { nativeConnectionEnvironment, literal, seedOrder, cancelSql, finalizeSql, paymentSql, assertPaid } = require("./native/cloud-order-cancellation-postgres.test.cjs");
 let pg, db;
 test.before(async () => {
   pg = new PGlite();
@@ -62,4 +62,15 @@ test("native financial CI uses disposable PostgreSQL17 and no project secrets", 
 test("recurring native fixture uses PostgreSQL calendar-month boundaries at January month end", async () => {
   const f = await seedOrder(db, { recurring: true, periodStart: "2027-01-31T12:00:00.000Z" });
   assert.equal(new Date(f.event.ends_at).toISOString(), "2027-02-28T12:00:00.000Z");
+});
+
+test("native driver removes libpq service selectors instead of setting an empty service name", () => {
+  const inherited = { PGSERVICE: "synthetic-service", PGSERVICEFILE: "/fixture/not-read", PGPASSWORD: "fixture-only" };
+  const env = nativeConnectionEnvironment(inherited);
+  assert.equal("PGSERVICE" in env, false);
+  assert.equal("PGSERVICEFILE" in env, false);
+  assert.equal(env.PGHOSTADDR, "127.0.0.1");
+  assert.equal(env.PGPASSFILE, "/dev/null");
+  assert.equal(env.PGPASSWORD, "fixture-only");
+  assert.equal(inherited.PGSERVICE, "synthetic-service");
 });
