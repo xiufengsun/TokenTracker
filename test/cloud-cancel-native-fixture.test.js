@@ -47,11 +47,13 @@ test("synthetic SQL literals escape quotes without reimplementing billing logic"
   assert.equal(literal(null), "NULL");
 });
 
-test("native financial CI uses disposable PostgreSQL17 and no project secrets", () => {
+test("native financial CI covers production PostgreSQL15 and PostgreSQL17 with no project secrets", () => {
   const fs = require("node:fs"), path = require("node:path");
   const workflow = fs.readFileSync(path.join(__dirname, "../.github/workflows/ci.yml"), "utf8");
   const job = workflow.slice(workflow.indexOf("  billing-native-postgres:"));
-  assert.match(job, /image: postgres:17/);
+  assert.match(job, /postgres: \[15, 17\]/);
+  assert.match(job, /image: postgres:\$\{\{ matrix.postgres \}\}/);
+  assert.match(job, /TOKENTRACKER_TEST_PGMAJOR: \$\{\{ matrix.postgres \}\}/);
   assert.match(job, /persist-credentials: false/);
   assert.match(job, /timeout-minutes: 8/);
   assert.match(job, /job.services.postgres.ports\[5432\]/);
@@ -73,4 +75,12 @@ test("native driver removes libpq service selectors instead of setting an empty 
   assert.equal(env.PGPASSFILE, "/dev/null");
   assert.equal(env.PGPASSWORD, "fixture-only");
   assert.equal(inherited.PGSERVICE, "synthetic-service");
+});
+
+test("native server guard requires its explicit supported service version", () => {
+  const { assertNativePostgresVersion } = require("./native/cloud-order-cancellation-postgres.test.cjs");
+  assert.doesNotThrow(() => assertNativePostgresVersion(150018, "15"));
+  assert.doesNotThrow(() => assertNativePostgresVersion(170012, "17"));
+  assert.throws(() => assertNativePostgresVersion(150018, "17"));
+  for (const major of ["", "16", "15;unexpected"]) assert.throws(() => assertNativePostgresVersion(150018, major));
 });

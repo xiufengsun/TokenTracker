@@ -1,4 +1,4 @@
-// Opt-in native PostgreSQL17 tests. No gateway HTTP calls or production credentials.
+// Opt-in native PostgreSQL15/17 tests. No gateway HTTP calls or production credentials.
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
@@ -15,6 +15,11 @@ function nativeConnectionEnvironment(inherited) {
   delete env.PGSERVICE;
   delete env.PGSERVICEFILE;
   return env;
+}
+
+function assertNativePostgresVersion(number, major) {
+  assert.match(major || "", /^(15|17)$/, "only explicit PostgreSQL15/17 fixture targets allowed");
+  assert.equal(Math.floor(number / 10000), Number(major), `native PostgreSQL${major} required`);
 }
 
 class PsqlSession {
@@ -126,7 +131,7 @@ function registerNativeTests() {
     admin = await connect(null);
     const version = await admin.value("SELECT to_jsonb(current_setting('server_version'))");
     const number = await admin.value("SELECT current_setting('server_version_num')::int");
-    assert.ok(number >= 170000 && number < 180000, "native PostgreSQL17 required");
+    assertNativePostgresVersion(number, process.env.TOKENTRACKER_TEST_PGMAJOR || "17");
     console.log(`Native PostgreSQL ${version}; independent psql backends; no provider requests`);
     assert.equal(await admin.value("SELECT count(*)::int FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind IN ('r','p')"), 0, "refuse nonempty test database");
     await installCloudBillingSchema(admin);
@@ -242,5 +247,5 @@ function registerNativeTests() {
     try { await assert.rejects(untrusted.value(cancelSql(f)), /permission denied/i); } finally { await untrusted.close(); }
   });
 }
-module.exports = { nativeConnectionEnvironment, literal, seedOrder, cancelSql, finalizeSql, paymentSql, paidStateSql, assertPaid };
+module.exports = { assertNativePostgresVersion, nativeConnectionEnvironment, literal, seedOrder, cancelSql, finalizeSql, paymentSql, paidStateSql, assertPaid };
 if (require.main === module) registerNativeTests();

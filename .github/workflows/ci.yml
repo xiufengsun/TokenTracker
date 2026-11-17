@@ -299,12 +299,16 @@ jobs:
             windows-package-manifest.json
 
   billing-native-postgres:
-    name: Billing cancellation native PostgreSQL17
+    name: Billing cancellation native PostgreSQL${{ matrix.postgres }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: [15, 17]
     services:
       postgres:
-        image: postgres:17
+        image: postgres:${{ matrix.postgres }}
         env:
           POSTGRES_DB: tokentracker_cancel_native
           POSTGRES_USER: postgres
@@ -327,6 +331,7 @@ jobs:
       - name: Native concurrent cancellation and payment persistence
         env:
           TOKENTRACKER_NATIVE_POSTGRES: '1'
+          TOKENTRACKER_TEST_PGMAJOR: ${{ matrix.postgres }}
           TOKENTRACKER_TEST_PGPORT: ${{ job.services.postgres.ports[5432] }}
           PGPASSWORD: native-fixture-only
         run: node --test --test-timeout=120000 test/native/cloud-order-cancellation-postgres.test.cjs
