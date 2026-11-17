@@ -12,6 +12,8 @@ export async function closeExpiredUnusedGiftOrders(
   let closed = false;
   for (const value of result.data || []) {
     const order = value as CloudOrder;
+    // Cancellation has stricter receipt/operation finality; never bypass it via gift cleanup.
+    if (order.cancel_requested_at) continue;
     if (order.user_id !== userId || order.environment !== environment || order.provider !== 'waffo') continue;
     if (!await confirmExpiredUnusedWaffoCheckout(order, config)) continue;
     const latest = await rpc(client, 'cloud_close_unpaid_order', { p_user_id: userId, p_order_id: order.id });
