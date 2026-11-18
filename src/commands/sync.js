@@ -1241,26 +1241,50 @@ async function cmdSync(argv, context = {}) {
       // through one) must be compared by its real location, not its spelling.
       const cursorFilePaths = Object.keys(cursors.files || {});
       const cursorRootIdentities = new Set();
+      // A root whose directory no longer exists (a symlink that was removed, a
+      // folder that was moved) cannot be resolved to a real location. Its cursor
+      // keys still say which files it once supplied, so keep a few of their
+      // paths below projects/ and look for the same files under a configured root.
+      const vanishedRootFiles = new Map();
+      const MAX_VANISHED_ROOT_SAMPLES = 25;
       {
-        const spellings = new Set();
+        const spellings = new Map();
         for (const filePath of cursorFilePaths) {
-          for (const match of filePath.matchAll(/[\\/]projects[\\/]/g)) spellings.add(filePath.slice(0, match.index));
-        }
-        for (const spelling of spellings) {
-          let real = spelling;
-          try {
-            real = fssync.realpathSync(spelling);
-          } catch (_e) {
-            // A vanished directory keeps its own spelling.
+          for (const match of filePath.matchAll(/[\\/]projects[\\/]/g)) {
+            const spelling = filePath.slice(0, match.index);
+            const relative = filePath.slice(match.index + match[0].length);
+            if (!spellings.has(spelling)) spellings.set(spelling, []);
+            const samples = spellings.get(spelling);
+            if (samples.length < MAX_VANISHED_ROOT_SAMPLES) samples.push(relative);
           }
-          cursorRootIdentities.add(profileRootKey(real));
+        }
+        for (const [spelling, samples] of spellings) {
+          try {
+            cursorRootIdentities.add(profileRootKey(fssync.realpathSync(spelling)));
+          } catch (_e) {
+            vanishedRootFiles.set(spelling, samples);
+            cursorRootIdentities.add(profileRootKey(spelling));
+          }
         }
       }
+      const vanishedRootHadFilesUnder = (entry) => {
+        for (const samples of vanishedRootFiles.values()) {
+          for (const relative of samples) {
+            try {
+              if (fssync.existsSync(path.join(entry.path, "projects", ...relative.split(/[\\/]/)))) return true;
+            } catch (_e) {
+              // An unreadable candidate is simply not a match.
+            }
+          }
+        }
+        return false;
+      };
       const rootPreviouslySuppliedFiles = (entry) => {
         const prefix = path.join(entry.path, "projects") + path.sep;
         return (
           cursorFilePaths.some((filePath) => filePath.startsWith(prefix)) ||
-          cursorRootIdentities.has(profileRootKey(entry.realPath || entry.path))
+          cursorRootIdentities.has(profileRootKey(entry.realPath || entry.path)) ||
+          vanishedRootHadFilesUnder(entry)
         );
       };
       const legacyMigrationPending =

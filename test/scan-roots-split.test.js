@@ -896,3 +896,51 @@ test("a pending repair still waits when the root was scanned through a symlink a
     assert.deepEqual(await migrationsDone(home), { repair: false, observer: false });
   });
 });
+
+// ---- a symlink that is gone
+
+async function removeDirLink(linkPath) {
+  if (process.platform === "win32") await fsp.rmdir(linkPath);
+  else await fsp.unlink(linkPath);
+}
+
+test("a pending repair still waits when the symlink a root was scanned through has since been removed", async (t) => {
+  await withTempSyncEnv(async (home) => {
+    const { work } = await twoProfiles(home);
+    const alias = path.join(home, "alias-work");
+    if (!(await linkDir(work, alias, t))) return;
+    await writeConfig(home, { scanRoots: { claude: [alias] } });
+    await cmdSync([]);
+    assert.equal((await latestTotalsBySource(home)).claude, 450);
+    await makeLegacyClaudeMigrationsPending(home);
+
+    await removeDirLink(alias);
+    await fsp.access(path.join(work, "projects", "p2", "s2.jsonl"));
+    await writeConfig(home, { scanRoots: { claude: [work] }, splitScanRoots: true });
+    await cmdSync([]);
+
+    assert.equal((await latestTotalsBySource(home)).claude, 450, "history is not erased");
+    assert.deepEqual(await migrationsDone(home), { repair: false, observer: false });
+  });
+});
+
+test("a root that was deleted for good does not hold the migrations back for ever", async () => {
+  await withTempSyncEnv(async (home) => {
+    const native = path.join(home, ".claude");
+    const gone = path.join(home, "gone", ".claude-old");
+    const work = path.join(home, ".claude-work");
+    await writeClaudeSession(native, "p1", "s1", { msgId: "m-native", input: 100, output: 50 });
+    await writeClaudeSession(gone, "old", "so", { msgId: "m-old", input: 1000, output: 500 });
+    await writeConfig(home, { scanRoots: { claude: [gone] } });
+    await cmdSync([]);
+    await makeLegacyClaudeMigrationsPending(home);
+
+    await fsp.rm(path.join(home, "gone"), { recursive: true, force: true });
+    await writeClaudeSession(work, "p2", "s2", { msgId: "m-work", input: 200, output: 100 });
+    await writeConfig(home, { scanRoots: { claude: [work] }, splitScanRoots: true });
+    await cmdSync([]);
+
+    assert.deepEqual(await migrationsDone(home), { repair: true, observer: true }, "nothing configured has that history");
+    assert.deepEqual(await latestTotalsBySource(home), { claude: 150, "claude@work": 300 });
+  });
+});
