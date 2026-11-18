@@ -1243,10 +1243,11 @@ async function cmdSync(argv, context = {}) {
       const cursorRootIdentities = new Set();
       // A root whose directory no longer exists (a symlink that was removed, a
       // folder that was moved) cannot be resolved to a real location. Its cursor
-      // keys still say which files it once supplied, so keep a few of their
-      // paths below projects/ and look for the same files under a configured root.
+      // keys still say which files it once supplied, so keep their paths below
+      // projects/ and look for the same files under a configured root. All of
+      // them are kept: any cap could be filled with files that were pruned since,
+      // hiding a later one that still exists. The look-up stops at the first hit.
       const vanishedRootFiles = new Map();
-      const MAX_VANISHED_ROOT_SAMPLES = 25;
       {
         const spellings = new Map();
         for (const filePath of cursorFilePaths) {
@@ -1254,8 +1255,7 @@ async function cmdSync(argv, context = {}) {
             const spelling = filePath.slice(0, match.index);
             const relative = filePath.slice(match.index + match[0].length);
             if (!spellings.has(spelling)) spellings.set(spelling, []);
-            const samples = spellings.get(spelling);
-            if (samples.length < MAX_VANISHED_ROOT_SAMPLES) samples.push(relative);
+            spellings.get(spelling).push(relative);
           }
         }
         for (const [spelling, samples] of spellings) {

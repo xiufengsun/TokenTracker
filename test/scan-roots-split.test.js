@@ -924,6 +924,35 @@ test("a pending repair still waits when the symlink a root was scanned through h
   });
 });
 
+test("a removed symlink is still matched when its first many files were deleted and only a later one remains", async (t) => {
+  await withTempSyncEnv(async (home) => {
+    const work = path.join(home, ".claude-work");
+    const alias = path.join(home, "alias-work");
+    const sessions = 30;
+    for (let i = 0; i < sessions; i++) {
+      await writeClaudeSession(work, "p", `s${String(i).padStart(2, "0")}`, { msgId: `m-${i}`, input: 20, output: 10 });
+    }
+    if (!(await linkDir(work, alias, t))) return;
+    await writeConfig(home, { scanRoots: { claude: [alias] } });
+    await cmdSync([]);
+    assert.equal((await latestTotalsBySource(home)).claude, sessions * 30);
+    await makeLegacyClaudeMigrationsPending(home);
+
+    const scanned = Object.keys((await readCursors(home)).files).filter((key) => key.endsWith(".jsonl"));
+    assert.ok(scanned.length >= sessions, "every session has a cursor entry");
+    for (const filePath of scanned.slice(0, 25)) {
+      await fsp.rm(path.join(work, "projects", "p", path.basename(filePath)));
+    }
+    await removeDirLink(alias);
+    await writeConfig(home, { scanRoots: { claude: [work] }, splitScanRoots: true });
+    await cmdSync([]);
+    await cmdSync([]);
+
+    assert.deepEqual(await migrationsDone(home), { repair: false, observer: false }, "both stay pending across two syncs");
+    assert.equal((await latestTotalsBySource(home)).claude, sessions * 30, "history is not erased");
+  });
+});
+
 test("a root that was deleted for good does not hold the migrations back for ever", async () => {
   await withTempSyncEnv(async (home) => {
     const native = path.join(home, ".claude");
