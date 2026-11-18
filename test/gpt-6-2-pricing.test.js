@@ -100,3 +100,13 @@ test("Public Codex session scanner preserves historical Ultrafast costs after pr
     close(summarizeSessions([after]).by_model[0].cost_usd, 2.4);
   } finally { Date.now = originalNow; fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("Specialist GPT6.2 Astra Law uses confirmed Standard/context rates, never general speed promotions", () => {
+  for (const model of ["gpt-6.2-astra-law", "openai/gpt-6.2-astra-law", "gpt-6-2-astra-law"]) {
+    const actual = pricing.getModelPricing(model);
+    assert.equal(actual.input,8); assert.equal(actual.cache_read,.4); assert.equal(actual.output,40); assert.equal(actual.cache_write,10);
+    assert.equal(actual.priority_multiplier,undefined);assert.equal(actual.ultrafast_multiplier,undefined);
+    close(pricing.computeRowCost({source:"codex",model,input_tokens:300000,long_context_input_tokens:300000}),4.8);
+  }
+  for(const slug of slugs){const source=fs.readFileSync(path.join(__dirname,"../dashboard/edge-patches",`${slug}.ts`),"utf8");const block=source.match(/const MODEL_PRICING[\s\S]*?\nfunction getModelPricing\(model: string(?:, source = "")?\) \{[\s\S]*?\n\}/)[0];const c=vm.createContext({});vm.runInContext(transformSync(block,{loader:"ts",format:"cjs"}).code,c);for(const model of ["gpt-6.2-astra-law","openai/gpt-6.2-astra-law","gpt-6-2-astra-law"])assert.equal(c.getModelPricing(model).input,8);}
+});

@@ -7,7 +7,11 @@ Official evidence retrieved 2026-11-18 (Asia/Shanghai):
 - Sol: https://developers.openai.com/api/docs/models/gpt-6.2-sol.md
 - Full tiers: https://developers.openai.com/api/docs/pricing
 
-Only `gpt-6.2-astra` and `gpt-6.2-sol` are listed API IDs. No dated snapshots,
+The general-purpose API IDs covered are `gpt-6.2-astra` and `gpt-6.2-sol`.
+The official pricing page additionally confirms specialist `gpt-6.2-astra-law`
+under Legal model configurations; its Standard short/long rates equal Astra.
+No Fast/Ultrafast specialist price is published, so it does not inherit those
+multipliers. No dated snapshots,
 GPT-6.2 Terra/Luna/Pro/Codex SKUs or floating aliases are confirmed here.
 Provider prefixes and reasoning-effort decorations are lookup aliases, not claims
 of additional released API models. Unknown variants remain unpriced unless an
@@ -19,6 +23,7 @@ USD per million tokens, Standard short-context API-equivalent estimates:
 | --- | ---: | ---: | ---: | ---: | ---: |
 | gpt-6.2-astra | 8 | 0.40 | 40 | 10 | 20 |
 | gpt-6.2-sol | 2 | 0.10 | 10 | 2.50 | 5 |
+| gpt-6.2-astra-law | 8 | 0.40 | 40 | 10 | 20 |
 
 Above 272,000 **request input** tokens (cache included), input/cache rates double
 and output is 1.5x for the full request. Fast is 2x; Ultrafast is 3x through

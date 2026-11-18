@@ -173,6 +173,13 @@
       "cache_write": 0.125,
       "note": "Dotted alias for claude-haiku-5-5. Same short-context rates."
     },
+    "gpt-6.2-astra-law": {
+      "input": 8,
+      "output": 40,
+      "cache_read": 0.4,
+      "cache_write": 10,
+      "note": "Official specialist Legal model configuration Standard USD/MTok, verified 2026-11-18 at https://developers.openai.com/api/docs/pricing#legal-model-configurations. Short 8/0.4/10/40 input/cache-read/30m-write/output; long 16/0.8/20/60. 12h write20 short/40 long is not distinguishable in current rows. No Fast/Ultrafast price is published for this specialist ID; do not inherit general Astra promotion multipliers."
+    },
     "gpt-6.2-astra": {
       "input": 8,
       "output": 40,

@@ -183,6 +183,7 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   // standard short-context estimate; never infer long context from totals.
   // Official GPT-6.2 Standard short-context USD/MTok, verified 2026-11-18:
   // https://developers.openai.com/api/docs/pricing (cloud has no request tier/retention).
+  "gpt-6.2-astra-law": { input: 8, output: 40, cache_read: 0.4, cache_write: 10 },
   "gpt-6.2-astra": { input: 8, output: 40, cache_read: 0.4, cache_write: 10 },
   "gpt-6.2-sol": { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
   "gpt-6-astra": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
@@ -475,7 +476,7 @@ function getModelPricing(model: string, source = "") {
   // Do not guess prices for unannounced GPT-6.2 SKUs or dated snapshots.
   const gpt62 = lower.trim().match(/gpt-6[.-]2(?:-(.*))?$/);
   if (gpt62) {
-    const known = /^(astra|sol)(?:-?(?:low|medium|high|xhigh|max)(?:-fast)?|-fast)?$/.exec(gpt62[1] || "");
+    const known = /^(astra-law|astra|sol)(?:-?(?:low|medium|high|xhigh|max)(?:-fast)?|-fast)?$/.exec(gpt62[1] || "");
     return known ? MODEL_PRICING[`gpt-6.2-${known[1]}`] : ZERO_PRICING;
   }
   // Fable 5.2 before the broad fable matcher, or claude-fable-5-2 bills at the
