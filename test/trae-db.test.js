@@ -128,19 +128,35 @@ function context(input = 100) {
   };
 }
 
-test("TRAE discovery uses only international live databases on each platform", (t) => {
+const TRAE_DB_APP_DIRS = ["Trae", "TRAE SOLO", "Trae CN", "TRAE SOLO CN"];
+
+function appSupportParent(platform, home, env = {}) {
+  if (platform === "win32") return env.APPDATA || path.join(home, "AppData", "Roaming");
+  if (platform === "darwin") return path.join(home, "Library", "Application Support");
+  return env.XDG_CONFIG_HOME || path.join(home, ".config");
+}
+
+function writeLiveTraeDb(parent, name, module = "ai-agent") {
+  const root = path.join(parent, name, "ModularData", module);
+  fs.mkdirSync(root, { recursive: true });
+  const db = path.join(root, "database.db");
+  fs.writeFileSync(db, "live");
+  fs.writeFileSync(path.join(root, "database_decrypted.db"), "stale");
+  return db;
+}
+
+function liveDbPath(parent, name, module = "ai-agent") {
+  return path.join(parent, name, "ModularData", module, "database.db");
+}
+
+test("TRAE discovery includes international and CN live databases on each platform", (t) => {
   const dir = temp(t);
   for (const platform of ["win32", "darwin", "linux"]) {
-    const parent = platform === "win32" ? path.join(dir, "AppData", "Roaming")
-      : platform === "darwin" ? path.join(dir, "Library", "Application Support") : path.join(dir, ".config");
-    for (const name of ["Trae", "TRAE SOLO", "Trae CN", "TRAE SOLO CN"]) {
-      const root = path.join(parent, name, "ModularData", "ai-agent");
-      fs.mkdirSync(root, { recursive: true });
-      fs.writeFileSync(path.join(root, "database.db"), "live");
-      fs.writeFileSync(path.join(root, "database_decrypted.db"), "stale");
-    }
-    assert.deepEqual(resolveTraeDbPaths({}, { platform, home: dir }), ["Trae", "TRAE SOLO"].map((name) =>
-      path.join(parent, name, "ModularData", "ai-agent", "database.db")));
+    const parent = appSupportParent(platform, dir);
+    const expected = TRAE_DB_APP_DIRS.map((name) => writeLiveTraeDb(parent, name));
+    const resolved = resolveTraeDbPaths({}, { platform, home: dir });
+    assert.deepEqual(resolved, expected);
+    assert.equal(resolved.length, new Set(resolved).size);
   }
   const custom = path.join(dir, "custom", "ModularData", "ai-agent");
   fs.mkdirSync(custom, { recursive: true });
@@ -148,6 +164,58 @@ test("TRAE discovery uses only international live databases on each platform", (
   assert.deepEqual(resolveTraeDbPaths({ TOKENTRACKER_TRAE_HOME: path.join(dir, "custom") }), []);
   const explicit = path.join(custom, "database_decrypted.db");
   assert.deepEqual(resolveTraeDbPaths({ TOKENTRACKER_TRAE_DB: explicit }), [explicit]);
+});
+
+test("TRAE discovery joins both CN names under the macOS Application Support parent", (t) => {
+  const home = temp(t);
+  const parent = path.join(home, "Library", "Application Support");
+  const expected = ["Trae CN", "TRAE SOLO CN"].map((name) => writeLiveTraeDb(parent, name));
+  assert.deepEqual(resolveTraeDbPaths({}, { platform: "darwin", home }), expected);
+  assert.equal(expected[0], path.join(parent, "Trae CN", "ModularData", "ai-agent", "database.db"));
+  assert.equal(expected[1], path.join(parent, "TRAE SOLO CN", "ModularData", "ai-agent", "database.db"));
+});
+
+test("TRAE discovery still finds international databases when CN dirs are absent", (t) => {
+  const dir = temp(t);
+  for (const platform of ["win32", "darwin", "linux"]) {
+    const parent = appSupportParent(platform, dir);
+    const expected = ["Trae", "TRAE SOLO"].map((name) => writeLiveTraeDb(parent, name));
+    assert.deepEqual(resolveTraeDbPaths({}, { platform, home: dir }), expected);
+  }
+});
+
+test("TRAE discovery prefers TOKENTRACKER_TRAE_HOME and TOKENTRACKER_TRAE_DB over default international and CN roots", (t) => {
+  const dir = temp(t);
+  const platform = "darwin";
+  const parent = appSupportParent(platform, dir);
+  for (const name of TRAE_DB_APP_DIRS) writeLiveTraeDb(parent, name);
+  const customRoot = path.join(dir, "custom-home");
+  const customDb = writeLiveTraeDb(customRoot, ".");
+  assert.deepEqual(
+    resolveTraeDbPaths({ TOKENTRACKER_TRAE_HOME: customRoot }, { platform, home: dir }),
+    [customDb],
+  );
+  const explicit = liveDbPath(parent, "Trae CN");
+  assert.deepEqual(
+    resolveTraeDbPaths({ TOKENTRACKER_TRAE_DB: explicit, TOKENTRACKER_TRAE_HOME: customRoot }, { platform, home: dir }),
+    [explicit],
+  );
+});
+
+test("TRAE discovery keeps Windows APPDATA and Linux XDG parents when enumerating CN names", (t) => {
+  const dir = temp(t);
+  const winParent = path.join(dir, "win-roaming");
+  const linuxParent = path.join(dir, "xdg-config");
+  const winExpected = TRAE_DB_APP_DIRS.map((name) => writeLiveTraeDb(winParent, name));
+  const linuxExpected = TRAE_DB_APP_DIRS.map((name) => writeLiveTraeDb(linuxParent, name));
+  assert.deepEqual(
+    resolveTraeDbPaths({ APPDATA: winParent }, { platform: "win32", home: path.join(dir, "unused-home") }),
+    winExpected,
+  );
+  assert.deepEqual(
+    resolveTraeDbPaths({ XDG_CONFIG_HOME: linuxParent }, { platform: "linux", home: path.join(dir, "unused-home") }),
+    linuxExpected,
+  );
 });
 
 test("TRAE reader projects structured usage without message bodies or scalar history snapshots", async (t) => {
