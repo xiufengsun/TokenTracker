@@ -408,20 +408,32 @@ test("a batch of only split-profile rows uploads nothing but still advances the 
 
 // ---------------------------------------------------------------- pending ground-truth repair
 
-// The one-time Claude repair rebuilds every "claude" row from the roots it is
-// given. A root that was already scanned into "claude" before the split was
-// turned on holds history that belongs there ("history stays under claude"), so
-// the repair must still count it, not drop it.
+// The one-time Claude repair clears every "claude" row and rebuilds it from disk.
+// A split root that already has history in the cursor store cannot be handled by
+// it: leaving the root out erases what it added to "claude" before the split,
+// and counting it files the whole directory (including usage added after the
+// split) under "claude" or counts it twice. So the repair waits for such a root;
+// nothing is deleted or recounted, and new usage goes to the profile.
+const cursorsFile = (home) => path.join(trackerDir(home), "cursors.json");
+
+async function readCursors(home) {
+  return JSON.parse(await fsp.readFile(cursorsFile(home), "utf8"));
+}
+
+async function groundTruthRepairDone(home) {
+  const migrations = (await readCursors(home)).migrations || {};
+  return Object.keys(migrations).some((key) => key.startsWith("claudeGroundTruthRepair"));
+}
+
 async function makeGroundTruthRepairPending(home) {
-  const file = path.join(trackerDir(home), "cursors.json");
-  const cursors = JSON.parse(await fsp.readFile(file, "utf8"));
+  const cursors = await readCursors(home);
   const keys = Object.keys(cursors.migrations || {}).filter((key) => key.startsWith("claudeGroundTruthRepair"));
   assert.ok(keys.length > 0, "the first sync records the repair as done");
   for (const key of keys) delete cursors.migrations[key];
-  await fsp.writeFile(file, JSON.stringify(cursors), "utf8");
+  await fsp.writeFile(cursorsFile(home), JSON.stringify(cursors), "utf8");
 }
 
-test("a pending repair keeps history that an extra root already added to claude before the split", async () => {
+test("a pending repair waits for a root that added to claude before the split: history stays, new usage goes to the profile", async () => {
   await withTempSyncEnv(async (home) => {
     const { work } = await twoProfiles(home);
     await writeConfig(home, { scanRoots: { claude: [work] } });
@@ -429,21 +441,19 @@ test("a pending repair keeps history that an extra root already added to claude 
     assert.deepEqual(await latestTotalsBySource(home), { claude: 450 });
     await makeGroundTruthRepairPending(home);
 
-    // The repair reads the files as they are on disk, so usage appended just
-    // before this sync is part of the history it keeps under "claude".
     await writeConfig(home, { scanRoots: { claude: [work] }, splitScanRoots: true });
     await appendClaudeUsage(path.join(work, "projects", "p2", "s2.jsonl"), { msgId: "m-work-2", input: 20, output: 10 });
     await cmdSync([]);
-    assert.deepEqual(await latestTotalsBySource(home), { claude: 480 });
+    assert.deepEqual(await latestTotalsBySource(home), { claude: 450, "claude@work": 30 });
 
-    // From here on the split root's new usage goes to its profile.
     await appendClaudeUsage(path.join(work, "projects", "p2", "s2.jsonl"), { msgId: "m-work-3", input: 6, output: 4 });
     await cmdSync([]);
-    assert.deepEqual(await latestTotalsBySource(home), { claude: 480, "claude@work": 10 });
+    assert.deepEqual(await latestTotalsBySource(home), { claude: 450, "claude@work": 40 });
+    assert.equal(await groundTruthRepairDone(home), false, "the repair is deferred, not run");
   });
 });
 
-test("a pending repair does not count a new split root's files as plain claude", async () => {
+test("a pending repair does not count a new split root's files as plain claude, and still runs", async () => {
   await withTempSyncEnv(async (home) => {
     const { work } = await twoProfiles(home);
     await writeConfig(home, { scanRoots: { claude: [work] }, splitScanRoots: true });
@@ -451,23 +461,78 @@ test("a pending repair does not count a new split root's files as plain claude",
     await cmdSync([]);
 
     assert.deepEqual(await latestTotalsBySource(home), { claude: 150, "claude@work": 300 });
+    assert.equal(await groundTruthRepairDone(home), true, "a new split root does not hold the repair back");
   });
 });
 
-test("the repair finishing does not make a later sync count anything twice", async () => {
+test("a pending repair never recounts a root that is already filed under its profile", async () => {
+  await withTempSyncEnv(async (home) => {
+    const { work } = await twoProfiles(home);
+    await writeConfig(home, { scanRoots: { claude: [work] }, splitScanRoots: true });
+    await cmdSync([]);
+    const first = await latestTotalsBySource(home);
+    assert.deepEqual(first, { claude: 150, "claude@work": 300 });
+
+    // A scoped sync can file a split root's files before a full scan has run the
+    // repair; model that by making the repair pending again.
+    await makeGroundTruthRepairPending(home);
+    await cmdSync([]);
+    await cmdSync([]);
+
+    assert.deepEqual(await latestTotalsBySource(home), first);
+    assert.equal(await groundTruthRepairDone(home), false);
+  });
+});
+
+test("the repair still runs when no split root has history", async () => {
+  await withTempSyncEnv(async (home) => {
+    await writeClaudeSession(path.join(home, ".claude"), "p1", "s1", { msgId: "m1", input: 100, output: 50 });
+    await writeConfig(home, { splitScanRoots: true });
+    await cmdSync([]);
+    await makeGroundTruthRepairPending(home);
+
+    await cmdSync([]);
+
+    assert.equal(await groundTruthRepairDone(home), true);
+    assert.deepEqual(await latestTotalsBySource(home), { claude: 150 });
+  });
+});
+
+test("with the split off, a pending repair runs as before and counts every root once", async () => {
   await withTempSyncEnv(async (home) => {
     const { work } = await twoProfiles(home);
     await writeConfig(home, { scanRoots: { claude: [work] } });
     await cmdSync([]);
     await makeGroundTruthRepairPending(home);
+
+    await cmdSync([]);
+
+    assert.equal(await groundTruthRepairDone(home), true);
+    assert.deepEqual(await latestTotalsBySource(home), { claude: 450 });
+  });
+});
+
+async function captureStderr(fn) {
+  const write = process.stderr.write;
+  let out = "";
+  process.stderr.write = (chunk) => { out += String(chunk); return true; };
+  try { await fn(); } finally { process.stderr.write = write; }
+  return out;
+}
+
+test("the deferral is announced while the repair waits, and not once it is done", async () => {
+  await withTempSyncEnv(async (home) => {
+    const { work } = await twoProfiles(home);
     await writeConfig(home, { scanRoots: { claude: [work] }, splitScanRoots: true });
     await cmdSync([]);
-    const first = await latestTotalsBySource(home);
 
-    await cmdSync([]);
-    await cmdSync([]);
+    const quiet = await captureStderr(() => cmdSync([]));
+    assert.doesNotMatch(quiet, /ground-truth repair deferred/, "the repair is done: nothing to announce");
 
-    assert.deepEqual(await latestTotalsBySource(home), first);
+    await makeGroundTruthRepairPending(home);
+    const announced = await captureStderr(() => cmdSync([]));
+    assert.match(announced, /ground-truth repair deferred: split profile root/);
+    assert.ok(announced.includes(work), "the notice names the root");
   });
 });
 

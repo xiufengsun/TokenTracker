@@ -1226,10 +1226,33 @@ async function cmdSync(argv, context = {}) {
           return !projectsState.exists && rootPreviouslySuppliedFiles(entry.path);
         })
         .map((entry) => entry.path);
+      // The repair clears every "claude" row and rebuilds it from disk. For a
+      // split root that the cursor store already shows as scanned, neither
+      // choice is safe: leaving it out erases the history it added to "claude"
+      // before the split, and counting it rebuilds the whole directory as
+      // "claude" (cursors move to EOF, so usage added after the split lands
+      // there too), or counts it twice when a scoped sync already filed part of
+      // it under the profile. The repair cannot tell those bytes apart, so it
+      // waits: nothing is deleted or recounted, and it runs on a later full scan
+      // once no split root has history (for example after the split is turned
+      // off). A NEW split root has no history, so it does not hold the repair
+      // back and is simply left out of it.
+      const repairPending = !cursors.migrations?.[CLAUDE_GROUND_TRUTH_REPAIR_KEY];
+      const splitRootsWithHistory = repairPending
+        ? scanRoots.claude
+          .filter((entry) => entry.profile && entry.exists && rootPreviouslySuppliedFiles(entry.path))
+          .map((entry) => entry.path)
+        : [];
       if (unavailableClaudeRoots.length > 0) {
         if (!opts.auto) {
           process.stderr.write(
             `Claude ground-truth repair deferred: configured scan root(s) unavailable: ${unavailableClaudeRoots.join(", ")}\n`,
+          );
+        }
+      } else if (splitRootsWithHistory.length > 0) {
+        if (!opts.auto) {
+          process.stderr.write(
+            `Claude ground-truth repair deferred: split profile root(s) already hold history: ${splitRootsWithHistory.join(", ")}\n`,
           );
         }
       } else {
@@ -1240,15 +1263,8 @@ async function cmdSync(argv, context = {}) {
           projectQueuePath,
           projectQueueStatePath,
           // Split profiles are filed under their own source; the repair rebuilds
-          // plain "claude" rows only, so it must not count a NEW split root's
-          // files as "claude". A split root the cursor store already shows as
-          // scanned was counted into "claude" before the split was turned on:
-          // that history stays under "claude" (the repair clears every claude
-          // row and rebuilds it from these roots, so leaving it out would erase
-          // it). Only usage appended from now on goes to the profile.
-          rootDirs: claudeProjectsDirs.filter(
-            (dir) => !claudeProfileSourceByDir.has(dir) || rootPreviouslySuppliedFiles(path.dirname(dir)),
-          ),
+          // plain "claude" rows only, so it must not count their files again.
+          rootDirs: claudeProjectsDirs.filter((dir) => !claudeProfileSourceByDir.has(dir)),
         });
       }
     }
