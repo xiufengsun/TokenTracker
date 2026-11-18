@@ -91,9 +91,8 @@ async function seedOrder(db, { issued = true, expired = true, recurring = false,
   const f = { ...row, owner, checkout: id("cs_native"), attempt: id("ORD_"), product: id("PROD_") };
   f.expiry = new Date(Date.now() + (expired ? -7200000 : 3600000)).toISOString();
   if (!issued) return f;
-  await db.value(`SELECT cloud_claim_checkout(${literal(owner)},${literal(f.id)})`);
-  const operation = await db.value(`SELECT cloud_begin_checkout_operation(${literal(owner)},'sandbox',${literal(f.id)})`);
-  assert.equal(operation.allowed, true);
+  const operation = await db.value(`SELECT cloud_claim_checkout_tracked(${literal(owner)},'sandbox',${literal(f.id)})`);
+  assert.ok(operation.operation_id);
   await db.value(`SELECT cloud_attach_waffo_checkout(${literal(owner)},${literal(f.id)},${literal(f.checkout)},${literal(f.product)},'https://fixture.invalid/checkout',${literal(f.expiry)})`);
   await db.value(`SELECT cloud_finish_checkout_operation(${literal(owner)},'sandbox',${literal(f.id)},${literal(operation.operation_id)},false)`);
   await db.value(`SELECT cloud_register_waffo_attempt(${literal(f.id)},'sandbox',${literal(f.attempt)},${literal(f.product)},${literal(recurring ? "recurring" : "fixed")})`);
@@ -228,6 +227,35 @@ function registerNativeTests() {
     assert.equal((await admin.value(finalizeSql(complete))).status, "closed");
     assert.equal((await admin.value(finalizeSql(complete))).status, "closed");
   });
+  test("native rolling legacy claims remain uncertain and tracked claims attach receipts atomically", async () => {
+    const legacy = await seedOrder(admin, { issued: false });
+    await admin.value(`SELECT cloud_claim_checkout(${literal(legacy.owner)},${literal(legacy.id)})`);
+    const held = await admin.value(cancelSql(legacy));
+    assert.equal(held.status, "pending");
+    assert.equal(held.checkout_tracking_uncertain, true);
+    const recovery = await seedOrder(admin, { issued: false });
+    await admin.value(`SELECT cloud_attach_waffo_checkout(${literal(recovery.owner)},${literal(recovery.id)},NULL,${literal(recovery.product)},NULL)`);
+    const tracked = await admin.value(`SELECT cloud_claim_checkout_tracked(${literal(recovery.owner)},'sandbox',${literal(recovery.id)})`);
+    const recovered = await admin.value(`SELECT cloud_claim_checkout(${literal(recovery.owner)},${literal(recovery.id)})`);
+    assert.equal(recovered.claimed, false);
+    assert.equal(recovered.order.checkout_tracking_uncertain, true);
+    await admin.value(`SELECT cloud_attach_waffo_checkout(${literal(recovery.owner)},${literal(recovery.id)},${literal(recovery.checkout)},${literal(recovery.product)},'https://fixture.invalid/checkout',${literal(recovery.expiry)})`);
+    await admin.value(`SELECT cloud_register_waffo_attempt(${literal(recovery.id)},'sandbox',${literal(recovery.attempt)},${literal(recovery.product)},'fixed')`);
+    await admin.value(`SELECT cloud_finish_checkout_operation(${literal(recovery.owner)},'sandbox',${literal(recovery.id)},${literal(tracked.operation_id)},false)`);
+    assert.equal((await admin.value(cancelSql(recovery))).status, "ready");
+    assert.equal((await admin.value(finalizeSql(recovery))).status, "ready");
+    const fresh = await seedOrder(admin, { issued: false });
+    const { first: claim, second: canceled } = await interleave(
+      `SELECT cloud_claim_checkout_tracked(${literal(fresh.owner)},'sandbox',${literal(fresh.id)})`,
+      cancelSql(fresh), "tracked-claim/receipt-vs-cancel");
+    assert.ok(claim.operation_id);
+    assert.equal(canceled.status, "pending");
+    assert.equal(canceled.checkout_tracking_uncertain, false);
+    assert.equal(await admin.value(`SELECT count(*)::int FROM tokentracker_cloud_checkout_operations WHERE order_id=${literal(fresh.id)}`), 1);
+    const duplicate = await admin.value(`SELECT cloud_claim_checkout_tracked(${literal(fresh.owner)},'sandbox',${literal(fresh.id)})`);
+    assert.equal(duplicate.cancel_pending, true);
+    assert.equal(await admin.value(`SELECT count(*)::int FROM tokentracker_cloud_checkout_operations WHERE order_id=${literal(fresh.id)}`), 1);
+  });
   test("native owner isolation, rollback lock release and service-only privileges", async () => {
     const f = await seedOrder(admin, { issued: false }), other = await seedOrder(admin, { issued: false });
     const a = await connect(), b = await connect();
@@ -242,6 +270,7 @@ function registerNativeTests() {
       try { await assert.rejects(actor.value(sql), /no rows|not found/i); } finally { await actor.close(); }
     }
     assert.equal(await admin.value("SELECT has_function_privilege('authenticated','cloud_request_order_cancel(uuid,text,uuid)','EXECUTE')"), false);
+    assert.equal(await admin.value("SELECT has_function_privilege('authenticated','cloud_claim_checkout_tracked(uuid,text,uuid)','EXECUTE')"), false);
     assert.equal(await admin.value("SELECT has_table_privilege('authenticated','tokentracker_cloud_checkout_operations','INSERT')"), false);
     const untrusted = await connect("authenticated");
     try { await assert.rejects(untrusted.value(cancelSql(f)), /permission denied/i); } finally { await untrusted.close(); }

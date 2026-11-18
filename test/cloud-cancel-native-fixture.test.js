@@ -84,3 +84,26 @@ test("native server guard requires its explicit supported service version", () =
   assert.throws(() => assertNativePostgresVersion(150018, "17"));
   for (const major of ["", "16", "15;unexpected"]) assert.throws(() => assertNativePostgresVersion(150018, major));
 });
+
+test("legacy checkout claim after migration is not a never-issued cancellable draft", async () => {
+  const f = await seedOrder(db, { issued: false });
+  await db.value(`SELECT cloud_claim_checkout(${literal(f.owner)},${literal(f.id)})`);
+  const result = await db.value(cancelSql(f));
+  assert.equal(result.status, "pending");
+  assert.equal(result.checkout_tracking_uncertain, true);
+});
+
+test("legacy claimed-false recovery cannot reuse a tracked operation as provenance", async () => {
+  const f = await seedOrder(db, { issued: false });
+  await db.value(`SELECT cloud_attach_waffo_checkout(${literal(f.owner)},${literal(f.id)},NULL,${literal(f.product)},NULL)`);
+  const tracked = await db.value(`SELECT cloud_claim_checkout_tracked(${literal(f.owner)},'sandbox',${literal(f.id)})`);
+  assert.ok(tracked.operation_id);
+  const legacy = await db.value(`SELECT cloud_claim_checkout(${literal(f.owner)},${literal(f.id)})`);
+  assert.equal(legacy.claimed, false);
+  assert.equal(legacy.order.checkout_tracking_uncertain, true);
+  await db.value(`SELECT cloud_attach_waffo_checkout(${literal(f.owner)},${literal(f.id)},${literal(f.checkout)},${literal(f.product)},'https://fixture.invalid/checkout',${literal(f.expiry)})`);
+  await db.value(`SELECT cloud_register_waffo_attempt(${literal(f.id)},'sandbox',${literal(f.attempt)},${literal(f.product)},'fixed')`);
+  await db.value(`SELECT cloud_finish_checkout_operation(${literal(f.owner)},'sandbox',${literal(f.id)},${literal(tracked.operation_id)},false)`);
+  assert.equal((await db.value(cancelSql(f))).status, "ready");
+  assert.equal((await db.value(finalizeSql(f))).status, "ready", "known expired receipt cannot erase legacy recovery uncertainty");
+});

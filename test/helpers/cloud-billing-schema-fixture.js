@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { functionSql } = require("./cloud-usage-archive-fixture");
 const migration = name => fs.readFileSync(path.join(__dirname, "../../migrations", name), "utf8");
-async function installCloudBillingSchema(db) {
+async function installCloudBillingSchema(db, { afterSubscriptions } = {}) {
   await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE project_admin BYPASSRLS;
     CREATE SCHEMA auth; CREATE TABLE auth.users(id uuid PRIMARY KEY);
     CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$
@@ -36,7 +36,10 @@ async function installCloudBillingSchema(db) {
     "20261007160000_cloud-waffo-sandbox-periods.sql",
     "20261008120000_self-hosted-access.sql", "20261009120000_cloud-gifts.sql",
     "20261106011916_cloud-waffo-unused-checkout-retry.sql",
-    "20261106014534_cloud-checkout-recovery.sql", "20261117090000_cloud-order-cancellation.sql"]) await db.exec(migration(name));
+    "20261106014534_cloud-checkout-recovery.sql", "20261117090000_cloud-order-cancellation.sql"]) {
+    await db.exec(migration(name));
+    if (name === "20261003120000_cloud-subscriptions.sql" && afterSubscriptions) await afterSubscriptions(db);
+  }
   await db.exec("UPDATE tokentracker_cloud_policy SET phase='active',launch_at=now()-interval '1 hour' WHERE environment='sandbox'");
 }
 module.exports = { installCloudBillingSchema };
