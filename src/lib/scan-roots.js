@@ -90,17 +90,68 @@ function deriveProfileName(rootPath, provider) {
   return sanitizeProfileName(path.basename(path.dirname(path.resolve(rootPath)))) || "profile";
 }
 
+const PROFILE_NAME_PATTERN = new RegExp(`^[a-z0-9][a-z0-9._-]{0,${MAX_PROFILE_NAME_LENGTH - 1}}$`);
+// Where sync remembers which source each split root was given.
+const PROFILE_SOURCES_FILE = "profile-sources.json";
+
+// The identity a root is remembered under: its absolute path (case-folded on
+// Windows, where paths are case-insensitive).
+function profileRootKey(rootPath) {
+  const key = path.resolve(rootPath).replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? key.toLowerCase() : key;
+}
+
+// { claude: { "<root key>": "work" } } from tracker/profile-sources.json. A
+// missing or damaged file means "nothing remembered yet".
+async function loadProfileNames(trackerDir) {
+  let raw = null;
+  try {
+    raw = await readJson(path.join(trackerDir, PROFILE_SOURCES_FILE));
+  } catch {
+    return {};
+  }
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+}
+
+// The names to write back after a resolve: what was already remembered, plus
+// every split root that just got one. An existing entry is never rewritten.
+// Returns `known` itself when there is nothing new, so callers can skip the write.
+function rememberProfileNames(known, scanRoots) {
+  const base = known && typeof known === "object" && !Array.isArray(known) ? known : {};
+  let changed = false;
+  const next = { ...base };
+  for (const provider of SPLITTABLE_PROVIDERS) {
+    const current = { ...(base[provider] && typeof base[provider] === "object" ? base[provider] : {}) };
+    for (const entry of (scanRoots && scanRoots[provider]) || []) {
+      if (!entry.profile) continue;
+      const key = profileRootKey(entry.path);
+      if (current[key] === undefined) {
+        current[key] = entry.profile;
+        changed = true;
+      }
+    }
+    next[provider] = current;
+  }
+  return changed ? next : known;
+}
+
 // Give every non-native root of a provider its own source name. Names are made
 // unique ("work", "work-2", ...) so two roots never share a source.
 //
-// Roots are named in path order, not discovery order. The order differs between
+// A name, once given to a root, is remembered (profile-sources.json, see
+// rememberProfileNames) and never changes. Roots without one are named in path
+// order, not discovery order. The order differs between
 // processes (CLAUDE_CONFIG_DIR is only set in some of them) and changes when the
 // config list is edited, and two roots that share a folder name would otherwise
 // swap "work" and "work-2" from one sync to the next. Path order cannot undo a
 // change in WHICH roots exist, so give roots that must stay apart different
 // folder names.
-function assignProfileSources(provider, entries) {
-  const used = new Set();
+function assignProfileSources(provider, entries, remembered = null) {
+  const pinned = remembered && typeof remembered === "object" ? remembered : {};
+  const validPinned = (value) => typeof value === "string" && PROFILE_NAME_PATTERN.test(value);
+  // Every remembered name stays reserved, also for a root that is no longer
+  // configured: usage may still sit under it, so a newcomer must not inherit it.
+  const used = new Set(Object.values(pinned).filter(validPinned));
   const named = entries
     .filter((entry) => entry.origin !== "native")
     .sort((a, b) => {
@@ -109,10 +160,16 @@ function assignProfileSources(provider, entries) {
       return left < right ? -1 : left > right ? 1 : 0;
     });
   for (const entry of named) {
-    const base = deriveProfileName(entry.path, provider);
-    let name = base;
-    for (let n = 2; used.has(name); n++) name = `${base}-${n}`;
-    used.add(name);
+    const rememberedName = pinned[profileRootKey(entry.path)];
+    let name;
+    if (validPinned(rememberedName)) {
+      name = rememberedName;
+    } else {
+      const base = deriveProfileName(entry.path, provider);
+      name = base;
+      for (let n = 2; used.has(name); n++) name = `${base}-${n}`;
+      used.add(name);
+    }
     entry.profile = name;
     entry.source = `${provider}${PROFILE_SOURCE_SEPARATOR}${name}`;
   }
@@ -246,6 +303,7 @@ function resolveScanRoots({
   config = null,
   base = {},
   deps = {},
+  profileNames = null,
 } = {}) {
   const configured = normalizeScanRootsConfig(config && typeof config === "object" ? config.scanRoots : null);
   const split = normalizeSplitScanRoots(config && typeof config === "object" ? config.splitScanRoots : null);
@@ -279,7 +337,7 @@ function resolveScanRoots({
         source: provider,
       });
     }
-    if (split[provider] && SPLITTABLE_PROVIDERS.includes(provider)) assignProfileSources(provider, entries);
+    if (split[provider] && SPLITTABLE_PROVIDERS.includes(provider)) assignProfileSources(provider, entries, profileNames && profileNames[provider]);
     out[provider] = entries;
   }
   return out;
@@ -345,6 +403,7 @@ async function loadScanRootsConfig({ home = os.homedir() } = {}) {
 }
 
 module.exports = {
+  PROFILE_SOURCES_FILE,
   PROFILE_SOURCE_SEPARATOR,
   PROVIDER_NAMES,
   SPLITTABLE_PROVIDERS,
@@ -356,9 +415,12 @@ module.exports = {
   extraScanRootPaths,
   hasAnyScanChild,
   isProfileSource,
+  loadProfileNames,
   loadScanRootsConfig,
   normalizeScanRootsConfig,
   normalizeSplitScanRoots,
+  profileRootKey,
+  rememberProfileNames,
   resolveEnvRoot,
   resolveScanRoots,
   scanRootDirState,

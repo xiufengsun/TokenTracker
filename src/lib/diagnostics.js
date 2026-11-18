@@ -3,7 +3,7 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 
 const { readJson } = require("./fs");
-const { resolveEnvRoot, resolveScanRoots } = require("./scan-roots");
+const { loadProfileNames, resolveEnvRoot, resolveScanRoots } = require("./scan-roots");
 const { readCursorStateSummary } = require("./cursor-store");
 const { readCodexNotify, readEveryCodeNotify } = require("./codex-config");
 const { areClaudeUsageHooksConfigured, buildClaudeHookCommand } = require("./claude-config");
@@ -102,6 +102,7 @@ async function collectTrackerDiagnostics({
     env: process.env,
     config,
     base: { codex: [codexHome], claude: [path.join(home, ".claude")] },
+    profileNames: await loadProfileNames(trackerDir),
   });
   const describeScanRoots = (entries) => entries.map((entry) => ({
     path: redactValue(entry.path, home),

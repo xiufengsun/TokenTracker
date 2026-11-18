@@ -206,10 +206,14 @@ const {
   extraScanRootPaths,
   hasAnyScanChild,
   resolveEnvRoot,
+  PROFILE_SOURCES_FILE,
+  loadProfileNames,
+  rememberProfileNames,
   resolveScanRoots,
   scanRootDirState,
 } = require("../lib/scan-roots");
 const { isProfileSource } = require("../lib/profile-source");
+const { writeJsonAtomicSync } = require("../lib/atomic-json");
 const { resolveRuntimeConfig, isLegacyInsforgeBaseUrl } = require("../lib/runtime-config");
 const { resolveDeviceTokenPresence } = require("../lib/cloud-device-token");
 
@@ -687,12 +691,25 @@ async function cmdSync(argv, context = {}) {
     // and that single value feeds discovery AND the cursor store below.
     // config.scanRoots adds roots for every process.
     const codexNativeValue = resolveEnvRoot("codex", { env: process.env, home }) || path.join(home, ".codex");
+    // A split root keeps the source it was first given (profile-sources.json),
+    // whatever order or set of roots this process happens to see.
+    const knownProfileNames = await loadProfileNames(trackerDir);
     const scanRoots = resolveScanRoots({
       home,
       env: process.env,
       config,
       base: { codex: [codexNativeValue], claude: [path.join(home, ".claude")] },
+      profileNames: knownProfileNames,
     });
+    const rememberedProfileNames = rememberProfileNames(knownProfileNames, scanRoots);
+    if (rememberedProfileNames !== knownProfileNames) {
+      try {
+        writeJsonAtomicSync(path.join(trackerDir, PROFILE_SOURCES_FILE), rememberedProfileNames);
+      } catch (err) {
+        // Not remembering a name must not stop collection; the next sync retries.
+        if (!opts.auto) process.stderr.write(`Could not save profile names: ${err?.message || err}\n`);
+      }
+    }
     const codexCursorRoots = scanRoots.codex.map((entry) => entry.path);
     const cursorStore = await openCursorStore({
       trackerDir,
@@ -1198,7 +1215,54 @@ async function cmdSync(argv, context = {}) {
       }
     }
     if (isFullSourceScan) {
-      await reincludeClaudeMemObserverFiles({ cursors, claudeFiles, queuePath, queueStatePath });
+      // Two one-time Claude migrations rewrite history from disk: the observer
+      // reinclusion drops the cursors of claude-mem observer files, and the
+      // ground-truth repair clears every "claude" row and rebuilds it. Both are
+      // unsafe around a split root that already has history, and the repair is
+      // also unsafe once any usage is filed under a profile:
+      //   - leaving such a root out of the repair erases the history it added to
+      //     "claude" before the split;
+      //   - counting it rebuilds the whole directory as "claude" (cursors move to
+      //     EOF, so usage added after the split lands there too);
+      //   - a root that a scoped sync already filed under its profile would be
+      //     counted twice, and so would profile rows left behind when the split
+      //     is turned off again;
+      //   - dropping an observer file's cursor makes a root that holds only
+      //     observer files look unscanned, and re-reads its legacy bytes under the
+      //     profile.
+      // Neither migration can tell pre-split bytes from later ones, so both wait:
+      // nothing is deleted or re-read, history stays under "claude", and new usage
+      // goes to the profile. They run on a later full scan once no split root has
+      // history and no profile usage is recorded. A NEW split root has no history,
+      // does not hold them back, and is simply left out of the repair.
+      const cursorFilePaths = Object.keys(cursors.files || {});
+      const rootPreviouslySuppliedFiles = (rootPath) => {
+        const prefix = path.join(rootPath, "projects") + path.sep;
+        return cursorFilePaths.some((filePath) => filePath.startsWith(prefix));
+      };
+      const legacyMigrationPending =
+        !cursors.migrations?.[CLAUDE_GROUND_TRUTH_REPAIR_KEY] ||
+        !cursors.migrations?.[CLAUDE_MEM_OBSERVER_REINCLUDE_KEY];
+      const splitRootsWithHistory = legacyMigrationPending
+        ? scanRoots.claude
+          .filter((entry) => entry.profile && entry.exists && rootPreviouslySuppliedFiles(entry.path))
+          .map((entry) => entry.path)
+        : [];
+      const profileUsageRecorded = legacyMigrationPending &&
+        Object.keys(cursors.hourly?.buckets || {}).some((key) => isProfileSource(key.split("|")[0]));
+      const holdLegacyClaudeMigrations = splitRootsWithHistory.length > 0 || profileUsageRecorded;
+      if (holdLegacyClaudeMigrations) {
+        if (!opts.auto) {
+          process.stderr.write(
+            `Claude ground-truth repair deferred: split profile usage already recorded${
+              splitRootsWithHistory.length > 0 ? ` (root(s) with history: ${splitRootsWithHistory.join(", ")})` : ""
+            }
+`,
+          );
+        }
+      } else {
+        await reincludeClaudeMemObserverFiles({ cursors, claudeFiles, queuePath, queueStatePath });
+      }
       // The ground-truth repair rebuilds every Claude queue row from the roots
       // it is given. A configured root that is absent or unreadable right now
       // (unmounted volume, permissions) may still hold history that an earlier
@@ -1212,11 +1276,6 @@ async function cmdSync(argv, context = {}) {
       // history. Defer in both cases: the migration key stays unset and the
       // repair runs on a later full scan once the root is back. Ordinary
       // scanning still proceeds.
-      const cursorFilePaths = Object.keys(cursors.files || {});
-      const rootPreviouslySuppliedFiles = (rootPath) => {
-        const prefix = path.join(rootPath, "projects") + path.sep;
-        return cursorFilePaths.some((filePath) => filePath.startsWith(prefix));
-      };
       const unavailableClaudeRoots = scanRoots.claude
         .filter((entry) => {
           if (entry.origin === "native") return false;
@@ -1226,36 +1285,14 @@ async function cmdSync(argv, context = {}) {
           return !projectsState.exists && rootPreviouslySuppliedFiles(entry.path);
         })
         .map((entry) => entry.path);
-      // The repair clears every "claude" row and rebuilds it from disk. For a
-      // split root that the cursor store already shows as scanned, neither
-      // choice is safe: leaving it out erases the history it added to "claude"
-      // before the split, and counting it rebuilds the whole directory as
-      // "claude" (cursors move to EOF, so usage added after the split lands
-      // there too), or counts it twice when a scoped sync already filed part of
-      // it under the profile. The repair cannot tell those bytes apart, so it
-      // waits: nothing is deleted or recounted, and it runs on a later full scan
-      // once no split root has history (for example after the split is turned
-      // off). A NEW split root has no history, so it does not hold the repair
-      // back and is simply left out of it.
-      const repairPending = !cursors.migrations?.[CLAUDE_GROUND_TRUTH_REPAIR_KEY];
-      const splitRootsWithHistory = repairPending
-        ? scanRoots.claude
-          .filter((entry) => entry.profile && entry.exists && rootPreviouslySuppliedFiles(entry.path))
-          .map((entry) => entry.path)
-        : [];
       if (unavailableClaudeRoots.length > 0) {
         if (!opts.auto) {
           process.stderr.write(
-            `Claude ground-truth repair deferred: configured scan root(s) unavailable: ${unavailableClaudeRoots.join(", ")}\n`,
+            `Claude ground-truth repair deferred: configured scan root(s) unavailable: ${unavailableClaudeRoots.join(", ")}
+`,
           );
         }
-      } else if (splitRootsWithHistory.length > 0) {
-        if (!opts.auto) {
-          process.stderr.write(
-            `Claude ground-truth repair deferred: split profile root(s) already hold history: ${splitRootsWithHistory.join(", ")}\n`,
-          );
-        }
-      } else {
+      } else if (!holdLegacyClaudeMigrations) {
         await repairClaudeQueueFromGroundTruth({
           cursors,
           queuePath,

@@ -132,6 +132,7 @@ const {
   describeScanRootState,
   hasAnyScanChild,
   resolveEnvRoot,
+  loadProfileNames,
   resolveScanRoots,
 } = require("../lib/scan-roots");
 const { probeGrokHookState, resolveGrokHome } = require("../lib/grok-hook");
@@ -263,6 +264,7 @@ async function cmdStatus(argv = []) {
     env: process.env,
     config,
     base: { codex: [codexHome], claude: [path.join(home, ".claude")] },
+    profileNames: await loadProfileNames(trackerDir),
   });
   const extraScanRoots = [];
   for (const provider of ["codex", "claude"]) {

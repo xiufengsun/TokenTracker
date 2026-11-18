@@ -22,7 +22,10 @@ const { cmdSync, readQueueBatch } = require("../src/commands/sync");
 const { cmdStatus } = require("../src/commands/status");
 const {
   deriveProfileName,
+  loadProfileNames,
   normalizeSplitScanRoots,
+  profileRootKey,
+  rememberProfileNames,
   resolveScanRoots,
 } = require("../src/lib/scan-roots");
 const { baseSource, isProfileSource, profileOfSource } = require("../src/lib/profile-source");
@@ -512,6 +515,82 @@ test("with the split off, a pending repair runs as before and counts every root 
   });
 });
 
+// Both one-time Claude migrations rewrite history from disk: the observer
+// reinclusion drops the cursors of claude-mem observer files, and the repair
+// rebuilds every "claude" row. They share the same hazard around split roots.
+async function makeLegacyClaudeMigrationsPending(home) {
+  const cursors = await readCursors(home);
+  const keys = Object.keys(cursors.migrations || {}).filter(
+    (key) => key.startsWith("claudeGroundTruthRepair") || key.startsWith("claudeMemObserverReinclude"),
+  );
+  assert.ok(keys.length >= 2, "the first sync records both migrations as done");
+  for (const key of keys) delete cursors.migrations[key];
+  await fsp.writeFile(cursorsFile(home), JSON.stringify(cursors), "utf8");
+}
+
+async function migrationsDone(home) {
+  const migrations = (await readCursors(home)).migrations || {};
+  const done = (prefix) => Object.keys(migrations).some((key) => key.startsWith(prefix));
+  return { repair: done("claudeGroundTruthRepair"), observer: done("claudeMemObserverReinclude") };
+}
+
+const OBSERVER_PROJECT = "w--claude-mem-observer-sessions";
+
+test("a split root holding only observer files keeps its history under claude while both migrations are pending", async () => {
+  await withTempSyncEnv(async (home) => {
+    const native = path.join(home, ".claude");
+    const work = path.join(home, ".claude-work");
+    await writeClaudeSession(native, "p1", "s1", { msgId: "m-native", input: 100, output: 50 });
+    const observer = await writeClaudeSession(work, OBSERVER_PROJECT, "s2", { msgId: "m-observer", input: 200, output: 100 });
+    await writeConfig(home, { scanRoots: { claude: [work] } });
+    await cmdSync([]);
+    const before = await latestTotalsBySource(home);
+    assert.equal(before.claude, 450, "the observer file counted into claude before the split");
+    await makeLegacyClaudeMigrationsPending(home);
+
+    await writeConfig(home, { scanRoots: { claude: [work] }, splitScanRoots: true });
+    await cmdSync([]);
+    assert.deepEqual(await latestTotalsBySource(home), { claude: 450 }, "history is neither erased nor re-filed under the profile");
+
+    await appendClaudeUsage(observer, { msgId: "m-observer-2", input: 6, output: 4 });
+    await cmdSync([]);
+    assert.deepEqual(await latestTotalsBySource(home), { claude: 450, "claude@work": 10 });
+    assert.deepEqual(await migrationsDone(home), { repair: false, observer: false }, "both migrations wait");
+  });
+});
+
+test("with the split turned off again, a pending repair does not rebuild a root whose usage is already filed under its profile", async () => {
+  await withTempSyncEnv(async (home) => {
+    const { work } = await twoProfiles(home);
+    await writeConfig(home, { scanRoots: { claude: [work] }, splitScanRoots: true });
+    await cmdSync([]);
+    const split = await latestTotalsBySource(home);
+    assert.deepEqual(split, { claude: 150, "claude@work": 300 });
+    await makeLegacyClaudeMigrationsPending(home);
+
+    await writeConfig(home, { scanRoots: { claude: [work] } });
+    await cmdSync([]);
+    await cmdSync([]);
+
+    assert.deepEqual(await latestTotalsBySource(home), split, "profile tokens must not also be counted under claude");
+    assert.deepEqual(await migrationsDone(home), { repair: false, observer: false });
+  });
+});
+
+test("the legacy migrations still run once there is neither a split root with history nor profile usage", async () => {
+  await withTempSyncEnv(async (home) => {
+    const { work } = await twoProfiles(home);
+    await writeConfig(home, { scanRoots: { claude: [work] } });
+    await cmdSync([]);
+    await makeLegacyClaudeMigrationsPending(home);
+
+    await cmdSync([]);
+
+    assert.deepEqual(await migrationsDone(home), { repair: true, observer: true });
+    assert.deepEqual(await latestTotalsBySource(home), { claude: 450 });
+  });
+});
+
 async function captureStderr(fn) {
   const write = process.stderr.write;
   let out = "";
@@ -531,7 +610,7 @@ test("the deferral is announced while the repair waits, and not once it is done"
 
     await makeGroundTruthRepairPending(home);
     const announced = await captureStderr(() => cmdSync([]));
-    assert.match(announced, /ground-truth repair deferred: split profile root/);
+    assert.match(announced, /ground-truth repair deferred: split profile usage already recorded/);
     assert.ok(announced.includes(work), "the notice names the root");
   });
 });
@@ -578,4 +657,134 @@ test("a capped name that ends in a separator is trimmed", () => {
   const name = deriveProfileName(`/h/.claude-${"a".repeat(63)}-bbbb`, "claude");
   assert.ok(name.length <= 64);
   assert.doesNotMatch(name, /[-._]$/);
+});
+
+// ---------------------------------------------------------------- pinned names
+
+// A name, once given to a root, stays with that root: it is remembered in
+// profile-sources.json next to config.json, so a process that sees a different
+// set or order of roots (CLAUDE_CONFIG_DIR set in one only, a reordered config)
+// cannot hand "work" to the other root of the same folder name.
+
+function resolveWith(configRoots, profileNames, env = {}) {
+  return resolveScanRoots({
+    home: "/h",
+    env,
+    config: { scanRoots: { claude: configRoots }, splitScanRoots: true },
+    base: { claude: ["/h/.claude"] },
+    profileNames,
+  }).claude;
+}
+const sourceOf = (entries, root) => entries.find((entry) => entry.path === path.resolve(root)).source;
+
+test("a remembered name is kept even when the root now sorts differently", () => {
+  const a = path.resolve("/a/.claude-work");
+  const b = path.resolve("/b/claude-work");
+  const pinned = { claude: { [profileRootKey(b)]: "work", [profileRootKey(a)]: "work-2" } };
+  const entries = resolveWith([a, b], pinned);
+  assert.equal(sourceOf(entries, b), "claude@work");
+  assert.equal(sourceOf(entries, a), "claude@work-2");
+});
+
+test("a root that is no longer configured keeps its name reserved, so a newcomer cannot take it", () => {
+  const gone = path.resolve("/gone/.claude-work");
+  const fresh = path.resolve("/fresh/.claude-work");
+  const entries = resolveWith([fresh], { claude: { [profileRootKey(gone)]: "work" } });
+  assert.equal(sourceOf(entries, fresh), "claude@work-2");
+});
+
+test("a new root never takes a name that is already pinned to another root", () => {
+  const a = path.resolve("/a/.claude-work");
+  const earlier = path.resolve("/0/.claude-work");
+  const entries = resolveWith([earlier, a], { claude: { [profileRootKey(a)]: "work" } });
+  assert.equal(sourceOf(entries, a), "claude@work");
+  assert.equal(sourceOf(entries, earlier), "claude@work-2");
+});
+
+test("a damaged remembered name is ignored", () => {
+  const a = path.resolve("/a/.claude-work");
+  for (const bad of ["", "Work", "a/b", "x".repeat(65), 7, null]) {
+    const entries = resolveWith([a], { claude: { [profileRootKey(a)]: bad } });
+    assert.equal(sourceOf(entries, a), "claude@work", String(bad));
+  }
+});
+
+test("rememberProfileNames adds new roots, never rewrites a pinned one, and returns the same object when nothing changed", () => {
+  const a = path.resolve("/a/.claude-work");
+  const b = path.resolve("/b/claude-work");
+  const first = rememberProfileNames({}, { claude: resolveWith([a, b], {}), codex: [] });
+  assert.deepEqual(first, { claude: { [profileRootKey(a)]: "work", [profileRootKey(b)]: "work-2" } });
+  assert.equal(rememberProfileNames(first, { claude: resolveWith([a, b], first), codex: [] }), first);
+  const third = path.resolve("/0/.claude-work");
+  const grown = rememberProfileNames(first, { claude: resolveWith([third, a, b], first), codex: [] });
+  assert.equal(grown.claude[profileRootKey(a)], "work");
+  assert.equal(grown.claude[profileRootKey(b)], "work-2");
+  assert.equal(grown.claude[profileRootKey(third)], "work-3");
+});
+
+test("rememberProfileNames never rewrites a name that is already remembered", () => {
+  const a = path.resolve("/a/.claude-work");
+  const known = { claude: { [profileRootKey(a)]: "work-2" } };
+  const handmade = { claude: [{ path: a, profile: "work", source: "claude@work" }], codex: [] };
+  assert.equal(rememberProfileNames(known, handmade), known);
+  assert.equal(known.claude[profileRootKey(a)], "work-2");
+});
+
+test("loadProfileNames tolerates a missing or broken file", async () => {
+  await withTempSyncEnv(async (home) => {
+    assert.deepEqual(await loadProfileNames(trackerDir(home)), {});
+    await fsp.mkdir(trackerDir(home), { recursive: true });
+    await fsp.writeFile(path.join(trackerDir(home), "profile-sources.json"), "not json", "utf8");
+    assert.deepEqual(await loadProfileNames(trackerDir(home)), {});
+    await fsp.writeFile(path.join(trackerDir(home), "profile-sources.json"), "[1,2]", "utf8");
+    assert.deepEqual(await loadProfileNames(trackerDir(home)), {});
+  });
+});
+
+test("sync keeps two same-named roots on their sources when another process sees an extra root first", async () => {
+  await withTempSyncEnv(async (home) => {
+    const a = path.join(home, "a", ".claude-work");
+    const b = path.join(home, "b", "claude-work");
+    const earlier = path.join(home, "0", ".claude-work");
+    const fileA = await writeClaudeSession(a, "p", "sa", { msgId: "m-a", input: 10, output: 5 });
+    const fileB = await writeClaudeSession(b, "p", "sb", { msgId: "m-b", input: 20, output: 10 });
+    await writeClaudeSession(earlier, "p", "se", { msgId: "m-e", input: 40, output: 20 });
+    await writeConfig(home, { scanRoots: { claude: [a, b] }, splitScanRoots: true });
+    await cmdSync([]);
+    assert.deepEqual(await latestTotalsBySource(home), { "claude@work": 15, "claude@work-2": 30 });
+
+    // Another process (hook, desktop app) also sees CLAUDE_CONFIG_DIR, which sorts first.
+    process.env.CLAUDE_CONFIG_DIR = earlier;
+    await appendClaudeUsage(fileA, { msgId: "m-a2", input: 1, output: 1 });
+    await appendClaudeUsage(fileB, { msgId: "m-b2", input: 2, output: 2 });
+    await cmdSync([]);
+
+    assert.deepEqual(await latestTotalsBySource(home), {
+      "claude@work": 17,
+      "claude@work-2": 34,
+      "claude@work-3": 60,
+    });
+    const pinned = JSON.parse(await fsp.readFile(path.join(trackerDir(home), "profile-sources.json"), "utf8"));
+    assert.deepEqual(Object.values(pinned.claude).sort(), ["work", "work-2", "work-3"]);
+  });
+});
+
+test("status shows the remembered source of a root, not a fresh guess", async () => {
+  await withTempSyncEnv(async (home) => {
+    const a = path.join(home, "a", ".claude-work");
+    const b = path.join(home, "b", "claude-work");
+    await writeClaudeSession(a, "p", "sa", { msgId: "m-a", input: 10, output: 5 });
+    await writeClaudeSession(b, "p", "sb", { msgId: "m-b", input: 20, output: 10 });
+    await writeConfig(home, { scanRoots: { claude: [a, b] }, splitScanRoots: true });
+    await cmdSync([]);
+    // Pin b to "work" the way an earlier run could have, then check what status reports for it.
+    const file = path.join(trackerDir(home), "profile-sources.json");
+    await fsp.writeFile(file, JSON.stringify({ claude: { [profileRootKey(b)]: "work", [profileRootKey(a)]: "work-2" } }), "utf8");
+
+    const out = await captureStdout(() => cmdStatus([]));
+
+    // Both roots share one line, so tie each source to its own path.
+    assert.ok(out.includes(`source claude@work: ${b}`), "b keeps the name pinned to it");
+    assert.ok(out.includes(`source claude@work-2: ${a}`), "a keeps the name pinned to it");
+  });
 });
