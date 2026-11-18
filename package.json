@@ -65,7 +65,7 @@
     "alipay-sdk": "4.14.0",
     "esbuild": "0.28.2",
     "pngjs": "^7.0.0",
-    "sql.js": "1.15.2",
+    "sql.js": "1.16.0",
     "urllib": "4.9.1"
   },
   "repository": {
