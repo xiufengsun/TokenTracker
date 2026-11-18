@@ -242,6 +242,10 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   // https://developers.openai.com/api/docs/models/gpt-6-astra
   // Cloud buckets do not retain per-request context/service tier. Use the
   // standard short-context estimate; never infer long context from totals.
+  // Official GPT-6.2 Standard short-context USD/MTok, verified 2026-11-18:
+  // https://developers.openai.com/api/docs/pricing (cloud has no request tier/retention).
+  "gpt-6.2-astra": { input: 8, output: 40, cache_read: 0.4, cache_write: 10 },
+  "gpt-6.2-sol": { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
   "gpt-6-astra": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
   // GPT-6 Sol Standard USD/MTok, verified 2026-09-24:
   // https://developers.openai.com/api/docs/models/gpt-6-sol
@@ -529,6 +533,12 @@ function getModelPricing(model: string, source = "") {
   // reports its own positive cost still wins earlier via
   // SOURCES_WITH_AUTHORITATIVE_COST.
   if (lower.includes("cline-free/") || lower.includes("cline-pass/")) return ZERO_PRICING;
+  // Do not guess prices for unannounced GPT-6.2 SKUs or dated snapshots.
+  const gpt62 = lower.trim().match(/gpt-6[.-]2(?:-(.*))?$/);
+  if (gpt62) {
+    const known = /^(astra|sol)(?:-?(?:low|medium|high|xhigh|max)(?:-fast)?|-fast)?$/.exec(gpt62[1] || "");
+    return known ? MODEL_PRICING[`gpt-6.2-${known[1]}`] : ZERO_PRICING;
+  }
   // Fable 5.2 before the broad fable matcher, or claude-fable-5-2 bills at the
   // Fable 5 $10/$50 rate. Fast before 5.2 (the "fable-5.2" needle is a prefix
   // of "fable-5.2-fast"), and -latest never matches: it is a floating alias

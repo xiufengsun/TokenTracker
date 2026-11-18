@@ -380,6 +380,19 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
   if (gemini4 && !/^(?:-(?:minimal|low|medium|high|xhigh))?$/.test(gemini4[2])) {
     return { hit: false, source: "miss", value: null };
   }
+  // Only Astra and Sol are published GPT-6.2 IDs (2026-11-18). Do not let
+  // unknown SKUs/snapshots inherit their rates via contained/fuzzy matching.
+  // Explicit curated/LiteLLM exact prices above remain authoritative.
+  const gpt62 = (dotForm || lower).trim().match(/gpt-6\.2(?:-(.*))?$/);
+  if (gpt62) {
+    if (lower.includes("cline-free/") || lower.includes("cline-pass/")) {
+      return { hit: true, source: "curated:cline-gateway", value: curated.exact["cline-gateway-models"] };
+    }
+    const known = /^(astra|sol)(?:-?(?:low|medium|high|xhigh|max)(?:-fast)?|-fast)?$/.exec(gpt62[1] || "");
+    const value = known && curated.exact?.[`gpt-6.2-${known[1]}`];
+    return value ? { hit: true, source: "curated:gpt-6.2", value }
+      : { hit: false, source: "miss", value: null };
+  }
   const curatedDotContainedExact = lookupContainedExactCaseInsensitive(curated.exact, dotForm);
   if (curatedDotContainedExact) {
     return { hit: true, source: "curated:exact-dot", value: curatedDotContainedExact };
