@@ -4507,10 +4507,45 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
   const queueSize = await safeStatSize(queuePath);
   const limit = Math.min(Math.max(1, Math.floor(Number(batchSize || 200))), MAX_INGEST_BUCKETS);
 
+  // The account view adds the rows past the cursor to the cloud aggregate
+  // (account-pending-overlay.js). That is only sound while the cloud holds
+  // the rows before the cursor and none after it, which
+  // `cloudBaselineOffset === offset` records. A drain that reaches the end of
+  // the queue establishes it, and every committed batch moves it with the
+  // cursor. Any other writer that moves the cursor (replays, repairs, owner
+  // changes) leaves it behind, which turns the overlay off until the next
+  // full drain. `uploadingSince` marks a request whose rows the cloud may
+  // already hold while the cursor does not show them yet; one left behind by
+  // a run that died mid-request means the baseline is unknown.
+  let baselineKnown = Number.isSafeInteger(offset) && Number(state.cloudBaselineOffset) === offset &&
+    !state.uploadingSince;
+  if (!baselineKnown) delete state.cloudBaselineOffset;
+  delete state.uploadingSince;
+  const commitOffset = async (nextOffset) => {
+    offset = nextOffset;
+    state.offset = offset;
+    if (baselineKnown || offset >= queueSize) {
+      baselineKnown = true;
+      state.cloudBaselineOffset = offset;
+    } else {
+      delete state.cloudBaselineOffset;
+    }
+    delete state.uploadingSince;
+    state.updatedAt = new Date().toISOString();
+    await writeJson(queueStatePath, state);
+  };
+
   try {
     for (let batch = 0; batch < batchBudget; batch++) {
       if (Date.now() >= deadline) break;
-      if (offset >= queueSize) break;
+      if (offset >= queueSize) {
+        if (!baselineKnown) {
+          baselineKnown = true;
+          state.cloudBaselineOffset = offset;
+          await writeJson(queueStatePath, state);
+        }
+        break;
+      }
       const result = await readQueueBatch(queuePath, offset, limit);
       // A states-only tail (e.g. a retry batch whose bucket rows already
       // uploaded) is still a meaningful upload: it advances the canonical
@@ -4518,12 +4553,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
       if (result.buckets.length === 0 && result.sessionStates.length === 0) {
         // Complete ignored control/malformed rows need no cloud request, but
         // must not leave a permanent pending tail. Incomplete bytes stay put.
-        if (result.nextOffset > offset) {
-          offset = result.nextOffset;
-          state.offset = offset;
-          state.updatedAt = new Date().toISOString();
-          await writeJson(queueStatePath, state);
-        }
+        if (result.nextOffset > offset) await commitOffset(result.nextOffset);
         break;
       }
 
@@ -4558,6 +4588,8 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) break;
       requestSignal = AbortSignal.timeout(Math.max(1, Math.ceil(remainingMs)));
+      state.uploadingSince = new Date().toISOString();
+      await writeJson(queueStatePath, state);
       const res = await fetchFunctionResponse(functionUrlFor(root, INGEST_SLUG), {
         method: "POST",
         headers,
@@ -4599,12 +4631,19 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
       skipped += Number(data?.skipped || 0);
       batches += 1;
 
-      offset = result.nextOffset;
-      state.offset = offset;
-      state.updatedAt = new Date().toISOString();
-      await writeJson(queueStatePath, state);
+      await commitOffset(result.nextOffset);
     }
   } catch (error) {
+    if (state.uploadingSince) {
+      delete state.uploadingSince;
+      // A rejection (4xx) stored nothing. Without a response, or after a 5xx,
+      // the batch may be in the cloud while the cursor sits before it.
+      if (!(error?.status >= 400 && error.status < 500)) {
+        baselineKnown = false;
+        delete state.cloudBaselineOffset;
+      }
+      await writeJson(queueStatePath, state).catch(() => {});
+    }
     // A bounded drain can finish partially without discarding successful
     // offsets or the server cooldown. Other failures retain their retry path.
     const requestTimedOut = requestSignal?.aborted && requestSignal.reason?.name === "TimeoutError" &&
