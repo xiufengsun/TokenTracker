@@ -300,6 +300,23 @@ function serializeSessionRecord(row) {
   return JSON.stringify({ ...row, model_usage: row.model_usage.map(serializeModelUsageRow) });
 }
 
+// GPT-6.2's dated Ultrafast promotion must use usage time, never the date
+// a session is opened. Preserve all other models' existing pricing behavior.
+function sessionModelCost(record, row) {
+  if (!/gpt-6[.-]2-(?:astra|sol)/i.test(String(row.model))) {
+    return computeRowCost({ source: record.source, ...row });
+  }
+  const buckets = (Array.isArray(record.usage_buckets) ? record.usage_buckets : []).filter((bucket) =>
+    bucket.model === row.model && Number.isFinite(Date.parse(bucket.hour_start || bucket.timestamp)));
+  const complete = buckets.length > 0 && MODEL_USAGE_SUM_FIELDS
+    .filter((field) => field.endsWith("_tokens"))
+    .every((field) => buckets.reduce((sum, bucket) => sum + finite(bucket[field]), 0) === finite(row[field]));
+  if (complete) return buckets.reduce((sum, bucket) =>
+    sum + computeRowCost({ source: record.source, ...bucket }), 0);
+  return computeRowCost({ source: record.source, ...row,
+    hour_start: row.hour_start || row.timestamp || record.started_at || record.ended_at });
+}
+
 function repriceSessionRecord(record) {
   if (Array.isArray(record.usage_buckets)) {
     record.usage_buckets = record.usage_buckets.map((bucket) => ({
@@ -310,8 +327,8 @@ function repriceSessionRecord(record) {
   if (modelUsage.length > 0) {
     let hasUnpricedUsage = false;
     for (const row of modelUsage) {
-      row.cost_usd = computeRowCost({ source: record.source, ...row });
-      row.pricing = getModelPricingInfo(row.model, { ...row, source: record.source });
+      row.cost_usd = sessionModelCost(record, row);
+      row.pricing = getModelPricingInfo(row.model, { ...row, source: record.source, at: record.started_at || record.ended_at });
       if (row.total_tokens > 0 && row.pricing.status === "unpriced") hasUnpricedUsage = true;
     }
     record.model_usage = modelUsage;
@@ -333,7 +350,7 @@ function repriceSessionRecord(record) {
       && Number.isFinite(providerCost)
       && providerCost >= 0
       ? providerCost
-      : computeRowCost({ source: record.source, model: record.model, ...record.tokens });
+      : sessionModelCost(record, { model: record.model, ...record.tokens });
     if (record.cost_source !== "provider_reported" && finite(record.total_tokens || record.tokens?.total_tokens) > 0
       && getModelPricingInfo(record.model, { source: record.source }).status === "unpriced") record.cost_is_partial = true;
   }
@@ -378,10 +395,10 @@ function modelUsageForAggregation(record) {
   }
   const priced = rows.map((row) => denseModelUsageRow({
     ...row,
-    pricing: getModelPricingInfo(row.model, { ...row, source: record.source }),
+    pricing: getModelPricingInfo(row.model, { ...row, source: record.source, at: record.started_at || record.ended_at }),
     cost_usd: Number.isFinite(Number(row.cost_usd))
       ? Number(row.cost_usd)
-      : computeRowCost({ source: record.source, ...row }),
+      : sessionModelCost(record, row),
   }));
   if (record.cost_source === "provider_reported" && priced.length === 1) priced[0].cost_usd = finite(record.cost_usd);
   // Sum(rows.edit_turns) has to equal record.edit_turns or the by_model column
