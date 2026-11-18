@@ -116,6 +116,22 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "claude-fable-5-2-fast": { input: 16, output: 80, cache_read: 0.4, cache_write: 20 },
   "claude-fable-5.2-fast": { input: 16, output: 80, cache_read: 0.4, cache_write: 20 },
   "claude-fable-5": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
+  // Mythos family, official rates verified 2026-11-18. Same $8/$40/0.20/10
+  // standard and $16/$80 fast rates as Fable 5.2; Mythos 5.1 is $10/$50
+  // with cache hit $0.25; Mythos 5 is $10/$50 with cache hit $1. Exact
+  // dotted and provider-qualified keys are required: edge has no Claude
+  // normalizer. No broad mythos fallback and no -latest / -preview pin.
+  "claude-mythos-5-2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "claude-mythos-5.2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "anthropic/claude-mythos-5.2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "anthropic/claude-mythos-5-2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "claude-mythos-5-2-fast": { input: 16, output: 80, cache_read: 0.4, cache_write: 20 },
+  "claude-mythos-5.2-fast": { input: 16, output: 80, cache_read: 0.4, cache_write: 20 },
+  "claude-mythos-5-1": { input: 10, output: 50, cache_read: 0.25, cache_write: 12.5 },
+  "claude-mythos-5.1": { input: 10, output: 50, cache_read: 0.25, cache_write: 12.5 },
+  "anthropic/claude-mythos-5.1": { input: 10, output: 50, cache_read: 0.25, cache_write: 12.5 },
+  "anthropic/claude-mythos-5-1": { input: 10, output: 50, cache_read: 0.25, cache_write: 12.5 },
+  "claude-mythos-5": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
   "claude-opus-5": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
   "claude-opus-5-fast": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
   "claude-opus-4-6": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
@@ -325,6 +341,11 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "qwen3.8-max": { input: 2, output: 6, cache_read: 0.17, cache_write: 2.5 },
   "qwen3.8-max-0902": { input: 2, output: 6, cache_read: 0.17, cache_write: 2.5 },
   "qwen3.8-max-2026-09-02": { input: 2, output: 6, cache_read: 0.17, cache_write: 2.5 },
+  // Singapore International pay-as-you-go for official API id qwen4-max,
+  // verified 2026-11-18. cache_write is the 5-minute cache-creation rate;
+  // 1-hour creation ($3) cannot fit this field. qwen4-max-preview is Token
+  // Plan only and must not inherit this rate (strict lookup below).
+  "qwen4-max": { input: 1.5, output: 4.5, cache_read: 0.075, cache_write: 1.875 },
   "hy4-preview": { input: 0.833, output: 2.5, cache_read: 0.042, cache_write: 0.833 },
   "hy4-preview-agent": { input: 0.833, output: 2.5, cache_read: 0.042, cache_write: 0.833 },
   // ── Misc / Free ──
@@ -484,6 +505,7 @@ function getModelPricing(model: string, source = "") {
   // of "fable-5.2-fast"), and -latest never matches: it is a floating alias
   // the Anthropic docs did not pin to 5.2 on 2026-11-10.
   if (/(?:^|\/)claude-fable-latest(?:$|[^a-z0-9])/.test(lower)) return ZERO_PRICING;
+  if (/(?:^|\/)claude-mythos-(?:latest|preview)(?:$|[^a-z0-9])/.test(lower)) return ZERO_PRICING;
   const fableKey = lower.replace(/[^a-z0-9./]+/g, "-");
   // The minor must end or be followed by a non-digit. Without that boundary
   // the dated Fable 5 ids (claude-fable-5-20250901) and fable-5-20 contain
@@ -491,6 +513,14 @@ function getModelPricing(model: string, source = "") {
   if (/fable-5[.-]2-fast(?:$|[^0-9])/.test(fableKey)) return MODEL_PRICING["claude-fable-5-2-fast"];
   if (/fable-5[.-]2(?:$|[^0-9])/.test(fableKey)) return MODEL_PRICING["claude-fable-5-2"];
   if (lower.includes("fable")) return MODEL_PRICING["claude-fable-5"];
+  // Mythos family is version-bounded the same way. No broad mythos fallback:
+  // a generic includes("mythos") would bill Mythos 5 / 5.1 / unknown SKUs
+  // at the 5.2 rate. Bare mythos-5 uses a tighter end class so 5-1 / 5.2
+  // / 5-20 cannot inherit Mythos 5 ($10/$50, cache hit $1).
+  if (/mythos-5[.-]2-fast(?:$|[^0-9])/.test(fableKey)) return MODEL_PRICING["claude-mythos-5-2-fast"];
+  if (/mythos-5[.-]2(?:$|[^0-9])/.test(fableKey)) return MODEL_PRICING["claude-mythos-5-2"];
+  if (/mythos-5[.-]1(?:$|[^0-9])/.test(fableKey)) return MODEL_PRICING["claude-mythos-5-1"];
+  if (/mythos-5(?:$|[^0-9.-])/.test(fableKey)) return MODEL_PRICING["claude-mythos-5"];
   // Opus 5 fast mode bills at 2x the standard Opus tier ($10/$50), so the
   // -fast matcher must precede both the opus-5 and the generic opus fallback.
   if (/opus-5[.-]5(?:$|[^0-9.])/.test(lower)) return MODEL_PRICING["claude-opus-5-5"];
@@ -625,6 +655,7 @@ function getModelPricing(model: string, source = "") {
   if (lower.includes("hy3")) return MODEL_PRICING["hy3-preview-agent"];
   if (/(?:^|\/)qwen3[.-]8-flash(?:-\d{4}-\d{2}-\d{2})?$/.test(lower.trim())) return MODEL_PRICING["qwen3.8-flash"];
   if (/(?:^|\/)qwen3[.-]8-max(?:-0902|-\d{4}-\d{2}-\d{2})?$/.test(lower.trim())) return MODEL_PRICING["qwen3.8-max"];
+  if (/(?:^|\/)qwen4-max(?:-\d{4}-\d{2}-\d{2})?$/.test(lower.trim())) return MODEL_PRICING["qwen4-max"];
   if (lower.includes("hy4")) return MODEL_PRICING["hy4-preview"];
   if (lower.includes("composer-2.5") && lower.includes("fast")) return MODEL_PRICING["composer-2.5-fast"];
   if (lower.includes("composer-2.5")) return MODEL_PRICING["composer-2.5"];
