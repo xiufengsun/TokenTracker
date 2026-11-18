@@ -208,6 +208,7 @@ const {
   resolveEnvRoot,
   PROFILE_SOURCES_FILE,
   loadProfileNames,
+  profileRootKey,
   rememberProfileNames,
   resolveScanRoots,
   scanRootDirState,
@@ -1235,17 +1236,39 @@ async function cmdSync(argv, context = {}) {
       // goes to the profile. They run on a later full scan once no split root has
       // history and no profile usage is recorded. A NEW split root has no history,
       // does not hold them back, and is simply left out of the repair.
+      // Cursor keys keep the spelling a file was first scanned under, so a root
+      // now reached through a symlink (or configured directly after being scanned
+      // through one) must be compared by its real location, not its spelling.
       const cursorFilePaths = Object.keys(cursors.files || {});
-      const rootPreviouslySuppliedFiles = (rootPath) => {
-        const prefix = path.join(rootPath, "projects") + path.sep;
-        return cursorFilePaths.some((filePath) => filePath.startsWith(prefix));
+      const cursorRootIdentities = new Set();
+      {
+        const spellings = new Set();
+        for (const filePath of cursorFilePaths) {
+          for (const match of filePath.matchAll(/[\\/]projects[\\/]/g)) spellings.add(filePath.slice(0, match.index));
+        }
+        for (const spelling of spellings) {
+          let real = spelling;
+          try {
+            real = fssync.realpathSync(spelling);
+          } catch (_e) {
+            // A vanished directory keeps its own spelling.
+          }
+          cursorRootIdentities.add(profileRootKey(real));
+        }
+      }
+      const rootPreviouslySuppliedFiles = (entry) => {
+        const prefix = path.join(entry.path, "projects") + path.sep;
+        return (
+          cursorFilePaths.some((filePath) => filePath.startsWith(prefix)) ||
+          cursorRootIdentities.has(profileRootKey(entry.realPath || entry.path))
+        );
       };
       const legacyMigrationPending =
         !cursors.migrations?.[CLAUDE_GROUND_TRUTH_REPAIR_KEY] ||
         !cursors.migrations?.[CLAUDE_MEM_OBSERVER_REINCLUDE_KEY];
       const splitRootsWithHistory = legacyMigrationPending
         ? scanRoots.claude
-          .filter((entry) => entry.profile && entry.exists && rootPreviouslySuppliedFiles(entry.path))
+          .filter((entry) => entry.profile && entry.exists && rootPreviouslySuppliedFiles(entry))
           .map((entry) => entry.path)
         : [];
       const profileUsageRecorded = legacyMigrationPending &&
@@ -1282,7 +1305,7 @@ async function cmdSync(argv, context = {}) {
           if (!entry.exists) return true;
           const projectsState = scanRootDirState(path.join(entry.path, "projects"));
           if (projectsState.error !== null) return true;
-          return !projectsState.exists && rootPreviouslySuppliedFiles(entry.path);
+          return !projectsState.exists && rootPreviouslySuppliedFiles(entry);
         })
         .map((entry) => entry.path);
       if (unavailableClaudeRoots.length > 0) {

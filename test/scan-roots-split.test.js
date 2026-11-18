@@ -788,3 +788,111 @@ test("status shows the remembered source of a root, not a fresh guess", async ()
     assert.ok(out.includes(`source claude@work-2: ${a}`), "a keeps the name pinned to it");
   });
 });
+
+// ---------------------------------------------------------------- review round 3
+
+test("a collision suffix never pushes a name past the length limit, and the name survives a round trip", () => {
+  const long = "x".repeat(100);
+  const a = path.resolve(`/a/.claude-${long}`);
+  const b = path.resolve(`/b/.claude-${long}`);
+  const c = path.resolve(`/c/.claude-${long}`);
+  const entries = resolveWith([a, b, c], null);
+  const names = [a, b, c].map((root) => entries.find((entry) => entry.path === root).profile);
+  assert.equal(new Set(names).size, 3, "three roots, three names");
+  for (const name of names) {
+    assert.ok(name.length <= 64, `${name.length} characters`);
+    assert.match(name, /^[a-z0-9][a-z0-9._-]*$/);
+    assert.doesNotMatch(name, /[-._]$/);
+  }
+  assert.ok(names[0].endsWith("x"), "the first root keeps the plain name");
+  assert.match(names[1], /-2$/);
+  assert.match(names[2], /-3$/);
+
+  const remembered = rememberProfileNames({}, { claude: entries, codex: [] });
+  const again = resolveWith([c, b, a], remembered);
+  assert.deepEqual(
+    [a, b, c].map((root) => again.find((entry) => entry.path === root).profile),
+    names,
+    "remembered names are accepted again, not re-derived",
+  );
+});
+
+test("trimming a name to fit its suffix never leaves a separator in front of the suffix", () => {
+  const base = "a".repeat(61) + "-bb";
+  const first = path.resolve("/a/.claude-" + base);
+  const second = path.resolve("/b/.claude-" + base);
+  const entries = resolveWith([first, second], null);
+  assert.equal(entries.find((entry) => entry.path === first).profile, base);
+  assert.equal(entries.find((entry) => entry.path === second).profile, "a".repeat(61) + "-2");
+});
+
+test("a name that fits is left unchanged by the suffix handling", () => {
+  const a = path.resolve("/a/.claude-work");
+  const b = path.resolve("/b/.claude-work");
+  const entries = resolveWith([a, b], null);
+  assert.deepEqual([a, b].map((root) => entries.find((entry) => entry.path === root).profile), ["work", "work-2"]);
+});
+
+test("an invalid remembered value is replaced by the name the root was just given", () => {
+  const first = path.resolve("/0/.claude-work");
+  const target = path.resolve("/z/claude-work");
+  for (const bad of [null, "", "Work", 7, "x".repeat(65)]) {
+    const known = { claude: { [profileRootKey(target)]: bad } };
+    const entries = resolveWith([first, target], known);
+    const given = entries.find((entry) => entry.path === target).profile;
+    assert.equal(given, "work-2", String(bad));
+    const saved = rememberProfileNames(known, { claude: entries, codex: [] });
+    assert.equal(saved.claude[profileRootKey(target)], "work-2", `${String(bad)} is replaced`);
+    const later = resolveWith([path.resolve("/00/.claude-work"), first, target], saved);
+    assert.equal(later.find((entry) => entry.path === target).profile, "work-2", "and it then stays put");
+  }
+});
+
+// ---- symlinked roots
+
+async function linkDir(target, linkPath, t) {
+  try {
+    await fsp.symlink(target, linkPath, process.platform === "win32" ? "junction" : "dir");
+    return true;
+  } catch (err) {
+    t.skip(`cannot create a directory link here: ${err.code}`);
+    return false;
+  }
+}
+
+test("a pending repair still waits when the root is now reached through a symlink to the spelling it was scanned under", async (t) => {
+  await withTempSyncEnv(async (home) => {
+    const { work } = await twoProfiles(home);
+    await writeConfig(home, { scanRoots: { claude: [work] } });
+    await cmdSync([]);
+    assert.deepEqual(await latestTotalsBySource(home), { claude: 450 });
+    await makeLegacyClaudeMigrationsPending(home);
+
+    const alias = path.join(home, "alias-work");
+    if (!(await linkDir(work, alias, t))) return;
+    await writeConfig(home, { scanRoots: { claude: [alias] }, splitScanRoots: true });
+    await cmdSync([]);
+
+    const totals = await latestTotalsBySource(home);
+    assert.equal(totals.claude, 450, "history is not erased");
+    assert.deepEqual(await migrationsDone(home), { repair: false, observer: false });
+  });
+});
+
+test("a pending repair still waits when the root was scanned through a symlink and is now configured directly", async (t) => {
+  await withTempSyncEnv(async (home) => {
+    const { work } = await twoProfiles(home);
+    const alias = path.join(home, "alias-work");
+    if (!(await linkDir(work, alias, t))) return;
+    await writeConfig(home, { scanRoots: { claude: [alias] } });
+    await cmdSync([]);
+    assert.equal((await latestTotalsBySource(home)).claude, 450);
+    await makeLegacyClaudeMigrationsPending(home);
+
+    await writeConfig(home, { scanRoots: { claude: [work] }, splitScanRoots: true });
+    await cmdSync([]);
+
+    assert.equal((await latestTotalsBySource(home)).claude, 450, "history is not erased");
+    assert.deepEqual(await migrationsDone(home), { repair: false, observer: false });
+  });
+});

@@ -91,6 +91,7 @@ function deriveProfileName(rootPath, provider) {
 }
 
 const PROFILE_NAME_PATTERN = new RegExp(`^[a-z0-9][a-z0-9._-]{0,${MAX_PROFILE_NAME_LENGTH - 1}}$`);
+const isValidProfileName = (value) => typeof value === "string" && PROFILE_NAME_PATTERN.test(value);
 // Where sync remembers which source each split root was given.
 const PROFILE_SOURCES_FILE = "profile-sources.json";
 
@@ -114,7 +115,10 @@ async function loadProfileNames(trackerDir) {
 }
 
 // The names to write back after a resolve: what was already remembered, plus
-// every split root that just got one. An existing entry is never rewritten.
+// every split root that just got one. A valid entry is never rewritten; an
+// invalid one (null, wrong type, a name the pattern rejects) is replaced by the
+// name the root was just given, otherwise the next process would derive again
+// and could hand the name to another root.
 // Returns `known` itself when there is nothing new, so callers can skip the write.
 function rememberProfileNames(known, scanRoots) {
   const base = known && typeof known === "object" && !Array.isArray(known) ? known : {};
@@ -125,7 +129,7 @@ function rememberProfileNames(known, scanRoots) {
     for (const entry of (scanRoots && scanRoots[provider]) || []) {
       if (!entry.profile) continue;
       const key = profileRootKey(entry.path);
-      if (current[key] === undefined) {
+      if (!isValidProfileName(current[key])) {
         current[key] = entry.profile;
         changed = true;
       }
@@ -148,7 +152,7 @@ function rememberProfileNames(known, scanRoots) {
 // folder names.
 function assignProfileSources(provider, entries, remembered = null) {
   const pinned = remembered && typeof remembered === "object" ? remembered : {};
-  const validPinned = (value) => typeof value === "string" && PROFILE_NAME_PATTERN.test(value);
+  const validPinned = isValidProfileName;
   // Every remembered name stays reserved, also for a root that is no longer
   // configured: usage may still sit under it, so a newcomer must not inherit it.
   const used = new Set(Object.values(pinned).filter(validPinned));
@@ -167,7 +171,11 @@ function assignProfileSources(provider, entries, remembered = null) {
     } else {
       const base = deriveProfileName(entry.path, provider);
       name = base;
-      for (let n = 2; used.has(name); n++) name = `${base}-${n}`;
+      // Make room for the suffix: "<trimmed base>-<n>" must itself fit the limit.
+      for (let n = 2; used.has(name); n++) {
+        const suffix = `-${n}`;
+        name = `${base.slice(0, MAX_PROFILE_NAME_LENGTH - suffix.length).replace(/[-._]+$/g, "")}${suffix}`;
+      }
       used.add(name);
     }
     entry.profile = name;
