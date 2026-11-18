@@ -493,12 +493,11 @@ export default async function billing(req: Request): Promise<Response> {
           p_provider_price_id: waffoProductId(order, config), p_checkout_url: null,
         });
       }
-      const claim = await rpc(client, "cloud_claim_checkout", {
-        p_user_id: userId,
-        p_order_id: order.id,
+      const claim = await rpc(client, "cloud_claim_checkout_tracked", {
+        p_user_id: userId, p_environment: environment, p_order_id: order.id,
       });
       const current = object(claim.order) as unknown as CloudOrder;
-      if (current.cancel_requested_at) throw new BillingError("order_cancel_processing", 409);
+      if (claim.cancel_pending || current.cancel_requested_at) throw new BillingError("order_cancel_processing", 409);
       if (!['pending', 'ready'].includes(current.status) ||
           Date.parse(current.expires_at) <= Date.now()) {
         throw new BillingError("checkout_expired", 409);
@@ -519,10 +518,8 @@ export default async function billing(req: Request): Promise<Response> {
           pending: true,
         }, 202);
       }
-      const operation = await rpc(client, "cloud_begin_checkout_operation", {
-        p_user_id: userId, p_environment: environment, p_order_id: current.id,
-      });
-      if (!operation.allowed) throw new BillingError("order_cancel_processing", 409);
+      const operationId = text(claim.operation_id);
+      if (!operationId) throw new BillingError("order_cancel_processing", 409);
       let attached;
       let uncertain = true;
       try {
@@ -540,7 +537,7 @@ export default async function billing(req: Request): Promise<Response> {
       } finally {
         await rpc(client, "cloud_finish_checkout_operation", {
           p_user_id: userId, p_environment: environment, p_order_id: current.id,
-          p_operation_id: operation.operation_id, p_uncertain: uncertain,
+          p_operation_id: operationId, p_uncertain: uncertain,
         });
       }
       return json({

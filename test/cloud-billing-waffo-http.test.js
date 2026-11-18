@@ -1521,10 +1521,11 @@ test("cancellation intent does not suppress a later webhook payment or account r
   assert.equal(result.data.cancellation,"not_cancelled");assert.equal((await localOrder(id)).status,"paid");
   assert.equal((await account(owner)).payments.length,1);
 });
-test("cancel-before-operation prevents network start; finalizer rejects changed receipt and attempt evidence",async()=>{
+test("legacy claim cancellation remains processing and blocks a new operation; finalizer rejects changed proof",async()=>{
   const owner=await user(),row=await draftForCancellation(owner);
   await db.query("SELECT cloud_claim_checkout($1,$2)",[owner,row.id]);
-  assert.equal((await api("cancel-order",{id:row.id},owner)).data.cancellation,"cancelled");
+  assert.equal((await api("cancel-order",{id:row.id},owner)).data.cancellation,"processing");
+  assert.equal((await localOrder(row.id)).checkout_tracking_uncertain,true);
   const denied=await db.query("SELECT cloud_begin_checkout_operation($1,'sandbox',$2) AS r",[owner,row.id]);assert.equal(denied.rows[0].r.allowed,false);
   const secondOwner=await user(),made=await checkout(secondOwner),id=made.data.order.id;
   await api("cancel-order",{id},secondOwner);
