@@ -107,3 +107,19 @@ test("legacy claimed-false recovery cannot reuse a tracked operation as provenan
   assert.equal((await db.value(cancelSql(f))).status, "ready");
   assert.equal((await db.value(finalizeSql(f))).status, "ready", "known expired receipt cannot erase legacy recovery uncertainty");
 });
+
+test("cancellation migration is accepted by official InsForge session-configuration guards", () => {
+  const fs = require("node:fs"), path = require("node:path");
+  const sql = fs.readFileSync(path.join(__dirname, "../migrations/20261117090000_cloud-order-cancellation.sql"), "utf8");
+  assert.doesNotMatch(sql, /\bset_config\s*\(/i);
+  assert.doesNotMatch(sql, /\bcurrent_setting\s*\(/i);
+});
+test("stale transaction markers cannot finalize and clients cannot write markers", async () => {
+  const f = await seedOrder(db);
+  assert.equal((await db.value(cancelSql(f))).status, "ready");
+  await db.exec(`INSERT INTO tokentracker_cloud_tx_markers(txid,kind,order_id) VALUES(txid_current()-1,'order_cancel_finalizing',${literal(f.id)})`);
+  await assert.rejects(db.exec(`UPDATE tokentracker_cloud_orders SET status='closed' WHERE id=${literal(f.id)}`), /order cancellation is pending/i);
+  assert.equal((await db.value(`SELECT status FROM tokentracker_cloud_orders WHERE id=${literal(f.id)}`)), "ready");
+  assert.equal(await db.value("SELECT has_table_privilege('authenticated','tokentracker_cloud_tx_markers','INSERT')"), false);
+  assert.equal(await db.value("SELECT has_function_privilege('authenticated','cloud_tx_mark(text,uuid)','EXECUTE')"), false);
+});

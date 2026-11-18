@@ -218,7 +218,7 @@ Never-issued drafts can close atomically. Issued links remain **processing** unt
 session-family expiry and independently confirmed terminal unpaid attempts, matching the persisted
 attempt set, permit atomic finalization. Expiry alone is not payment finality. No subscription cancel
 API is invoked; a raced successful payment wins and retains its entitlement and renewal settings.
-The atomic tracked-claim RPC creates its operation receipt in the claim transaction. Legacy
+Transaction-local authorization uses a privileged marker table keyed by the current transaction, because official InsForge migration guards reject session-configuration statements. The atomic tracked-claim RPC creates its operation receipt in the claim transaction. Legacy
 handlers may coexist during rollout: their old claim RPC remains supported, but claims made
 without that atomic wrapper are marked uncertain and never treated as never-issued drafts.
 Pre-migration issued/claimed orders are deliberately marked `checkout_tracking_uncertain`: their

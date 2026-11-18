@@ -272,6 +272,8 @@ function registerNativeTests() {
     assert.equal(await admin.value("SELECT has_function_privilege('authenticated','cloud_request_order_cancel(uuid,text,uuid)','EXECUTE')"), false);
     assert.equal(await admin.value("SELECT has_function_privilege('authenticated','cloud_claim_checkout_tracked(uuid,text,uuid)','EXECUTE')"), false);
     assert.equal(await admin.value("SELECT has_table_privilege('authenticated','tokentracker_cloud_checkout_operations','INSERT')"), false);
+    assert.equal(await admin.value("SELECT has_table_privilege('authenticated','tokentracker_cloud_tx_markers','INSERT')"), false);
+    assert.equal(await admin.value("SELECT has_function_privilege('authenticated','cloud_tx_mark(text,uuid)','EXECUTE')"), false);
     const untrusted = await connect("authenticated");
     try { await assert.rejects(untrusted.value(cancelSql(f)), /permission denied/i); } finally { await untrusted.close(); }
   });
