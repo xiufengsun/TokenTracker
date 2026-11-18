@@ -104,8 +104,8 @@ function normalizeClaudeModel(model) {
     .replace(/^-+|-+$/g, "")
     .replace(/-{2,}/g, "-");
 
-  if (/^claude-(sonnet|opus|haiku|fable)-\d+\.\d+/.test(m)) {
-    return m.replace(/^(claude-(?:sonnet|opus|haiku|fable)-\d+)\.(\d+)/, "$1-$2");
+  if (/^claude-(sonnet|opus|haiku|fable|mythos)-\d+\.\d+/.test(m)) {
+    return m.replace(/^(claude-(?:sonnet|opus|haiku|fable|mythos)-\d+)\.(\d+)/, "$1-$2");
   }
   if (/^(sonnet|opus|haiku)-\d+[.-]\d+/.test(m)) {
     return m
@@ -262,11 +262,16 @@ function lookupContainedExactCaseInsensitive(table, model) {
     // is a separate SKU from Opus 5). Dated and provider suffixes still work.
     const suffix = lower.slice(start + key.length);
     if (/^[.\d]/.test(suffix)) continue;
-    // Alternate SKU markers (preview/next/exp/…) must not inherit the base
-    // exact rate, including when they follow a date snapshot
+    // Alternate SKU markers (preview/next/exp/fast/…) must not inherit the
+    // base exact rate, including when they follow a date snapshot
     // (`qwen3.8-max-2026-09-02-preview`, `qwen3-8-max-0902-preview`).
+    // `-fast` is a separate 2x SKU for Fable/Mythos/Opus, not a dated or
+    // provider suffix. Without this, a longer provider-qualified base key
+    // (`anthropic/claude-mythos-5.2`) wins contained matching over the
+    // bare `claude-mythos-5.2-fast` exact key because it is longer, and
+    // `anthropic/claude-mythos-5-2-fast` is billed at the standard rate.
     // Plain dated (-0902 / -YYYY-MM-DD) and provider-qualified suffixes still match.
-    if (/(?:^|-)(?:preview|next|exp|experimental|beta|alpha)(?:-|$)/.test(suffix)) continue;
+    if (/(?:^|-)(?:preview|next|exp|experimental|beta|alpha|fast)(?:-|$)/.test(suffix)) continue;
     return table[key];
   }
   return null;
@@ -328,6 +333,12 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
   if (/(?:^|\/)qwen3[.-]8-max(?:-0902|-\d{4}-\d{2}-\d{2})?$/.test(lower.trim()) && curated.exact?.["qwen3.8-max"]) {
     return { hit: true, source: "curated:exact", value: curated.exact["qwen3.8-max"] };
   }
+  // Official API id qwen4-max only. The optional dated suffix is for
+  // provider-qualified snapshots of that exact SKU; -preview, -plus,
+  // -flash and any other qwen4-* suffix must not inherit the Max API rate.
+  if (/(?:^|\/)qwen4-max(?:-\d{4}-\d{2}-\d{2})?$/.test(lower.trim()) && curated.exact?.["qwen4-max"]) {
+    return { hit: true, source: "curated:exact", value: curated.exact["qwen4-max"] };
+  }
 
   // 2. LiteLLM exact
   if (litellm && litellm[lookupModel]) {
@@ -360,6 +371,16 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
   // an explicit exact entry added later still wins. Re-check on the next
   // Fable release before pointing it anywhere.
   if (/(?:^|\/)claude-fable-latest(?:$|[^a-z0-9])/.test(lower)) {
+    return { hit: false, source: "miss", value: null };
+  }
+
+  // Floating Mythos aliases (`claude-mythos-latest`) and the preview SKU
+  // (`claude-mythos-preview`) are not pinned to a versioned list rate.
+  // Checked 2026-11-18: official Mythos 5 / 5.1 / 5.2 overviews and the
+  // Anthropic pricing page document the versioned ids, not a -latest
+  // alias, and publish no pay-as-you-go price for the preview id. Stop
+  // here so version-bounded mythos fuzzy needles cannot price them.
+  if (/(?:^|\/)claude-mythos-(?:latest|preview)(?:$|[^a-z0-9])/.test(lower)) {
     return { hit: false, source: "miss", value: null };
   }
 
@@ -419,13 +440,16 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
       if (!match || !ref) continue;
       const needle = match.toLowerCase();
       if (!curated.exact[ref]) continue;
-      // The Fable 5.2 needles are version-bounded. A plain substring lets the
-      // dot-restored form of a dated Fable 5 id through: claude-fable-5-20250901
-      // becomes claude-fable-5.20250901, which contains "fable-5.2". fable-5-20
-      // contains "fable-5-2" the same way. The minor must end the id or be
-      // followed by a non-digit, so -20261109 and -20 stay off the 5.2 rate.
-      const bounded = /^fable-5[.-]2(?:-fast)?$/.test(needle)
-        ? new RegExp(`${needle.replace(".", "\\.")}(?:$|[^0-9])`)
+      // Fable 5.2 and Mythos family needles are version-bounded. A plain
+      // substring lets the dot-restored form of a dated Fable/Mythos 5 id
+      // through: claude-fable-5-20250901 becomes claude-fable-5.20250901,
+      // which contains "fable-5.2". fable-5-20 / mythos-5-20 contain the
+      // hyphenated 5-2 needle the same way. The minor must end the id or
+      // be followed by a non-digit, so -20261109 and -20 stay off the 5.2
+      // rate. The bare mythos-5 needle also needs a tighter end class so
+      // mythos-5-1 / mythos-5.2 / mythos-5-20 cannot inherit Mythos 5 rates.
+      const bounded = /^fable-5[.-]2(?:-fast)?$/.test(needle) || /^mythos-5(?:[.-][12](?:-fast)?)?$/.test(needle)
+        ? new RegExp(`${needle.replaceAll(".", "\\.")}${needle === "mythos-5" ? "(?:$|[^0-9.-])" : "(?:$|[^0-9])"}`)
         : null;
       const matches = (value) => (bounded ? bounded.test(value) : value.includes(needle));
       if (matches(lower)) {
@@ -434,9 +458,10 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
       if (dotForm && matches(dotForm)) {
         return { hit: true, source: "curated:fuzzy", value: curated.exact[ref] };
       }
-      // Display names ("Claude Fable 5.2", "Fable 5.2 Fast") only reach this
-      // scan when no source normalizer ran. Fold spaces for the pinned 5.2
-      // needles only — a general fold would price unrelated display names.
+      // Display names ("Claude Fable 5.2", "Mythos 5.2 Fast") only reach this
+      // scan when no source normalizer ran. Fold spaces for the pinned
+      // version-bounded needles only — a general fold would price unrelated
+      // display names.
       if (bounded && bounded.test(lower.replace(/[^a-z0-9.]+/g, "-"))) {
         return { hit: true, source: "curated:fuzzy", value: curated.exact[ref] };
       }
