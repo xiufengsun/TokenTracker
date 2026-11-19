@@ -913,6 +913,46 @@ test("a successful account read carries no fallback header", async () => {
   }
 });
 
+test("account view adds usage the daily upload window has not sent yet (#1132)", async () => {
+  const queuePath = path.join(tmpHome, "queue.jsonl");
+  const uploaded = { ...SAMPLE_ROW, hour_start: "2026-11-17T10:00:00.000Z" };
+  const pending = { ...SAMPLE_ROW, hour_start: "2026-11-18T08:00:00.000Z", input_tokens: 500, output_tokens: 0, total_tokens: 500 };
+  writeQueue(queuePath, [uploaded, pending]);
+  // The free-tier upload ran once this morning, before the `pending` row existed.
+  fs.writeFileSync(
+    path.join(path.dirname(queuePath), "queue.state.json"),
+    JSON.stringify({ offset: Buffer.byteLength(JSON.stringify(uploaded) + "\n") }),
+  );
+  seedSignedInTracker();
+
+  const accessJwt = freshAccessJwt();
+  const cloud = { from: "2026-11-17", to: "2026-11-18", data: [
+    { day: "2026-11-17", total_tokens: 120, billable_total_tokens: 120, total_cost_usd: 0, conversation_count: 1, models: { "claude-sonnet-4-6": 120 } },
+  ] };
+  const realFetch = global.fetch;
+  global.fetch = async (urlStr) => {
+    if (String(urlStr).includes("/api/auth/refresh")) {
+      return { ok: true, status: 200, json: async () => ({ accessToken: accessJwt }) };
+    }
+    if (String(urlStr).includes("/tokentracker-account-daily")) {
+      return { ok: true, status: 200, json: async () => cloud };
+    }
+    throw new Error(`unexpected fetch ${urlStr}`);
+  };
+  try {
+    const handler = freshHandler(queuePath);
+    const res = await call(handler, {
+      endpoint: "/functions/tokentracker-usage-daily?from=2026-11-17&to=2026-11-18&tz=UTC&account=1",
+    });
+    assert.equal(res._headers["x-tokentracker-account-view"], "1");
+    assert.equal(res._headers["x-tokentracker-account-fallback"], undefined);
+    const days = Object.fromEntries(res.json().data.map((d) => [d.day, d.total_tokens]));
+    assert.deepEqual(days, { "2026-11-17": 120, "2026-11-18": 500 });
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
 for (const marker of ["valid", "unreadable"]) {
   test(`a pending cloud usage rebuild serves local data authoritatively (${marker} marker)`, async () => {
     // A rebuild wipes this device's cloud rows and replays the queue, one free
