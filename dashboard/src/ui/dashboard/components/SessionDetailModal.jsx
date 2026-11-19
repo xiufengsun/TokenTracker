@@ -73,6 +73,7 @@ export function SessionDetailModal({ session, subagents = [], onClose }) {
   const models = sessionModels(session);
   const descendants = useMemo(() => summarizeSessions(subagents), [subagents]);
   const ownTokens = sessionOwnTokens(session);
+  const usageUnavailable = session.usage_precision === "unavailable";
   const ownCost = sessionOwnCost(session);
   const subagentTokens = Number(session.subagent_total_tokens ?? descendants.tokens);
   const subagentCost = Number(session.subagent_cost_usd ?? descendants.cost);
@@ -87,6 +88,11 @@ export function SessionDetailModal({ session, subagents = [], onClose }) {
   } : null;
   const hasReasoning = Number(session.reasoning_output_tokens) > 0;
   const isGrok = session.source === "grok";
+  const isAntigravity = session.source === "antigravity";
+  const signalIsRecorded = (key, grokOnly) => {
+    if (isAntigravity) return key === "model_calls" ? !usageUnavailable : key === "turns" && session.turns > 0;
+    return typeof session[key] === "number" && (!grokOnly || isGrok);
+  };
   const contextAvailable = isGrok && Number(session.context_window_tokens) > 0;
 
   useEffect(() => {
@@ -167,8 +173,8 @@ export function SessionDetailModal({ session, subagents = [], onClose }) {
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5">
           <section aria-label={copy("sessions.detail.consumption")}>
             <dl className="grid grid-cols-2 overflow-hidden rounded-lg border border-oai-gray-200 dark:border-oai-gray-800">
-              <Kpi label={copy("sessions.col.tokens")}>{formatCompactNumber(ownTokens + subagentTokens)}</Kpi>
-              <Kpi label={copy("sessions.col.cost")} className="border-l">{combinedPartial && ownCost + subagentCost === 0 ? copy("dashboard.cost_breakdown.unpriced_label") : <>{combinedPartial ? "≥" : ""}{formatCost(ownCost + subagentCost)}</>}</Kpi>
+              <Kpi label={copy("sessions.col.tokens")}>{usageUnavailable ? copy("sessions.detail.not_recorded") : formatCompactNumber(ownTokens + subagentTokens)}</Kpi>
+              <Kpi label={copy("sessions.col.cost")} className="border-l">{usageUnavailable ? copy("sessions.detail.not_recorded") : combinedPartial && ownCost + subagentCost === 0 ? copy("dashboard.cost_breakdown.unpriced_label") : <>{combinedPartial ? "≥" : ""}{formatCost(ownCost + subagentCost)}</>}</Kpi>
               <Kpi label={copy("sessions.summary.speed")} className="border-t" title={hasSpeed ? copy("sessions.performance.samples", { count: performance.estimated_request_count }) : copy("sessions.detail.no_speed")}>
                 {hasSpeed ? <SessionPerformance performance={performance} /> : "—"}
               </Kpi>
@@ -201,7 +207,7 @@ export function SessionDetailModal({ session, subagents = [], onClose }) {
           <section className="mt-6">
             <h3 className="text-sm font-medium text-oai-black dark:text-white">{copy("sessions.detail.tokens")}</h3>
             <dl className="mt-2 grid grid-cols-1 gap-x-8 gap-y-1.5 sm:grid-cols-2">
-              {TOKEN_ROWS.map(({ key, label }) => <Stat key={key} label={label()}>{session[key] == null ? "—" : formatCompactNumber(session[key])}</Stat>)}
+              {TOKEN_ROWS.map(({ key, label }) => <Stat key={key} label={label()}>{usageUnavailable ? copy("sessions.detail.not_recorded") : session[key] == null ? "—" : formatCompactNumber(session[key])}</Stat>)}
             </dl>
           </section>
 
@@ -221,8 +227,8 @@ export function SessionDetailModal({ session, subagents = [], onClose }) {
                   <li key={model.model} className="py-2.5">
                     <div className="grid grid-cols-[minmax(0,1fr)_80px_88px] items-baseline gap-3 text-sm">
                       <span className="min-w-0 break-words text-oai-black dark:text-white">{model.model || copy("sessions.model.unknown")}</span>
-                      <span className="text-right tabular-nums">{formatCompactNumber(model.total_tokens)}</span>
-                      <span className="text-right tabular-nums">{unpriced && !hasKnownCost ? "—" : formatCost(modelCost)}</span>
+                      <span className="text-right tabular-nums">{usageUnavailable ? copy("sessions.detail.not_recorded") : formatCompactNumber(model.total_tokens)}</span>
+                      <span className="text-right tabular-nums">{usageUnavailable ? copy("sessions.detail.not_recorded") : unpriced && !hasKnownCost ? "—" : formatCost(modelCost)}</span>
                     </div>
                     {/* Per-model speed and the pricing disclosure share one muted
                         line under the model so a single-model session stays two
@@ -251,7 +257,7 @@ export function SessionDetailModal({ session, subagents = [], onClose }) {
             <summary className="flex min-h-11 cursor-pointer items-center rounded text-sm font-medium text-oai-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500 dark:text-white">{copy("sessions.detail.signals")}</summary>
             <dl className="grid grid-cols-1 gap-x-8 gap-y-1.5 pb-4 sm:grid-cols-2">
               {SIGNAL_ROWS.map(({ key, label, grokOnly }) => (
-                <Stat key={key} label={label()}>{typeof session[key] === "number" && (!grokOnly || isGrok) ? formatCompactNumber(session[key]) : copy("sessions.detail.not_recorded")}</Stat>
+                <Stat key={key} label={label()}>{signalIsRecorded(key, grokOnly) ? formatCompactNumber(session[key]) : copy("sessions.detail.not_recorded")}</Stat>
               ))}
             </dl>
             {isGrok && session.usage_precision ? <p className="pb-3 text-xs leading-5 text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.grok.runtime_breakdown", { calls: formatCompactNumber(session.model_calls), seconds: (Number(session.api_duration_ms || 0) / 1000).toFixed(1), tools: formatCompactNumber(session.tool_calls), errors: formatCompactNumber(session.error_count) })}</p> : null}
