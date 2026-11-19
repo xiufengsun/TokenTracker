@@ -505,6 +505,13 @@
       "cache_write": 0,
       "note": "Cursor/Google Standard list rates, verified 2026-11-16: https://cursor.com/docs/models/gemini-4-hydrogen . $1.50/$7.50/$0.075 per MTok input/output/cache read; no separate cache-write charge."
     },
+    "gemini-4-neon": {
+      "input": 3,
+      "output": 15,
+      "cache_read": 0.15,
+      "cache_write": 0,
+      "note": "Google Gemini 4 Neon Standard paid-tier list rates, verified 2026-11-19: $3.00/$15.00 per MTok input/output, $0.15 implicit cache read, flat across the 1M context window. Official Gemini API does not support explicit caching, so cache_write is 0; Google Cloud lists a $3.75 cache-write rate only from 2027-01-12. Official thinking levels are low/medium/high/xhigh and share this rate; decorator suffixes are stripped like other Gemini 4 SKUs. Batch, Flex, and Priority consumption options are not represented in the single-rate fields. Sources: https://ai.google.dev/gemini-api/docs/pricing https://aistudio.google.com/docs/whats-new-gemini-4-neon https://cursor.com/docs/models-and-pricing https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-neon/"
+    },
     "muse-wonder-1.0": {
       "input": 4,
       "output": 20,

@@ -140,7 +140,7 @@ function normalizeCursorModel(model) {
   const parts = m.split("-");
   const isFast = parts.includes("fast");
 
-  if (/^gemini-4[.-](argon|carbon|hydrogen)(?:-(minimal|low|medium|high|xhigh))?$/.test(m)) {
+  if (/^gemini-4[.-](argon|carbon|hydrogen|neon)(?:-(minimal|low|medium|high|xhigh))?$/.test(m)) {
     return m.replace(/^gemini-4\./, "gemini-4-").replace(/-(minimal|low|medium|high|xhigh)$/, "");
   }
   if (/^muse-wonder-1[.-]0(?:-(minimal|low|medium|high|xhigh|extra-high|max))?$/.test(m)) {
@@ -397,9 +397,29 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
 
   // Gemini 4's Cyber Permissive SKU and future variants must not inherit
   // the cheaper introductory Standard rate through contained-key matching.
-  const gemini4 = lower.trim().match(/(?:^|\/)gemini-4[.-](carbon|hydrogen)(.*)$/);
-  if (gemini4 && !/^(?:-(?:minimal|low|medium|high|xhigh))?$/.test(gemini4[2])) {
-    return { hit: false, source: "miss", value: null };
+  // Also match after a flattened provider prefix (google/gemini-4-neon-lite -> google-gemini-4-neon-lite).
+  const gemini4 = lower.trim().match(/(?:^|[^a-z0-9])gemini-4[.-](carbon|hydrogen|neon)(.*)$/);
+  if (gemini4) {
+    if (!/^(?:-(?:minimal|low|medium|high|xhigh))?$/.test(gemini4[2])) {
+      return { hit: false, source: "miss", value: null };
+    }
+    // Official Neon Standard aliases, including provider-qualified ids, share
+    // the exact list rate. Carbon/hydrogen already had this miss-on-unknown
+    // guard; this run only adds Neon positive resolution so existing lookups
+    // stay unchanged.
+    if (gemini4[1] === "neon" && curated.exact && curated.exact["gemini-4-neon"]) {
+      // Cline free/pass gateways bill at zero; do not apply the Standard API
+      // rate after a flattened or slash-qualified prefix.
+      const raw = model.toLowerCase();
+      if (/(?:^|\/)cline-(?:free|pass)\//.test(raw) || /(?:^|[^a-z0-9])cline-(?:free|pass)[-/]/.test(lower)) {
+        return {
+          hit: true,
+          source: "curated:cline-gateway",
+          value: curated.exact["cline-gateway-models"] || { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+        };
+      }
+      return { hit: true, source: "curated:gemini-4-neon", value: curated.exact["gemini-4-neon"] };
+    }
   }
   // General Astra/Sol and the specialist Astra Law have confirmed rates. Do not let
   // unknown SKUs/snapshots inherit their rates via contained/fuzzy matching.
