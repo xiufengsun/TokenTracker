@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setCopyLocale } from "./copy";
 import {
   DEFAULT_MENU_BAR_ITEMS,
   FALLBACK_MENU_BAR_ITEMS,
@@ -7,6 +8,18 @@ import {
 } from "./menu-bar-display.js";
 
 describe("normalizeMenuBarItems", () => {
+  it("localizes the optional Antigravity Argon menu labels", () => {
+    const item = FALLBACK_MENU_BAR_ITEMS.find((entry) => entry.id === "antigravityArgonWeekly");
+    try {
+      setCopyLocale("zh-CN");
+      expect(item.label).toBe("Antigravity Argon 7 天限额");
+      expect(item.shortLabel).toBe("Ag Argon 7天");
+      setCopyLocale("en");
+      expect(item.label).toBe("Antigravity Argon 7d Limit");
+    } finally {
+      setCopyLocale("en");
+    }
+  });
   it("keeps the default Token + Cost display when no valid selection exists", () => {
     expect(normalizeMenuBarItems(null)).toEqual(DEFAULT_MENU_BAR_ITEMS);
     expect(normalizeMenuBarItems(["unknown"])).toEqual(DEFAULT_MENU_BAR_ITEMS);

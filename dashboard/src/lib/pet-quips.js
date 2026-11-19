@@ -447,6 +447,7 @@ function collectPetLimitRows(limits) {
     ["Claude 5h", limits.antigravity?.secondary_window],
     ["Gemini weekly", limits.antigravity?.tertiary_window],
     ["Gemini 5h", limits.antigravity?.quaternary_window],
+    [copy("limits.label.antigravity_argon_weekly"), limits.antigravity?.argon_weekly_window],
   ]);
   addGeneric("zcode", limits.zcode, zcodeQuipWindows(limits.zcode));
   addGeneric("opencodeGo", limits.opencodeGo, [["5h", limits.opencodeGo?.primary_window], ["Weekly", limits.opencodeGo?.secondary_window], ["Month", limits.opencodeGo?.tertiary_window]]);

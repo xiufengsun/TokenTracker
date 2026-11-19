@@ -80,6 +80,7 @@ const PROVIDER_NAMES = {
 const WINDOW_NAMES = {
     five_hour: '5h', seven_day: '7d', seven_day_opus: '7d Opus',
     seven_day_sonnet: '7d Sonnet',
+    argon_weekly_window: 'Argon 7d',
 };
 
 // Strings.swift emptyTodayQuips.

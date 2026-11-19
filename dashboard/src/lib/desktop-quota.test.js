@@ -2,6 +2,13 @@ import { describe, it, expect } from "vitest";
 import { desktopQuotaRows, quotaPeriodLabel, quotaResetCountdown, mergeQuotaSnapshot, selectQuotaRows } from "./desktop-quota.js";
 
 describe("desktop quota snapshots", () => {
+  it("exposes the optional Antigravity Argon weekly row to desktop widgets", () => {
+    const rows = desktopQuotaRows({ antigravity: { configured: true,
+      argon_weekly_window: { used_percent: 34, reset_at: "2030-01-01T00:00:00Z" } } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: "antigravity:argon-weekly", remaining: 66,
+      resetMs: Date.parse("2030-01-01T00:00:00Z") });
+  });
   it("keeps both fully available and exhausted quotas, without coercing missing values", () => {
     const rows = desktopQuotaRows({
       claude: { configured: true, five_hour: { utilization: 0 }, seven_day: { utilization: 100 } },

@@ -98,6 +98,8 @@ extension UsageLimitsResponse {
             return guarded(antigravity.configured, antigravity.error, antigravity.tertiaryWindow?.usedPercent)
         case .antigravityGemini5h:
             return guarded(antigravity.configured, antigravity.error, antigravity.quaternaryWindow?.usedPercent)
+        case .antigravityArgonWeekly:
+            return guarded(antigravity.configured, antigravity.error, antigravity.argonWeeklyWindow?.usedPercent)
         case .zcodeGlm52:
             return guarded(zcode?.configured, zcode?.error, zcode?.primaryWindow?.usedPercent)
         case .zcodeGlm5Turbo:
@@ -815,6 +817,7 @@ struct AntigravityLimits: Codable, Equatable {
     let secondaryWindow: GenericLimitWindow?
     let tertiaryWindow: GenericLimitWindow?
     let quaternaryWindow: GenericLimitWindow?
+    let argonWeeklyWindow: GenericLimitWindow?
 
     enum CodingKeys: String, CodingKey {
         case configured, error
@@ -825,6 +828,7 @@ struct AntigravityLimits: Codable, Equatable {
         case secondaryWindow = "secondary_window"
         case tertiaryWindow = "tertiary_window"
         case quaternaryWindow = "quaternary_window"
+        case argonWeeklyWindow = "argon_weekly_window"
     }
 }
 

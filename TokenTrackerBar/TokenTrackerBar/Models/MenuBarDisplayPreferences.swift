@@ -32,6 +32,7 @@ enum MenuBarDisplayMetric: String, CaseIterable {
     case antigravityClaude5h
     case antigravityGeminiWeekly
     case antigravityGemini5h
+    case antigravityArgonWeekly
     case zcodeGlm52
     case zcodeGlm5Turbo
     case opencodeGo5h
@@ -79,6 +80,7 @@ enum MenuBarDisplayMetric: String, CaseIterable {
         case .antigravityClaude5h: return "Ag Cl 5h"
         case .antigravityGeminiWeekly: return "Ag Gm 7d"
         case .antigravityGemini5h: return "Ag Gm 5h"
+        case .antigravityArgonWeekly: return "Ag Argon 7d"
         case .zcodeGlm52: return "ZC Pri"
         case .zcodeGlm5Turbo: return "ZC Sec"
         case .opencodeGo5h: return "OG 5h"
@@ -126,6 +128,7 @@ enum MenuBarDisplayMetric: String, CaseIterable {
         case .antigravityClaude5h: return "Antigravity Claude 5h Limit"
         case .antigravityGeminiWeekly: return "Antigravity Gemini 7d Limit"
         case .antigravityGemini5h: return "Antigravity Gemini 5h Limit"
+        case .antigravityArgonWeekly: return "Antigravity Argon 7d Limit"
         case .zcodeGlm52: return "ZCode Primary Limit"
         case .zcodeGlm5Turbo: return "ZCode Secondary Limit"
         case .opencodeGo5h: return "OpenCode Go 5h Limit"
@@ -153,7 +156,7 @@ enum MenuBarDisplayMetric: String, CaseIterable {
              .kiroMonth, .kiroBonus,
              .grokMonth, .grokOndemand,
              .copilotPremium, .copilotChat,
-             .antigravityClaudeWeekly, .antigravityClaude5h, .antigravityGeminiWeekly, .antigravityGemini5h,
+             .antigravityClaudeWeekly, .antigravityClaude5h, .antigravityGeminiWeekly, .antigravityGemini5h, .antigravityArgonWeekly,
              .zcodeGlm52, .zcodeGlm5Turbo,
              .opencodeGo5h, .opencodeGoWeekly, .opencodeGoMonthly,
              .commandCode5h, .commandCodeWeekly,
@@ -178,7 +181,7 @@ enum MenuBarDisplayMetric: String, CaseIterable {
         case .kiroMonth, .kiroBonus: return "kiro"
         case .grokMonth, .grokOndemand: return "grok"
         case .copilotPremium, .copilotChat: return "copilot"
-        case .antigravityClaudeWeekly, .antigravityClaude5h, .antigravityGeminiWeekly, .antigravityGemini5h: return "antigravity"
+        case .antigravityClaudeWeekly, .antigravityClaude5h, .antigravityGeminiWeekly, .antigravityGemini5h, .antigravityArgonWeekly: return "antigravity"
         case .zcodeGlm52, .zcodeGlm5Turbo: return "zcode"
         case .opencodeGo5h, .opencodeGoWeekly, .opencodeGoMonthly: return "opencodeGo"
         case .commandCode5h, .commandCodeWeekly: return "commandCode"
@@ -250,6 +253,7 @@ private extension UsageLimitsResponse {
         case .antigravityClaude5h: return antigravity.secondaryWindow != nil
         case .antigravityGeminiWeekly: return antigravity.tertiaryWindow != nil
         case .antigravityGemini5h: return antigravity.quaternaryWindow != nil
+        case .antigravityArgonWeekly: return antigravity.argonWeeklyWindow != nil
         case .zcodeGlm52: return zcode?.primaryWindow != nil
         case .zcodeGlm5Turbo: return zcode?.secondaryWindow != nil
         case .opencodeGo5h: return opencodeGo?.primaryWindow != nil
@@ -366,7 +370,7 @@ enum MenuBarDisplayPreferences {
                  .grokMonth, .grokOndemand,
                  .copilotPremium, .copilotChat,
                  .antigravityClaudeWeekly, .antigravityClaude5h,
-                 .antigravityGeminiWeekly, .antigravityGemini5h,
+                 .antigravityGeminiWeekly, .antigravityGemini5h, .antigravityArgonWeekly,
                  .zcodeGlm52, .zcodeGlm5Turbo,
                  .opencodeGo5h, .opencodeGoWeekly, .opencodeGoMonthly,
                  .commandCode5h, .commandCodeWeekly,

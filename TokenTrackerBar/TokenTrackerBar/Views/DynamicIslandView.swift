@@ -364,6 +364,8 @@ struct DynamicIslandView: View {
             return (nil, "5h", limitPercentText(for: metric) ?? "--")
         case .claude7d, .codex7d, .codexSpark7d, .antigravityClaudeWeekly, .antigravityGeminiWeekly:
             return (nil, "7d", limitPercentText(for: metric) ?? "--")
+        case .antigravityArgonWeekly:
+            return (nil, "Argon 7d", limitPercentText(for: metric) ?? "--")
         case .cursorPlan:
             return (nil, "Plan", limitPercentText(for: metric) ?? "--")
         case .cursorAuto:

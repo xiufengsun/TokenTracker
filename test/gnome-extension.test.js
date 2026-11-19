@@ -21,6 +21,22 @@ test("GNOME extension parses as an ES module", () => {
   assert.equal(result.status, 0, result.stderr);
 });
 
+test("GNOME limits label the optional Argon weekly window", () => {
+  const source = fs.readFileSync(path.join(extensionDir, "extension.js"), "utf8").replace(/\r\n/g, "\n");
+  const names = source.match(/const WINDOW_NAMES = \{[\s\S]*?\n\};/)?.[0];
+  const start = source.indexOf("function limitRows(");
+  const end = source.indexOf("\n}\n", start) + 2;
+  assert.ok(names && start >= 0 && end > start);
+  const limitRows = new Function("PROVIDER_NAMES", "percentOf", "resetSeconds", "windowLabelFromSeconds",
+    `${names}\n${source.slice(start, end)}\nreturn limitRows;`)(
+    { antigravity: "Antigravity" }, (window) => window.used_percent ?? null, () => null, () => null,
+  );
+  assert.deepEqual(limitRows({ antigravity: { configured: true,
+    argon_weekly_window: { used_percent: 34 } } }), [
+    { name: "Antigravity", label: "Argon 7d", percent: 34, reset: null },
+  ]);
+});
+
 test("GNOME extension metadata matches its directory and lists shell versions", () => {
   const metadata = JSON.parse(fs.readFileSync(path.join(extensionDir, "metadata.json"), "utf8"));
   // GNOME only loads an extension whose uuid equals its directory name.

@@ -291,6 +291,8 @@ function metricLabel(id, fallback) {
       return copy("menubar.metric.codex_spark_5h");
     case "codexSpark7d":
       return copy("menubar.metric.codex_spark_7d");
+    case "antigravityArgonWeekly":
+      return copy("menubar.metric.antigravity_argon_weekly");
     default:
       return fallback;
   }
@@ -431,6 +433,7 @@ function MenuBarDisplayCard() {
     return nativeItems.map((item) => ({
       ...item,
       displayLabel: metricLabel(item.id, item.label),
+      shortLabel: item.id === "antigravityArgonWeekly" ? copy("menubar.metric.antigravity_argon_weekly_short") : item.shortLabel,
       previewValue: previewValueFor(item),
     }));
   }, [settings?.menuBarAvailableItems]);
