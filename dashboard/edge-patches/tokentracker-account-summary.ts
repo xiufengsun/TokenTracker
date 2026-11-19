@@ -274,6 +274,7 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "gemini-4-argon": { input: 2, output: 10, cache_read: 0.1, cache_write: 0 },
   "gemini-4-carbon": { input: 2, output: 10, cache_read: 0.1, cache_write: 0 },
   "gemini-4-hydrogen": { input: 1.5, output: 7.5, cache_read: 0.075, cache_write: 0 },
+  "gemini-4-neon": { input: 3, output: 15, cache_read: 0.15, cache_write: 0 },
   "muse-wonder-1.0": { input: 4, output: 20, cache_read: 0.2, cache_write: 0 },
   // ── Moonshot Kimi ──
   "kimi-for-coding": { input: 0.6, output: 2, cache_read: 0.15 },
@@ -585,7 +586,7 @@ function getModelPricing(model: string, source = "") {
   // Standard Gemini 4 SKUs and their effort levels; other variants have
   // independent prices, including Carbon Cyber Permissive.
   if (lower.includes("gemini-4-argon") || lower.includes("gemini-4.argon")) return MODEL_PRICING["gemini-4-argon"];
-  const gemini4 = lower.trim().match(/(?:^|\/)gemini-4[.-](carbon|hydrogen)(?:-(?:minimal|low|medium|high|xhigh))?$/);
+  const gemini4 = lower.trim().match(/(?:^|\/)gemini-4[.-](carbon|hydrogen|neon)(?:-(?:minimal|low|medium|high|xhigh))?$/);
   if (gemini4) return MODEL_PRICING[`gemini-4-${gemini4[1]}`];
   if (/(?:^|\/)muse-wonder-1[.-]0(?:-(?:minimal|low|medium|high|xhigh|extra-high|max))?$/.test(lower)) return MODEL_PRICING["muse-wonder-1.0"];
   // Gemini 3.8/3.7/3.6 Flash introductory Standard rates must precede the
