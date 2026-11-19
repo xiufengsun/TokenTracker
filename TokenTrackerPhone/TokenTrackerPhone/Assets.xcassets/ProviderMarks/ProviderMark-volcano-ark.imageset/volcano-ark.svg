@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 192 192" fill-rule="evenodd">
+  <!-- Volcano Engine 3-mountain mark, the official brand asset for the
+       Volcano Ark (火山方舟) Coding Plan. Volcengine does not publish a
+       dedicated Ark sub-brand SVG, so the parent platform mark is reused
+       here — it is what users see on ark.cn-beijing.volces.com and
+       console.volcengine.com, and identifies the Volcengine family
+       unambiguously to Ark subscribers. -->
+  <!-- Deep-blue main peak (background). -->
+  <polygon points="62,162 108,1 120,162" fill="#1678FF"/>
+  <!-- Cyan front-left peak (foreground). -->
+  <polygon points="28,162 40,110 52,162" fill="#37E2E2"/>
+  <!-- Cyan front-right peak (foreground). -->
+  <polygon points="102,162 144,78 164,162" fill="#37E2E2"/>
+</svg>

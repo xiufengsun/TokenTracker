@@ -1,0 +1,89 @@
+name: TokenTrackerPhone
+options:
+  deploymentTarget:
+    iOS: "26.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+
+targets:
+  TokenTrackerPhone:
+    type: application
+    platform: iOS
+    configFiles:
+      Debug: Config/Base.xcconfig
+      Release: Config/Base.xcconfig
+    sources:
+      - path: TokenTrackerPhone
+      - path: ../TokenTrackerBar/TokenTrackerBar/Models/TokenTotals.swift
+        group: Shared
+      - path: ../TokenTrackerBar/TokenTrackerBar/Models/UsageSummary.swift
+        group: Shared
+      - path: ../TokenTrackerBar/TokenTrackerBar/Models/ModelBreakdown.swift
+        group: Shared
+      - path: ../TokenTrackerBar/TokenTrackerBar/Models/HeatmapData.swift
+        group: Shared
+      - path: ../TokenTrackerBar/TokenTrackerBar/Models/LimitPace.swift
+        group: Shared
+      - path: ../TokenTrackerBar/TokenTrackerBar/Utilities/TokenFormatter.swift
+        group: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(TT_BUNDLE_PREFIX).tokentracker.phone
+        PRODUCT_NAME: TokenTracker
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: TokenTrackerPhone/Info.plist
+      properties:
+        CFBundleDisplayName: TokenTracker
+        CFBundleName: TokenTracker
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        UILaunchScreen: {}
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        ITSAppUsesNonExemptEncryption: false
+        NSFaceIDUsageDescription: "Lock TokenTracker with Face ID to keep your AI spend and usage private on your iPhone."
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: tokentracker.oauth
+            CFBundleURLSchemes:
+              - tokentracker
+
+  TokenTrackerPhoneTests:
+    type: bundle.unit-test
+    platform: iOS
+    configFiles:
+      Debug: Config/Base.xcconfig
+      Release: Config/Base.xcconfig
+    sources:
+      - path: TokenTrackerPhoneTests
+    dependencies:
+      - target: TokenTrackerPhone
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(TT_BUNDLE_PREFIX).tokentracker.phone.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/TokenTracker.app/TokenTracker
+        BUNDLE_LOADER: $(TEST_HOST)
+
+schemes:
+  TokenTrackerPhone:
+    build:
+      targets:
+        TokenTrackerPhone: all
+        TokenTrackerPhoneTests: [test]
+    test:
+      targets:
+        - TokenTrackerPhoneTests

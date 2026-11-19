@@ -1,0 +1,25 @@
+{
+  "images": [
+    {
+      "filename": "acode.png",
+      "idiom": "universal"
+    },
+    {
+      "filename": "acode-dark.png",
+      "idiom": "universal",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  },
+  "properties": {
+    "template-rendering-intent": "original"
+  }
+}
