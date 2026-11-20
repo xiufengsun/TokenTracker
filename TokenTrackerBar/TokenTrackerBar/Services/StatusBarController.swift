@@ -253,6 +253,14 @@ final class StatusBarController: NSObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.closePopoverIfShown() }
         }
+
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.closePopoverIfShown() }
+        }
     }
 
     // MARK: - Status Item
@@ -835,14 +843,22 @@ final class StatusBarController: NSObject {
         guard let button = statusItem.button else { return }
 
         if popover.isShown {
-            // The revealed auto-hiding menu bar over a full-screen Space can
-            // dispatch the status button's action twice for one physical click
-            // (macOS 26), which closed the popover before the user ever saw it.
-            // Swallow a "close" toggle arriving right after the popover opened.
-            if ProcessInfo.processInfo.systemUptime - popoverShownAt > 0.5 {
+            // Check if the popover is still admitted on the active Space. If it
+            // was left behind on another desktop or Space, dismiss it immediately
+            // so this click can cleanly re-open it on the current active Space.
+            let popoverOnActiveSpace = popover.contentViewController?.view.window?.isOnActiveSpace ?? true
+            if !popoverOnActiveSpace {
                 closePopoverIfShown()
+            } else {
+                // The revealed auto-hiding menu bar over a full-screen Space can
+                // dispatch the status button's action twice for one physical click
+                // (macOS 26), which closed the popover before the user ever saw it.
+                // Swallow a "close" toggle arriving right after the popover opened.
+                if ProcessInfo.processInfo.systemUptime - popoverShownAt > 0.5 {
+                    closePopoverIfShown()
+                }
+                return
             }
-            return
         }
 
         // Prefer the status-item button as the positioning view on its own
@@ -1060,7 +1076,7 @@ final class StatusBarController: NSObject {
         window.hasShadow = false
         window.ignoresMouseEvents = true
         window.level = .statusBar
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, .stationary]
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         window.isReleasedWhenClosed = false
         return window
     }
