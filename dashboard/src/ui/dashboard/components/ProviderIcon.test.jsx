@@ -218,3 +218,17 @@ describe("ProviderIcon", () => {
     expect(container.querySelector(".text-oai-gray-400")).toBeNull();
     expect(container.querySelector("circle")).toBeNull();
   });
+
+  it.each(["muse", "MUSE"])("renders the Muse Code mark from the official brand asset for %s", (provider) => {
+    const { container } = render(
+      <ProviderIcon provider={provider} size={22} />,
+    );
+    const icon = container.querySelector('img[src="/brand-logos/muse.svg"]');
+
+    expect(icon).not.toBeNull();
+    expect(icon).toHaveAttribute("width", "22");
+    expect(icon).toHaveAttribute("height", "22");
+    expect(icon).not.toHaveClass("dark:invert");
+    expect(container.querySelector(".text-oai-gray-400")).toBeNull();
+    expect(container.querySelector("circle")).toBeNull();
+  });

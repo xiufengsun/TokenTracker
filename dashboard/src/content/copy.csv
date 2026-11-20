@@ -2206,3 +2206,11 @@ cloud.order_cancel.unverified,dashboard,Cloud,CancelPendingOrder,unverified,This
 cloud.order_cancel.pending_label,dashboard,Cloud,CancelPendingOrder,pending_label,Cancellation processing,Unconfirmed request is not proof of accepted cancellation,active
 cloud.order_cancel.unverified_label,dashboard,Cloud,CancelPendingOrder,unverified_label,Verification required,Unconfirmed request is not proof of accepted cancellation,active
 cloud.order_cancel.unknown,dashboard,Cloud,CancelPendingOrder,unknown,Cancellation status is unconfirmed. Do not pay through old links or create another order. Check cancellation status again; code redemption may remain unavailable until verified.,Unconfirmed request is not proof of accepted cancellation,active
+limits.provider.muse,ui,LimitsPage,UsageLimitsPanel,provider_muse,"Muse Code",,active
+limits.label.muse_5h,ui,LimitsPage,UsageLimitsPanel,muse_5h,"5h",,active
+limits.label.muse_weekly,ui,LimitsPage,UsageLimitsPanel,muse_weekly,"Weekly",,active
+limits.muse.setupHint.title,ui,LimitsPage,UsageLimitsPanel,muse_hint_title,"Connect Muse Code",,active
+limits.muse.setupHint.subtitle,ui,LimitsPage,UsageLimitsPanel,muse_hint_subtitle,"Reads your Muse Code subscription quota from the official Muse CLI on this machine.",,active
+limits.muse.setupHint.step1,ui,LimitsPage,UsageLimitsPanel,muse_hint_step1,"Install Muse Code and sign in with the command below — TokenTracker picks it up with no restart.",,active
+limits.muse.setupHint.note,ui,LimitsPage,UsageLimitsPanel,muse_hint_note,"Click ""Refresh limits"" above after signing in. TokenTracker reads quota windows locally via muse usage --json.",,active
+limits.muse.setupHint.snippet_login,ui,LimitsPage,UsageLimitsPanel,muse_hint_snippet_login,"muse login",,active

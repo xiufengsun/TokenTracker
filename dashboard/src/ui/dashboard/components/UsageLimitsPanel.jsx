@@ -48,6 +48,11 @@ function devinLoginSnippet() {
   return copy("limits.devin.setupHint.snippet_login");
 }
 
+/** Return the CLI sign-in command shown in Muse Code setup and reauth hints. */
+function museLoginSnippet() {
+  return copy("limits.muse.setupHint.snippet_login");
+}
+
 function formatReset(isoOrUnix) {
   const ts = resetToMs(isoOrUnix);
   if (!Number.isFinite(ts)) return null;
@@ -1075,6 +1080,7 @@ function renderUnlinkedProvider(id, statusNodes, expanded, onToggle, subscriptio
   );
 }
 
+/** Render a single provider group across unlinked, error, reauth, stale, and healthy quota states. */
 function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = null, now = Date.now(), onKeySaved = null) {
   if (!PROVIDER_LIMIT_SPECS[id]) return null;
   const connectionActions = id === "cursor"
@@ -1104,6 +1110,7 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
         {id === "agentPlan" ? <SetupHint title={copy("limits.agentPlan.setupHint.title")}><ArkAgentPlanSetupHint /></SetupHint> : null}
         {id === "devin" ? <SetupHint title={copy("limits.devin.setupHint.title")}><DevinSetupHint /></SetupHint> : null}
         {id === "deepseek" ? <SetupHint title={copy("limits.deepseek.setupHint.title")}><DeepseekSetupHint onSaved={onKeySaved} /></SetupHint> : null}
+        {id === "muse" ? <SetupHint title={copy("limits.muse.setupHint.title")}><MuseSetupHint /></SetupHint> : null}
       </>,
       expanded,
       onToggle,
@@ -1138,6 +1145,7 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
         {id === "codingPlan" ? <SetupHint title={copy("limits.codingPlan.setupHint.title")}><ArkCodingPlanSetupHint /></SetupHint> : null}
         {id === "agentPlan" ? <SetupHint title={copy("limits.agentPlan.setupHint.title")}><ArkAgentPlanSetupHint /></SetupHint> : null}
         {id === "devin" ? <SetupHint title={copy("limits.devin.setupHint.title")}><DevinSetupHint /></SetupHint> : null}
+        {id === "muse" ? <SetupHint title={copy("limits.muse.setupHint.title")}><MuseSetupHint /></SetupHint> : null}
       </>,
       expanded,
       onToggle,
@@ -1160,7 +1168,9 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
         ? commandCodeLoginSnippet()
         : id === "devin"
           ? devinLoginSnippet()
-          : REAUTH_CLI_COMMANDS[id];
+          : id === "muse"
+            ? museLoginSnippet()
+            : REAUTH_CLI_COMMANDS[id];
     badge = (
       <StatusBadge
         label={copy("limits.reauth.badge")}
@@ -1512,6 +1522,31 @@ function DevinSetupHint() {
   );
 }
 
+/** Render setup instructions for connecting a local Muse Code CLI subscription. */
+function MuseSetupHint() {
+  const loginSnippet = museLoginSnippet();
+
+  return (
+    <div className="mt-3 text-[11px] text-oai-gray-600 dark:text-oai-gray-300">
+      <div className="mt-0.5 leading-snug text-oai-gray-500 dark:text-oai-gray-400">
+        {copy("limits.muse.setupHint.subtitle")}
+      </div>
+
+      <ol className="mt-2.5 space-y-2.5">
+        <HintStep n="1">
+          <div>{copy("limits.muse.setupHint.step1")}</div>
+          <pre className="mt-1.5 overflow-x-auto rounded-md bg-oai-gray-100 dark:bg-oai-gray-900/60 px-2 py-1.5 font-mono text-[10.5px] leading-relaxed whitespace-pre">
+            {loginSnippet}
+          </pre>
+          <div className="mt-1 text-[10px] text-oai-gray-400 dark:text-oai-gray-500">
+            {copy("limits.muse.setupHint.note")}
+          </div>
+        </HintStep>
+      </ol>
+    </div>
+  );
+}
+
 // Ark Coding Plan (火山方舟) quota comes from the official Ark CLI (arkcli)
 // running on this machine — there is no public quota endpoint, so the CLI is
 // feature-detected at fetch time. When it is missing (or not signed in) the
@@ -1674,8 +1709,9 @@ function useWidestLabelWidth(containerRef) {
   return labelWidth;
 }
 
-export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi, deepseek, order, visibility, displayMode, subscriptions = [], showSubscriptions = true, onProviderKeySaved = null }) {
-  const dataById = { claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi, deepseek };
+/** Render all visible provider quota groups and manual subscription rows in user-selected order. */
+export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi, deepseek, muse, order, visibility, displayMode, subscriptions = [], showSubscriptions = true, onProviderKeySaved = null }) {
+  const dataById = { claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi, deepseek, muse };
   const containerRef = useRef(null);
   const labelWidth = useWidestLabelWidth(containerRef);
   const [expandedId, setExpandedId] = useState(null);
