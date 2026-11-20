@@ -99,9 +99,14 @@ test("free self-host policy does not bypass signatures, expiry, token revocation
     has_function_privilege('authenticated','cloud_ingest_usage(text,text,jsonb,jsonb,text)','EXECUTE') AS direct_upload,
     has_function_privilege('authenticated','account_summary_wire(uuid,uuid,timestamptz,timestamptz,text,integer,text,text)','EXECUTE') AS direct_private_read`)).rows[0];
   assert.deepEqual(permissions,{anon_read:false,user_read:false,direct_upload:false,direct_private_read:false});
-  await instance.db.transaction(async tx=>{await tx.exec("SET LOCAL ROLE authenticated");
-    await assert.rejects(tx.query("SELECT * FROM tokentracker_hourly"),/permission denied/);
-  }).catch(error=>{if(!/transaction is aborted/.test(error.message))throw error;});
+  // Let the denied statement reject the callback so PGlite rolls back, rather
+  // than swallowing it and attempting to COMMIT an already-aborted transaction.
+  await assert.rejects(instance.db.transaction(async tx=>{
+    await tx.exec("SET LOCAL ROLE authenticated");
+    await tx.query("SELECT * FROM tokentracker_hourly");
+  }), /permission denied/);
+  // SET LOCAL ROLE must be gone after rollback; privileged fixture access works.
+  await instance.db.query("SELECT count(*) FROM tokentracker_hourly");
 });
 
 test("self-host device authorization points to its own dashboard and the device flow uses that instance",async()=>{

@@ -103,6 +103,83 @@
       "cache_write": 12.5,
       "note": "Fable 5 \u2014 Anthropic's top tier above Opus. Not yet in LiteLLM. $10/$50 per MTok; cache_read 0.1x, cache_write 1.25x. Remove once LiteLLM carries it. Fable 5.2 is a cheaper separate SKU \u2014 see claude-fable-5-2."
     },
+    "claude-mythos-5-2": {
+      "input": 8,
+      "output": 40,
+      "cache_read": 0.2,
+      "cache_write": 10,
+      "note": "Claude Mythos 5.2, same official standard-tier rates as Fable 5.2, verified 2026-11-18: https://platform.claude.com/docs/en/about-claude/pricing and https://platform.claude.com/docs/en/models/mythos-5-2/overview. Official Claude API id claude-mythos-5-2 (released 2026-11-09; verification required). $8 / $40 per MTok input/output. cache_read is the published cache-hit rate ($0.20 / MTok, 0.025x base input). cache_write is the published 5-minute cache-write rate ($10 / MTok, 1.25x); the 1-hour write is $16 / MTok and cannot fit this single field. Channel prefixes (anthropic/, bedrock/, vertex_ai/, azure_ai/, openrouter/, \u2026) do not change the rate. Fast mode is a separate SKU at $16/$80 \u2014 see claude-mythos-5-2-fast. Official pages do not document claude-mythos-latest, so that floating alias is not pinned here. Version-bounded matchers must not let mythos-5, mythos-5.1, mythos-5-20, or dated ids inherit these 5.2 rates."
+    },
+    "claude-mythos-5.2": {
+      "input": 8,
+      "output": 40,
+      "cache_read": 0.2,
+      "cache_write": 10,
+      "note": "Dotted spelling of claude-mythos-5-2. Same standard-tier rates, verified 2026-11-18: https://platform.claude.com/docs/en/about-claude/pricing. Its own exact key because normalizeClaudeModel historically hyphenated only sonnet/opus/haiku/fable, so a dotted mythos id would not reach claude-mythos-5-2, and edge lookups have no Claude normalizer."
+    },
+    "anthropic/claude-mythos-5.2": {
+      "input": 8,
+      "output": 40,
+      "cache_read": 0.2,
+      "cache_write": 10,
+      "note": "Provider-qualified dotted id for Claude Mythos 5.2. Same standard-tier rates as claude-mythos-5-2, verified 2026-11-18. Kept exact so a lookup without the claude source normalizer still hits."
+    },
+    "anthropic/claude-mythos-5-2": {
+      "input": 8,
+      "output": 40,
+      "cache_read": 0.2,
+      "cache_write": 10,
+      "note": "Provider-qualified hyphenated id for Claude Mythos 5.2. Same standard-tier rates, verified 2026-11-18. Official Bedrock id is global.anthropic.claude-mythos-5-2 (also us.anthropic.claude-mythos-5-2); channel prefix does not change billing."
+    },
+    "claude-mythos-5-2-fast": {
+      "input": 16,
+      "output": 80,
+      "cache_read": 0.4,
+      "cache_write": 20,
+      "note": "Claude Mythos 5.2 fast mode, official Foundry/API id claude-mythos-5-2-fast (also speed=fast on the Claude API). Input/output are the published fast rates, 2x standard: $16 / $80 per MTok, verified 2026-11-18 at https://platform.claude.com/docs/en/about-claude/pricing and https://platform.claude.com/docs/en/build-with-claude/fast-mode. Those pages publish no standalone fast-mode cache dollar amounts; they say prompt-caching multipliers apply on top of fast-mode pricing, so cache_read/cache_write use the same official Mythos/Fable 5.2 multipliers as the standard tier (0.025x \u2192 $0.40, 5-minute 1.25x \u2192 $20), matching claude-fable-5-2-fast. The 1-hour fast write cannot fit this single field."
+    },
+    "claude-mythos-5.2-fast": {
+      "input": 16,
+      "output": 80,
+      "cache_read": 0.4,
+      "cache_write": 20,
+      "note": "Dotted spelling of claude-mythos-5-2-fast. Same fast-mode rates, verified 2026-11-18. Its own exact key because the dotted form is not rewritten to the hyphenated one on every lookup path."
+    },
+    "claude-mythos-5-1": {
+      "input": 10,
+      "output": 50,
+      "cache_read": 0.25,
+      "cache_write": 12.5,
+      "note": "Claude Mythos 5.1 official rates, verified 2026-11-18: https://platform.claude.com/docs/en/about-claude/pricing and https://platform.claude.com/docs/en/models/mythos-5-1/overview. Official API id claude-mythos-5-1. $10 / $50 per MTok input/output. cache_read is the published cache-hit rate ($0.25 / MTok, 0.025x). cache_write is the published 5-minute cache-write rate ($12.50 / MTok); the 1-hour write is $20 / MTok and cannot fit this single field. Must not inherit Mythos 5.2 or Mythos 5 rates."
+    },
+    "claude-mythos-5.1": {
+      "input": 10,
+      "output": 50,
+      "cache_read": 0.25,
+      "cache_write": 12.5,
+      "note": "Dotted spelling of claude-mythos-5-1. Same official Mythos 5.1 rates, verified 2026-11-18."
+    },
+    "anthropic/claude-mythos-5.1": {
+      "input": 10,
+      "output": 50,
+      "cache_read": 0.25,
+      "cache_write": 12.5,
+      "note": "Provider-qualified dotted id for Claude Mythos 5.1. Same official rates, verified 2026-11-18."
+    },
+    "anthropic/claude-mythos-5-1": {
+      "input": 10,
+      "output": 50,
+      "cache_read": 0.25,
+      "cache_write": 12.5,
+      "note": "Provider-qualified hyphenated id for Claude Mythos 5.1 (official Bedrock id anthropic.claude-mythos-5-1). Same official rates, verified 2026-11-18."
+    },
+    "claude-mythos-5": {
+      "input": 10,
+      "output": 50,
+      "cache_read": 1,
+      "cache_write": 12.5,
+      "note": "Claude Mythos 5 official rates, verified 2026-11-18: https://platform.claude.com/docs/en/about-claude/pricing and https://platform.claude.com/docs/en/models/mythos-5/overview. Official API id claude-mythos-5. $10 / $50 per MTok input/output. cache_read is the published cache-hit rate ($1 / MTok, 0.1x \u2014 unlike Mythos 5.1/5.2). cache_write is the published 5-minute cache-write rate ($12.50 / MTok); the 1-hour write is $20 / MTok and cannot fit this single field. A family matcher must use this versioned rate rather than falling back to Mythos 5.2. mythos-5.1, mythos-5-2, mythos-5-20, and dated ids must not inherit this entry."
+    },
     "claude-opus-5": {
       "input": 5,
       "output": 25,
@@ -172,6 +249,35 @@
       "cache_read": 0.01,
       "cache_write": 0.125,
       "note": "Dotted alias for claude-haiku-5-5. Same short-context rates."
+    },
+    "gpt-6.2-astra-law": {
+      "input": 8,
+      "output": 40,
+      "cache_read": 0.4,
+      "cache_write": 10,
+      "note": "Official specialist Legal model configuration Standard USD/MTok, verified 2026-11-18 at https://developers.openai.com/api/docs/pricing#legal-model-configurations. Short 8/0.4/10/40 input/cache-read/30m-write/output; long 16/0.8/20/60. 12h write20 short/40 long is not distinguishable in current rows. No Fast/Ultrafast price is published for this specialist ID; do not inherit general Astra promotion multipliers."
+    },
+    "gpt-6.2-astra": {
+      "input": 8,
+      "output": 40,
+      "cache_read": 0.4,
+      "cache_write": 10,
+      "priority_multiplier": 2,
+      "ultrafast_multiplier": 3,
+      "ultrafast_regular_multiplier": 6,
+      "ultrafast_promotion_ends_at": "2027-03-01T08:00:00Z",
+      "note": "Official Standard USD/MTok, verified 2026-11-18: https://developers.openai.com/api/docs/models/gpt-6.2-astra.md and https://developers.openai.com/api/docs/pricing. Cache write is 30m (12h costs $20/MTok and retention is not recorded). Input above 272K: 2x input/cache, 1.5x output, observed subsets only. Fast 2x; Ultrafast 3x through February 28 2027 Pacific, then 6x from March 1 Pacific. Only the published bare model ID is confirmed; reasoning/provider decorations are lookup aliases, not separate API SKUs. Cloud aggregates remain Standard short-context estimates; Batch and 12h retention cannot be distinguished by current usage rows."
+    },
+    "gpt-6.2-sol": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 2.5,
+      "priority_multiplier": 2,
+      "ultrafast_multiplier": 3,
+      "ultrafast_regular_multiplier": 6,
+      "ultrafast_promotion_ends_at": "2027-03-01T08:00:00Z",
+      "note": "Official Standard USD/MTok, verified 2026-11-18: https://developers.openai.com/api/docs/models/gpt-6.2-sol.md and https://developers.openai.com/api/docs/pricing. Cache write is 30m (12h costs $5.0/MTok and retention is not recorded). Input above 272K: 2x input/cache, 1.5x output, observed subsets only. Fast 2x; Ultrafast 3x through February 28 2027 Pacific, then 6x from March 1 Pacific. Only the published bare model ID is confirmed; reasoning/provider decorations are lookup aliases, not separate API SKUs. Cloud aggregates remain Standard short-context estimates; Batch and 12h retention cannot be distinguished by current usage rows."
     },
     "gpt-6-astra": {
       "input": 10,
@@ -325,6 +431,13 @@
       "cache_write": 2.5,
       "note": "Alibaba Model Studio Singapore (International), USD per MTok, verified 2026-10-25: https://www.alibabacloud.com/help/en/model-studio/qwen3-8-max . Alias of qwen3.8-max-0902; same Singapore International list rates. Issue #744."
     },
+    "qwen4-max": {
+      "input": 1.5,
+      "output": 4.5,
+      "cache_read": 0.075,
+      "cache_write": 1.875,
+      "note": "Alibaba Model Studio Singapore (International) pay-as-you-go rates for official API id qwen4-max, verified 2026-11-18: https://www.alibabacloud.com/help/en/model-studio/qwen4-max and https://www.alibabacloud.com/help/en/model-studio/model-pricing (both last updated 2026-11-18). GA announced 2026-11-16: https://www.alibabacloud.com/en/press-room/alibaba-unveils-qwen4-max . Input $1.5 / output $4.5 per MTok. cache_read is the published explicit/implicit cache-hit rate ($0.075). cache_write is the published 5-minute cache-creation rate ($1.875); the 1-hour cache-creation rate is $3 and cannot fit this single field. Beijing and other-region list prices differ ($1.413/$4.24 and region-specific cache tables) and must not be mixed into this Singapore International reference estimate. qwen4-max-preview is Token Plan / subscription-only (pay-as-you-go not supported) and must not inherit this API rate. No official API prices were found for unreleased Qwen4-Plus/Flash; unknown qwen4-* SKUs stay unpriced."
+    },
     "hy4-preview": {
       "input": 0.833,
       "output": 2.5,
@@ -377,6 +490,34 @@
       "cache_read": 0.1,
       "cache_write": 0,
       "note": "Google Gemini 4 Argon introductory list rate (through 2026-11-30) matching Cursor Other Models pool: $2/M input, $0.10/M cached input, $10/M output. Effort suffixes (-high/-medium/-low/-minimal) are stripped by normalizeCursorModel. Sources: https://cursor.com/docs/models-and-pricing and https://ai.google.dev/gemini-api/docs/pricing"
+    },
+    "gemini-4-carbon": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 0,
+      "note": "Cursor/Google introductory Standard rates through 2026-11-30, verified 2026-11-16: https://cursor.com/docs/models/gemini-4-carbon . From 2026-12-01 the published rate becomes $4/$20/$0.20 per MTok input/output/cache read. Reasoning effort does not change the per-token rate."
+    },
+    "gemini-4-hydrogen": {
+      "input": 1.5,
+      "output": 7.5,
+      "cache_read": 0.075,
+      "cache_write": 0,
+      "note": "Cursor/Google Standard list rates, verified 2026-11-16: https://cursor.com/docs/models/gemini-4-hydrogen . $1.50/$7.50/$0.075 per MTok input/output/cache read; no separate cache-write charge."
+    },
+    "gemini-4-neon": {
+      "input": 3,
+      "output": 15,
+      "cache_read": 0.15,
+      "cache_write": 0,
+      "note": "Google Gemini 4 Neon Standard paid-tier list rates, verified 2026-11-19: $3.00/$15.00 per MTok input/output, $0.15 implicit cache read, flat across the 1M context window. Official Gemini API does not support explicit caching, so cache_write is 0; Google Cloud lists a $3.75 cache-write rate only from 2027-01-12. Official thinking levels are low/medium/high/xhigh and share this rate; decorator suffixes are stripped like other Gemini 4 SKUs. Batch, Flex, and Priority consumption options are not represented in the single-rate fields. Sources: https://ai.google.dev/gemini-api/docs/pricing https://aistudio.google.com/docs/whats-new-gemini-4-neon https://cursor.com/docs/models-and-pricing https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-neon/"
+    },
+    "muse-wonder-1.0": {
+      "input": 4,
+      "output": 20,
+      "cache_read": 0.2,
+      "cache_write": 0,
+      "note": "Cursor/Meta Standard list rates, verified 2026-11-16: https://cursor.com/docs/models/muse-wonder and https://dev.meta.ai/models/muse-wonder . All six effort levels, including max, use the same per-token rate; Max Mode has no long-context premium. Muse Wonder Full is a separate subscription model."
     },
     "gemini-3-flash-preview": {
       "input": 0.5,
@@ -999,6 +1140,34 @@
     {
       "match": "fable-5.2",
       "ref": "claude-fable-5.2"
+    },
+    {
+      "match": "mythos-5-2-fast",
+      "ref": "claude-mythos-5-2-fast"
+    },
+    {
+      "match": "mythos-5.2-fast",
+      "ref": "claude-mythos-5.2-fast"
+    },
+    {
+      "match": "mythos-5-2",
+      "ref": "claude-mythos-5-2"
+    },
+    {
+      "match": "mythos-5.2",
+      "ref": "claude-mythos-5.2"
+    },
+    {
+      "match": "mythos-5-1",
+      "ref": "claude-mythos-5-1"
+    },
+    {
+      "match": "mythos-5.1",
+      "ref": "claude-mythos-5.1"
+    },
+    {
+      "match": "mythos-5",
+      "ref": "claude-mythos-5"
     },
     {
       "match": "claude-opus-5-fast",

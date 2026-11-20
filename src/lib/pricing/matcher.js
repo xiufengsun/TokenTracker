@@ -104,8 +104,8 @@ function normalizeClaudeModel(model) {
     .replace(/^-+|-+$/g, "")
     .replace(/-{2,}/g, "-");
 
-  if (/^claude-(sonnet|opus|haiku|fable)-\d+\.\d+/.test(m)) {
-    return m.replace(/^(claude-(?:sonnet|opus|haiku|fable)-\d+)\.(\d+)/, "$1-$2");
+  if (/^claude-(sonnet|opus|haiku|fable|mythos)-\d+\.\d+/.test(m)) {
+    return m.replace(/^(claude-(?:sonnet|opus|haiku|fable|mythos)-\d+)\.(\d+)/, "$1-$2");
   }
   if (/^(sonnet|opus|haiku)-\d+[.-]\d+/.test(m)) {
     return m
@@ -139,6 +139,13 @@ function normalizeCursorModel(model) {
     .replace(/-{2,}/g, "-");
   const parts = m.split("-");
   const isFast = parts.includes("fast");
+
+  if (/^gemini-4[.-](argon|carbon|hydrogen|neon)(?:-(minimal|low|medium|high|xhigh))?$/.test(m)) {
+    return m.replace(/^gemini-4\./, "gemini-4-").replace(/-(minimal|low|medium|high|xhigh)$/, "");
+  }
+  if (/^muse-wonder-1[.-]0(?:-(minimal|low|medium|high|xhigh|extra-high|max))?$/.test(m)) {
+    return "muse-wonder-1.0";
+  }
 
   if (/^(?:cursor-)?grok-4[.-]7(?:-|$)/.test(m)) {
     return isFast ? "cursor-grok-4.7-fast" : "cursor-grok-4.7";
@@ -255,11 +262,16 @@ function lookupContainedExactCaseInsensitive(table, model) {
     // is a separate SKU from Opus 5). Dated and provider suffixes still work.
     const suffix = lower.slice(start + key.length);
     if (/^[.\d]/.test(suffix)) continue;
-    // Alternate SKU markers (preview/next/exp/…) must not inherit the base
-    // exact rate, including when they follow a date snapshot
+    // Alternate SKU markers (preview/next/exp/fast/…) must not inherit the
+    // base exact rate, including when they follow a date snapshot
     // (`qwen3.8-max-2026-09-02-preview`, `qwen3-8-max-0902-preview`).
+    // `-fast` is a separate 2x SKU for Fable/Mythos/Opus, not a dated or
+    // provider suffix. Without this, a longer provider-qualified base key
+    // (`anthropic/claude-mythos-5.2`) wins contained matching over the
+    // bare `claude-mythos-5.2-fast` exact key because it is longer, and
+    // `anthropic/claude-mythos-5-2-fast` is billed at the standard rate.
     // Plain dated (-0902 / -YYYY-MM-DD) and provider-qualified suffixes still match.
-    if (/(?:^|-)(?:preview|next|exp|experimental|beta|alpha)(?:-|$)/.test(suffix)) continue;
+    if (/(?:^|-)(?:preview|next|exp|experimental|beta|alpha|fast)(?:-|$)/.test(suffix)) continue;
     return table[key];
   }
   return null;
@@ -321,6 +333,12 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
   if (/(?:^|\/)qwen3[.-]8-max(?:-0902|-\d{4}-\d{2}-\d{2})?$/.test(lower.trim()) && curated.exact?.["qwen3.8-max"]) {
     return { hit: true, source: "curated:exact", value: curated.exact["qwen3.8-max"] };
   }
+  // Official API id qwen4-max only. The optional dated suffix is for
+  // provider-qualified snapshots of that exact SKU; -preview, -plus,
+  // -flash and any other qwen4-* suffix must not inherit the Max API rate.
+  if (/(?:^|\/)qwen4-max(?:-\d{4}-\d{2}-\d{2})?$/.test(lower.trim()) && curated.exact?.["qwen4-max"]) {
+    return { hit: true, source: "curated:exact", value: curated.exact["qwen4-max"] };
+  }
 
   // 2. LiteLLM exact
   if (litellm && litellm[lookupModel]) {
@@ -356,6 +374,16 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
     return { hit: false, source: "miss", value: null };
   }
 
+  // Floating Mythos aliases (`claude-mythos-latest`) and the preview SKU
+  // (`claude-mythos-preview`) are not pinned to a versioned list rate.
+  // Checked 2026-11-18: official Mythos 5 / 5.1 / 5.2 overviews and the
+  // Anthropic pricing page document the versioned ids, not a -latest
+  // alias, and publish no pay-as-you-go price for the preview id. Stop
+  // here so version-bounded mythos fuzzy needles cannot price them.
+  if (/(?:^|\/)claude-mythos-(?:latest|preview)(?:$|[^a-z0-9])/.test(lower)) {
+    return { hit: false, source: "miss", value: null };
+  }
+
   // Kimi Code K2.8 Preview aliases must not inherit fuzzy `kimi` → kimi-k2.5 rates (#766).
   // Parser stores bare `k2.8`; raw `kimicoding` / `kimi-k2.8` / `kimicoding/k2.8` may still
   // appear in lookups. `kimi-for-coding` keeps its curated exact entry (resolved above).
@@ -367,6 +395,45 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
     return { hit: false, source: "miss", value: null };
   }
 
+  // Gemini 4's Cyber Permissive SKU and future variants must not inherit
+  // the cheaper introductory Standard rate through contained-key matching.
+  // Also match after a flattened provider prefix (google/gemini-4-neon-lite -> google-gemini-4-neon-lite).
+  const gemini4 = lower.trim().match(/(?:^|[^a-z0-9])gemini-4[.-](carbon|hydrogen|neon)(.*)$/);
+  if (gemini4) {
+    if (!/^(?:-(?:minimal|low|medium|high|xhigh))?$/.test(gemini4[2])) {
+      return { hit: false, source: "miss", value: null };
+    }
+    // Official Neon Standard aliases, including provider-qualified ids, share
+    // the exact list rate. Carbon/hydrogen already had this miss-on-unknown
+    // guard; this run only adds Neon positive resolution so existing lookups
+    // stay unchanged.
+    if (gemini4[1] === "neon" && curated.exact && curated.exact["gemini-4-neon"]) {
+      // Cline free/pass gateways bill at zero; do not apply the Standard API
+      // rate after a flattened or slash-qualified prefix.
+      const raw = model.toLowerCase();
+      if (/(?:^|\/)cline-(?:free|pass)\//.test(raw) || /(?:^|[^a-z0-9])cline-(?:free|pass)[-/]/.test(lower)) {
+        return {
+          hit: true,
+          source: "curated:cline-gateway",
+          value: curated.exact["cline-gateway-models"] || { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+        };
+      }
+      return { hit: true, source: "curated:gemini-4-neon", value: curated.exact["gemini-4-neon"] };
+    }
+  }
+  // General Astra/Sol and the specialist Astra Law have confirmed rates. Do not let
+  // unknown SKUs/snapshots inherit their rates via contained/fuzzy matching.
+  // Explicit curated/LiteLLM exact prices above remain authoritative.
+  const gpt62 = (dotForm || lower).trim().match(/gpt-6\.2(?:-(.*))?$/);
+  if (gpt62) {
+    if (lower.includes("cline-free/") || lower.includes("cline-pass/")) {
+      return { hit: true, source: "curated:cline-gateway", value: curated.exact["cline-gateway-models"] };
+    }
+    const known = /^(astra-law|astra|sol)(?:-?(?:low|medium|high|xhigh|max)(?:-fast)?|-fast)?$/.exec(gpt62[1] || "");
+    const value = known && curated.exact?.[`gpt-6.2-${known[1]}`];
+    return value ? { hit: true, source: "curated:gpt-6.2", value }
+      : { hit: false, source: "miss", value: null };
+  }
   const curatedDotContainedExact = lookupContainedExactCaseInsensitive(curated.exact, dotForm);
   if (curatedDotContainedExact) {
     return { hit: true, source: "curated:exact-dot", value: curatedDotContainedExact };
@@ -393,13 +460,16 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
       if (!match || !ref) continue;
       const needle = match.toLowerCase();
       if (!curated.exact[ref]) continue;
-      // The Fable 5.2 needles are version-bounded. A plain substring lets the
-      // dot-restored form of a dated Fable 5 id through: claude-fable-5-20250901
-      // becomes claude-fable-5.20250901, which contains "fable-5.2". fable-5-20
-      // contains "fable-5-2" the same way. The minor must end the id or be
-      // followed by a non-digit, so -20261109 and -20 stay off the 5.2 rate.
-      const bounded = /^fable-5[.-]2(?:-fast)?$/.test(needle)
-        ? new RegExp(`${needle.replace(".", "\\.")}(?:$|[^0-9])`)
+      // Fable 5.2 and Mythos family needles are version-bounded. A plain
+      // substring lets the dot-restored form of a dated Fable/Mythos 5 id
+      // through: claude-fable-5-20250901 becomes claude-fable-5.20250901,
+      // which contains "fable-5.2". fable-5-20 / mythos-5-20 contain the
+      // hyphenated 5-2 needle the same way. The minor must end the id or
+      // be followed by a non-digit, so -20261109 and -20 stay off the 5.2
+      // rate. The bare mythos-5 needle also needs a tighter end class so
+      // mythos-5-1 / mythos-5.2 / mythos-5-20 cannot inherit Mythos 5 rates.
+      const bounded = /^fable-5[.-]2(?:-fast)?$/.test(needle) || /^mythos-5(?:[.-][12](?:-fast)?)?$/.test(needle)
+        ? new RegExp(`${needle.replaceAll(".", "\\.")}${needle === "mythos-5" ? "(?:$|[^0-9.-])" : "(?:$|[^0-9])"}`)
         : null;
       const matches = (value) => (bounded ? bounded.test(value) : value.includes(needle));
       if (matches(lower)) {
@@ -408,9 +478,10 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
       if (dotForm && matches(dotForm)) {
         return { hit: true, source: "curated:fuzzy", value: curated.exact[ref] };
       }
-      // Display names ("Claude Fable 5.2", "Fable 5.2 Fast") only reach this
-      // scan when no source normalizer ran. Fold spaces for the pinned 5.2
-      // needles only — a general fold would price unrelated display names.
+      // Display names ("Claude Fable 5.2", "Mythos 5.2 Fast") only reach this
+      // scan when no source normalizer ran. Fold spaces for the pinned
+      // version-bounded needles only — a general fold would price unrelated
+      // display names.
       if (bounded && bounded.test(lower.replace(/[^a-z0-9.]+/g, "-"))) {
         return { hit: true, source: "curated:fuzzy", value: curated.exact[ref] };
       }

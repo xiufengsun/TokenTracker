@@ -11,6 +11,7 @@ export function cloudBillingErrorText(error, context) {
   if (["gift_rate_limited", "gift_redemption_rate_limited"].includes(code)) return copy("cloud.gift.error_rate_limit");
   if (code === "gift_not_available") return copy("cloud.gift.error_not_available");
   if (code === "gift_requires_renewal_cancel") return copy("cloud.gift.error_renewal");
+  if (code === "order_cancel_processing") return copy("cloud.order_cancel.processing");
   if (code === "gift_checkout_pending") return copy("cloud.gift.error_checkout");
   if (code === "gift_membership_active") return copy("cloud.gift.error_active");
   if (code === "billing_catalog_unavailable")

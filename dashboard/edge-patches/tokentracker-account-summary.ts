@@ -144,6 +144,22 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "claude-fable-5-2-fast": { input: 16, output: 80, cache_read: 0.4, cache_write: 20 },
   "claude-fable-5.2-fast": { input: 16, output: 80, cache_read: 0.4, cache_write: 20 },
   "claude-fable-5": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
+  // Mythos family, official rates verified 2026-11-18. Same $8/$40/0.20/10
+  // standard and $16/$80 fast rates as Fable 5.2; Mythos 5.1 is $10/$50
+  // with cache hit $0.25; Mythos 5 is $10/$50 with cache hit $1. Exact
+  // dotted and provider-qualified keys are required: edge has no Claude
+  // normalizer. No broad mythos fallback and no -latest / -preview pin.
+  "claude-mythos-5-2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "claude-mythos-5.2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "anthropic/claude-mythos-5.2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "anthropic/claude-mythos-5-2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
+  "claude-mythos-5-2-fast": { input: 16, output: 80, cache_read: 0.4, cache_write: 20 },
+  "claude-mythos-5.2-fast": { input: 16, output: 80, cache_read: 0.4, cache_write: 20 },
+  "claude-mythos-5-1": { input: 10, output: 50, cache_read: 0.25, cache_write: 12.5 },
+  "claude-mythos-5.1": { input: 10, output: 50, cache_read: 0.25, cache_write: 12.5 },
+  "anthropic/claude-mythos-5.1": { input: 10, output: 50, cache_read: 0.25, cache_write: 12.5 },
+  "anthropic/claude-mythos-5-1": { input: 10, output: 50, cache_read: 0.25, cache_write: 12.5 },
+  "claude-mythos-5": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
   "claude-opus-5": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
   "claude-opus-5-fast": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
   "claude-opus-4-6": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
@@ -209,6 +225,11 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   // https://developers.openai.com/api/docs/models/gpt-6-astra
   // Cloud buckets do not retain per-request context/service tier. Use the
   // standard short-context estimate; never infer long context from totals.
+  // Official GPT-6.2 Standard short-context USD/MTok, verified 2026-11-18:
+  // https://developers.openai.com/api/docs/pricing (cloud has no request tier/retention).
+  "gpt-6.2-astra-law": { input: 8, output: 40, cache_read: 0.4, cache_write: 10 },
+  "gpt-6.2-astra": { input: 8, output: 40, cache_read: 0.4, cache_write: 10 },
+  "gpt-6.2-sol": { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
   "gpt-6-astra": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
   // GPT-6 Sol Standard USD/MTok, verified 2026-09-24:
   // https://developers.openai.com/api/docs/models/gpt-6-sol
@@ -251,6 +272,10 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "composer-2.5-fast": { input: 3, output: 15, cache_read: 0.5 },
   // Google Gemini 4 Argon (Cursor Other Models / Google introductory list rate)
   "gemini-4-argon": { input: 2, output: 10, cache_read: 0.1, cache_write: 0 },
+  "gemini-4-carbon": { input: 2, output: 10, cache_read: 0.1, cache_write: 0 },
+  "gemini-4-hydrogen": { input: 1.5, output: 7.5, cache_read: 0.075, cache_write: 0 },
+  "gemini-4-neon": { input: 3, output: 15, cache_read: 0.15, cache_write: 0 },
+  "muse-wonder-1.0": { input: 4, output: 20, cache_read: 0.2, cache_write: 0 },
   // ── Moonshot Kimi ──
   "kimi-for-coding": { input: 0.6, output: 2, cache_read: 0.15 },
   "kimi-k2.5": { input: 0.6, output: 2, cache_read: 0.15 },
@@ -345,6 +370,11 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "qwen3.8-max": { input: 2, output: 6, cache_read: 0.17, cache_write: 2.5 },
   "qwen3.8-max-0902": { input: 2, output: 6, cache_read: 0.17, cache_write: 2.5 },
   "qwen3.8-max-2026-09-02": { input: 2, output: 6, cache_read: 0.17, cache_write: 2.5 },
+  // Singapore International pay-as-you-go for official API id qwen4-max,
+  // verified 2026-11-18. cache_write is the 5-minute cache-creation rate;
+  // 1-hour creation ($3) cannot fit this field. qwen4-max-preview is Token
+  // Plan only and must not inherit this rate (strict lookup below).
+  "qwen4-max": { input: 1.5, output: 4.5, cache_read: 0.075, cache_write: 1.875 },
   "hy4-preview": { input: 0.833, output: 2.5, cache_read: 0.042, cache_write: 0.833 },
   "hy4-preview-agent": { input: 0.833, output: 2.5, cache_read: 0.042, cache_write: 0.833 },
   // ── Misc / Free ──
@@ -493,11 +523,18 @@ function getModelPricing(model: string, source = "") {
   // reports its own positive cost still wins earlier via
   // SOURCES_WITH_AUTHORITATIVE_COST.
   if (lower.includes("cline-free/") || lower.includes("cline-pass/")) return ZERO_PRICING;
+  // Do not guess prices for unannounced GPT-6.2 SKUs or dated snapshots.
+  const gpt62 = lower.trim().match(/gpt-6[.-]2(?:-(.*))?$/);
+  if (gpt62) {
+    const known = /^(astra-law|astra|sol)(?:-?(?:low|medium|high|xhigh|max)(?:-fast)?|-fast)?$/.exec(gpt62[1] || "");
+    return known ? MODEL_PRICING[`gpt-6.2-${known[1]}`] : ZERO_PRICING;
+  }
   // Fable 5.2 before the broad fable matcher, or claude-fable-5-2 bills at the
   // Fable 5 $10/$50 rate. Fast before 5.2 (the "fable-5.2" needle is a prefix
   // of "fable-5.2-fast"), and -latest never matches: it is a floating alias
   // the Anthropic docs did not pin to 5.2 on 2026-11-10.
   if (/(?:^|\/)claude-fable-latest(?:$|[^a-z0-9])/.test(lower)) return ZERO_PRICING;
+  if (/(?:^|\/)claude-mythos-(?:latest|preview)(?:$|[^a-z0-9])/.test(lower)) return ZERO_PRICING;
   const fableKey = lower.replace(/[^a-z0-9./]+/g, "-");
   // The minor must end or be followed by a non-digit. Without that boundary
   // the dated Fable 5 ids (claude-fable-5-20250901) and fable-5-20 contain
@@ -505,6 +542,14 @@ function getModelPricing(model: string, source = "") {
   if (/fable-5[.-]2-fast(?:$|[^0-9])/.test(fableKey)) return MODEL_PRICING["claude-fable-5-2-fast"];
   if (/fable-5[.-]2(?:$|[^0-9])/.test(fableKey)) return MODEL_PRICING["claude-fable-5-2"];
   if (lower.includes("fable")) return MODEL_PRICING["claude-fable-5"];
+  // Mythos family is version-bounded the same way. No broad mythos fallback:
+  // a generic includes("mythos") would bill Mythos 5 / 5.1 / unknown SKUs
+  // at the 5.2 rate. Bare mythos-5 uses a tighter end class so 5-1 / 5.2
+  // / 5-20 cannot inherit Mythos 5 ($10/$50, cache hit $1).
+  if (/mythos-5[.-]2-fast(?:$|[^0-9])/.test(fableKey)) return MODEL_PRICING["claude-mythos-5-2-fast"];
+  if (/mythos-5[.-]2(?:$|[^0-9])/.test(fableKey)) return MODEL_PRICING["claude-mythos-5-2"];
+  if (/mythos-5[.-]1(?:$|[^0-9])/.test(fableKey)) return MODEL_PRICING["claude-mythos-5-1"];
+  if (/mythos-5(?:$|[^0-9.-])/.test(fableKey)) return MODEL_PRICING["claude-mythos-5"];
   // Opus 5 fast mode bills at 2x the standard Opus tier ($10/$50), so the
   // -fast matcher must precede both the opus-5 and the generic opus fallback.
   if (/opus-5[.-]5(?:$|[^0-9.])/.test(lower)) return MODEL_PRICING["claude-opus-5-5"];
@@ -538,8 +583,12 @@ function getModelPricing(model: string, source = "") {
   if (lower.includes("gpt-5.1-codex-mini")) return MODEL_PRICING["gpt-5.1-codex-mini"];
   if (lower.includes("gpt-5.1")) return MODEL_PRICING["gpt-5.1-codex"];
   if (lower.includes("gpt-5")) return MODEL_PRICING["gpt-5"];
-  // gemini-4-argon must precede gemini-3 / gemini-2.5 substring matchers.
+  // Standard Gemini 4 SKUs and their effort levels; other variants have
+  // independent prices, including Carbon Cyber Permissive.
   if (lower.includes("gemini-4-argon") || lower.includes("gemini-4.argon")) return MODEL_PRICING["gemini-4-argon"];
+  const gemini4 = lower.trim().match(/(?:^|\/)gemini-4[.-](carbon|hydrogen|neon)(?:-(?:minimal|low|medium|high|xhigh))?$/);
+  if (gemini4) return MODEL_PRICING[`gemini-4-${gemini4[1]}`];
+  if (/(?:^|\/)muse-wonder-1[.-]0(?:-(?:minimal|low|medium|high|xhigh|extra-high|max))?$/.test(lower)) return MODEL_PRICING["muse-wonder-1.0"];
   // Gemini 3.8/3.7/3.6 Flash introductory Standard rates must precede the
   // gemini-3 catch-all (which bills at gemini-3-flash-preview). Alternate
   // SKUs (cyber, tts, lite, image, live) have different published rates.
@@ -635,6 +684,7 @@ function getModelPricing(model: string, source = "") {
   if (lower.includes("hy3")) return MODEL_PRICING["hy3-preview-agent"];
   if (/(?:^|\/)qwen3[.-]8-flash(?:-\d{4}-\d{2}-\d{2})?$/.test(lower.trim())) return MODEL_PRICING["qwen3.8-flash"];
   if (/(?:^|\/)qwen3[.-]8-max(?:-0902|-\d{4}-\d{2}-\d{2})?$/.test(lower.trim())) return MODEL_PRICING["qwen3.8-max"];
+  if (/(?:^|\/)qwen4-max(?:-\d{4}-\d{2}-\d{2})?$/.test(lower.trim())) return MODEL_PRICING["qwen4-max"];
   if (lower.includes("hy4")) return MODEL_PRICING["hy4-preview"];
   if (lower.includes("composer-2.5") && lower.includes("fast")) return MODEL_PRICING["composer-2.5-fast"];
   if (lower.includes("composer-2.5")) return MODEL_PRICING["composer-2.5"];

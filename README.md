@@ -260,7 +260,7 @@ An Arch `PKGBUILD` for a local pacman install lives in `TokenTrackerLinux/packag
 | **Grok Build** (xAI) | ✅ Auto | SessionEnd hook + passive `updates.jsonl` / `signals.json` scan (`~/.grok/sessions/**/`) |
 | **Kilo CLI** (kilo.ai) | ✅ Auto | Passive SQLite reader (`~/.local/share/kilo/kilo.db`, OpenCode-fork schema) |
 | **Kilo Code** (VS Code extension) | ✅ Auto | Passive `ui_messages.json` reader (Cursor/Code/CodeBuddy/Windsurf globalStorage) |
-| **Antigravity** | ✅ Auto | Passive transcript reader (`~/.gemini/{antigravity,antigravity-ide,antigravity-cli}/brain/**/transcript.jsonl`); see [quota credentials and Linux keyring setup](docs/antigravity-limits.md). Disable quota lookup with `TOKENTRACKER_DISABLE_ANTIGRAVITY_QUOTA=1` |
+| **Antigravity** | ✅ Auto | Passive transcript reader (`~/.gemini/{antigravity,antigravity-ide,antigravity-insiders,antigravity-cli}/brain/**/transcript.jsonl`, plus T3 Code profiles at `~/.t3/userdata/providers/antigravity/*/antigravity-acp/`); see [quota credentials and Linux keyring setup](docs/antigravity-limits.md). Disable quota lookup with `TOKENTRACKER_DISABLE_ANTIGRAVITY_QUOTA=1` |
 | **OmO** | ✅ Auto | Passive reader (`~/.omo/agent/sessions/**/*.jsonl`, subagent transcripts included). Same session format as oh-my-pi but a separate install root, cursor namespace and source label, so both can be tracked side by side. Reasoning tokens are reported as a subset of output (Codex convention) and are never billed twice |
 | **pi** (`@mariozechner/pi-coding-agent`) | ✅ Auto | Passive reader (`~/.pi/agent/sessions/**/*.jsonl`, pi-subagents fork transcripts folded in) + Sessions browser (`pi --session <id>` resume) |
 | **Dots** | ✅ Auto | Routed through pi's provider split (`pi-dots` source, same passive reader) — no separate hook |
@@ -380,6 +380,7 @@ Most users never need this — defaults are sensible. For advanced setups:
 | `TOKENTRACKER_GROK_HOME` | Override Grok Build directory for the Grok integration and Skills Manager | `~/.grok` |
 | `GROK_HOME` | Legacy Grok Build directory override, used when `TOKENTRACKER_GROK_HOME` is unset | `~/.grok` |
 | `TOKENTRACKER_ANTIGRAVITY_HOME` | Force a single Antigravity Skills directory (auto-detects `~/.gemini/antigravity` + `~/.gemini/antigravity-ide` otherwise) | auto |
+| `TOKENTRACKER_T3_HOME` | Override the T3 Code state directory used to auto-discover Antigravity (`agy`) profiles | `~/.t3` |
 | `TOKENTRACKER_DISABLE_ANTIGRAVITY_QUOTA` | Set to `1` to skip all Antigravity credential reads and remote quota lookups | unset |
 | `TOKENTRACKER_LMSTUDIO_HOME` | Override the LM Studio data directory used by the passive server-log reader | `~/.lmstudio` |
 | `TOKENTRACKER_UNSLOTH_DB` | Override the Unsloth Studio database file used by the passive usage reader | `$UNSLOTH_STUDIO_HOME/studio.db` |

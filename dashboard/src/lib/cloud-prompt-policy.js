@@ -183,8 +183,19 @@ export function cloudPromotionTargetReason(machineCount, membership, subscriptio
 }
 
 export function cloudContextualPromptDecision({ userId, intentional = false, scene, membership,
-  failure, subscriptions = [], catalog, catalogObservedAt, paymentConflict = false, machineCount,
+  failure, subscriptions = [], catalog, catalogObservedAt, paymentConflict = false, machineCount, overview = false,
   now = Date.now(), storage = browserStorage() }) {
+  if (overview && !(Number(machineCount) >= 2)) return null;
+  if (userId && overview && ["expired", "free"].includes(membership?.status) && !membership.can_upload_cloud &&
+    membership.environment === "live" && membership.phase === "active" &&
+    membership.hosting_mode !== "self_hosted" && catalog?.policy?.hosting_mode !== "self_hosted") {
+    const expired = membership.status === "expired";
+    return { scene: expired ? "sync_expired" : "sync_free", kind: "status",
+      titleKey: expired ? "cloud.notice.expired.title" : "cloud.notice.free.title",
+      bodyKey: expired ? "cloud.notice.expired.body" : "cloud.notice.free.body",
+      ctaKey: expired ? "cloud.notice.restore" : "cloud.notice.learn",
+      href: expired ? "/settings?section=cloud" : "/cloud" };
+  }
   if (!userId || !intentional || !scenes.has(scene) || paymentConflict ||
     membership?.status === "self_hosted" || membership?.hosting_mode === "self_hosted" ||
     catalog?.policy?.hosting_mode === "self_hosted") return null;

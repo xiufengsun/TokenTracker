@@ -297,3 +297,41 @@ jobs:
             TokenTracker-review-win-x64.zip
             TokenTrackerWin/installer/Output/TokenTracker-Setup-v*.exe
             windows-package-manifest.json
+
+  billing-native-postgres:
+    name: Billing cancellation native PostgreSQL${{ matrix.postgres }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: [15, 17]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_DB: tokentracker_cancel_native
+          POSTGRES_USER: postgres
+          # Disposable service-only fixture password, never a project credential.
+          POSTGRES_PASSWORD: native-fixture-only
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tokentracker_cancel_native"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Native concurrent cancellation and payment persistence
+        env:
+          TOKENTRACKER_NATIVE_POSTGRES: '1'
+          TOKENTRACKER_TEST_PGMAJOR: ${{ matrix.postgres }}
+          TOKENTRACKER_TEST_PGPORT: ${{ job.services.postgres.ports[5432] }}
+          PGPASSWORD: native-fixture-only
+        run: node --test --test-timeout=120000 test/native/cloud-order-cancellation-postgres.test.cjs

@@ -105,6 +105,7 @@ export function DashboardView(props) {
 
   const {
     copy,
+    cloudNotice,
     onOpenShare,
     screenshotMode,
     showExpiredGate,
@@ -316,6 +317,7 @@ export function DashboardView(props) {
         return (
           <FadeIn delay={delay}>
             <UsageOverview
+              cloudNotice={screenshotMode ? null : cloudNotice}
               accountView={accountView}
               accountScopeSwitchable={accountScopeSwitchable}
               period={period}

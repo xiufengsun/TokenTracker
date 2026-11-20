@@ -185,7 +185,7 @@ brew install xiufengsun/tokentracker/tokentracker
 | **Grok Build** (xAI) | ✅ 自動 | SessionEnd hook + パッシブな `updates.jsonl` / `signals.json` スキャン (`~/.grok/sessions/**/`) |
 | **Kilo CLI** (kilo.ai) | ✅ 自動 | パッシブな SQLite リーダー (`~/.local/share/kilo/kilo.db`、OpenCode-fork スキーマ) |
 | **Kilo Code** (VS Code 拡張) | ✅ 自動 | パッシブな `ui_messages.json` リーダー (Cursor/Code/CodeBuddy/Windsurf の globalStorage) |
-| **Antigravity** | ✅ 自動 | パッシブなトランスクリプトリーダー (`~/.gemini/{antigravity,antigravity-ide,antigravity-cli}/brain/**/transcript.jsonl`) |
+| **Antigravity** | ✅ 自動 | パッシブなトランスクリプトリーダー (`~/.gemini/{antigravity,antigravity-ide,antigravity-insiders,antigravity-cli}/brain/**/transcript.jsonl`、および T3 Code プロファイル `~/.t3/userdata/providers/antigravity/*/antigravity-acp/`) |
 | **pi** (`@mariozechner/pi-coding-agent`) | ✅ 自動 | パッシブリーダー (`~/.pi/agent/sessions/**/*.jsonl`) |
 | **Dots** | ✅ 自動 | pi のプロバイダー分割経由 (`pi-dots` source、同じパッシブリーダーを再利用) — 追加フックなし |
 | **Prime Agent** | ✅ 自動 | メタデータのみのパッシブ使用量リーダー (`~/.prime/agent/sessions/*.jsonl`) |
@@ -295,6 +295,7 @@ TokenTracker は使用量データをローカルで処理します。プロン�
 | `CODEX_HOME` | Codex CLI ディレクトリの上書き | `~/.codex` |
 | `TOKENTRACKER_ACODE_HOME` | AStudio ディレクトリの上書き | `~/.acode` |
 | `GEMINI_HOME` | Gemini CLI ディレクトリの上書き | `~/.gemini` |
+| `TOKENTRACKER_T3_HOME` | Antigravity (`agy`) プロファイルの自動検出に使う T3 Code 状態ディレクトリの上書き | `~/.t3` |
 
 ---
 

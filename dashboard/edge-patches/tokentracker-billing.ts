@@ -1,4 +1,4 @@
-import { cancelWaffoSubscription, closeUnpaidWaffoAttempts, queryWaffoBindings, createWaffoCheckout, validateWaffoProduct, waffoProductId } from "./cloud/waffo.ts";
+import { cancelWaffoSubscription, confirmedCancelledWaffoAttempts, closeUnpaidWaffoAttempts, queryWaffoBindings, createWaffoCheckout, validateWaffoProduct, waffoProductId } from "./cloud/waffo.ts";
 import { reconcileWaffoOrder } from "./cloud/waffo-processing.ts";
 import { giftAccount, redeemGift } from "./cloud/gifts.ts";
 import { closeExpiredUnusedGiftOrders } from "./cloud/gift-expired-orders.ts";
@@ -87,6 +87,13 @@ export default async function billing(req: Request): Promise<Response> {
         throw new BillingError("checkout_not_launched", 503);
       }
     }
+    async function requireNoPendingCancellation() {
+      const pending = await client.database.from("tokentracker_cloud_orders").select("id")
+        .eq("user_id", userId).eq("environment", environment).in("status", ["pending", "ready"])
+        .not("cancel_requested_at", "is", null).limit(1);
+      if (pending.error) throw new BillingError("billing_operation_failed", 503);
+      if (pending.data?.length) throw new BillingError("order_cancel_processing", 409);
+    }
     async function ownedOrder(id: string): Promise<CloudOrder> {
       const result = await client.database.from("tokentracker_cloud_orders")
         .select("*")
@@ -115,7 +122,7 @@ export default async function billing(req: Request): Promise<Response> {
           .eq("user_id", userId).eq("environment", environment),
         client.database.from("tokentracker_cloud_orders")
           .select(
-            "id,provider,sku,currency,amount_cents,billing_mode,status,created_at,expires_at,checkout_url,retry_payment_conflict_at",
+            "id,provider,sku,currency,amount_cents,billing_mode,status,created_at,expires_at,checkout_url,retry_payment_conflict_at,cancel_requested_at,checkout_tracking_uncertain",
           )
           .eq("user_id", userId).eq("environment", environment).in("status", [
             "pending",
@@ -210,7 +217,7 @@ export default async function billing(req: Request): Promise<Response> {
       const id = uuid(url.searchParams.get("id"));
       const result = await client.database.from("tokentracker_cloud_orders")
         .select(
-          "id,provider,sku,currency,amount_cents,billing_mode,status,checkout_url,expires_at,provider_order_id,retry_payment_conflict_at",
+          "id,provider,sku,currency,amount_cents,billing_mode,status,checkout_url,expires_at,provider_order_id,retry_payment_conflict_at,cancel_requested_at,checkout_tracking_uncertain",
         )
         .eq("id", id).eq("user_id", userId).eq("environment", environment)
         .maybeSingle();
@@ -246,11 +253,46 @@ export default async function billing(req: Request): Promise<Response> {
         }),
       });
     }
+    if (action === "cancel-order" && req.method === "POST") {
+      const input = await body(req);
+      const old = await ownedOrder(uuid(input.id));
+      const result = await rpc(client, "cloud_request_order_cancel", {
+        p_user_id: userId, p_environment: environment, p_order_id: old.id,
+      });
+      if (result.error) throw new BillingError(String(result.error), 409);
+      let current = await ownedOrder(old.id);
+      let verificationPending = false;
+      if (current.cancel_requested_at && ["pending", "ready"].includes(current.status)) {
+        try {
+          // Reads and accounting only; never cancel a provider subscription or issue a new checkout.
+          await reconcileWaffoOrder(client, current, waffoConfig());
+          current = await ownedOrder(old.id);
+          if (["pending", "ready"].includes(current.status)) {
+            const attempts = await confirmedCancelledWaffoAttempts(current, waffoConfig());
+            if (attempts !== null) {
+              await rpc(client, "cloud_finalize_order_cancel", {
+                p_user_id: userId, p_environment: environment, p_order_id: current.id,
+                p_checkout_id: current.provider_checkout_id,
+                p_checkout_expires_at: current.provider_checkout_expires_at,
+                p_attempt_ids: attempts,
+              });
+            }
+          }
+        } catch { verificationPending = true; }
+      }
+      current = await ownedOrder(old.id);
+      const processing = !!current.cancel_requested_at && ["pending", "ready"].includes(current.status);
+      return json({ order: { id: current.id, status: current.status, cancel_requested_at: current.cancel_requested_at },
+        cancellation: processing ? "processing" : current.status === "closed" ? "cancelled" : "not_cancelled",
+        verification_pending: verificationPending }, processing ? 202 : 200);
+    }
     if (action === "restart-checkout" && req.method === "POST") {
       await checkoutPolicy();
+      await requireNoPendingCancellation();
       const input = await body(req);
       const requestId = uuid(input.request_id);
       const old = await ownedOrder(uuid(input.id));
+      if (old.cancel_requested_at) throw new BillingError("order_cancel_processing", 409);
       if (old.provider !== "waffo" || !configuredProviders().waffo) {
         throw new BillingError("payment_provider_not_configured", 503);
       }
@@ -425,6 +467,7 @@ export default async function billing(req: Request): Promise<Response> {
       });
     }
     if (action === "checkout" && req.method === "POST") {
+      await requireNoPendingCancellation();
       const input = await body(req);
       const provider = text(input.provider);
       // Unconfigured providers are never presented as functioning payment options.
@@ -450,11 +493,11 @@ export default async function billing(req: Request): Promise<Response> {
           p_provider_price_id: waffoProductId(order, config), p_checkout_url: null,
         });
       }
-      const claim = await rpc(client, "cloud_claim_checkout", {
-        p_user_id: userId,
-        p_order_id: order.id,
+      const claim = await rpc(client, "cloud_claim_checkout_tracked", {
+        p_user_id: userId, p_environment: environment, p_order_id: order.id,
       });
       const current = object(claim.order) as unknown as CloudOrder;
+      if (claim.cancel_pending || current.cancel_requested_at) throw new BillingError("order_cancel_processing", 409);
       if (!['pending', 'ready'].includes(current.status) ||
           Date.parse(current.expires_at) <= Date.now()) {
         throw new BillingError("checkout_expired", 409);
@@ -475,23 +518,28 @@ export default async function billing(req: Request): Promise<Response> {
           pending: true,
         }, 202);
       }
-      let checkout: Awaited<ReturnType<typeof createWaffoCheckout>>;
+      const operationId = text(claim.operation_id);
+      if (!operationId) throw new BillingError("order_cancel_processing", 409);
+      let attached;
+      let uncertain = true;
       try {
-        checkout = await createWaffoCheckout(current, waffoConfig());
-      } catch {
-        // Persisted order identity lets the owner recover an ambiguous response.
-        return json({
-          order: { id: current.id, status: current.status },
-          pending: true,
-          error: "checkout_confirmation_pending",
-        }, 202);
-      }
-      const attached = await rpc(client, "cloud_attach_waffo_checkout", {
+        const checkout = await createWaffoCheckout(current, waffoConfig());
+        attached = await rpc(client, "cloud_attach_waffo_checkout", {
           p_user_id: userId, p_order_id: current.id,
           p_provider_checkout_id: checkout.sessionId || null,
           p_provider_price_id: checkout.priceId || null, p_checkout_url: checkout.checkoutUrl,
           p_provider_checkout_expires_at: checkout.expiresAt,
         });
+        uncertain = false;
+      } catch {
+        return json({ order: { id: current.id, status: current.status }, pending: true,
+          error: "checkout_confirmation_pending" }, 202);
+      } finally {
+        await rpc(client, "cloud_finish_checkout_operation", {
+          p_user_id: userId, p_environment: environment, p_order_id: current.id,
+          p_operation_id: operationId, p_uncertain: uncertain,
+        });
+      }
       return json({
         order: {
           id: attached.id,

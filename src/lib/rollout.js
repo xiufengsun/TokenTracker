@@ -7030,6 +7030,80 @@ function qoderNewModelFromRecord(record) {
   return normalizeModelInput(stripped) || "qoder-agent";
 }
 
+function isQoderGenericAutoModel(model) {
+  return (normalizeModelInput(model) || "").toLowerCase() === "auto";
+}
+
+function qoderRuntimeConfigModel(record) {
+  if (record?.type !== "runtime-config") return null;
+  const direct = typeof record?.model === "string" ? record.model.trim() : "";
+  const stripped = direct.replace(
+    /^qoder-custom-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\//i,
+    "",
+  );
+  const model = normalizeModelInput(stripped);
+  return model || null;
+}
+
+function qoderRuntimeSessionId(record) {
+  const sessionId = record?.sessionId || record?.session_id;
+  return typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : "";
+}
+
+// Collect explicit runtime-config models per session, ordered by timestamp.
+// Assistant rows that only say "auto" inherit the latest config at or before
+// their timestamp (#1092). A later config in the same session must not rewrite
+// earlier turns, and a session that really selected Auto stays "auto".
+function collectQoderRuntimeModels(files) {
+  const bySession = new Map();
+  for (const filePath of files) {
+    let raw;
+    try {
+      raw = fssync.readFileSync(filePath, "utf8");
+    } catch (_e) {
+      continue;
+    }
+    const lines = raw.split("\n");
+    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+      const line = lines[lineIdx];
+      if (!line.trim() || !line.includes("runtime-config")) continue;
+      let record;
+      try {
+        record = JSON.parse(line);
+      } catch (_e) {
+        continue;
+      }
+      const model = qoderRuntimeConfigModel(record);
+      const sessionId = qoderRuntimeSessionId(record);
+      if (!model || !sessionId) continue;
+      const ts = qoderNewTimestampMs(record);
+      if (!ts) continue; // Undated configs cannot be ordered against timestamped usage.
+      const list = bySession.get(sessionId) || [];
+      list.push({ ts, model, lineIdx, filePath });
+      bySession.set(sessionId, list);
+    }
+  }
+  for (const list of bySession.values()) {
+    list.sort((a, b) => a.ts - b.ts || a.lineIdx - b.lineIdx || a.filePath.localeCompare(b.filePath));
+  }
+  return bySession;
+}
+
+function resolveQoderRuntimeModel(record, runtimeModels, fallbackModel) {
+  if (!isQoderGenericAutoModel(fallbackModel)) return fallbackModel;
+  const sessionId = qoderRuntimeSessionId(record);
+  const events = sessionId ? runtimeModels.get(sessionId) : null;
+  if (!events || events.length === 0) return fallbackModel;
+  const ts = qoderNewTimestampMs(record);
+  if (!ts) return fallbackModel;
+  let chosen = null;
+  for (const ev of events) {
+    if (ts && ev.ts > ts) break;
+    chosen = ev.model;
+  }
+  return chosen || fallbackModel;
+}
+
 function qoderNewMessageKey(record, filePath, lineIndex = 0) {
   const msgId = normalizeMessageKeyPart(record?.message?.id)
     || normalizeMessageKeyPart(record?.uuid)
@@ -7083,6 +7157,11 @@ function readQoderNominalCredits(usage) {
   return max >= MIN_QODER_CREDIT_ACTIVITY ? max : 0;
 }
 
+function isQoderCacheInclusiveUsage(usage) {
+  const ratio = usage?.context_usage_ratio;
+  return typeof ratio === "number" && Number.isFinite(ratio);
+}
+
 function normalizeQoderNewTokens(usage) {
   if (!usage || typeof usage !== "object") return null;
   const credits = readQoderNominalCredits(usage);
@@ -7103,14 +7182,24 @@ function normalizeQoderNewTokens(usage) {
     const cach = Math.max(0, Math.trunc(cached));
     const out = Math.max(0, Math.trunc(output));
     const cc = Math.max(0, Math.trunc(cacheCreation));
+    // Qoder's remote-chat route (CLI 1.1.8x, agent 1.1.79+) copies Chat
+    // Completions prompt_tokens straight into input_tokens, so it already
+    // includes the cache counts — same contract as legacy normalizeQoderTokens.
+    // Those records also carry context_usage_ratio (= input_tokens / context
+    // window), which is only meaningful for a cache-inclusive prompt count.
+    // Rows without it (older Anthropic-shaped CN/BYOK transcripts) or whose
+    // cache counts exceed input stay disjoint.
+    const inclusive = isQoderCacheInclusiveUsage(usage) && cach + cc <= inp;
+    const ordinary = inclusive ? inp - cach - cc : inp;
+    const total = ordinary + cach + cc + out;
     return {
-      input_tokens: inp,
+      input_tokens: ordinary,
       cached_input_tokens: cach,
       cache_creation_input_tokens: cc,
       output_tokens: out,
       reasoning_output_tokens: 0,
-      total_tokens: inp + cach + cc + out,
-      billable_total_tokens: inp + cach + cc + out,
+      total_tokens: total,
+      billable_total_tokens: total,
       credits: Number.isFinite(credits) && credits > 0 ? credits : 0,
       // `credits` dies at the totals boundary — parseQoderNewIncremental never
       // copies it into bucket totals or the cursor, and must not start: there
@@ -7185,6 +7274,7 @@ async function parseQoderNewIncremental({
   const publicRepoCache = projectEnabled ? new Map() : null;
   const touchedBuckets = new Set();
   const cb = typeof onProgress === "function" ? onProgress : null;
+  const runtimeModels = collectQoderRuntimeModels(files);
 
   // Build current snapshot from all JSONL files
   const currentByKey = new Map();
@@ -7236,7 +7326,7 @@ async function parseQoderNewIncremental({
       if (!bucketStart) continue;
       const messageKey = qoderNewMessageKey(record, filePath, lineIdx);
       if (!messageKey) continue;
-      const model = qoderNewModelFromRecord(record);
+      const model = resolveQoderRuntimeModel(record, runtimeModels, qoderNewModelFromRecord(record));
       const totals = base ? {
         input_tokens: base.input_tokens,
         cached_input_tokens: base.cached_input_tokens,
@@ -22196,8 +22286,29 @@ async function listAntigravitySessionFiles(brainDir) {
   return (await listAntigravitySessionFilesWithStatus(brainDir)).files;
 }
 
-async function listAntigravityTranscriptsWithStatus(geminiHome, knownFiles = null) {
-  const dirs = resolveAntigravityBrainDirs(geminiHome);
+function dedupeAntigravityBrainDirs(dirs) {
+  const seen = new Set();
+  const out = [];
+  for (const dir of dirs || []) {
+    if (!dir || typeof dir !== "string") continue;
+    let key;
+    try {
+      key = fssync.realpathSync(dir);
+    } catch (_err) {
+      key = path.resolve(dir);
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(dir);
+  }
+  return out;
+}
+
+async function listAntigravityTranscriptsWithStatus(geminiHome, knownFiles = null, extraBrainDirs = []) {
+  const dirs = dedupeAntigravityBrainDirs([
+    ...resolveAntigravityBrainDirs(geminiHome),
+    ...(Array.isArray(extraBrainDirs) ? extraBrainDirs : []),
+  ]);
   const results = await Promise.all(
     dirs.map((dir) => listAntigravitySessionFilesWithStatus(dir, knownFiles)),
   );
