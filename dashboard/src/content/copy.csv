@@ -2206,3 +2206,11 @@ cloud.order_cancel.unverified,dashboard,Cloud,CancelPendingOrder,unverified,This
 cloud.order_cancel.pending_label,dashboard,Cloud,CancelPendingOrder,pending_label,Cancellation processing,Unconfirmed request is not proof of accepted cancellation,active
 cloud.order_cancel.unverified_label,dashboard,Cloud,CancelPendingOrder,unverified_label,Verification required,Unconfirmed request is not proof of accepted cancellation,active
 cloud.order_cancel.unknown,dashboard,Cloud,CancelPendingOrder,unknown,Cancellation status is unconfirmed. Do not pay through old links or create another order. Check cancellation status again; code redemption may remain unavailable until verified.,Unconfirmed request is not proof of accepted cancellation,active
+nav.update_available,shared,*,SidebarUpdatePill,update_available,"Update to v{{version}}",,active
+nav.update_available_short,shared,*,SidebarUpdatePill,update_available_short,"Update",,active
+nav.update_available_title,shared,*,SidebarUpdatePill,update_available_title,"New version {{version}} available",,active
+nav.update_confirm_title,shared,*,SidebarUpdatePill,update_confirm_title,"Update Available",,active
+nav.update_confirm_description,shared,*,SidebarUpdatePill,update_confirm_description,"Version {{version}} is available (current {{current}}). Would you like to update now?",,active
+nav.update_confirm_yes,shared,*,SidebarUpdatePill,update_confirm_yes,"Update Now",,active
+nav.update_confirm_no,shared,*,SidebarUpdatePill,update_confirm_no,"Later",,active
+settings.menubar.autoUpdateHintWindows,ui,SettingsPage,MenuBarSection,mb_auto_update_hint_win,"Check for new versions in the background and notify you when an update is ready. Manual checks stay available when this is off.",,active

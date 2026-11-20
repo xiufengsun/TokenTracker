@@ -28,6 +28,7 @@ import { useLocale } from "../../hooks/useLocale.js";
 import { shouldFetchGithubStars } from "../dashboard/util/should-fetch-github-stars.js";
 import { InsforgeUserHeaderControls } from "../../components/InsforgeUserHeaderControls.jsx";
 import { isNativeApp, isNativeEmbed, isNativeLinuxApp, isNativeWindowsApp } from "../../lib/native-bridge.js";
+import { SidebarUpdatePill } from "./SidebarUpdatePill.jsx";
 
 const STORAGE_KEY = "tt.sidebarCollapsed";
 
@@ -405,6 +406,7 @@ function SidebarBody({
       </nav>
 
       {/* Bottom: theme and GitHub utilities share a compact visual height. */}
+      <SidebarUpdatePill collapsed={collapsed} />
       <div
         className={cn(
           "tt-sidebar-utilities flex items-center px-2 py-2",

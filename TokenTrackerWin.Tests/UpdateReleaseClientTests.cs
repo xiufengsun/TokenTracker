@@ -361,6 +361,31 @@ public sealed class UpdateReleaseClientTests
         Assert.Equal(callers - 1, results.Count(result => result == UpdateChecker.CheckOutcome.Skipped));
     }
 
+    [Fact]
+    public async Task FailedCheckAfterUpdateAvailablePreservesPendingUpdate()
+    {
+        var shouldFail = false;
+        using var http = Http(request =>
+        {
+            if (shouldFail)
+                return IsApi(request) ? RateLimited() : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+            return ApiRelease();
+        });
+        var checker = new UpdateChecker(http);
+        var quitRequested = false;
+        checker.QuitRequested += () => quitRequested = true;
+
+        Assert.Equal(UpdateChecker.CheckOutcome.UpdateAvailable, await checker.CheckAsync(silent: false));
+        Assert.Equal(UpdateChecker.UpdateState.UpdateAvailable, checker.State);
+        Assert.Equal("1.3.9", checker.LatestVersion);
+
+        shouldFail = true;
+        Assert.Equal(UpdateChecker.CheckOutcome.Failed, await checker.CheckAsync(silent: false));
+        Assert.Equal(UpdateChecker.UpdateState.UpdateAvailable, checker.State);
+        Assert.Equal("1.3.9", checker.LatestVersion);
+        Assert.False(quitRequested);
+    }
+
     private static bool IsApi(HttpRequestMessage request) => request.RequestUri!.Host == "api.github.com";
 
     private static HttpResponseMessage ApiRelease(bool includeInstaller = true)

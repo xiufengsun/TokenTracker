@@ -104,7 +104,11 @@ export function MenuBarSection() {
       />
       <SettingsRow
         label={copy("settings.menubar.autoUpdate")}
-        hint={copy("settings.menubar.autoUpdateHint")}
+        hint={
+          isWindows
+            ? copy("settings.menubar.autoUpdateHintWindows")
+            : copy("settings.menubar.autoUpdateHint")
+        }
         control={
           <ToggleSwitch
             checked={autoUpdateEnabled}
