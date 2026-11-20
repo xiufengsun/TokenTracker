@@ -502,7 +502,8 @@ function PlaceholderIcon({ size = 16, className = "" }) {
  * /brand-logos/ when available, otherwise falls back to a mono SVG (currentColor).
  */
 export function ProviderIcon({ provider, size = 16, color, className = "" }) {
-  const normalized = provider?.toUpperCase?.() || "";
+  // A split profile ("claude@work", see splitScanRoots) wears its provider's icon.
+  const normalized = (provider?.toUpperCase?.() || "").split("@")[0];
   const logoKey = piAwareLogoKey(normalized);
   const logoSrc = PROVIDER_LOGO_MAP[logoKey];
 

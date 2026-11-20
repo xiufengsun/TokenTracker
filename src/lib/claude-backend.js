@@ -1,5 +1,6 @@
 // Local-only accounting provenance. Never infer historical routing from current config.
 const fs = require("node:fs");
+const { baseSource } = require("./profile-source");
 const path = require("node:path");
 const crypto = require("node:crypto");
 
@@ -277,7 +278,7 @@ function mergeBackendUsage(target, delta) {
 // sets ANTHROPIC_BASE_URL (and for subagent transcripts, which get no hooks), so
 // treating it as unpriced turned all new default-setup Claude usage into $0.
 function hasUnknownBackendCost(row) {
-  return row?.source === "claude" && row.backend_usage?.some((p) => p.backend === "custom" && p.total_tokens > 0);
+  return baseSource(row?.source) === "claude" && row.backend_usage?.some((p) => p.backend === "custom" && p.total_tokens > 0);
 }
 function readCustomBackend({ home, env = process.env }) {
   // Current configuration is ONLY for the limits card, never usage attribution.

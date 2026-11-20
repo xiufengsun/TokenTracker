@@ -34,6 +34,7 @@ export function useUsageData({
   accountRevision = 0,
   accountViewResolving = false,
   deviceId = null,
+  profile = null,
 }: any = {}) {
   const useCloud = Boolean(accountView && accountAccessToken);
   const scopeKey = useCloud ? "cloud" : "local";
@@ -48,7 +49,7 @@ export function useUsageData({
   const tokenReady = isAccessTokenReady(accessToken);
   const cacheAllowed = !guestAllowed && !mockEnabled;
 
-  const deviceScope = deviceId || "all";
+  const deviceScope = `${deviceId || "all"}${profile ? `.p-${profile}` : ""}`;
   const storageKey = (() => {
     if (!cacheKey) return null;
     const host = safeHost(baseUrl) || "default";
@@ -128,6 +129,7 @@ export function useUsageData({
     accountAccessToken,
     accountRevision,
     deviceId,
+    profile,
     timeZone,
     tzOffsetMinutes,
     // These gates change which source is allowed to render. Invalidate an
@@ -173,6 +175,7 @@ export function useUsageData({
               from,
               to,
               device: deviceId,
+              profile: useCloud ? null : profile,
               timeZone,
               tzOffsetMinutes,
             }),
@@ -182,6 +185,7 @@ export function useUsageData({
               from,
               to,
               device: deviceId,
+              profile: useCloud ? null : profile,
               timeZone,
               tzOffsetMinutes,
               rolling: true,
@@ -197,6 +201,7 @@ export function useUsageData({
             from,
             to,
             device: deviceId,
+            profile: useCloud ? null : profile,
             timeZone,
             tzOffsetMinutes,
           });
@@ -208,6 +213,7 @@ export function useUsageData({
           from,
           to,
           device: deviceId,
+          profile: useCloud ? null : profile,
           timeZone,
           tzOffsetMinutes,
           rolling: true,
@@ -236,6 +242,7 @@ export function useUsageData({
             from,
             to,
             device: deviceId,
+            profile: useCloud ? null : profile,
             timeZone,
             tzOffsetMinutes,
             rolling: true,
@@ -332,6 +339,7 @@ export function useUsageData({
     accountAccessToken,
     accountRevision,
     deviceId,
+    profile,
     beginRequest,
   ]);
 

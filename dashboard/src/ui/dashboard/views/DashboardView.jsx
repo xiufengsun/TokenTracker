@@ -193,6 +193,9 @@ export function DashboardView(props) {
     deviceOptions,
     selectedDevice,
     onDeviceChange,
+    profileOptions,
+    selectedProfile,
+    onProfileChange,
     deviceUsageBlock,
     localHistoryOnly,
     localHistoryRevision,
@@ -348,6 +351,9 @@ export function DashboardView(props) {
               selectedDevice={selectedDevice}
               dataRevision={localHistoryRevision}
               onDeviceChange={onDeviceChange}
+              profileOptions={profileOptions}
+              selectedProfile={selectedProfile}
+              onProfileChange={onProfileChange}
             />
           </FadeIn>
         );

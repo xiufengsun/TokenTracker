@@ -44,6 +44,21 @@ describe("ProviderIcon", () => {
     expect(icon).toHaveClass("dark:invert");
   });
 
+  it("gives a split profile (claude@work) the icon of its provider", () => {
+    const plain = render(createElement(ProviderIcon, { provider: "claude", size: 20 })).container;
+    const profile = render(createElement(ProviderIcon, { provider: "claude@work", size: 20 })).container;
+
+    expect(profile.innerHTML).toBe(plain.innerHTML);
+    expect(profile.querySelector("img, svg")).not.toBeNull();
+  });
+
+  it("keeps the placeholder for a profile of an unknown provider", () => {
+    const { container } = render(createElement(ProviderIcon, { provider: "nothing@work" }));
+
+    expect(container.querySelector("svg")).not.toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
   it("keeps the theme-aware placeholder for unknown providers", () => {
     const { container } = render(<ProviderIcon provider="unknown-provider" />);
     const placeholder = container.querySelector("svg");

@@ -30,6 +30,7 @@ export function useActivityHeatmap({
   accountRevision = 0,
   accountViewResolving = false,
   deviceId = null,
+  profile = null,
 }: any = {}) {
   const useCloud = Boolean(accountView && accountAccessToken);
   const scopeKey = useCloud ? "cloud" : "local";
@@ -65,6 +66,7 @@ export function useActivityHeatmap({
     accountRevision,
     accountViewResolving,
     deviceId,
+    profile,
     timeZone,
     tzOffsetMinutes,
     // Include source/rendering gates in the request identity. This prevents
@@ -80,8 +82,8 @@ export function useActivityHeatmap({
   const storageKey = useMemo(() => {
     if (!cacheKey) return null;
     const tzKey = getTimeZoneCacheKey({ timeZone, offsetMinutes: tzOffsetMinutes });
-    return `tokentracker.heatmap.${cacheKey}.${scopeKey}.${weeks}.${weekStartsOn}.${tzKey}.${deviceId || "all"}${useCloud || !accountRevision ? "" : `.r${accountRevision}`}`;
-  }, [cacheKey, deviceId, scopeKey, timeZone, tzOffsetMinutes, weeks, weekStartsOn, useCloud, accountRevision]);
+    return `tokentracker.heatmap.${cacheKey}.${scopeKey}.${weeks}.${weekStartsOn}.${tzKey}.${deviceId || "all"}${profile ? `.p-${profile}` : ""}${useCloud || !accountRevision ? "" : `.r${accountRevision}`}`;
+  }, [cacheKey, deviceId, profile, scopeKey, timeZone, tzOffsetMinutes, weeks, weekStartsOn, useCloud, accountRevision]);
 
   const readCache = useCallback(() => {
     if (!storageKey || typeof window === "undefined") return null;
@@ -156,6 +158,7 @@ export function useActivityHeatmap({
           to: range.to,
           weekStartsOn,
           device: deviceId,
+          profile: useCloud ? null : profile,
           timeZone,
           tzOffsetMinutes,
         });
@@ -262,6 +265,7 @@ export function useActivityHeatmap({
         from: range.from,
         to: range.to,
         device: deviceId,
+        profile: useCloud ? null : profile,
         timeZone,
         tzOffsetMinutes,
       });
@@ -348,6 +352,7 @@ export function useActivityHeatmap({
     accountAccessToken,
     accountRevision,
     deviceId,
+    profile,
     beginRequest,
   ]);
 
