@@ -31,6 +31,7 @@ const SOURCE_IDENTICAL_KEY_ALLOWLIST = [
   /^settings[.]menubar[.]updates[.]footerCore$/,
   /^limits[.]provider[.]/,
   /^limits[.]zcode[.]region[.](?:zai|bigmodel)$/, // Region brand names.
+  /^settings[.]instance[.]field[.]anonKeyPlaceholder$/, // JWT-shaped format hint, identical across locales.
   /^limits[.]zcode[.]other_region[.]title$/, // Formatting-only label.
   /^limits[.]apiKey[.]env_unset_command$/,
   /^limits[.]agentPlan[.]setupHint[.]snippet_install$/,
