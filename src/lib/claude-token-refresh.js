@@ -50,23 +50,24 @@ async function refreshClaudeTokens({
     throw err;
   }
 
-  const trimmedRefresh = refreshToken.trim();
+  const cleanRefreshToken = sanitizeAsciiToken(refreshToken, "refreshToken");
   const singleflightBucket = dedupeKeyFetch || fetchImpl;
   let tokenMap = inflightRefreshesByFetch.get(singleflightBucket);
   if (!tokenMap) {
     tokenMap = new Map();
     inflightRefreshesByFetch.set(singleflightBucket, tokenMap);
   }
-  const existing = tokenMap.get(trimmedRefresh);
+  const existing = tokenMap.get(cleanRefreshToken);
   if (existing) {
     return existing;
   }
 
   const run = (async () => {
-    const scopeStr = Array.isArray(scopes) && scopes.length > 0
-      ? scopes.join(" ")
+    const cleanScopes = sanitizeScopes(scopes);
+    const scopeStr = cleanScopes && cleanScopes.length > 0
+      ? cleanScopes.join(" ")
       : typeof scopes === "string" && scopes.trim().length > 0
-        ? scopes
+        ? sanitizeScopes(scopes.trim().split(/\s+/))?.join(" ") || CLAUDE_DEFAULT_SCOPES.join(" ")
         : CLAUDE_DEFAULT_SCOPES.join(" ");
 
     const res = await fetchImpl(CLAUDE_REFRESH_ENDPOINT, {
@@ -78,8 +79,8 @@ async function refreshClaudeTokens({
       },
       body: JSON.stringify({
         grant_type: "refresh_token",
-        refresh_token: trimmedRefresh,
-        client_id: clientId,
+        refresh_token: cleanRefreshToken,
+        client_id: sanitizeAsciiToken(clientId, "clientId"),
         scope: scopeStr,
       }),
     });
@@ -91,6 +92,13 @@ async function refreshClaudeTokens({
         detail = data?.error || data?.error_description || null;
       } catch (_e) {
         // Ignore parse failure
+      }
+      if (res.status === 400 && String(detail || "").toLowerCase() === "invalid_scope") {
+        const err = new Error(`Claude token refresh failed: ${res.status} (invalid_scope)`);
+        err.code = "REFRESH_HTTP_ERROR";
+        err.status = res.status;
+        err.detail = detail;
+        throw err;
       }
       const err = new Error(CLAUDE_AUTH_EXPIRED_MESSAGE);
       err.code = "REFRESH_TOKEN_EXPIRED";
@@ -125,7 +133,7 @@ async function refreshClaudeTokens({
       accessToken: body.access_token,
       refreshToken: typeof body.refresh_token === "string" && body.refresh_token.length > 0
         ? body.refresh_token
-        : trimmedRefresh,
+        : cleanRefreshToken,
       expiresAt,
       refreshTokenExpiresAt,
       scopes: typeof body.scope === "string"
@@ -134,12 +142,12 @@ async function refreshClaudeTokens({
     });
   })();
 
-  tokenMap.set(trimmedRefresh, run);
+  tokenMap.set(cleanRefreshToken, run);
   try {
     return await run;
   } finally {
-    if (tokenMap.get(trimmedRefresh) === run) {
-      tokenMap.delete(trimmedRefresh);
+    if (tokenMap.get(cleanRefreshToken) === run) {
+      tokenMap.delete(cleanRefreshToken);
     }
   }
 }

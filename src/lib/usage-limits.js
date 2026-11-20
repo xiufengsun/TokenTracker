@@ -13,6 +13,7 @@ const {
   CLAUDE_TOKEN_EXPIRY_SKEW_MS,
   detectClaudeCodeCredentialsPresence,
   detectClaudeCodeSubscriptionDetails,
+  parseClaudeOauthExpiryMs,
   readClaudeCodeAccessToken,
   readClaudeCodeAuthBundle,
   readClaudeCodeOauthToken,
@@ -4549,7 +4550,8 @@ async function fetchUsageLimitsUncached({
       ? claudeAuth.accessToken
       : null;
   let claudeTokenExpiresAtMs = claudeAuth?.expiresAtMs ?? null;
-  const claudePlanType = claudeSubscription?.planType || claudeAuth?.subscriptionType || null;
+  let claudePlanType = claudeSubscription?.planType || claudeAuth?.subscriptionType || null;
+  let adoptedReplacementLogin = false;
   let claudeRetryAtMs = null;
   let freshClaudeCache = null;
 
@@ -4588,6 +4590,9 @@ async function fetchUsageLimitsUncached({
   const codexPlanType = codexAuthRefreshed?.planType || null;
 
   const providerFetch = withFetchTimeout(fetchImpl, providerTimeoutMs);
+  // Shared singleflight refreshes use an independent timeout budget so a short-timeout
+  // caller cannot abort a refresh that a longer-timeout caller is awaiting.
+  const claudeRefreshFetch = withFetchTimeout(fetchImpl, Math.max(providerTimeoutMs, 10_000));
   let storedRefreshToken = claudeAuth?.refreshToken || null;
 
   const applyPersistedClaudePayload = (updatedPayload, attemptedTokens) => {
@@ -4604,23 +4609,29 @@ async function fetchUsageLimitsUncached({
       return true;
     }
     // Another login or sign-out happened concurrently while refresh was in flight.
-    if (!persistedOauth?.accessToken || !persistedOauth?.refreshToken) {
+    if (!persistedOauth?.accessToken) {
       claudeToken = null;
       claudeAuthRefreshed = null;
       storedRefreshToken = null;
       return false;
     }
-    const adoptedExp = typeof persistedOauth.expiresAt === "number" ? persistedOauth.expiresAt : null;
-    storedRefreshToken = persistedOauth.refreshToken;
+    const adoptedExp = parseClaudeOauthExpiryMs(persistedOauth.expiresAt);
+    const adoptedNowMs = injectedNowMs ?? Date.now();
+    adoptedReplacementLogin = true;
+    storedRefreshToken = persistedOauth.refreshToken || null;
+    if (persistedOauth.subscriptionType) {
+      claudePlanType = persistedOauth.subscriptionType;
+    }
     claudeAuthRefreshed = {
       ...claudeAuthRefreshed,
       accessToken: persistedOauth.accessToken,
-      refreshToken: persistedOauth.refreshToken,
+      refreshToken: persistedOauth.refreshToken || null,
       expiresAtMs: adoptedExp,
       scopes: Array.isArray(persistedOauth.scopes) ? persistedOauth.scopes : claudeAuthRefreshed?.scopes,
+      subscriptionType: persistedOauth.subscriptionType || claudeAuthRefreshed?.subscriptionType || null,
       rawPayload: updatedPayload,
     };
-    claudeToken = (!adoptedExp || adoptedExp > (injectedNowMs ?? Date.now()) + CLAUDE_TOKEN_EXPIRY_SKEW_MS)
+    claudeToken = (!adoptedExp || adoptedExp > adoptedNowMs + CLAUDE_TOKEN_EXPIRY_SKEW_MS)
       ? persistedOauth.accessToken
       : null;
     claudeTokenExpiresAtMs = adoptedExp;
@@ -4634,7 +4645,7 @@ async function fetchUsageLimitsUncached({
         newTokens = await refreshClaudeTokens({
           refreshToken: claudeAuth.refreshToken,
           scopes: claudeAuth.scopes,
-          fetchImpl: providerFetch,
+          fetchImpl: claudeRefreshFetch,
           dedupeKeyFetch: fetchImpl,
           nowMs,
         });
@@ -4642,10 +4653,9 @@ async function fetchUsageLimitsUncached({
         claudeRefreshError = err;
       }
 
-      if (signal?.aborted) return null;
-
       if (newTokens) {
-        // Keep the refreshed tokens in memory even if persistence fails.
+        // Always persist rotated tokens even if this slot's deadline already fired,
+        // so the single-use refresh token is never lost.
         claudeAuthRefreshed = {
           ...claudeAuth,
           accessToken: newTokens.accessToken,
@@ -4669,7 +4679,6 @@ async function fetchUsageLimitsUncached({
             env,
             securityRunner,
           });
-          if (signal?.aborted) return null;
           applyPersistedClaudePayload(updatedPayload, newTokens);
         } catch (_persistErr) {
           // Non-fatal: keep the refreshed in-memory token and leave storedRefreshToken unchanged.
@@ -4681,10 +4690,11 @@ async function fetchUsageLimitsUncached({
 
     const slotNowMs = injectedNowMs ?? Date.now();
     // Skip the upstream Claude call entirely while a 429 cooldown is active — calling again
-    // just renews the penalty. The result handling below serves cache or a cooldown message.
+    // just renews the penalty. Do not serve the previous account's cache if we adopted a replacement login.
     claudeRetryAtMs = readClaudeRateLimitRetryAtMs({ home, nowMs: slotNowMs, tokenExpiresAtMs: claudeTokenExpiresAtMs });
-    // Also avoid cross-process hammering after a recent successful read.
-    freshClaudeCache = !forceRefresh ? readFreshClaudeLimitsCache({ home, nowMs: slotNowMs }) : null;
+    freshClaudeCache = !forceRefresh && !adoptedReplacementLogin
+      ? readFreshClaudeLimitsCache({ home, nowMs: slotNowMs })
+      : null;
     if (freshClaudeCache || claudeRetryAtMs) return null;
 
     try {
@@ -4697,7 +4707,7 @@ async function fetchUsageLimitsUncached({
           retriedTokens = await refreshClaudeTokens({
             refreshToken: claudeAuthRefreshed.refreshToken,
             scopes: claudeAuthRefreshed.scopes,
-            fetchImpl: providerFetch,
+            fetchImpl: claudeRefreshFetch,
             dedupeKeyFetch: fetchImpl,
             nowMs: injectedNowMs ?? Date.now(),
           });
@@ -4707,7 +4717,6 @@ async function fetchUsageLimitsUncached({
           }
           throw refreshErr;
         }
-        if (signal?.aborted) return null;
         claudeAuthRefreshed = {
           ...claudeAuthRefreshed,
           accessToken: retriedTokens.accessToken,
@@ -4731,7 +4740,6 @@ async function fetchUsageLimitsUncached({
             env,
             securityRunner,
           });
-          if (signal?.aborted) return null;
           if (!applyPersistedClaudePayload(updatedPayload, retriedTokens) && !claudeToken) {
             return null;
           }
@@ -4938,7 +4946,9 @@ async function fetchUsageLimitsUncached({
       claudeResult?.status === "rejected"
     ) {
       const transientMessage = claudeRefreshError?.message || claudeResult?.reason?.message || "Unknown error";
-      const cached = readClaudeLimitsCache({ home, nowMs });
+      const cached = !adoptedReplacementLogin
+        ? readClaudeLimitsCache({ home, nowMs: injectedNowMs ?? Date.now() })
+        : null;
       claude = cached || { configured: true, error: transientMessage };
     } else {
       claude = {

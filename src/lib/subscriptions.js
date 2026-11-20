@@ -586,6 +586,7 @@ async function readCodexAuthBundle({ home, env } = {}) {
 
 module.exports = {
   CLAUDE_TOKEN_EXPIRY_SKEW_MS,
+  parseClaudeOauthExpiryMs,
   resolveClaudeKeychainAccount,
   collectLocalSubscriptions,
   detectClaudeCodeCredentialsPresence,
