@@ -120,9 +120,89 @@ async function refreshClaudeTokens({
   };
 }
 
+function sanitizeClaudeTokens(newTokens) {
+  if (!newTokens || typeof newTokens !== "object") {
+    throw new Error("Invalid Claude token payload");
+  }
+  const accessToken = typeof newTokens.accessToken === "string" ? newTokens.accessToken.trim() : "";
+  const refreshToken = typeof newTokens.refreshToken === "string" ? newTokens.refreshToken.trim() : "";
+  if (!accessToken || accessToken.length > 4096) {
+    throw new Error("Invalid Claude accessToken");
+  }
+  if (!refreshToken || refreshToken.length > 4096) {
+    throw new Error("Invalid Claude refreshToken");
+  }
+  const expiresAt = Number(newTokens.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= 0) {
+    throw new Error("Invalid Claude expiresAt");
+  }
+  const refreshTokenExpiresAt =
+    newTokens.refreshTokenExpiresAt != null && Number.isFinite(Number(newTokens.refreshTokenExpiresAt))
+      ? Number(newTokens.refreshTokenExpiresAt)
+      : null;
+  const scopes = Array.isArray(newTokens.scopes)
+    ? newTokens.scopes.filter((s) => typeof s === "string" && /^[a-zA-Z0-9:_.-]+$/.test(s))
+    : null;
+
+  return {
+    accessToken,
+    refreshToken,
+    expiresAt,
+    refreshTokenExpiresAt,
+    scopes,
+  };
+}
+
+function readLatestStoredClaudePayload({
+  platform,
+  service,
+  account,
+  credPath,
+  securityRunner,
+}) {
+  if (platform === "darwin") {
+    const runner = typeof securityRunner === "function" ? securityRunner : cp.spawnSync;
+    const res = runner("security", [
+      "find-generic-password",
+      "-s",
+      service,
+      "-a",
+      account,
+      "-w",
+    ], {
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2000,
+      encoding: "utf8",
+    });
+    if (!res || res.error || res.status !== 0) return null;
+    const stdout = typeof res.stdout === "string"
+      ? res.stdout
+      : Buffer.isBuffer(res.stdout)
+        ? res.stdout.toString("utf8")
+        : "";
+    const trimmed = stdout.trim();
+    if (!trimmed) return null;
+    try {
+      const parsed = JSON.parse(trimmed);
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  try {
+    const raw = fs.readFileSync(credPath, "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (_e) {
+    return null;
+  }
+}
+
 async function persistRefreshedClaudeAuth({
   currentPayload,
   newTokens,
+  expectedRefreshToken,
   platform = process.platform,
   service = "Claude Code-credentials",
   account,
@@ -131,22 +211,50 @@ async function persistRefreshedClaudeAuth({
   env = process.env,
   securityRunner,
 } = {}) {
-  const baseOauth = (currentPayload && typeof currentPayload === "object" && currentPayload.claudeAiOauth) || {};
+  const sanitized = sanitizeClaudeTokens(newTokens);
+  const acct = platform === "darwin" ? (account || resolveClaudeKeychainAccount({ env })) : null;
+  const credPath = platform !== "darwin"
+    ? (credentialsPath || path.join(typeof home === "string" && home ? home : os.homedir(), ".claude", ".credentials.json"))
+    : null;
+
+  // Reread stored credentials immediately before writing so we do not overwrite
+  // another account's login or an already-rotated token written concurrently.
+  const latestPayload = readLatestStoredClaudePayload({
+    platform,
+    service,
+    account: acct,
+    credPath,
+    securityRunner,
+  });
+  const capturedRefreshToken =
+    (typeof expectedRefreshToken === "string" && expectedRefreshToken) ||
+    (typeof currentPayload?.claudeAiOauth?.refreshToken === "string" ? currentPayload.claudeAiOauth.refreshToken : null);
+  const latestRefreshToken =
+    typeof latestPayload?.claudeAiOauth?.refreshToken === "string" ? latestPayload.claudeAiOauth.refreshToken : null;
+
+  if (capturedRefreshToken && latestRefreshToken && latestRefreshToken !== capturedRefreshToken) {
+    return latestPayload;
+  }
+
+  const basePayload = latestPayload || (currentPayload && typeof currentPayload === "object" ? currentPayload : {});
+  const baseOauth = (basePayload.claudeAiOauth && typeof basePayload.claudeAiOauth === "object")
+    ? basePayload.claudeAiOauth
+    : {};
   const merged = {
-    ...(currentPayload && typeof currentPayload === "object" ? currentPayload : {}),
+    ...basePayload,
     claudeAiOauth: {
       ...baseOauth,
-      accessToken: newTokens.accessToken,
-      refreshToken: newTokens.refreshToken,
-      expiresAt: newTokens.expiresAt,
-      ...(newTokens.refreshTokenExpiresAt ? { refreshTokenExpiresAt: newTokens.refreshTokenExpiresAt } : {}),
-      ...(newTokens.scopes ? { scopes: newTokens.scopes } : {}),
+      accessToken: sanitized.accessToken,
+      refreshToken: sanitized.refreshToken,
+      expiresAt: sanitized.expiresAt,
+      ...(sanitized.refreshTokenExpiresAt ? { refreshTokenExpiresAt: sanitized.refreshTokenExpiresAt } : {}),
+      ...(sanitized.scopes ? { scopes: sanitized.scopes } : {}),
     },
   };
+  const serialized = JSON.stringify(merged, null, platform === "darwin" ? 0 : 2);
 
   if (platform === "darwin") {
     const runner = typeof securityRunner === "function" ? securityRunner : cp.spawnSync;
-    const acct = account || resolveClaudeKeychainAccount({ env });
     const result = runner("security", [
       "add-generic-password",
       "-s",
@@ -154,7 +262,7 @@ async function persistRefreshedClaudeAuth({
       "-a",
       acct,
       "-w",
-      JSON.stringify(merged),
+      serialized,
       "-U",
     ], {
       stdio: "ignore",
@@ -168,10 +276,9 @@ async function persistRefreshedClaudeAuth({
   }
 
   // Linux / Windows
-  const credPath = credentialsPath || path.join(typeof home === "string" && home ? home : os.homedir(), ".claude", ".credentials.json");
   await fs.promises.mkdir(path.dirname(credPath), { recursive: true });
   const tmp = `${credPath}.tmp.${process.pid}.${Date.now()}`;
-  await fs.promises.writeFile(tmp, JSON.stringify(merged, null, 2), { mode: 0o600 });
+  await fs.promises.writeFile(tmp, serialized, { mode: 0o600 });
   await fs.promises.rename(tmp, credPath);
   return merged;
 }

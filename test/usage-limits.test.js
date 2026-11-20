@@ -1929,6 +1929,141 @@ describe("getUsageLimits", () => {
     }
   });
 
+  it("keeps refreshed Claude token in memory when Keychain persistence fails", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-persist-fail-"));
+    try {
+      const nowMs = Date.parse("2026-05-05T12:00:00.000Z");
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "darwin",
+        nowMs,
+        providerTimeoutMs: 2000,
+        securityRunner(_bin, args) {
+          if (args[0] === "find-generic-password" && args.includes("-w")) {
+            return {
+              status: 0,
+              stdout: JSON.stringify({
+                claudeAiOauth: {
+                  accessToken: "stale-darwin-token",
+                  refreshToken: "rt-darwin-valid",
+                  expiresAt: nowMs - 1000,
+                },
+              }),
+            };
+          }
+          if (args[0] === "add-generic-password") {
+            return { status: 1 }; // simulate Keychain write failure
+          }
+          return { status: 1, stdout: "" };
+        },
+        commandRunner() {
+          return { status: 1, stdout: "" };
+        },
+        fetchImpl(url, opts) {
+          if (typeof url === "string" && url.includes("platform.claude.com/v1/oauth/token")) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                token_type: "Bearer",
+                access_token: "in-memory-refreshed-token",
+                refresh_token: "new-rt-darwin",
+                expires_in: 28800,
+              }),
+            });
+          }
+          if (typeof url === "string" && url === "https://api.anthropic.com/api/oauth/usage") {
+            assert.equal(opts?.headers?.Authorization, "Bearer in-memory-refreshed-token");
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                five_hour: { utilization: 18, resets_at: "2026-05-05T17:00:00Z" },
+                seven_day: { utilization: 42, resets_at: "2026-05-12T12:00:00Z" },
+              }),
+            });
+          }
+          return pendingUnlessCodexReset(url);
+        },
+      });
+
+      assert.equal(result.claude.configured, true);
+      assert.equal(result.claude.error, null);
+      assert.equal(result.claude.five_hour.utilization, 18);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves 429 error from retried Claude usage fetch after 401 refresh", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-401-then-429-"));
+    try {
+      const nowMs = Date.parse("2026-05-05T12:00:00.000Z");
+      const claudeDir = path.join(tmp, ".claude");
+      fs.mkdirSync(claudeDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(claudeDir, ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "rejected-access-token",
+            refreshToken: "rt-claude-retry",
+            expiresAt: nowMs + 3600 * 1000,
+          },
+        }),
+      );
+
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        nowMs,
+        providerTimeoutMs: 2000,
+        securityRunner() {
+          return { status: 1, stdout: "" };
+        },
+        commandRunner() {
+          return { status: 1, stdout: "" };
+        },
+        fetchImpl(url, opts) {
+          if (typeof url === "string" && url.includes("platform.claude.com/v1/oauth/token")) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                token_type: "Bearer",
+                access_token: "second-chance-token",
+                refresh_token: "new-rt-retry",
+                expires_in: 28800,
+              }),
+            });
+          }
+          if (typeof url === "string" && url === "https://api.anthropic.com/api/oauth/usage") {
+            if (opts?.headers?.Authorization === "Bearer rejected-access-token") {
+              return Promise.resolve({ ok: false, status: 401 });
+            }
+            if (opts?.headers?.Authorization === "Bearer second-chance-token") {
+              return Promise.resolve({
+                ok: false,
+                status: 429,
+                headers: new Headers({ "retry-after": "600" }),
+              });
+            }
+          }
+          return pendingUnlessCodexReset(url);
+        },
+      });
+
+      assert.equal(result.claude.configured, true);
+      assert.equal(result.claude.auth_action_required, undefined);
+      assert.match(result.claude.error, /retry in ~10m/);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces a reauth-required error when the refresh token itself is expired", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-codex-reauth-"));

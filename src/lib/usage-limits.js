@@ -4539,53 +4539,19 @@ async function fetchUsageLimitsUncached({
   ]);
 
   // Match the official Claude Code CLI: when access token is stale or expired (<5m remaining),
-  // refresh using the refresh token and persist the new credentials.
+  // refresh inside the Claude provider slot so refresh + usage share the provider timeout
+  // budget and never block other providers.
   let claudeRefreshError = null;
   let claudeAuthRefreshed = claudeAuth;
-  if (
+  let claudeToken =
     claudeAuth &&
-    isClaudeTokenStale(claudeAuth, nowMs) &&
-    claudeAuth.refreshToken
-  ) {
-    try {
-      const newTokens = await refreshClaudeTokens({
-        refreshToken: claudeAuth.refreshToken,
-        scopes: claudeAuth.scopes,
-        fetchImpl,
-        nowMs,
-      });
-      const updatedPayload = await persistRefreshedClaudeAuth({
-        currentPayload: claudeAuth.rawPayload,
-        newTokens,
-        platform,
-        service: claudeAuth.service,
-        account: claudeAuth.account,
-        credentialsPath: claudeAuth.credentialsPath,
-        home,
-        env,
-        securityRunner,
-      });
-      claudeAuthRefreshed = {
-        ...claudeAuth,
-        accessToken: newTokens.accessToken,
-        refreshToken: newTokens.refreshToken,
-        expiresAtMs: newTokens.expiresAt,
-        refreshTokenExpiresAtMs: newTokens.refreshTokenExpiresAt,
-        scopes: newTokens.scopes,
-        rawPayload: updatedPayload,
-      };
-    } catch (err) {
-      claudeRefreshError = err;
-    }
-  }
-
-  const claudeToken =
-    claudeAuthRefreshed &&
-    (!claudeAuthRefreshed.expiresAtMs || claudeAuthRefreshed.expiresAtMs > nowMs + CLAUDE_TOKEN_EXPIRY_SKEW_MS)
-      ? claudeAuthRefreshed.accessToken
+    (!claudeAuth.expiresAtMs || claudeAuth.expiresAtMs > nowMs + CLAUDE_TOKEN_EXPIRY_SKEW_MS)
+      ? claudeAuth.accessToken
       : null;
-  const claudeTokenExpiresAtMs = claudeAuthRefreshed?.expiresAtMs ?? null;
-  const claudePlanType = claudeSubscription?.planType || claudeAuthRefreshed?.subscriptionType || null;
+  let claudeTokenExpiresAtMs = claudeAuth?.expiresAtMs ?? null;
+  const claudePlanType = claudeSubscription?.planType || claudeAuth?.subscriptionType || null;
+  let claudeRetryAtMs = null;
+  let freshClaudeCache = null;
 
   // Match the official Codex CLI: prefer the access token's JWT expiry and refresh only
   // within five minutes of it; fall back to last_refresh >8 days for opaque/legacy tokens.
@@ -4621,36 +4587,94 @@ async function fetchUsageLimitsUncached({
   const codexAccountId = codexAuthRefreshed?.accountId || null;
   const codexPlanType = codexAuthRefreshed?.planType || null;
 
-  // Skip the upstream Claude call entirely while a 429 cooldown is active — calling again
-  // just renews the penalty. The result handling below serves cache or a cooldown message.
-  const claudeRetryAtMs = claudeToken
-    ? readClaudeRateLimitRetryAtMs({ home, nowMs, tokenExpiresAtMs: claudeTokenExpiresAtMs })
-    : null;
-  // Also avoid cross-process hammering after a recent successful read: embedded-server
-  // restarts and background polls read the disk cache instead of spending another Claude
-  // OAuth usage request. Claude Code's own cached read counts too, so a session that just
-  // refreshed its usage spares this process a call against the same throttled budget. An explicit user refresh (refresh=1 → forceRefresh) punches
-  // through this cache — but never through the 429 cooldown above, which is exactly the
-  // hammering the cooldown exists to prevent.
-  const freshClaudeCache = claudeToken && !forceRefresh
-    ? readFreshClaudeLimitsCache({ home, nowMs })
-    : null;
+  const providerFetch = withFetchTimeout(fetchImpl, providerTimeoutMs);
 
-  const executeClaudeFetch = async () => {
+  const executeClaudeSlot = async () => {
+    if (claudeAuth && isClaudeTokenStale(claudeAuth, nowMs) && claudeAuth.refreshToken) {
+      let newTokens = null;
+      try {
+        newTokens = await refreshClaudeTokens({
+          refreshToken: claudeAuth.refreshToken,
+          scopes: claudeAuth.scopes,
+          fetchImpl: providerFetch,
+          nowMs,
+        });
+      } catch (err) {
+        claudeRefreshError = err;
+      }
+
+      if (newTokens) {
+        // Keep the refreshed tokens in memory even if persistence fails.
+        claudeAuthRefreshed = {
+          ...claudeAuth,
+          accessToken: newTokens.accessToken,
+          refreshToken: newTokens.refreshToken,
+          expiresAtMs: newTokens.expiresAt,
+          refreshTokenExpiresAtMs: newTokens.refreshTokenExpiresAt,
+          scopes: newTokens.scopes,
+        };
+        claudeToken = newTokens.accessToken;
+        claudeTokenExpiresAtMs = newTokens.expiresAt;
+        try {
+          const updatedPayload = await persistRefreshedClaudeAuth({
+            currentPayload: claudeAuth.rawPayload,
+            newTokens,
+            expectedRefreshToken: claudeAuth.refreshToken,
+            platform,
+            service: claudeAuth.service,
+            account: claudeAuth.account,
+            credentialsPath: claudeAuth.credentialsPath,
+            home,
+            env,
+            securityRunner,
+          });
+          claudeAuthRefreshed = { ...claudeAuthRefreshed, rawPayload: updatedPayload };
+        } catch (_persistErr) {
+          // Non-fatal: the refreshed token in memory remains usable for this request.
+        }
+      }
+    }
+
+    if (!claudeToken) return null;
+
+    // Skip the upstream Claude call entirely while a 429 cooldown is active — calling again
+    // just renews the penalty. The result handling below serves cache or a cooldown message.
+    claudeRetryAtMs = readClaudeRateLimitRetryAtMs({ home, nowMs, tokenExpiresAtMs: claudeTokenExpiresAtMs });
+    // Also avoid cross-process hammering after a recent successful read.
+    freshClaudeCache = !forceRefresh ? readFreshClaudeLimitsCache({ home, nowMs }) : null;
+    if (freshClaudeCache || claudeRetryAtMs) return null;
+
     try {
       return await fetchClaudeUsageLimits(claudeToken, { fetchImpl: providerFetch, maxAttempts: 1 });
     } catch (err) {
       if (err?.code === "AUTH_EXPIRED" && claudeAuthRefreshed?.refreshToken && !claudeRefreshError) {
+        const prevRefreshToken = claudeAuthRefreshed.refreshToken;
+        let retriedTokens;
         try {
-          const newTokens = await refreshClaudeTokens({
-            refreshToken: claudeAuthRefreshed.refreshToken,
+          retriedTokens = await refreshClaudeTokens({
+            refreshToken: prevRefreshToken,
             scopes: claudeAuthRefreshed.scopes,
-            fetchImpl,
+            fetchImpl: providerFetch,
             nowMs,
           });
-          await persistRefreshedClaudeAuth({
+        } catch (_refreshErr) {
+          throw err;
+        }
+        claudeAuthRefreshed = {
+          ...claudeAuthRefreshed,
+          accessToken: retriedTokens.accessToken,
+          refreshToken: retriedTokens.refreshToken,
+          expiresAtMs: retriedTokens.expiresAt,
+          refreshTokenExpiresAtMs: retriedTokens.refreshTokenExpiresAt,
+          scopes: retriedTokens.scopes,
+        };
+        claudeToken = retriedTokens.accessToken;
+        claudeTokenExpiresAtMs = retriedTokens.expiresAt;
+        try {
+          const updatedPayload = await persistRefreshedClaudeAuth({
             currentPayload: claudeAuthRefreshed.rawPayload,
-            newTokens,
+            newTokens: retriedTokens,
+            expectedRefreshToken: prevRefreshToken,
             platform,
             service: claudeAuthRefreshed.service,
             account: claudeAuthRefreshed.account,
@@ -4659,16 +4683,17 @@ async function fetchUsageLimitsUncached({
             env,
             securityRunner,
           });
-          return await fetchClaudeUsageLimits(newTokens.accessToken, { fetchImpl: providerFetch, maxAttempts: 1 });
-        } catch (_retryErr) {
-          throw err;
+          claudeAuthRefreshed = { ...claudeAuthRefreshed, rawPayload: updatedPayload };
+        } catch (_persistErr) {
+          // Keep using refreshed in-memory token even if persistence fails.
         }
+        // Propagate errors from the retried usage request (e.g. 429 RATE_LIMITED) directly.
+        return await fetchClaudeUsageLimits(retriedTokens.accessToken, { fetchImpl: providerFetch, maxAttempts: 1 });
       }
       throw err;
     }
   };
 
-  const providerFetch = withFetchTimeout(fetchImpl, providerTimeoutMs);
   // What a hidden provider's Promise.all slot resolves to. Both shapes flow
   // through the same assembly branches as a genuinely unconfigured provider —
   // the CommandCode/Devin fulfilled branches keep the value verbatim, the
@@ -4679,8 +4704,8 @@ async function fetchUsageLimitsUncached({
   const hiddenSentinel = Promise.resolve({ configured: false });
   const hiddenSettled = Promise.resolve({ status: "fulfilled", value: { configured: false } });
   const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, devinRaw, workbuddy, workbuddyAi, deepseek, claudeServiceStatus] = await Promise.all([
-    claudeToken && !freshClaudeCache && !claudeRetryAtMs
-      ? withProviderTimeout(executeClaudeFetch(), "Claude", providerTimeoutMs).then(
+    claudeAuth && !customClaudeBackend
+      ? withProviderTimeout(executeClaudeSlot(), "Claude", providerTimeoutMs).then(
           (value) => ({ status: "fulfilled", value }),
           (reason) => ({ status: "rejected", reason }),
         )
@@ -4835,7 +4860,7 @@ async function fetchUsageLimitsUncached({
     // Public status-page probe (fail-soft, own 5-min cache in provider-status.js).
     // Only probed for configured accounts — without a token the Claude section
     // never renders, so the reading would have nowhere to go.
-    claudeToken
+    (claudeToken || claudeAuth?.refreshToken) && !customClaudeBackend
       ? fetchProviderServiceStatus("claude", { fetchImpl, nowMs })
       : Promise.resolve(null),
   ]);
@@ -4857,13 +4882,17 @@ async function fetchUsageLimitsUncached({
     claude = credentialsPresent
       ? {
           configured: true,
-          error: (claudeRefreshError && claudeRefreshError.code === "REFRESH_TOKEN_EXPIRED" ? claudeRefreshError.message : CLAUDE_AUTH_EXPIRED_MESSAGE),
+          error: (claudeRefreshError && claudeRefreshError.code === "REFRESH_TOKEN_EXPIRED"
+            ? claudeRefreshError.message
+            : claudeResult?.status === "rejected" && claudeResult.reason?.message
+              ? claudeResult.reason.message
+              : CLAUDE_AUTH_EXPIRED_MESSAGE),
           auth_action_required: "reauth",
         }
       : { configured: false };
   } else if (freshClaudeCache) {
     claude = freshClaudeCache;
-  } else if (claudeResult && claudeResult.status === "fulfilled") {
+  } else if (claudeResult && claudeResult.status === "fulfilled" && claudeResult.value) {
     claude = {
       configured: true,
       error: null,

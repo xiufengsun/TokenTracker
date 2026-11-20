@@ -274,4 +274,54 @@ describe("persistRefreshedClaudeAuth", () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it("skips writing if stored refreshToken changed concurrently (macOS and Linux)", async () => {
+    let writeCalled = false;
+    const runner = (_bin, args) => {
+      if (args[0] === "find-generic-password") {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            claudeAiOauth: { accessToken: "other-acc", refreshToken: "other-rt" },
+          }),
+        };
+      }
+      writeCalled = true;
+      return { status: 0 };
+    };
+
+    const macResult = await persistRefreshedClaudeAuth({
+      currentPayload: { claudeAiOauth: { accessToken: "old-acc", refreshToken: "old-rt" } },
+      newTokens: { accessToken: "new-acc", refreshToken: "new-rt", expiresAt: 1799999999000 },
+      platform: "darwin",
+      service: "Claude Code-credentials",
+      account: "testuser",
+      securityRunner: runner,
+    });
+    assert.equal(writeCalled, false);
+    assert.equal(macResult.claudeAiOauth.refreshToken, "other-rt");
+
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-claude-persist-race-"));
+    try {
+      const credDir = path.join(tmp, ".claude");
+      fs.mkdirSync(credDir, { recursive: true });
+      const credPath = path.join(credDir, ".credentials.json");
+      fs.writeFileSync(
+        credPath,
+        JSON.stringify({ claudeAiOauth: { accessToken: "other-acc", refreshToken: "other-rt" } }),
+      );
+
+      await persistRefreshedClaudeAuth({
+        currentPayload: { claudeAiOauth: { accessToken: "old-acc", refreshToken: "old-rt" } },
+        newTokens: { accessToken: "new-acc", refreshToken: "new-rt", expiresAt: 1799999999000 },
+        platform: "linux",
+        credentialsPath: credPath,
+      });
+
+      const onDisk = JSON.parse(fs.readFileSync(credPath, "utf8"));
+      assert.equal(onDisk.claudeAiOauth.refreshToken, "other-rt");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
