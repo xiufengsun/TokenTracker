@@ -2064,6 +2064,52 @@ describe("getUsageLimits", () => {
     }
   });
 
+  it("does not request reauthentication when proactive Claude refresh hits a transient 503", async () => {
+    resetUsageLimitsCache();
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-claude-503-refresh-"));
+    try {
+      const nowMs = Date.parse("2026-05-05T12:00:00.000Z");
+      const claudeDir = path.join(tmp, ".claude");
+      fs.mkdirSync(claudeDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(claudeDir, ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "expired-access-token",
+            refreshToken: "rt-claude-valid",
+            expiresAt: nowMs - 1000,
+          },
+        }),
+      );
+
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        nowMs,
+        providerTimeoutMs: 2000,
+        securityRunner() {
+          return { status: 1, stdout: "" };
+        },
+        commandRunner() {
+          return { status: 1, stdout: "" };
+        },
+        fetchImpl(url) {
+          if (typeof url === "string" && url.includes("platform.claude.com/v1/oauth/token")) {
+            return Promise.resolve({ ok: false, status: 503 });
+          }
+          return pendingUnlessCodexReset(url);
+        },
+      });
+
+      assert.equal(result.claude.configured, true);
+      assert.equal(result.claude.auth_action_required, undefined);
+      assert.match(result.claude.error, /503/);
+    } finally {
+      resetUsageLimitsCache();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces a reauth-required error when the refresh token itself is expired", async () => {
     resetUsageLimitsCache();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-limits-codex-reauth-"));

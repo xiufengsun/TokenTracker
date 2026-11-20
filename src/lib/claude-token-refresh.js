@@ -41,6 +41,7 @@ async function refreshClaudeTokens({
   scopes = CLAUDE_DEFAULT_SCOPES,
   clientId = CLAUDE_CLIENT_ID,
   fetchImpl = fetch,
+  dedupeKeyFetch = null,
   nowMs = Date.now(),
 } = {}) {
   if (typeof refreshToken !== "string" || refreshToken.trim().length === 0) {
@@ -49,89 +50,140 @@ async function refreshClaudeTokens({
     throw err;
   }
 
-  const scopeStr = Array.isArray(scopes) && scopes.length > 0
-    ? scopes.join(" ")
-    : typeof scopes === "string" && scopes.trim().length > 0
-      ? scopes
-      : CLAUDE_DEFAULT_SCOPES.join(" ");
+  const trimmedRefresh = refreshToken.trim();
+  const singleflightBucket = dedupeKeyFetch || fetchImpl;
+  let tokenMap = inflightRefreshesByFetch.get(singleflightBucket);
+  if (!tokenMap) {
+    tokenMap = new Map();
+    inflightRefreshesByFetch.set(singleflightBucket, tokenMap);
+  }
+  const existing = tokenMap.get(trimmedRefresh);
+  if (existing) {
+    return existing;
+  }
 
-  const res = await fetchImpl(CLAUDE_REFRESH_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      "User-Agent": "Claude-Code/2.1.317",
-    },
-    body: JSON.stringify({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken.trim(),
-      client_id: clientId,
-      scope: scopeStr,
-    }),
-  });
+  const run = (async () => {
+    const scopeStr = Array.isArray(scopes) && scopes.length > 0
+      ? scopes.join(" ")
+      : typeof scopes === "string" && scopes.trim().length > 0
+        ? scopes
+        : CLAUDE_DEFAULT_SCOPES.join(" ");
 
-  if (res.status === 400 || res.status === 401) {
-    let detail = null;
-    try {
-      const data = await res.json();
-      detail = data?.error || data?.error_description || null;
-    } catch (_e) {
-      // Ignore parse failure
+    const res = await fetchImpl(CLAUDE_REFRESH_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": "Claude-Code/2.1.317",
+      },
+      body: JSON.stringify({
+        grant_type: "refresh_token",
+        refresh_token: trimmedRefresh,
+        client_id: clientId,
+        scope: scopeStr,
+      }),
+    });
+
+    if (res.status === 400 || res.status === 401) {
+      let detail = null;
+      try {
+        const data = await res.json();
+        detail = data?.error || data?.error_description || null;
+      } catch (_e) {
+        // Ignore parse failure
+      }
+      const err = new Error(CLAUDE_AUTH_EXPIRED_MESSAGE);
+      err.code = "REFRESH_TOKEN_EXPIRED";
+      err.status = res.status;
+      err.detail = detail;
+      throw err;
     }
-    const err = new Error(CLAUDE_AUTH_EXPIRED_MESSAGE);
-    err.code = "REFRESH_TOKEN_EXPIRED";
-    err.status = res.status;
-    err.detail = detail;
-    throw err;
+
+    if (!res.ok) {
+      const err = new Error(`Claude token refresh failed: ${res.status}`);
+      err.code = "REFRESH_HTTP_ERROR";
+      err.status = res.status;
+      throw err;
+    }
+
+    const body = await res.json();
+    if (!body || typeof body.access_token !== "string" || body.access_token.length === 0) {
+      const err = new Error("Claude token refresh response missing access_token");
+      err.code = "REFRESH_INVALID_RESPONSE";
+      throw err;
+    }
+
+    const expiresInSec = typeof body.expires_in === "number" && body.expires_in > 0 ? body.expires_in : 28800;
+    const refreshExpiresInSec = typeof body.refresh_token_expires_in === "number" && body.refresh_token_expires_in > 0
+      ? body.refresh_token_expires_in
+      : null;
+
+    const expiresAt = nowMs + expiresInSec * 1000;
+    const refreshTokenExpiresAt = refreshExpiresInSec ? nowMs + refreshExpiresInSec * 1000 : null;
+
+    return sanitizeClaudeTokens({
+      accessToken: body.access_token,
+      refreshToken: typeof body.refresh_token === "string" && body.refresh_token.length > 0
+        ? body.refresh_token
+        : trimmedRefresh,
+      expiresAt,
+      refreshTokenExpiresAt,
+      scopes: typeof body.scope === "string"
+        ? body.scope.split(" ").filter(Boolean)
+        : Array.isArray(scopes) ? scopes : CLAUDE_DEFAULT_SCOPES,
+    });
+  })();
+
+  tokenMap.set(trimmedRefresh, run);
+  try {
+    return await run;
+  } finally {
+    if (tokenMap.get(trimmedRefresh) === run) {
+      tokenMap.delete(trimmedRefresh);
+    }
   }
+}
 
-  if (!res.ok) {
-    const err = new Error(`Claude token refresh failed: ${res.status}`);
-    err.code = "REFRESH_HTTP_ERROR";
-    err.status = res.status;
-    throw err;
+// In-process singleflight map keyed by base fetchImpl (so production calls using global
+// fetch deduplicate concurrent refreshes per refreshToken, while isolated test mocks don't collide).
+const inflightRefreshesByFetch = new WeakMap();
+
+function sanitizeAsciiToken(value, label) {
+  if (typeof value !== "string") {
+    throw new Error(`Invalid Claude ${label}`);
   }
-
-  const body = await res.json();
-  if (!body || typeof body.access_token !== "string" || body.access_token.length === 0) {
-    const err = new Error("Claude token refresh response missing access_token");
-    err.code = "REFRESH_INVALID_RESPONSE";
-    throw err;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 4096) {
+    throw new Error(`Invalid Claude ${label}`);
   }
+  const codes = new Array(trimmed.length);
+  for (let i = 0; i < trimmed.length; i++) {
+    const code = trimmed.charCodeAt(i);
+    if (code < 0x21 || code > 0x7e) {
+      throw new Error(`Invalid Claude ${label}`);
+    }
+    codes[i] = code;
+  }
+  return String.fromCharCode(...codes);
+}
 
-  const expiresInSec = typeof body.expires_in === "number" && body.expires_in > 0 ? body.expires_in : 28800;
-  const refreshExpiresInSec = typeof body.refresh_token_expires_in === "number" && body.refresh_token_expires_in > 0
-    ? body.refresh_token_expires_in
-    : null;
-
-  const expiresAt = nowMs + expiresInSec * 1000;
-  const refreshTokenExpiresAt = refreshExpiresInSec ? nowMs + refreshExpiresInSec * 1000 : null;
-
-  return {
-    accessToken: body.access_token,
-    refreshToken: typeof body.refresh_token === "string" && body.refresh_token.length > 0
-      ? body.refresh_token
-      : refreshToken,
-    expiresAt,
-    refreshTokenExpiresAt,
-    scopes: typeof body.scope === "string"
-      ? body.scope.split(" ").filter(Boolean)
-      : Array.isArray(scopes) ? scopes : CLAUDE_DEFAULT_SCOPES,
-  };
+function sanitizeScopes(scopes) {
+  if (!Array.isArray(scopes)) return null;
+  const out = [];
+  for (const s of scopes) {
+    if (typeof s !== "string" || s.length === 0 || s.length > 128) continue;
+    if (!/^[a-zA-Z0-9:_.-]+$/.test(s)) continue;
+    out.push(sanitizeAsciiToken(s, "scope"));
+  }
+  return out;
 }
 
 function sanitizeClaudeTokens(newTokens) {
   if (!newTokens || typeof newTokens !== "object") {
     throw new Error("Invalid Claude token payload");
   }
-  const accessToken = typeof newTokens.accessToken === "string" ? newTokens.accessToken.trim() : "";
-  const refreshToken = typeof newTokens.refreshToken === "string" ? newTokens.refreshToken.trim() : "";
-  if (!accessToken || accessToken.length > 4096) {
-    throw new Error("Invalid Claude accessToken");
-  }
-  if (!refreshToken || refreshToken.length > 4096) {
-    throw new Error("Invalid Claude refreshToken");
-  }
+  const accessToken = sanitizeAsciiToken(newTokens.accessToken, "accessToken");
+  const refreshToken = sanitizeAsciiToken(newTokens.refreshToken, "refreshToken");
   const expiresAt = Number(newTokens.expiresAt);
   if (!Number.isFinite(expiresAt) || expiresAt <= 0) {
     throw new Error("Invalid Claude expiresAt");
@@ -140,9 +192,7 @@ function sanitizeClaudeTokens(newTokens) {
     newTokens.refreshTokenExpiresAt != null && Number.isFinite(Number(newTokens.refreshTokenExpiresAt))
       ? Number(newTokens.refreshTokenExpiresAt)
       : null;
-  const scopes = Array.isArray(newTokens.scopes)
-    ? newTokens.scopes.filter((s) => typeof s === "string" && /^[a-zA-Z0-9:_.-]+$/.test(s))
-    : null;
+  const scopes = sanitizeScopes(newTokens.scopes);
 
   return {
     accessToken,
@@ -232,8 +282,13 @@ async function persistRefreshedClaudeAuth({
   const latestRefreshToken =
     typeof latestPayload?.claudeAiOauth?.refreshToken === "string" ? latestPayload.claudeAiOauth.refreshToken : null;
 
-  if (capturedRefreshToken && latestRefreshToken && latestRefreshToken !== capturedRefreshToken) {
-    return latestPayload;
+  if (capturedRefreshToken) {
+    if (platform !== "darwin" && !fs.existsSync(credPath)) {
+      return null;
+    }
+    if (latestPayload && latestRefreshToken !== capturedRefreshToken) {
+      return latestPayload;
+    }
   }
 
   const basePayload = latestPayload || (currentPayload && typeof currentPayload === "object" ? currentPayload : {});
@@ -277,9 +332,14 @@ async function persistRefreshedClaudeAuth({
 
   // Linux / Windows
   await fs.promises.mkdir(path.dirname(credPath), { recursive: true });
-  const tmp = `${credPath}.tmp.${process.pid}.${Date.now()}`;
-  await fs.promises.writeFile(tmp, serialized, { mode: 0o600 });
-  await fs.promises.rename(tmp, credPath);
+  const tmp = `${credPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    await fs.promises.writeFile(tmp, serialized, { mode: 0o600, flag: "wx" });
+    await fs.promises.rename(tmp, credPath);
+  } catch (err) {
+    await fs.promises.unlink(tmp).catch(() => {});
+    throw err;
+  }
   return merged;
 }
 

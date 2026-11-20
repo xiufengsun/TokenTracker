@@ -324,4 +324,46 @@ describe("persistRefreshedClaudeAuth", () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it("skips writing if user signed out concurrently (blanked token or deleted file)", async () => {
+    let writeCalled = false;
+    const runner = (_bin, args) => {
+      if (args[0] === "find-generic-password") {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            claudeAiOauth: { accessToken: "", refreshToken: "" },
+          }),
+        };
+      }
+      writeCalled = true;
+      return { status: 0 };
+    };
+
+    const macRes = await persistRefreshedClaudeAuth({
+      currentPayload: { claudeAiOauth: { accessToken: "old-acc", refreshToken: "old-rt" } },
+      newTokens: { accessToken: "new-acc", refreshToken: "new-rt", expiresAt: 1799999999000 },
+      platform: "darwin",
+      service: "Claude Code-credentials",
+      account: "testuser",
+      securityRunner: runner,
+    });
+    assert.equal(writeCalled, false);
+    assert.equal(macRes.claudeAiOauth.refreshToken, "");
+
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-claude-persist-signout-"));
+    try {
+      const missingPath = path.join(tmp, ".claude", ".credentials.json");
+      const linuxRes = await persistRefreshedClaudeAuth({
+        currentPayload: { claudeAiOauth: { accessToken: "old-acc", refreshToken: "old-rt" } },
+        newTokens: { accessToken: "new-acc", refreshToken: "new-rt", expiresAt: 1799999999000 },
+        platform: "linux",
+        credentialsPath: missingPath,
+      });
+      assert.equal(linuxRes, null);
+      assert.equal(fs.existsSync(missingPath), false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
