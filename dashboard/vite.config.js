@@ -1240,6 +1240,12 @@ function localDataApiPlugin() {
           // (cycle field, corrupt-store backups); a stale packaged app on
           // :7680 would 404 the Limits-page subscription UI in dev mode.
           || url.pathname === "/functions/tokentracker-subscription-manager"
+          // The instance config/test endpoints must share /api/local-auth's
+          // handler: proxying only them to :7680 issues a different local-auth
+          // token, so every save 401s in dev mode even though the packaged app
+          // (one handler for both) works.
+          || url.pathname === "/functions/tokentracker-instance-config"
+          || url.pathname === "/functions/tokentracker-instance-test"
           || url.pathname === "/api/pets/import"
           || url.pathname.startsWith("/api/pets/local/")
           || url.pathname.startsWith("/api/pets/codex/");
