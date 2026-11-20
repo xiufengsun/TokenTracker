@@ -80,6 +80,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private bool _updateBalloonShown;
     private string? _lastUpdateError;
     private bool _integrityCheckFailedDuringInstall;
+    private bool _confirmingUpdate;
 
     // Theme and tray state refresh independently of WebView script execution.
     private readonly System.Windows.Forms.Timer _refreshTimer = new() { Interval = 2000 };
@@ -791,6 +792,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             updateStatus,
             updateError = _lastUpdateError,
             updateAvailable = _updateChecker.State == UpdateChecker.UpdateState.UpdateAvailable,
+            updateInProgress = _updateChecker.State is UpdateChecker.UpdateState.Downloading
+                or UpdateChecker.UpdateState.Installing,
             latestVersion = _updateChecker.LatestVersion,
             updateBusy = _updateChecker.State is UpdateChecker.UpdateState.Checking
                 or UpdateChecker.UpdateState.Downloading
@@ -858,7 +861,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _lastUpdateError = null;
         PushDashboardNativeSettings();
 
-        var installed = await _updateChecker.DownloadAndInstallAsync();
+        var installed = await Task.Run(() => _updateChecker.DownloadAndInstallAsync());
         if (!installed)
         {
             _lastUpdateError = _integrityCheckFailedDuringInstall
@@ -910,21 +913,42 @@ internal sealed class TrayApplicationContext : ApplicationContext
     }
 
     /// <summary>
-    /// Tray "Check for Updates" / "Update to vX". When a prior (silent) check already
-    /// found a version, the item IS the update action — go straight to download+install.
-    /// Otherwise run a manual check and report the outcome via a dialog.
+    /// Tray "Check for Updates" / "Update to vX" (also invoked by Settings "Check
+    /// for updates"). Every path prompts the user for confirmation before
+    /// downloading, installing, and exiting the app.
     /// </summary>
     private void OnCheckUpdatesClicked()
     {
         switch (_updateChecker.State)
         {
             case UpdateChecker.UpdateState.UpdateAvailable:
-                _ = Task.Run(() => _updateChecker.DownloadAndInstallAsync());
+                PromptAndInstallPendingUpdate();
                 break;
             case UpdateChecker.UpdateState.Idle:
                 _ = RunManualCheckAsync();
                 break;
             // Checking / Downloading / Installing: already busy — ignore the click.
+        }
+    }
+
+    private void PromptAndInstallPendingUpdate()
+    {
+        if (_confirmingUpdate || _updateChecker.State != UpdateChecker.UpdateState.UpdateAvailable)
+            return;
+
+        _confirmingUpdate = true;
+        try
+        {
+            var confirm = MessageBox.Show(
+                string.Format(_updateStrings.UpdateFoundPrompt, _updateChecker.LatestVersion, _updateChecker.CurrentVersion),
+                _updateStrings.UpdateFoundTitle,
+                MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+            if (confirm == DialogResult.Yes)
+                _ = RunDashboardUpdateNowAsync();
+        }
+        finally
+        {
+            _confirmingUpdate = false;
         }
     }
 
@@ -934,11 +958,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         switch (outcome)
         {
             case UpdateChecker.CheckOutcome.UpdateAvailable:
-                var confirm = MessageBox.Show(
-                    string.Format(_updateStrings.UpdateFoundPrompt, _updateChecker.LatestVersion, _updateChecker.CurrentVersion),
-                    _updateStrings.UpdateFoundTitle,
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Information);
-                if (confirm == DialogResult.Yes) _ = Task.Run(() => _updateChecker.DownloadAndInstallAsync());
+                PromptAndInstallPendingUpdate();
                 break;
             case UpdateChecker.CheckOutcome.UpToDate:
                 MessageBox.Show(

@@ -1,12 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
+import { isNativeWindowsApp } from "../lib/native-bridge.js";
 import { useNativeSettings } from "./use-native-settings.js";
-
-const GITHUB_RELEASE_API_URL =
-  "https://api.github.com/repos/xiufengsun/TokenTracker/releases/latest";
-const GITHUB_RELEASE_PAGE_URL =
-  "https://github.com/xiufengsun/TokenTracker/releases/latest";
-const RELEASE_CACHE_KEY = "tt.githubLatestRelease";
-const RELEASE_CACHE_TTL_MS = 30 * 60 * 1000;
 
 /**
  * Strip leading 'v' prefixes and build/prerelease suffixes from a version string.
@@ -43,61 +37,11 @@ export function isNewerVersion(current, latest) {
 }
 
 /**
- * Read the cached GitHub release metadata from sessionStorage if still within the TTL.
- * @returns {{ latestVersion: string, htmlUrl: string } | null}
- */
-function readCachedRelease() {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.sessionStorage.getItem(RELEASE_CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (
-      !parsed ||
-      typeof parsed.latestVersion !== "string" ||
-      typeof parsed.timestamp !== "number"
-    ) {
-      return null;
-    }
-    if (Date.now() - parsed.timestamp > RELEASE_CACHE_TTL_MS) {
-      return null;
-    }
-    return {
-      latestVersion: normalizeVersion(parsed.latestVersion),
-      htmlUrl: parsed.htmlUrl || GITHUB_RELEASE_PAGE_URL,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Persist GitHub release metadata into sessionStorage with a timestamp.
- * @param {string} latestVersion
- * @param {string} htmlUrl
- */
-function writeCachedRelease(latestVersion, htmlUrl) {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage.setItem(
-      RELEASE_CACHE_KEY,
-      JSON.stringify({
-        latestVersion: normalizeVersion(latestVersion),
-        htmlUrl: htmlUrl || GITHUB_RELEASE_PAGE_URL,
-        timestamp: Date.now(),
-      }),
-    );
-  } catch {
-    /* ignore storage errors */
-  }
-}
-
-/**
  * Global application update state hook.
  *
- * Consumes native bridge settings when running inside the desktop host and
- * falls back to checking GitHub Releases (with a 30-minute sessionStorage
- * cache) in web mode.
+ * Scoped strictly to the Windows desktop client (`WebView2` host), consuming
+ * native update state, download progress, and error feedback from
+ * `native:settings`. Returns inactive defaults on web/cloud, macOS, and Linux.
  */
 export function useAppUpdate() {
   const {
@@ -112,76 +56,43 @@ export function useAppUpdate() {
   const currentVersion =
     normalizeVersion(nativeSettings?.version) || fallbackVersion;
 
-  const [webRelease, setWebRelease] = useState(readCachedRelease);
-
-  const nativeSettingsLoading = nativeAvailable && nativeSettings === null;
-  const hasExplicitNativeUpdateState =
-    nativeAvailable && typeof nativeSettings?.updateAvailable === "boolean";
-
-  useEffect(() => {
-    if (
-      typeof window === "undefined" ||
-      nativeSettingsLoading ||
-      hasExplicitNativeUpdateState
-    ) {
-      return undefined;
-    }
-
-    const cached = readCachedRelease();
-    if (cached) {
-      setWebRelease(cached);
-      return undefined;
-    }
-
-    let cancelled = false;
-    fetch(GITHUB_RELEASE_API_URL)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (cancelled || !data || typeof data.tag_name !== "string") return;
-        const latestVersion = normalizeVersion(data.tag_name);
-        const htmlUrl = data.html_url || GITHUB_RELEASE_PAGE_URL;
-        writeCachedRelease(latestVersion, htmlUrl);
-        setWebRelease({ latestVersion, htmlUrl });
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
-  }, [hasExplicitNativeUpdateState, nativeSettingsLoading]);
+  const isWindowsHost = isNativeWindowsApp();
+  const nativeSettingsLoading = isWindowsHost && nativeSettings === null;
+  const isWindowsClient =
+    isWindowsHost &&
+    nativeAvailable &&
+    !nativeSettingsLoading &&
+    (nativeSettings?.platform == null || nativeSettings.platform === "windows");
 
   const nativeLatest = normalizeVersion(nativeSettings?.latestVersion);
-  const latestVersion = nativeLatest || webRelease?.latestVersion || "";
-  const hasUpdate =
-    !nativeSettingsLoading &&
-    (hasExplicitNativeUpdateState
-      ? Boolean(nativeSettings.updateAvailable)
-      : isNewerVersion(currentVersion, latestVersion));
+  const latestVersion = isWindowsClient ? nativeLatest : "";
+  const hasUpdate = isWindowsClient && Boolean(nativeSettings?.updateAvailable);
+  const updateInProgress =
+    isWindowsClient &&
+    (typeof nativeSettings?.updateInProgress === "boolean"
+      ? nativeSettings.updateInProgress
+      : Boolean(nativeSettings?.updateBusy && nativeLatest));
 
-  const updateBusy = Boolean(nativeSettings?.updateBusy);
-  const updateStatus = nativeSettings?.updateStatus || null;
-  const updateError = nativeSettings?.updateError || null;
+  const updateBusy = isWindowsClient && Boolean(nativeSettings?.updateBusy);
+  const updateStatus = isWindowsClient
+    ? nativeSettings?.updateStatus || null
+    : null;
+  const updateError = isWindowsClient
+    ? nativeSettings?.updateError || null
+    : null;
 
   const triggerUpdate = useCallback(() => {
-    if (nativeAvailable) {
-      if (nativeSettings?.updateAvailable) {
-        runAction("updateNow");
-      } else {
-        runAction("checkForUpdates");
-      }
-      return;
+    if (!isWindowsClient) return;
+    if (nativeSettings?.updateAvailable) {
+      runAction("updateNow");
+    } else {
+      runAction("checkForUpdates");
     }
-    if (typeof window !== "undefined") {
-      window.open(
-        webRelease?.htmlUrl || GITHUB_RELEASE_PAGE_URL,
-        "_blank",
-        "noopener,noreferrer",
-      );
-    }
-  }, [nativeAvailable, nativeSettings?.updateAvailable, runAction, webRelease?.htmlUrl]);
+  }, [isWindowsClient, nativeSettings?.updateAvailable, runAction]);
 
   return {
     hasUpdate,
+    updateInProgress,
     currentVersion,
     latestVersion,
     updateBusy,
