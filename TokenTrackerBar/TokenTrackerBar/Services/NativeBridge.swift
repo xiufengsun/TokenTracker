@@ -197,6 +197,7 @@ final class NativeBridge {
                 "menuBarIconStyle": "static", "animatedIcon": false, "toastOnReset": false,
                 "confettiOnReset": false, "autoUpdateEnabled": false, "launchAtLogin": false,
                 "launchAtLoginSupported": false, "dynamicIslandEnabled": false,
+                "dynamicIslandPlacement": "island",
                 "dynamicIslandSupported": false, "hideMenuBarIcon": false, "isSyncing": false,
                 "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
                 "updateStatus": NSNull(), "updateBusy": false, "locale": NativeLocalization.currentPreference,
@@ -336,6 +337,7 @@ final class NativeBridge {
             "launchAtLogin": launchAtLoginValue,
             "launchAtLoginSupported": launchAtLoginSupported,
             "dynamicIslandEnabled": UserDefaults.standard.bool(forKey: DynamicIslandController.enabledDefaultsKey),
+            "dynamicIslandPlacement": DynamicIslandPlacementPolicy.placement().bridgeValue,
             "hideMenuBarIcon": UserDefaults.standard.bool(forKey: StatusBarController.hideMenuBarIconKey),
             // macOS-only feature flag: the Windows bridge never sends this, so
             // the dashboard can gate the Labs toggle on its presence.
@@ -433,6 +435,13 @@ final class NativeBridge {
                 } else if !wasEnabled {
                     StatusBarController.offerHideIconPromptAfterIslandEnabled()
                 }
+                NotificationCenter.default.post(name: .nativeSettingsChanged, object: nil)
+            }
+        case "dynamicIslandPlacement":
+            if let raw = value as? String {
+                let placement = DynamicIslandPlacement.fromBridge(raw)
+                DynamicIslandPlacementPolicy.write(placement)
+                dynamicIslandController?.reloadPlacement()
                 NotificationCenter.default.post(name: .nativeSettingsChanged, object: nil)
             }
         case "hideMenuBarIcon":
