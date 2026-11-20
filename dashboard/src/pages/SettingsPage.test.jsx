@@ -41,6 +41,8 @@ const LABELS = {
   "settings.section.limits.description": "Usage display and providers",
   "settings.section.labs": "Labs",
   "settings.section.labs.description": "Experimental insights",
+  "settings.section.about": "About",
+  "settings.section.about.description": "What Token Tracker is and who builds it",
   "settings.section.network": "Network",
   "settings.section.network.description": "Proxy configuration",
   "settings.limits.providers": "Providers",
@@ -108,6 +110,10 @@ vi.mock("../components/settings/useAccountProfileSettings.js", () => ({
 
 vi.mock("../components/settings/LabsSection.jsx", () => ({
   LabsSection: () => <div data-testid="labs-content" />,
+}));
+
+vi.mock("../components/settings/AboutSection.jsx", () => ({
+  AboutSection: () => <div data-testid="about-content" />,
 }));
 
 vi.mock("../components/settings/NetworkSection.jsx", () => ({
@@ -301,6 +307,17 @@ describe("SettingsPage category navigation", () => {
     );
     expect(container.querySelector('[data-settings-panel="limits"]')).not.toHaveAttribute("hidden");
     expect(container.querySelector('[data-settings-panel="appearance"]')).toHaveAttribute("hidden");
+  });
+
+  it("selects About from its deep link and keeps it inside the App group", () => {
+    const { container } = renderSettings("/settings?section=about");
+
+    const aboutButton = screen.getByRole("button", { name: "About" });
+    expect(aboutButton).toHaveAttribute("aria-current", "page");
+    expect(aboutButton.closest("nav").textContent).toContain("App");
+    expect(container.querySelector('[data-settings-panel="about"]')).not.toHaveAttribute("hidden");
+    expect(container.querySelector('[data-settings-panel="appearance"]')).toHaveAttribute("hidden");
+    expect(screen.getByTestId("about-content")).toBeInTheDocument();
   });
 
   it("offers independent reset toast and confetti settings in Usage & Limits", async () => {
