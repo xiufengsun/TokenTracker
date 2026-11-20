@@ -228,10 +228,25 @@ function createZcodePerformanceCollector() {
   return { consumeUsage, finish: totals.finish };
 }
 
+function createDshPerformanceCollector() {
+  const totals = accumulator();
+  function consumeUsage({ model, outputTokens, start, end, firstToken } = {}) {
+    // Step boundaries surround model work, before tool execution. Retry and
+    // interrupted steps are filtered by the transcript reader.
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start || end - start > MAX_DURATION_MS) return;
+    totals.request(model, outputTokens, start, end);
+    if (Number.isFinite(firstToken) && firstToken >= start && firstToken <= end) {
+      totals.add(model, { first_response_total_ms: firstToken - start, first_response_sample_count: 1 });
+    }
+  }
+  return { consumeUsage, finish: totals.finish };
+}
+
 module.exports = {
   normalizePerformance,
   mergePerformance,
   createClaudePerformanceCollector,
   createCodexPerformanceCollector,
   createZcodePerformanceCollector,
+  createDshPerformanceCollector,
 };

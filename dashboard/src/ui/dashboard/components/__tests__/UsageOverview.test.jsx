@@ -18,6 +18,14 @@ vi.mock("../../../../hooks/useTheme.js", () => ({
 }));
 
 describe("UsageOverview", () => {
+  it("places the Cloud notice inside the usage card above the main number", () => {
+    render(<UsageOverview periods={[]} summaryLabel="Total tokens" summaryValue="42"
+      cloudNotice={<div role="status">{copy("cloud.notice.expired.title")}</div>} />);
+    const notice = screen.getByRole("status");
+    const label = screen.getByText("Total tokens");
+    expect(notice.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(notice.parentElement).toBe(label.parentElement.parentElement);
+  });
   it("labels account-scope data on the usage card", () => {
     render(
       <UsageOverview
@@ -361,6 +369,21 @@ describe("UsageOverview", () => {
     expect(rowButton.querySelector("svg.lucide-chevron-down")).not.toHaveClass("rotate-180");
     expect(container.querySelectorAll("[data-model-rank-row]")).toHaveLength(2);
     expect(screen.queryByText("Cached input")).toBeNull();
+  });
+
+  it("explains Grok Bot subscription usage in both provider and combined model rows", async () => {
+    const user = userEvent.setup();
+    render(<UsageOverview periods={[]} summaryLabel="Total" summaryValue="100" fleetData={[{
+      source: "cursor", label: "CURSOR", totalPercent: "100.00", usage: 100, usd: 0,
+      models: [{ id: "grok-bot-default", name: "grok-bot-default", share: 100, usage: 100, cost: 0,
+        pricing: { status: "unpriced", source: "cursor_subscription" }, costSource: "model_pricing" }],
+    }]} />);
+    await act(async () => { await user.click(screen.getByRole("button", { name: /All tools:/i })); });
+    expect(screen.getByText(copy("dashboard.cost_breakdown.subscription_usage")))
+      .toHaveAttribute("title", copy("dashboard.cost_breakdown.subscription_usage_hint"));
+    expect(screen.queryByText(copy("dashboard.cost_breakdown.unpriced_label"))).not.toBeInTheDocument();
+    await act(async () => { await user.click(screen.getByRole("button", { name: /CURSOR:/i })); });
+    expect(screen.getByText(copy("dashboard.cost_breakdown.subscription_usage"))).toBeInTheDocument();
   });
 
   it("labels token-backed unpriced rows in the cost column instead of a blank cell", async () => {

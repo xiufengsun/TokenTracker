@@ -48,8 +48,9 @@ internal sealed class LocalSyncPublisher
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
         response.EnsureSuccessStatusCode();
-        // The local API writes its response after the sync child exits. Consume
-        // it so PublishAsync does not complete before that child is finished.
+        // The local API answers once the sync child exits or its 120s wait
+        // window closes (the child then keeps running). Consume the body so
+        // PublishAsync does not complete before that answer.
         await response.Content.ReadAsStringAsync(cancellationToken);
     }
 

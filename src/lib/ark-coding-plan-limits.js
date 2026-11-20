@@ -26,6 +26,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { runCommand, resolveBinaryPath, statBinaryInDirs, commonGlobalBinDirectories, resolvedCliEnvironment } = require("./command-runner");
+const { createLimitsCache } = require("./limits-cache");
 
 const ARK_LIMITS_CACHE_FILE = "ark-coding-plan-limits-cache.json";
 const ARK_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS = 12 * 60 * 60 * 1000;
@@ -212,75 +213,43 @@ function normalizeArkCodingPlanResponse(body) {
   };
 }
 
+// Deliberately fail-open on identity: the guard only applies when `profile
+// show` could establish the current identity — when it also failed, serving
+// the stale cache beats erroring out (availability over strictness). There is
+// no global max-age: dated windows are bounded by their own reset stamp and
+// undated ones by the 12h unknown-reset TTL.
+
+// A window whose reset_at has passed is stale — the quota has already rolled
+// over, so serving its old used_percent would mislead. Undated windows can't be
+// checked against a reset, so each one is dropped when the snapshot is too old;
+// a future-dated sibling must not keep it alive.
+const arkLimitsCache = createLimitsCache({
+  file: ARK_LIMITS_CACHE_FILE,
+  key: null,
+  maxAgeMs: null,
+  unknownResetTtlMs: ARK_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS,
+  fields: { plan_label: "string", product: "string", profile_identity: "string" },
+  windowKeys: ["primary_window", "secondary_window", "tertiary_window"],
+  identityField: "profile_identity",
+  identityRequired: false,
+  // The normalizer throws when no periods survive, so the write guard skips
+  // the window check the other providers need.
+  writeGuard: (record) => Boolean(record?.configured) && !record.error,
+  cachedFlag: true,
+  stale: true,
+  source: { const: "disk-cache" },
+});
+
 function arkCodingPlanCachePath({ home = os.homedir() } = {}) {
-  return path.join(home, ".tokentracker", "tracker", ARK_LIMITS_CACHE_FILE);
+  return arkLimitsCache.path({ home });
 }
 
 function readArkCodingPlanLimitsCache({ home = os.homedir(), nowMs = Date.now(), profileIdentity } = {}) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(arkCodingPlanCachePath({ home }), "utf8"));
-    // Deliberately fail-open: the guard only applies when `profile show`
-    // could establish the current identity. When it also failed, serving
-    // the stale cache beats erroring out — availability over strictness.
-    if (profileIdentity && parsed?.profile_identity !== profileIdentity) return null;
-    const cachedAtMs = Date.parse(parsed?.cached_at || "");
-    if (!Number.isFinite(cachedAtMs) || cachedAtMs > nowMs + 60_000) return null;
-    // A window whose reset_at has passed is stale — the quota has already
-    // rolled over, so serving its old used_percent would mislead. Drop it.
-    const windows = [parsed?.primary_window, parsed?.secondary_window, parsed?.tertiary_window];
-    const surviving = windows.map((window) => {
-      if (!window) return null;
-      const resetAtMs = Date.parse(window.reset_at || "");
-      if (Number.isFinite(resetAtMs) && resetAtMs <= nowMs) return null;
-      return window;
-    });
-    if (surviving.every((window) => !window)) return null;
-    // Undated windows can't be checked against a reset, so drop each one when
-    // the snapshot is too old. A future-dated sibling must not keep it alive.
-    const bounded = surviving.map((window) => {
-      if (!window) return null;
-      return Number.isFinite(Date.parse(window.reset_at || ""))
-        || nowMs - cachedAtMs <= ARK_LIMITS_CACHE_UNKNOWN_RESET_TTL_MS
-        ? window
-        : null;
-    });
-    if (bounded.every((window) => !window)) return null;
-    return {
-      configured: true,
-      error: null,
-      plan_label: typeof parsed?.plan_label === "string" ? parsed.plan_label : null,
-      product: typeof parsed?.product === "string" ? parsed.product : null,
-      primary_window: bounded[0],
-      secondary_window: bounded[1],
-      tertiary_window: bounded[2],
-      cached: true,
-      stale: true,
-      cached_at: parsed.cached_at,
-      source: "disk-cache",
-    };
-  } catch (_error) {
-    return null;
-  }
+  return arkLimitsCache.read({ home, nowMs, identity: profileIdentity });
 }
 
 function writeArkCodingPlanLimitsCache(limits, { home = os.homedir(), nowMs = Date.now() } = {}) {
-  if (!limits?.configured || limits.error) return;
-  const cachePath = arkCodingPlanCachePath({ home });
-  const payload = {
-    plan_label: limits.plan_label || null,
-    product: limits.product || null,
-    profile_identity: limits.profile_identity || null,
-    primary_window: limits.primary_window || null,
-    secondary_window: limits.secondary_window || null,
-    tertiary_window: limits.tertiary_window || null,
-    cached_at: new Date(nowMs).toISOString(),
-  };
-  try {
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const tmpPath = `${cachePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(tmpPath, cachePath);
-  } catch (_error) {}
+  arkLimitsCache.write(limits, { home, nowMs });
 }
 
 // runCommand / whichBinary / resolveBinaryPath now live in ./command-runner,

@@ -684,3 +684,26 @@ export async function confirmExpiredUnusedWaffoCheckout(order: BoundOrder, confi
   if ((await providerOrders(order, config, request)).length) return false;
   return (await providerOrders(order, config, request)).length === 0;
 }
+
+// Read-only finality evidence. Never invoke subscription cancellation here: a
+// pending -> paid race must not change an active customer's renewal settings.
+export async function confirmedCancelledWaffoAttempts(order: BoundOrder, config: WaffoConfig,
+  request: Fetcher = fetch, now = Date.now()): Promise<string[] | null> {
+  const value = object(order);
+  const expires = Date.parse(String(value.provider_checkout_expires_at));
+  if (!order.provider_checkout_id || !order.checkout_url || !Number.isFinite(expires) ||
+      now < expires + 60_000 || value.checkout_tracking_uncertain) return null;
+  const snapshots: string[][] = [];
+  for (let i = 0; i < 2; i++) {
+    const remotes = await providerOrders(order, config, request);
+    const ids: string[] = [];
+    for (const remote of remotes) {
+      assertUnpaid(remote, order, config);
+      if (!["canceled", "closed", "expired"].includes(String(remote.status))) return null;
+      ids.push(text(remote.id));
+    }
+    snapshots.push(ids.sort());
+  }
+  if (JSON.stringify(snapshots[0]) !== JSON.stringify(snapshots[1])) return null;
+  return snapshots[0];
+}

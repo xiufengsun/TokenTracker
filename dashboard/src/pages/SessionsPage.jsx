@@ -43,6 +43,7 @@ const SOURCE_FILTERS = [
   { id: "kimi", label: () => copy("leaderboard.column.kimi") },
   { id: "omp", label: () => "oh-my-pi" },
   { id: "dsh", label: () => copy("provider.display.deepseek_harness") },
+  { id: "pi", label: () => copy("provider.display.pi") },
 ];
 
 const DATE_RANGES = [

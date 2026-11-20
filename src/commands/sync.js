@@ -14,6 +14,12 @@ const { multiInstallParse, mergeBothFileSources } = require("../lib/multi-instal
 const { resolveDumateDbPaths, parseDumateIncremental } = require("../lib/dumate");
 const wsl = require("../lib/wsl-probe");
 const {
+  T3_ANTIGRAVITY_REL,
+  discoverT3AntigravityBrainDirs,
+  hostDiscoveryIncomplete,
+  mergeAntigravityInventories,
+} = require("../lib/antigravity-discovery");
+const {
   ensureDir,
   readJson,
   writeJson,
@@ -315,7 +321,7 @@ const DROID_DUP_SESSION_REPAIR_KEY = "droidDupSessionInflationRepair_2026_06";
 const CODEX_COLD_SCAN_AUDIT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const NOTIFY_LOCK_WAIT_MS = 130_000;
 const NOTIFY_LOCK_POLL_MS = 5_000;
-// Local API sync requests have a 120-second child-process budget. Reserve at
+// Local API sync requests answer within a 120-second wait window. Reserve at
 // least 30 seconds for parsing, persistence, and the response after contention.
 const PRIORITY_LOCK_WAIT_MS = 90_000;
 const PRIORITY_LOCK_POLL_MS = 250;
@@ -1315,31 +1321,43 @@ async function cmdSync(argv, context = {}) {
 
     let antigravityFiles = [];
     let antigravityInventoryComplete = true;
-    if (sourceAllowed("antigravity") && geminiPaths) {
+    if (sourceAllowed("antigravity")) {
       const knownAntigravityFiles = new Set(
         Object.keys(cursors.files || {}).filter((filePath) => resolveAntigravityDbPath(filePath)),
       );
+      const extraT3Parents = [];
+      if (process.platform === "win32" && wsl.shouldProbeWsl(process.env)) {
+        const wslT3Home = wsl.discoverWslHome(".t3");
+        if (wslT3Home) {
+          // discoverWslHome(".t3") already returns the T3 state root.
+          extraT3Parents.push(path.join(wslT3Home, T3_ANTIGRAVITY_REL));
+        }
+      }
+      const hostDiscovery = await discoverT3AntigravityBrainDirs({
+        home,
+        env: process.env,
+        parents: extraT3Parents,
+      });
       const fileSets = [];
-      if (geminiPaths.native) {
+      if (geminiPaths?.native) {
         fileSets.push(
           await listAntigravityTranscriptsWithStatus(geminiPaths.native, knownAntigravityFiles),
         );
       }
-      if (geminiPaths.wsl) {
+      if (geminiPaths?.wsl) {
         fileSets.push(
           await listAntigravityTranscriptsWithStatus(geminiPaths.wsl, knownAntigravityFiles),
         );
       }
-      antigravityInventoryComplete = fileSets.every((set) => set.complete);
-      const seen = new Set();
-      for (const set of fileSets) {
-        for (const f of set.files) {
-          if (!seen.has(f)) {
-            seen.add(f);
-            antigravityFiles.push(f);
-          }
-        }
+      if (hostDiscovery.brainDirs.length > 0 || hostDiscoveryIncomplete(hostDiscovery.reports, knownAntigravityFiles)) {
+        fileSets.push(
+          await listAntigravityTranscriptsWithStatus(null, knownAntigravityFiles, hostDiscovery.brainDirs),
+        );
       }
+      antigravityInventoryComplete =
+        fileSets.every((set) => set.complete) &&
+        !hostDiscoveryIncomplete(hostDiscovery.reports, knownAntigravityFiles);
+      antigravityFiles = mergeAntigravityInventories(fileSets, knownAntigravityFiles);
     }
     let antigravityResult = { filesProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
     if (antigravityFiles.length > 0) {
@@ -1854,7 +1872,7 @@ async function cmdSync(argv, context = {}) {
     if (sourceAllowed("dsh")) {
       await migrateLegacyDeepseekHarnessSource({ cursors, queuePath, queueStatePath });
       const dshSessionFiles = await resolveDshSessionFiles(process.env);
-      if (dshSessionFiles.length > 0) {
+      if (dshSessionFiles.length > 0 || cursors.dsh) {
         if (progress?.enabled) {
           progress.start(
             `Parsing DeepSeek Harness ${renderBar(0)} 0/${formatNumber(
@@ -1873,7 +1891,7 @@ async function cmdSync(argv, context = {}) {
             warnProviderParseFailure(
               "DeepSeek Harness",
               new Error(
-                `${dshResult.deferredMigrations} artifact migration(s) deferred; inspect cursors.dsh.deferredMigrations and retry after the replacement is complete`,
+                `${dshResult.deferredMigrations} accounting repair/artifact migration(s) deferred; inspect cursors.dsh.deferredMigrations, restore unavailable history or complete the replacement, then retry`,
               ),
               opts,
             );

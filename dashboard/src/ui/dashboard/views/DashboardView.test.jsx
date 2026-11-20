@@ -9,7 +9,7 @@ const loadingCard = vi.hoisted(() => ({ pending: true, mounts: 0, unmounts: 0 })
 vi.mock("../../components", () => ({ Shell: ({ children }) => <>{children}</>, Card: ({ children }) => <>{children}</> }));
 vi.mock("../../foundation/FadeIn.jsx", () => ({ FadeIn: ({ children }) => <>{children}</> }));
 vi.mock("../components/StatsPanel.jsx", () => ({ StatsPanel: () => <section data-testid="stats" /> }));
-vi.mock("../components/UsageOverview.jsx", () => ({ UsageOverview: () => <section data-testid="usage" /> }));
+vi.mock("../components/UsageOverview.jsx", () => ({ UsageOverview: ({ cloudNotice }) => <section data-testid="usage">{cloudNotice}</section> }));
 vi.mock("../components/CostAnalysisModal.jsx", () => ({ CostAnalysisModal: () => null }));
 vi.mock("../components/QualityPerDollarCard.jsx", async () => {
   const { useEffect } = await import("react");
@@ -24,6 +24,13 @@ vi.mock("../components/QualityPerDollarCard.jsx", async () => {
 });
 
 afterEach(cleanup);
+
+it("keeps the Cloud notice inside the right-side usage card", () => {
+  render(<DashboardView copy={copy} isLocalMode cloudNotice={<p role="status" aria-label="Cloud notice">{copy("cloud.notice.expired.title")}</p>}
+    leftCardOrder={["statsPanel"]} rightCardOrder={["usageOverview"]} />);
+  expect(screen.getByTestId("usage")).toContainElement(screen.getByRole("status", { name: "Cloud notice" }));
+  expect(screen.getByTestId("stats")).not.toContainElement(screen.getByRole("status", { name: "Cloud notice" }));
+});
 
 it("ignores removed promotional cards in saved layouts without leaving draggable empty slots", () => {
   render(<DashboardView copy={copy} isLocalMode

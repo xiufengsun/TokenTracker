@@ -268,8 +268,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 _updateStrings.IntegrityErrorMessage, ToolTipIcon.Warning);
             PushDashboardNativeSettings();
         });
-        _ = _updateChecker.CheckAsync(silent: true);
-        _updateCheckTimer.Tick += (_, _) => _ = _updateChecker.CheckAsync(silent: true);
+        _ = Task.Run(() => _updateChecker.CheckAsync(silent: true));
+        _updateCheckTimer.Tick += (_, _) => _ = Task.Run(() => _updateChecker.CheckAsync(silent: true));
         _updateCheckTimer.Start();
 
         // A stored preference (user toggled the pet at least once) always wins;
@@ -919,7 +919,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         switch (_updateChecker.State)
         {
             case UpdateChecker.UpdateState.UpdateAvailable:
-                _ = _updateChecker.DownloadAndInstallAsync();
+                _ = Task.Run(() => _updateChecker.DownloadAndInstallAsync());
                 break;
             case UpdateChecker.UpdateState.Idle:
                 _ = RunManualCheckAsync();
@@ -938,7 +938,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                     string.Format(_updateStrings.UpdateFoundPrompt, _updateChecker.LatestVersion, _updateChecker.CurrentVersion),
                     _updateStrings.UpdateFoundTitle,
                     MessageBoxButtons.YesNo, MessageBoxIcon.Information);
-                if (confirm == DialogResult.Yes) _ = _updateChecker.DownloadAndInstallAsync();
+                if (confirm == DialogResult.Yes) _ = Task.Run(() => _updateChecker.DownloadAndInstallAsync());
                 break;
             case UpdateChecker.CheckOutcome.UpToDate:
                 MessageBox.Show(

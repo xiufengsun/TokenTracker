@@ -124,6 +124,23 @@ test('publish waits for all three platforms and verifies every asset', () => {
   }
 });
 
+test('Linux packager root npm ci skips install scripts', () => {
+  // @mongodb-js/zstd@2.0.1's tarball omits etc/install-zstd.sh, so a missed
+  // prebuild download would otherwise fail npm ci and skip Linux assets.
+  // This job does not need those native install scripts: dashboard deps are
+  // installed separately, and EmbeddedServer already uses --ignore-scripts.
+  const linuxJob = release.slice(release.indexOf('\n  linux:'), release.indexOf('\n  publish:'));
+  const commands = linuxJob
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+  assert.match(
+    commands,
+    /npm ci --no-audit --no-fund --ignore-scripts/,
+    'root npm ci must ignore scripts so a missed zstd prebuild cannot fail the packager',
+  );
+});
+
 test('release verifies every managed version file via the shared registry', () => {
   // Adding a platform must not require a new hand-written version check.
   assert.match(release, /collectVersionEntries/);

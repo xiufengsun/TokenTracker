@@ -1,7 +1,6 @@
 const test=require("node:test");
 const assert=require("node:assert/strict");
-const fs=require("node:fs");
-const path=require("node:path");
+const { installCloudBillingSchema }=require("./helpers/cloud-billing-schema-fixture");
 const http=require("node:http");
 const {randomUUID,createHmac}=require("node:crypto");
 const {PGlite}=require("@electric-sql/pglite");
@@ -27,25 +26,14 @@ const quote=()=>({id:"pri_month",status:"active",tax_mode:"external",trial_perio
 const identifier=value=>{if(!/^[a-z_][a-z0-9_]*$/i.test(value))throw Error("bad identifier");return '"'+value+'"';};
 test.before(async()=>{
   db=new PGlite();
-  await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE project_admin BYPASSRLS;
-    CREATE SCHEMA auth; CREATE TABLE auth.users(id uuid PRIMARY KEY);
-    CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
-    CREATE TABLE tokentracker_devices(id uuid PRIMARY KEY,user_id uuid,created_at timestamptz DEFAULT now());
-    GRANT SELECT ON tokentracker_devices TO project_admin;`);
-  await db.exec(fs.readFileSync(path.join(__dirname,"../migrations/20261003120000_cloud-subscriptions.sql"),"utf8"));
-  for(const id of users){
-    await db.query("INSERT INTO auth.users VALUES($1)",[id]);
-    const result=await db.query("SELECT cloud_create_order($1,'sandbox','paddle','cloud_usd_monthly',$2) AS r",[id,randomUUID()]);
-    legacyOrders.set(id,result.rows[0].r.id);
-  }
-  await db.exec(fs.readFileSync(path.join(__dirname,"../migrations/20261007120000_cloud-waffo.sql"),"utf8"));
-  await db.exec(fs.readFileSync(path.join(__dirname,"../migrations/20261007130000_cloud-waffo-retry.sql"),"utf8"));
-  await db.exec(fs.readFileSync(path.join(__dirname,"../migrations/20261007140000_cloud-waffo-attempts.sql"),"utf8"));
-  await db.exec(fs.readFileSync(path.join(__dirname,"../migrations/20261007150000_cloud-waffo-authorizations.sql"),"utf8"));
-  await db.exec(fs.readFileSync(path.join(__dirname,"../migrations/20261007160000_cloud-waffo-sandbox-periods.sql"),"utf8"));
-  await db.exec(fs.readFileSync(path.join(__dirname,"../migrations/20261008120000_self-hosted-access.sql"),"utf8"));
-  await db.exec(fs.readFileSync(path.join(__dirname,"../migrations/20261106014534_cloud-checkout-recovery.sql"),"utf8"));
-  await db.exec("UPDATE tokentracker_cloud_policy SET phase='active',launch_at=now()-interval '1 hour' WHERE environment='sandbox'");
+  await installCloudBillingSchema(db, { afterSubscriptions: async () => {
+    // Historical Paddle orders predate the Waffo-only purchase and gift guards.
+    for(const id of users){
+      await db.query("INSERT INTO auth.users VALUES($1)",[id]);
+      const result=await db.query("SELECT cloud_create_order($1,'sandbox','paddle','cloud_usd_monthly',$2) AS r",[id,randomUUID()]);
+      legacyOrders.set(id,result.rows[0].r.id);
+    }
+  } });
   server=http.createServer(async(req,res)=>{
     const send=(status,value)=>{res.writeHead(status,{"Content-Type":"application/json"});res.end(JSON.stringify(value));};
     let raw="";for await(const chunk of req)raw+=chunk;

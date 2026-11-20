@@ -246,6 +246,65 @@ test("index: Kimi K3.1 Pro and gemini-4-argon priced via public API", () => {
   assert.equal(argon.cache_read, 0.1);
 });
 
+test("index: Antigravity gemini-4-argon backend variants inherit the published Argon rate (#1072)", () => {
+  const pricing = require("../src/lib/pricing");
+  const expected = { input: 2, output: 10, cache_read: 0.1 };
+  // Backend telemetry suffixes (-b, -trial) and the dotted spelling are the
+  // same Gemini 4 Argon public list rate already curated on the base id.
+  // Do not invent a new SKU; match Cloud Edge's substring matcher.
+  for (const model of ["gemini-4-argon-b", "gemini-4-argon-trial", "gemini-4.argon-b"]) {
+    for (const source of [undefined, "antigravity", "cursor"]) {
+      const info = pricing.getModelPricingInfo(model, source ? { source } : {});
+      assert.equal(info.status, "priced", `${model} ${source || "no-source"}`);
+      assert.equal(info.input, expected.input, `${model} input`);
+      assert.equal(info.output, expected.output, `${model} output`);
+      assert.equal(info.cache_read, expected.cache_read, `${model} cache_read`);
+    }
+  }
+  const base = pricing.getModelPricingInfo("gemini-4-argon", { source: "antigravity" });
+  assert.equal(base.status, "priced");
+  assert.equal(base.input, 2);
+});
+
+test("index: Antigravity Gemini 3.6/3.7/3.8 Flash use published Standard promo rates (#1063)", () => {
+  const pricing = require("../src/lib/pricing");
+  const flash25 = { input: 0.3, output: 2.5, cache_read: 0.03 };
+  for (const model of ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]) {
+    const info = pricing.getModelPricingInfo(model, { source: "antigravity" });
+    assert.equal(info.status, "priced", model);
+    assert.equal(info.input, 0.75, model);
+    assert.equal(info.output, 3.75, model);
+    assert.equal(info.cache_read, 0.075, model);
+    assert.notDeepEqual(
+      { input: info.input, output: info.output, cache_read: info.cache_read },
+      flash25,
+      `${model} must not inherit gemini-2.5-flash rates`,
+    );
+  }
+  const named = pricing.getModelPricingInfo("Gemini 3.8 Flash", { source: "antigravity" });
+  assert.equal(named.status, "priced");
+  assert.equal(named.input, 0.75);
+  assert.equal(named.output, 3.75);
+  assert.equal(named.cache_read, 0.075);
+
+  const flash35 = pricing.getModelPricingInfo("gemini-3.5-flash", { source: "antigravity" });
+  assert.equal(flash35.status, "priced");
+  assert.equal(flash35.source, "curated:exact");
+  assert.equal(flash35.input, 1.5);
+  assert.equal(flash35.output, 9);
+  assert.equal(flash35.cache_read, 0.15);
+
+  // No independent official rate for the -n suffix; leave it unaliased rather
+  // than inventing a number or silently inheriting another SKU.
+  const suffixN = pricing.getModelPricingInfo("gemini-3.8-flash-n", { source: "antigravity" });
+  assert.equal(suffixN.status, "unpriced");
+  assert.equal(suffixN.input, 0);
+  assert.equal(suffixN.output, 0);
+  const effort = pricing.getModelPricingInfo("gemini-3.8-flash-high", { source: "antigravity" });
+  assert.equal(effort.status, "priced");
+  assert.equal(effort.input, 0.75);
+});
+
 test("matcher: lookupPricing fuzzy match restores `digit-digit` to `digit.digit` (droid GLM parity)", () => {
   // Droid dash-normalizes upstream `GLM-5.1` to `glm-5-1`, but curated keys
   // are dot-delimited. The matcher must retry a dot-restored variant of the
@@ -445,13 +504,26 @@ test("matcher: Antigravity model aliases only apply to Antigravity source", () =
 
 test("matcher: Antigravity model normalization covers families without gpt-4o fallback", () => {
   assert.equal(matcher.normalizeAntigravityModel("Gemini 3.5 Pro"), "gemini-2.5-pro");
-  assert.equal(matcher.normalizeAntigravityModel("Gemini 3.5 Flash"), "gemini-2.5-flash");
+  assert.equal(matcher.normalizeAntigravityModel("Gemini 3.5 Flash"), "gemini-3.5-flash");
   assert.equal(matcher.normalizeAntigravityModel("Claude Haiku 4.6"), "claude-haiku-4-6");
   assert.equal(
     matcher.normalizeAntigravityModel("gpt-oss-120b"),
     "antigravity-gpt-oss-120b",
   );
   assert.notEqual(matcher.normalizeAntigravityModel("gpt-oss-20b"), "gpt-4o");
+});
+
+test("matcher: Antigravity Gemini 3.x Flash keeps published names and rates (#1063)", () => {
+  assert.equal(matcher.normalizeAntigravityModel("gemini-3.8-flash"), "gemini-3.8-flash");
+  assert.equal(matcher.normalizeAntigravityModel("Gemini 3.8 Flash"), "gemini-3.8-flash");
+  assert.equal(matcher.normalizeAntigravityModel("gemini-3.7-flash"), "gemini-3.7-flash");
+  assert.equal(matcher.normalizeAntigravityModel("gemini-3.6-flash"), "gemini-3.6-flash");
+  assert.equal(matcher.normalizeAntigravityModel("gemini-3.5-flash"), "gemini-3.5-flash");
+  // No independent official SKU was published for the -n suffix; do not invent
+  // a dedicated rate or a special alias. The raw normalized id is preserved.
+  assert.equal(matcher.normalizeAntigravityModel("gemini-3.8-flash-n"), "gemini-3.8-flash-n");
+  // Confirmed Claude / gpt-oss aliases are unchanged.
+  assert.equal(matcher.normalizeAntigravityModel("Gemini 3.5 Pro"), "gemini-2.5-pro");
 });
 
 test("matcher: Zed model normalization maps display names + ids to pricing keys", () => {
@@ -501,6 +573,19 @@ test("matcher: Claude normalization handles relay/gateway ids (#212)", () => {
   );
   assert.equal(matcher.normalizeClaudeModel("claude-3-7-sonnet"), "claude-3-7-sonnet");
   assert.equal(matcher.normalizeClaudeModel("claude-3-opus-20240229"), "claude-3-opus-20240229");
+  // Fable joins the hyphenation so claude-fable-5.2 reaches the curated key.
+  // The -latest alias is left untouched: it is not pinned to a version.
+  assert.equal(matcher.normalizeClaudeModel("claude-fable-5.2"), "claude-fable-5-2");
+  assert.equal(
+    matcher.normalizeClaudeModel("openrouter/anthropic/claude-fable-5.2"),
+    "claude-fable-5-2",
+  );
+  assert.equal(
+    matcher.normalizeClaudeModel("anthropic/claude-fable-5.2-20261109"),
+    "claude-fable-5-2-20261109",
+  );
+  assert.equal(matcher.normalizeClaudeModel("claude-fable-5.2-fast"), "claude-fable-5-2-fast");
+  assert.equal(matcher.normalizeClaudeModel("vertex_ai/claude-fable-latest"), "claude-fable-latest");
 });
 
 test("matcher: Cursor normalization preserves Grok Fast and canonicalizes Claude aliases", () => {
@@ -691,6 +776,88 @@ test("index: getModelPricing resolves claude-fable-5 from CURATED (not yet in Li
     reasoning_output_tokens: 0,
   });
   assert.equal(cost, 10);
+});
+
+test("index: Claude Fable 5.2 standard ids price at $8/$40 and never fall through to Fable 5", async () => {
+  pricing.resetPricingForTests();
+  const cachePath = tmpCachePath();
+  await pricing.ensurePricingLoaded({
+    cachePath,
+    fetchImpl: makeFetchImpl(FIXTURE_LITELLM),
+  });
+  // Standard tier, verified 2026-11-10 against the Anthropic pricing page:
+  // $8 input, $40 output, $0.20 cache hits, $10 5-minute cache writes.
+  const standard = { input: 8, output: 40, cache_read: 0.2, cache_write: 10 };
+  const ids = [
+    "claude-fable-5-2",
+    "claude-fable-5.2",
+    "Claude Fable 5.2",
+    "Fable 5.2",
+    "anthropic/claude-fable-5.2",
+    "anthropic/claude-fable-5.2-20261109",
+    "anthropic/claude-fable-5-2",
+    "anthropic.claude-fable-5-2",
+    "global.anthropic.claude-fable-5-2",
+    "us.anthropic.claude-fable-5-2",
+    "eu.anthropic.claude-fable-5-2",
+    "vertex_ai/claude-fable-5-2",
+    "vertex_ai/claude-fable-5-2@default",
+    "azure_ai/claude-fable-5-2",
+    "github_copilot/claude-fable-5.2",
+    "bedrock/claude_platform/claude-fable-5-2",
+    "openrouter/anthropic/claude-fable-5.2",
+  ];
+  for (const id of ids) {
+    const got = pricing.getModelPricing(id, { source: "claude" });
+    for (const field of Object.keys(standard)) {
+      assert.equal(got[field], standard[field], `${id}.${field}`);
+    }
+  }
+  // Without the claude normalizer the provider prefix stays, so the exact keys
+  // and the fable-5.2 fuzzy needle have to carry these on their own.
+  for (const id of ["anthropic/claude-fable-5.2", "bedrock/us-gov-east-1/anthropic.claude-fable-5-2", "Fable 5.2", "Claude Fable 5.2"]) {
+    const got = pricing.getModelPricing(id);
+    assert.equal(got.input, 8, id);
+    assert.equal(got.output, 40, id);
+  }
+  // Fable 5 stays on its own rate.
+  assert.equal(pricing.getModelPricing("claude-fable-5").input, 10);
+  // The 5.2 needle is version-bounded. A dated Fable 5 id dot-restores to
+  // something containing "fable-5.2", and fable-5-20 contains "fable-5-2";
+  // neither is 5.2. On origin/main these ids are unpriced.
+  for (const id of ["claude-fable-5-20250901", "claude-fable-5-20261109", "fable-5-20", "claude-fable-5-20"]) {
+    assert.equal(pricing.getModelPricingInfo(id).status, "unpriced", id);
+  }
+});
+
+test("index: Claude Fable 5.2 fast is its own 2x SKU and -latest stays unpriced", async () => {
+  pricing.resetPricingForTests();
+  const cachePath = tmpCachePath();
+  await pricing.ensurePricingLoaded({
+    cachePath,
+    fetchImpl: makeFetchImpl(FIXTURE_LITELLM),
+  });
+  // Fast input/output are published ($16/$80). Cache dollars are not: the
+  // pricing page only says caching multipliers stack on fast pricing, so the
+  // Fable 5.2 0.025x read and 1.25x 5-minute write are applied to the $16 input.
+  const fast = { input: 16, output: 80, cache_read: 0.4, cache_write: 20 };
+  for (const id of [
+    "claude-fable-5-2-fast",
+    "claude-fable-5.2-fast",
+    "azure_ai/claude-fable-5-2-fast",
+    "anthropic/claude-fable-5.2-fast",
+  ]) {
+    const got = pricing.getModelPricing(id, { source: "claude" });
+    for (const field of Object.keys(fast)) {
+      assert.equal(got[field], fast[field], `${id}.${field}`);
+    }
+  }
+  // Checked 2026-11-10: Anthropic does not document claude-fable-latest as an
+  // alias of 5.2, and the alias retargets on each release, so it stays unpriced.
+  for (const id of ["claude-fable-latest", "anthropic/claude-fable-latest", "vertex_ai/claude-fable-latest", "bedrock/claude-fable-latest"]) {
+    const info = pricing.getModelPricingInfo(id, { source: "claude" });
+    assert.equal(info.status, "unpriced", id);
+  }
 });
 
 test("index: getModelPricing resolves GLM-5.2 from CURATED for ZCode rows", async () => {

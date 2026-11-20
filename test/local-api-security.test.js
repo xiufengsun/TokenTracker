@@ -982,31 +982,27 @@ test("local sync remints relayed device token after active refresh token changes
   const fetchCalls = [];
   const issueTokens = ["issued-device-token-1", "issued-device-token-2"];
 
-  function jsonProxyResponse(data) {
-    const body = Buffer.from(JSON.stringify(data));
-    return {
-      ok: true,
-      status: 200,
-      headers: {
-        entries: () => [["content-type", "application/json"]],
-        get: (name) => (String(name).toLowerCase() === "content-type" ? "application/json" : null),
-      },
-      arrayBuffer: async () => body,
-    };
-  }
-
   global.fetch = async (urlStr, opts) => {
     const parsedBody = JSON.parse(String(opts.body || "{}"));
     fetchCalls.push({ url: String(urlStr), body: parsedBody });
     if (String(urlStr) === "https://cloud.example/api/auth/refresh?client_type=mobile") {
-      if (parsedBody.refresh_token === "refresh-xyz" && opts.credentials === "include") {
-        return jsonProxyResponse({ accessToken: "proxy-access-token", refreshToken: "refresh-new" });
+      // Page refresh now shares mintAccessToken with background sync (#1074),
+      // so both callers use the mobile JSON body (no credentials: include).
+      // The first refresh-xyz is the initial sync mint; a later one rotates.
+      if (parsedBody.refresh_token === "refresh-new") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ accessToken: "access-token-2" }),
+        };
       }
-      const suffix = parsedBody.refresh_token === "refresh-new" ? "2" : "1";
+      const xyzCalls = fetchCalls.filter((c) => c.body.refresh_token === "refresh-xyz").length;
       return {
         ok: true,
         status: 200,
-        json: async () => ({ accessToken: `access-token-${suffix}` }),
+        json: async () => (xyzCalls === 1
+          ? { accessToken: "access-token-1" }
+          : { accessToken: "access-token-1", refreshToken: "refresh-new" }),
       };
     }
     if (String(urlStr) === "https://cloud.example/functions/tokentracker-device-token-issue") {
@@ -1044,6 +1040,10 @@ test("local sync remints relayed device token after active refresh token changes
     );
     assert.equal(firstSyncRes.statusCode, 200);
 
+    // Drop the still-valid access-token cache so the page refresh actually
+    // contacts the backend and can rotate, matching an expiry-driven refresh.
+    require("../src/lib/cloud-account").__resetCloudAccountCacheForTests();
+
     const refreshReq = createRequest({ method: "POST" });
     refreshReq[Symbol.asyncIterator] = async function* () {};
     const refreshRes = createResponse();
@@ -1068,9 +1068,13 @@ test("local sync remints relayed device token after active refresh token changes
     assert.equal(calls.length, 2);
     assert.equal(calls[0].options.env.TOKENTRACKER_DEVICE_TOKEN, "issued-device-token-1");
     assert.equal(calls[1].options.env.TOKENTRACKER_DEVICE_TOKEN, "issued-device-token-2");
+    // The page-refresh mint rotates to refresh-new and caches that access
+    // token under the new key, so the follow-up sync reuses it instead of
+    // posting refresh-new again. The device-token remint (above) is what
+    // this test actually guards.
     assert.deepEqual(
       fetchCalls.filter((c) => c.url.endsWith("/api/auth/refresh?client_type=mobile")).map((c) => c.body.refresh_token),
-      ["refresh-xyz", "refresh-xyz", "refresh-new"],
+      ["refresh-xyz", "refresh-xyz"],
     );
     assert.equal(fetchCalls.filter((c) => c.url.endsWith("/functions/tokentracker-device-token-issue")).length, 2);
     assert.equal(issueTokens.length, 0);

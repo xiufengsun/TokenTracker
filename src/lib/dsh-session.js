@@ -8,6 +8,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { createDshPerformanceCollector, normalizePerformance } = require("./session-performance");
 const {
   isDshSessionLogName,
   parseDshVersion,
@@ -99,6 +100,48 @@ function sessionIdOf(value) {
 function eventTimestampMs(entry) {
   const time = Number(entry?.time);
   return Number.isFinite(time) && time >= MIN_DSH_TIMESTAMP_MS ? time : null;
+}
+
+function firstStreamTokenTime(stream) {
+  // DSH v4 stores raw chunks and packed delta runs together. Only non-empty
+  // deltas (or a name-bearing tool delta) mark a token; block-start does not.
+  for (const record of stream) {
+    if (record?.type === "chunk") {
+      const chunk = record.chunk;
+      const token = ["text-delta", "reasoning-delta"].includes(chunk?.type)
+        ? typeof chunk.text === "string" && chunk.text.length > 0
+        : chunk?.type === "tool-call-delta" && (
+          (typeof chunk.argumentsDelta === "string" && chunk.argumentsDelta.length > 0)
+          || (typeof chunk.name === "string" && chunk.name.length > 0));
+      const time = eventTimestampMs(record);
+      if (token && time !== null) return time;
+    } else if (["text-chunks", "reasoning-chunks", "tool-call-chunks"].includes(record?.type)) {
+      const tool = record.type === "tool-call-chunks";
+      const fragments = tool ? record.args : record.texts;
+      let time = eventTimestampMs({ time: record.time0 });
+      if (time === null || !Array.isArray(fragments)) continue;
+      for (let index = 0; index < fragments.length; index += 1) {
+        if (index > 0) {
+          const gap = record.dt?.[index - 1];
+          if (typeof gap !== "number" || !Number.isFinite(gap)) break;
+          time += gap;
+        }
+        if ((typeof fragments[index] === "string" && fragments[index].length > 0)
+          || (tool && typeof record.name === "string" && record.name.length > 0)) return time;
+      }
+    }
+  }
+  return null;
+}
+
+function messageTiming(data, step, end) {
+  if (!step || step.failed || data?.interrupted || step.turn !== data?.turn || step.step !== data?.step) return null;
+  const stream = Array.isArray(data?.stream) ? data.stream : null;
+  if (stream) {
+    const finish = stream.findLast((record) => record?.type === "chunk" && record.chunk?.type === "finish");
+    if (!finish || !finish.chunk.reason?.kind || ["error", "aborted"].includes(finish.chunk.reason.kind)) return null;
+  }
+  return { start: step.ts, end, firstToken: stream ? firstStreamTokenTime(stream) : null };
 }
 
 function directoryEntryIs(entry, fullPath, kind) {
@@ -279,6 +322,7 @@ async function parseDshTranscript(filePath) {
     events: [],
   };
   const lines = text.split("\n");
+  let openStep = null;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     if (!line) continue;
@@ -292,6 +336,33 @@ async function parseDshTranscript(filePath) {
     const data = entry.data && typeof entry.data === "object" ? entry.data : null;
     const seq = Number.isFinite(entry.seq) ? entry.seq : index;
     switch (entry.type) {
+      case "step/start": {
+        openStep = Number.isInteger(data?.turn) && Number.isInteger(data?.step)
+          ? { turn: data.turn, step: data.step, ts: eventTimestampMs(entry), failed: false } : null;
+        break;
+      }
+      case "assistant/attempt":
+      case "assistant/chunk": {
+        // A retry's step time includes failed work/backoff, so it cannot be a
+        // clean request sample even if the eventual message reports usage.
+        // v4 records the failed try as assistant/attempt. v1 has no attempt
+        // event: the failed try ends as a top-level assistant/chunk whose
+        // chunk is a finish with an error or aborted reason.
+        const chunk = data?.chunk;
+        const failedFinish = entry.type === "assistant/chunk"
+          && chunk?.type === "finish"
+          && ["error", "aborted"].includes(chunk.reason?.kind);
+        if ((entry.type === "assistant/attempt" || failedFinish)
+          && openStep && openStep.turn === data?.turn && openStep.step === data?.step) {
+          openStep.failed = true;
+        }
+        break;
+      }
+      case "step/end":
+      case "turn/start":
+      case "turn/end":
+        openStep = null;
+        break;
       case "session": {
         transcript.header = entry;
         break;
@@ -329,6 +400,8 @@ async function parseDshTranscript(filePath) {
         const ts = eventTimestampMs(entry);
         const model = modelName(message?.source?.model) || transcript.fallbackModel || "unknown";
         const delta = dshUsageDelta(data?.usage);
+        const timing = messageTiming(data, openStep, ts);
+        openStep = null;
         if (delta) {
           transcript.events.push({
             kind: "usage",
@@ -336,6 +409,7 @@ async function parseDshTranscript(filePath) {
             ts,
             model,
             delta,
+            timing,
           });
         }
         break;
@@ -405,6 +479,7 @@ function buildRow(transcript, owners) {
   const times = new Set();
   const agentTypes = new Map();
   const modelsForEdits = new Map();
+  const performanceCollector = createDshPerformanceCollector();
   let turns = 0;
   let edits = 0;
   let retries = 0;
@@ -451,6 +526,9 @@ function buildRow(transcript, owners) {
       addUsage(modelRow, delta);
       modelRow.usage_events += 1;
       modelUsage.set(model, modelRow);
+      if (event.timing) performanceCollector.consumeUsage({
+        model, outputTokens: delta.output_tokens + delta.reasoning_output_tokens, ...event.timing,
+      });
       if (event.ts != null) {
         const bucketTime = new Date(Math.floor(event.ts / 60000) * 60000).toISOString();
         const key = `${model}\u0000${bucketTime}`;
@@ -478,9 +556,11 @@ function buildRow(transcript, owners) {
     const gap = orderedTimes[index] - orderedTimes[index - 1];
     if (gap > 0 && gap <= DSH_ACTIVE_GAP_MS) activeMs += gap;
   }
+  const performance = performanceCollector.finish();
   const models = [...modelUsage.values()].map((row) => ({
     ...row,
     edit_turns: modelsForEdits.get(row.model) || 0,
+    performance: performance.byModel.get(row.model) || normalizePerformance(),
   }));
   // A session that only handshook (no user turn, no usage) has nothing to say.
   if (!tokens.total_tokens && !turns) return null;
@@ -507,6 +587,7 @@ function buildRow(transcript, owners) {
     started_at: orderedTimes.length ? new Date(orderedTimes[0]).toISOString() : null,
     ended_at: orderedTimes.length ? new Date(orderedTimes.at(-1)).toISOString() : null,
     active_ms: activeMs,
+    performance: performance.performance,
     provenance: {
       source: "local-session-log",
       confidence: "observed",

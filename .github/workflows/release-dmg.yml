@@ -403,7 +403,18 @@ jobs:
             TokenTrackerLinux/package-lock.json
 
       - name: Install root dependencies
-        run: npm ci --no-audit --no-fund
+        # @mongodb-js/zstd@2.0.1's published tarball omits etc/install-zstd.sh,
+        # so npm ci is a hard failure when prebuild-install cannot fetch the
+        # GitHub napi-v4 linux-x64 binary (the compile fallback then exits 127).
+        # That download is flaky: the same lockfile and Node 20.20.2 installed
+        # cleanly for npm-publish of v1.5.16, then failed twice on the v1.5.16
+        # linux packager a few hours later. The only other root install script
+        # is esbuild (dev). This job does not run root tests or esbuild; the
+        # EmbeddedServer is installed later with --ignore-scripts and ships
+        # Node 22, which decodes zstd via zlib.zstdDecompressSync (issue #465).
+        # Skipping scripts here unblocks packaging without changing the
+        # shipped app or the Node 20 CLI's normal install path.
+        run: npm ci --no-audit --no-fund --ignore-scripts
 
       # Verifies package.json AND every managed version file, including
       # TokenTrackerLinux's Cargo.toml / Cargo.lock / tauri.conf.json / PKGBUILD.

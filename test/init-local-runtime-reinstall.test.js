@@ -81,6 +81,10 @@ test("init can rerun from installed local runtime without self-deleting app sour
     USERPROFILE: tmp,
     CODEX_HOME: path.join(tmp, ".codex"),
     OPENCODE_CONFIG_DIR: path.join(tmp, ".config", "opencode"),
+    // This case checks runtime re-entry, not scanning. A detached first sync
+    // can otherwise outlive init and recreate files during Windows cleanup.
+    TOKENTRACKER_SKIP_FIRST_SYNC: "1",
+    TOKENTRACKER_NO_TELEMETRY: "1",
   };
   delete env.TOKENTRACKER_DEVICE_TOKEN;
 
@@ -136,6 +140,16 @@ test("installLocalTrackerApp replaces stale installed runtime and writes a packa
     assert.equal(typeof marker.version, "string");
     await fs.stat(path.join(appDir, "src", "lib", "codex-context-breakdown.js"));
     await fs.stat(path.join(appDir, "dashboard", "dist", "index.html"));
+
+    const installedParser = path.join(appDir, "src", "lib", "cursor-config.js");
+    await fs.utimes(installedParser, new Date(1000), new Date(1000));
+    await Promise.all([
+      installLocalTrackerApp({ appDir }),
+      installLocalTrackerApp({ appDir }),
+    ]);
+    assert.equal((await fs.stat(installedParser)).mtimeMs, 1000,
+      "overlapping refreshes must preserve unchanged files");
+    assert.equal(await fs.readFile(installedParser, "utf8"), copiedParser);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

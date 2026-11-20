@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCopyLocale } from "../../lib/copy";
-import { publishCloudPromptBilling, recordCloudPromptIntent, recordCloudPromptFailure } from "../../lib/cloud-prompt-policy.js";
+import { dismissCloudPrompt, publishCloudPromptBilling, recordCloudPromptIntent, recordCloudPromptFailure } from "../../lib/cloud-prompt-policy.js";
 import { CloudContextualPrompt, CloudDeadlinePrompt } from "./CloudContextualPrompt.jsx";
 import { readCloudAction } from "../../lib/cloud-action-intent.js";
 
@@ -35,6 +35,51 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("contextual Cloud panels", () => {
+  it("shows a compact expired status in the overview even after a reminder was dismissed", () => {
+    const request = vi.spyOn(globalThis, "fetch");
+    dismissCloudPrompt(userId, "sync", now);
+    publishCloudPromptBilling("account", { membership: { ...membership, status: "expired", can_read_cloud: true } }, userId, now);
+    show({ panel: "overview" });
+    expect(screen.getByRole("status", { name: "Cloud options" })).toHaveTextContent("Pro expired");
+    expect(screen.getByRole("link", { name: "Restore sync" })).toHaveAttribute("href", "/settings?section=cloud");
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(request).not.toHaveBeenCalled();
+  });
+  it("shows free accounts a single Pro link without requiring a manual action", () => {
+    const request = vi.spyOn(globalThis, "fetch");
+    show({ panel: "overview" });
+    expect(screen.getByRole("status", { name: "Cloud options" })).toHaveTextContent("You're on the free plan");
+    expect(screen.getByRole("link", { name: "Explore Pro" })).toHaveAttribute("href", "/cloud");
+    expect(screen.getAllByRole("link")).toHaveLength(1);
+    expect(request).not.toHaveBeenCalled();
+  });
+  it.each(["free", "expired"])("hides the %s overview notice for one device or an unknown count", (status) => {
+    publishCloudPromptBilling("account", { membership: { ...membership, status }, machine_count: 1 }, userId, now);
+    recordCloudPromptIntent(userId, "sync");
+    const view = show({ panel: "overview" });
+    expect(screen.queryByRole("status", { name: "Cloud options" })).not.toBeInTheDocument();
+    const unknownOwner = `${userId}-unknown-count`;
+    act(() => {
+      publishCloudPromptBilling("account", { membership: { ...membership, status } }, unknownOwner, now);
+      recordCloudPromptIntent(unknownOwner, "sync");
+    });
+    view.rerender(<MemoryRouter><CloudContextualPrompt userId={unknownOwner} panel="overview" /></MemoryRouter>);
+    expect(screen.queryByRole("status", { name: "Cloud options" })).not.toBeInTheDocument();
+  });
+  it("removes the overview status when membership is restored", () => {
+    publishCloudPromptBilling("account", { membership: { ...membership, status: "expired", can_read_cloud: true } }, userId, now);
+    show({ panel: "overview" });
+    expect(screen.getByRole("status", { name: "Cloud options" })).toBeInTheDocument();
+    act(() => publishCloudPromptBilling("account", { membership: { ...membership, status: "active", can_read_cloud: true, can_upload_cloud: true } }, userId, now));
+    expect(screen.queryByRole("status", { name: "Cloud options" })).not.toBeInTheDocument();
+  });
+  it.each([{ hosting_mode: "self_hosted" }, { environment: "sandbox" }, { phase: "preview" }])("keeps overview offers off unavailable instances: %j", (state) => {
+    publishCloudPromptBilling("account", { membership: { ...membership, ...state } }, userId, now);
+    const view = show({ panel: "overview" });
+    expect(screen.queryByRole("status", { name: "Cloud options" })).not.toBeInTheDocument();
+    view.rerender(<MemoryRouter><CloudContextualPrompt userId="different-owner" panel="overview" /></MemoryRouter>);
+    expect(screen.queryByRole("status", { name: "Cloud options" })).not.toBeInTheDocument();
+  });
   it("does not render a popup or reminder on initial opening", () => {
     show();
     expect(screen.queryByRole("region", { name: "Cloud options" })).not.toBeInTheDocument();

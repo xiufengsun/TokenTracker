@@ -21,7 +21,9 @@ function resolveTraeDbPaths(env = process.env, { platform = process.platform, ho
     : platform === "darwin"
       ? path.join(home, "Library", "Application Support")
       : env.XDG_CONFIG_HOME || path.join(home, ".config");
-  const roots = customHome ? [customHome] : [path.join(parent, "Trae"), path.join(parent, "TRAE SOLO")];
+  const roots = customHome
+    ? [customHome]
+    : ["Trae", "TRAE SOLO", "Trae CN", "TRAE SOLO CN"].map((name) => path.join(parent, name));
   const result = [];
   for (const root of roots) {
     // A decrypted sibling may be an old export. Only an explicit DB override

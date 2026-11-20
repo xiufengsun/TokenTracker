@@ -111,6 +111,11 @@ export function ThemeProvider({ children }) {
     const unsubscribe = subscribeNativeSystemAppearance((isDark) => {
       if (themeRef.current === "system") {
         setResolvedTheme(isDark ? "dark" : "light");
+      } else {
+        // Pinned theme: a native push may still have written the `.dark` class
+        // directly. resolvedTheme does not change, so the applyThemeToDOM
+        // effect will not re-run — re-assert the pinned theme explicitly.
+        applyThemeToDOM(themeRef.current);
       }
     });
     return unsubscribe;

@@ -371,6 +371,36 @@ test("a downgraded legacy writer is detected and remigrated on upgrade", async (
   });
 });
 
+test("a metadata-only touch of legacy cursors.json keeps the newer v2 state", async () => {
+  await withCursorFixture(async ({ trackerDir, cursorsPath, day17File }) => {
+    const migrated = await openCursorStore({ trackerDir, cursorsPath, forceV2: true });
+    await migrated.loadCodexFilesForPaths([day17File]);
+    migrated.cursors.files[day17File].offset = 11;
+    await migrated.commit();
+
+    // Simulate a ctime-only metadata touch without relying on chmod (NTFS may
+    // leave ctime unchanged — Windows CI failed the chmod assertion). Bump only
+    // the recorded fingerprint's ctimeNs so size/mtime/dev/ino still match.
+    const storeRoot = path.join(trackerDir, STORE_DIRNAME);
+    const manifestPath = path.join(storeRoot, "manifest.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    assert.ok(manifest.legacyFingerprint?.ctimeNs);
+    const bumpedCtime = `${BigInt(manifest.legacyFingerprint.ctimeNs) + 1n}`;
+    assert.notEqual(bumpedCtime, manifest.legacyFingerprint.ctimeNs);
+    manifest.legacyFingerprint = { ...manifest.legacyFingerprint, ctimeNs: bumpedCtime };
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+    const reopened = await openCursorStore({ trackerDir, cursorsPath });
+    assert.equal(reopened.requiresCommit, false);
+    await reopened.loadCodexFilesForPaths([day17File]);
+    assert.equal(reopened.cursors.files[day17File].offset, 11);
+
+    const summary = await readCursorStateSummary({ trackerDir, cursorsPath });
+    assert.equal(summary.mode, "v2");
+    assert.equal(summary.legacyDrift, false);
+  });
+});
+
 test("commit does not acknowledge a concurrent legacy write it did not migrate", async () => {
   await withCursorFixture(async ({ trackerDir, cursorsPath, day17File, legacy }) => {
     const store = await openCursorStore({ trackerDir, cursorsPath, forceV2: true });

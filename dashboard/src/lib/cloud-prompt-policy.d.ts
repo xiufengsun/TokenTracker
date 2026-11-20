@@ -16,8 +16,9 @@ export type CloudPromptState = {
 export type CloudPromptReason = "multi_device" | "deadline";
 export type CloudPromptDecision = {
   scene: string;
-  kind: "promotion" | "explanation" | "operation" | "deadline";
+  kind: "promotion" | "explanation" | "operation" | "deadline" | "status";
   bodyKey: string;
+  titleKey?: string;
   ctaKey?: string;
   href?: string;
   date?: string;
@@ -44,7 +45,7 @@ export function recordCloudPromptFailure(userId: string, code: string, membershi
 export function clearCloudPromptFailure(userId: string, source: string): void;
 export function dismissCloudPrompt(userId: string, scene: string, now?: number, storage?: Storage): void;
 export function cloudContextualPromptDecision(options: CloudPromptState & {
-  userId: string; intentional?: boolean; scene: CloudPromptScene; machineCount?: number;
+  userId: string; intentional?: boolean; scene: CloudPromptScene; machineCount?: number; overview?: boolean;
   now?: number; storage?: Storage;
 }): CloudPromptDecision | null;
 export function cloudDeadlinePromptDecision(options: {

@@ -17,12 +17,8 @@ test("tracker serve binds before first-run init (#961)", () => {
   assert.ok(listenIdx > needsIdx, "listener setup must follow the first-run flag");
   assert.ok(initAfterListenIdx > listenIdx, "first-run init must run after listenOnAvailablePort");
 
-  // The pre-listen optional sync must skip when first-run setup is still owed,
-  // otherwise we would block the bind the same way as before.
-  const preListenSync = source.slice(needsIdx, listenIdx);
-  assert.match(
-    preListenSync,
-    /if \(opts\.sync && !needsFirstRunSetup\)/,
-    "blocking startup sync must not run before first-run setup completes",
-  );
+  const refreshIdx = source.indexOf("await installLocalTrackerApp");
+  const syncIdx = source.indexOf("if (opts.sync && !needsFirstRunSetup)");
+  assert.ok(refreshIdx > listenIdx, "runtime refresh must not delay the listener");
+  assert.ok(syncIdx > refreshIdx, "startup sync must follow runtime refresh and listen");
 });

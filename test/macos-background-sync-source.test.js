@@ -41,7 +41,7 @@ test("macOS background sync sends auto background while Sync Now drains", () => 
   assert.match(
     apiClient,
     /localSyncResourceTimeout: TimeInterval = 130[\s\S]*syncConfig\.timeoutIntervalForResource = Self\.localSyncResourceTimeout[\s\S]*requestSession = path == "\/functions\/tokentracker-local-sync"/,
-    "Local sync requests need a resource timeout longer than the server's 120-second child timeout.",
+    "Local sync requests need a resource timeout longer than the server's 120-second response window.",
   );
   assert.match(
     apiClient,

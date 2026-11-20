@@ -21,10 +21,10 @@ import { getDetailsSortColumns, sortDailyRows } from "../lib/daily";
 import { getRangeForPeriod } from "../lib/date-range";
 import { DETAILS_PAGE_SIZE, paginateRows, trimLeadingZeroMonths } from "../lib/details";
 import {
-  formatUsdCurrency,
   toDisplayNumber,
   toFiniteNumber,
 } from "../lib/format";
+import { formatSummaryCost } from "../lib/summary-cost";
 import { shouldShowInstallCard } from "../lib/install-status";
 import { getMockNow, isMockEnabled } from "../lib/mock-data";
 import { publishUsageLimitsPreloadState } from "../lib/dashboard-preload.js";
@@ -140,6 +140,7 @@ export function DashboardPage({
   signInUrl = "/sign-in",
   signUpUrl = "/sign-up",
   onMainContentVisible,
+  cloudNotice,
 }) {
   const { resolvedLocale } = useLocale();
   const { currency, rate } = useCurrency();
@@ -1288,14 +1289,10 @@ export function DashboardPage({
     ],
   );
 
-  const hasUnpricedUsage = (modelBreakdown?.sources || []).some((source) => (source.models || []).some((model) =>
-    model.pricing?.status === "unpriced" && model.cost_source !== "provider_reported" && Number(model.totals?.total_tokens) > 0,
-  ));
-  const summaryCostValue = useMemo(() => {
-    if (hasUnpricedUsage && Number(summary?.total_cost_usd) === 0) return copy("dashboard.cost_breakdown.unpriced_label");
-    const value = formatUsdCurrency(summary?.total_cost_usd, { currency, rate });
-    return hasUnpricedUsage && value !== "-" ? `≥${value}` : value;
-  }, [summary?.total_cost_usd, currency, rate, hasUnpricedUsage]);
+  const summaryCostValue = useMemo(
+    () => formatSummaryCost(summary?.total_cost_usd, { modelBreakdown, currency, rate }),
+    [summary?.total_cost_usd, modelBreakdown, currency, rate],
+  );
   const summaryConversationsValue = useMemo(
     () => summary?.conversation_count ?? null,
     [summary?.conversation_count],
@@ -1419,6 +1416,7 @@ export function DashboardPage({
   return (
     <>
     <DashboardView
+      cloudNotice={cloudNotice}
       copy={copy}
       accountView={accountView}
       accountScopeSwitchable={accountScopeSwitchable}

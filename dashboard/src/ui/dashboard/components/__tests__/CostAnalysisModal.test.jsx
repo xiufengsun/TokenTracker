@@ -1,6 +1,20 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CostAnalysisModal } from "../CostAnalysisModal.jsx";
+import { copy } from "../../../../lib/copy";
+
+it("explains subscription usage without claiming a zero model cost", async () => {
+  const user = userEvent.setup();
+  render(<CostAnalysisModal isOpen onClose={() => {}} fleetData={[{
+    label: "CURSOR", usd: 0, usage: 100,
+    models: [{ name: "grok-bot-default", usage: 100, cost: 0,
+      pricing: { status: "unpriced", source: "cursor_subscription" } }],
+  }]} />);
+  expect(screen.getByText(copy("dashboard.cost_breakdown.subscription_usage"))).toBeInTheDocument();
+  expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+  await user.click(screen.getByText("grok-bot-default"));
+  expect(screen.getByText(copy("dashboard.cost_breakdown.subscription_usage_hint"))).toBeVisible();
+});
 
 it("invokes onClose when clicking the backdrop", async () => {
   const onClose = vi.fn();

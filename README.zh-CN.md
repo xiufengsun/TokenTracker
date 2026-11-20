@@ -173,7 +173,7 @@ brew install xiufengsun/tokentracker/tokentracker
 | **Cursor** | ✅ 自动 | API + SQLite 中的 auth token |
 | **Kiro** | ✅ 自动 | SQLite + JSONL 混合读取 |
 | **Gemini CLI** | ✅ 自动 | SessionEnd hook |
-| **Antigravity** | ✅ 自动 | 被动读取 transcript.jsonl（`~/.gemini/{antigravity,antigravity-ide,antigravity-cli}/brain/**/transcript.jsonl`） |
+| **Antigravity** | ✅ 自动 | 被动读取 transcript.jsonl（`~/.gemini/{antigravity,antigravity-ide,antigravity-insiders,antigravity-cli}/brain/**/transcript.jsonl`，以及 T3 Code 配置目录 `~/.t3/userdata/providers/antigravity/*/antigravity-acp/`） |
 | **OpenCode** | ✅ 自动 | 插件系统 + SQLite |
 | **OpenSquilla** | ✅ 自动 | 被动读取本地 SQLite 中已完成的模型用量（Desktop：`%APPDATA%\@opensquilla\desktop-electron\opensquilla\state\sessions.db`；CLI：`~/.opensquilla/state/sessions.db`）；只读取时间戳、模型 ID 与 token 计数，不读取对话正文。可用 `TOKENTRACKER_OPENSQUILLA_DB` 覆盖路径 |
 | **OpenClaw** | ✅ 自动 | Session 插件 |
@@ -303,6 +303,7 @@ TokenTracker 在本地处理你的用量数据。绝不收集或上传 prompt、
 | `TOKENTRACKER_GROK_HOME` | 覆盖 Grok Build 目录，供 Grok 集成和 Skills Manager 使用 | `~/.grok` |
 | `GROK_HOME` | 旧版 Grok Build 目录覆盖变量；未设置 `TOKENTRACKER_GROK_HOME` 时使用 | `~/.grok` |
 | `TOKENTRACKER_ANTIGRAVITY_HOME` | 强制指定 Antigravity Skills 目录（不设时自动检测 `~/.gemini/antigravity` 和 `~/.gemini/antigravity-ide`，同步会同时写入两者） | 自动 |
+| `TOKENTRACKER_T3_HOME` | 覆盖用于自动发现 Antigravity（`agy`）配置的 T3 Code 状态目录 | `~/.t3` |
 
 ---
 

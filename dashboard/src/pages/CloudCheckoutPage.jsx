@@ -123,7 +123,7 @@ export function CloudCheckoutPage() {
       .some((item) => item.retry_payment_conflict_at));
   const hasGiftAccess = membership?.has_gift === true || membership?.access_source === "gift" || account?.membership?.has_gift === true ||
     account?.gifts?.some((gift) => ["active", "pending"].includes(gift.state));
-  const canRestartCheckout = order?.provider === "waffo" &&
+  const canRestartCheckout = order?.provider === "waffo" && !order?.cancel_requested_at &&
     order.payment_state === "unpaid" &&
     order.status !== "paid" &&
     ["awaiting", "expired", "canceled"].includes(state) && launched && providerAvailable && !paymentConflict && !hasGiftAccess;
@@ -380,10 +380,10 @@ export function CloudCheckoutPage() {
   useEffect(() => {
     const payment = autoPayment.current;
     if (!payment || payment.opened || payment.ownerId !== userId || payment.backend !== backend || payment.orderId !== orderId || !currentOrderResult?.verified ||
-      order?.id?.toLowerCase() !== orderId.toLowerCase() || !order?.checkout_url || state !== "awaiting" || busy || !launched || !providerAvailable || paymentConflict) return;
+      order?.id?.toLowerCase() !== orderId.toLowerCase() || !order?.checkout_url || order?.cancel_requested_at || state !== "awaiting" || busy || !launched || !providerAvailable || paymentConflict) return;
     payment.opened = true;
     void perform(() => openCloudExternal(order.checkout_url, { sameTab: true }));
-  }, [userId, orderId, order?.id, order?.checkout_url, currentOrderResult?.verified, directAttempt?.nextPath, state, busy, launched, providerAvailable, paymentConflict, perform, backend]);
+  }, [userId, orderId, order?.id, order?.checkout_url, order?.cancel_requested_at, currentOrderResult?.verified, directAttempt?.nextPath, state, busy, launched, providerAvailable, paymentConflict, perform, backend]);
 
   const reconcile = () =>
     perform(async () => {
@@ -608,7 +608,7 @@ export function CloudCheckoutPage() {
   } else if (order) {
     const descriptions = {
       creating: copy("cloud.checkout.pending_creation"),
-      awaiting: copy("cloud.checkout.pending_payment"),
+      awaiting: copy(order?.cancel_requested_at ? "cloud.order_cancel.processing" : "cloud.checkout.pending_payment"),
       activating: copy("cloud.checkout.received"),
       expired: order?.status === "paid"
         ? copy("cloud.checkout.term_ended_detail")
@@ -619,9 +619,9 @@ export function CloudCheckoutPage() {
     contentNode = (
       <div className="space-y-5">
         <p className="text-sm leading-6 text-oai-gray-500 dark:text-oai-gray-400">
-          {descriptions[state]}
+          {order.cancel_requested_at && ["pending", "ready"].includes(order.status) ? copy("cloud.order_cancel.processing") : descriptions[state]}
         </p>
-        {state === "awaiting" && order.checkout_url && launched && providerAvailable && !paymentConflict ? (
+        {state === "awaiting" && !order.cancel_requested_at && order.checkout_url && launched && providerAvailable && !paymentConflict ? (
           <Button
             onClick={openPayment}
             disabled={busy}

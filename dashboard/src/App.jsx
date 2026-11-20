@@ -12,7 +12,6 @@ import { isScreenshotModeEnabled } from "./lib/screenshot-mode";
 import { useCloudUsageSync } from "./hooks/use-cloud-usage-sync";
 import { CloudContextualPrompt } from "./components/cloud/CloudContextualPrompt.jsx";
 import { clearCloudPromptIntent } from "./lib/cloud-prompt-policy.js";
-import { setCloudSyncEnabled } from "./lib/cloud-sync-prefs";
 import { AppLayout } from "./ui/components/Sidebar.jsx";
 import { LegalLinks } from "./ui/components/LegalLinks.jsx";
 import { ToastProvider } from "./ui/components/Toast.jsx";
@@ -368,14 +367,9 @@ export default function App() {
           {copy("instance.configuration.invalid")}
         </p>
       ) : null}
-      {isDashboardDefaultPath && !publicMode && cloudAuthSignedIn ? (
-          <CloudContextualPrompt userId={insforge.user?.id} localHost={isLocalMode} className="mx-auto w-full max-w-7xl px-4 pt-4 sm:px-6"
-            onContinueLocal={() => {
-              clearCloudPromptIntent(insforge.user?.id);
-              setCloudSyncEnabled(false);
-            }} />
-      ) : null}
       <PageComponent
+        cloudNotice={isDashboardDefaultPath && !publicMode && cloudAuthSignedIn
+          ? <CloudContextualPrompt userId={insforge.user?.id} panel="overview" /> : null}
         key={resolvedLocale}
         baseUrl={baseUrl}
         auth={authObject}

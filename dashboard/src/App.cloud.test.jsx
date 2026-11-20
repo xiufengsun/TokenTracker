@@ -5,6 +5,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App.jsx";
+import { clearCloudPromptBackendState, publishCloudPromptBilling } from "./lib/cloud-prompt-policy.js";
 
 const labels = {
   cloud: "Public Cloud plans",
@@ -57,7 +58,7 @@ vi.mock("./pages/SelfHostPage.jsx", () => ({
   SelfHostPage: () => <h1>{labels.selfHost}</h1>,
 }));
 vi.mock("./pages/DashboardPage.jsx", () => ({
-  DashboardPage: () => <h1>{labels.dashboard}</h1>,
+  DashboardPage: ({ cloudNotice }) => <section aria-label="Usage overview">{cloudNotice}<h1>{labels.dashboard}</h1></section>,
 }));
 vi.mock("./pages/LoginPage.jsx", () => ({
   LoginPage: () => <h1>{useLocation().pathname + useLocation().search}</h1>,
@@ -69,10 +70,20 @@ beforeEach(() => {
   auth.signedIn = false;
   auth.user = null;
   sessionStorage.clear();
+  clearCloudPromptBackendState();
 });
 afterEach(cleanup);
 
 describe("Cloud public routing", () => {
+  it("shows expired Cloud access on Dashboard without a prior manual action", async () => {
+    auth.signedIn = true;
+    auth.user = { id: "expired-account" };
+    publishCloudPromptBilling("account", { membership: { status: "expired", environment: "live", phase: "active",
+      can_read_cloud: true, can_upload_cloud: false }, machine_count: 2 }, auth.user.id);
+    render(<MemoryRouter initialEntries={["/dashboard"]}><App /></MemoryRouter>);
+    expect(await screen.findByRole("heading", { name: labels.dashboard })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Cloud options" })).toHaveTextContent("Pro expired");
+  });
   it("retains the protected account route when authentication must be restored", async () => {
     render(<MemoryRouter initialEntries={["/settings?section=account"]}><App /></MemoryRouter>);
     expect(await screen.findByRole("heading", { name: "/login?next=%2Fsettings%3Fsection%3Daccount" })).toBeInTheDocument();
