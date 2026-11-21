@@ -243,18 +243,28 @@ internal sealed class DashboardWindow : Window
         _backdropEnabled = DwmSetWindowAttribute(_hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref type, sizeof(int)) == 0;
     }
 
-    // ── Tilt wheel (horizontal scroll) ─────────────────────────────────
+    // ── Native window procedure ────────────────────────────────────────
 
     /// <summary>
-    /// Forwards horizontal mouse-wheel tilts into the hosted page. Only
-    /// WM_MOUSEHWHEEL is touched: vertical wheeling (WM_MOUSEWHEEL) flows through
-    /// the WebView2 control's normal WPF event channel. While exiting or before
-    /// the WebView core is up (including the ReplaceWebViewControl recovery race)
-    /// there is no page to scroll, so the message is left fully unhandled for the
-    /// default window procedure.
+    /// Dashboard HWND hook. Handles <c>WM_GETMINMAXINFO</c> so maximize stays
+    /// inside the current monitor's work area (see
+    /// <see cref="ApplyMaximizedWorkArea"/>) and forwards horizontal mouse-wheel
+    /// tilts into the hosted page. Vertical wheeling (<c>WM_MOUSEWHEEL</c>)
+    /// flows through the WebView2 control's normal WPF event channel. While
+    /// exiting or before the WebView core is up (including the
+    /// ReplaceWebViewControl recovery race) there is no page to scroll, so a
+    /// tilt message is left fully unhandled for the default window procedure.
     /// </summary>
     private nint DashboardWndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
     {
+        if (msg == WM_GETMINMAXINFO)
+        {
+            ApplyMaximizedWorkArea(hwnd, lParam);
+            // Leave unhandled so WPF can still write MinWidth/MinHeight into
+            // the track sizes. WPF does not overwrite ptMaxPosition/ptMaxSize.
+            return nint.Zero;
+        }
+
         if (msg != WM_MOUSEHWHEEL) return nint.Zero;
         if (_exiting || !_coreReady) return nint.Zero;
 
@@ -1215,11 +1225,46 @@ internal sealed class DashboardWindow : Window
         base.OnClosed(e);
     }
 
+    /// <summary>
+    /// Constrains maximize to the current monitor's work area so a visible
+    /// (non-auto-hide) taskbar is not covered. Coordinates come from
+    /// <c>GetMonitorInfo</c> in device pixels, matching <c>MINMAXINFO</c> and
+    /// the app's PerMonitorV2 DPI awareness — no DIP conversion, and not the
+    /// primary-only <see cref="SystemParameters.WorkArea"/>. Auto-hide already
+    /// falls out of <c>rcWork == rcMonitor</c>. On failure the default
+    /// <c>MINMAXINFO</c> is left unchanged.
+    /// </summary>
+    private static void ApplyMaximizedWorkArea(nint hwnd, nint lParam)
+    {
+        if (lParam == 0) return;
+
+        var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if (monitor == 0) return;
+
+        var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(monitor, ref info)) return;
+
+        if (!MaximizedWorkArea.TryCompute(
+                new MaximizedWorkArea.ScreenRect(info.rcWork.Left, info.rcWork.Top, info.rcWork.Right, info.rcWork.Bottom),
+                new MaximizedWorkArea.ScreenRect(info.rcMonitor.Left, info.rcMonitor.Top, info.rcMonitor.Right, info.rcMonitor.Bottom),
+                out var placement))
+        {
+            return;
+        }
+
+        var mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
+        mmi.ptMaxPosition = new POINT { X = placement.PositionX, Y = placement.PositionY };
+        mmi.ptMaxSize = new POINT { X = placement.SizeX, Y = placement.SizeY };
+        Marshal.StructureToPtr(mmi, lParam, fDeleteOld: false);
+    }
+
     // ── P/Invoke + constants ───────────────────────────────────────────
 
     private const int WM_NCLBUTTONDOWN = 0xA1;
     private const int HTCAPTION = 2;
     private const int WM_MOUSEHWHEEL = 0x020E; // horizontal wheel tilt (no WPF routing exists for it)
+    private const int WM_GETMINMAXINFO = 0x0024;
+    private const int MONITOR_DEFAULTTONEAREST = 0x00000002;
 
     // DWM (Win10 2004+ / Win11)
     private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
@@ -1232,11 +1277,43 @@ internal sealed class DashboardWindow : Window
     [StructLayout(LayoutKind.Sequential)]
     private struct MARGINS { public int Left, Right, Top, Bottom; }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X, Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MINMAXINFO
+    {
+        public POINT ptReserved;
+        public POINT ptMaxSize;
+        public POINT ptMaxPosition;
+        public POINT ptMinTrackSize;
+        public POINT ptMaxTrackSize;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public int dwFlags;
+    }
+
     [DllImport("user32.dll")]
     private static extern bool ReleaseCapture();
 
     [DllImport("user32.dll")]
     private static extern nint SendMessage(nint hWnd, int msg, nint wParam, nint lParam);
+
+    [DllImport("user32.dll")]
+    private static extern nint MonitorFromWindow(nint hwnd, int flags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetMonitorInfo(nint hMonitor, ref MONITORINFO lpmi);
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(nint hwnd, int attr, ref int value, int size);
