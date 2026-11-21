@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
+import { getInsforgeInstanceFingerprint } from "../../lib/insforge-config";
 import { Tooltip } from "@base-ui/react/tooltip";
 import { ChevronRight, Cloud, CreditCard, ExternalLink, Gift, Info, Monitor, Pause, Play, RefreshCw } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
@@ -18,6 +19,7 @@ import { getLocalApiAuthHeaders } from "../../lib/local-api-auth";
 import { copy } from "../../lib/copy";
 import { beginCloudOrderAction } from "../../lib/cloud-action-intent.js";
 import { CloudDeadlinePrompt } from "./CloudContextualPrompt.jsx";
+import { CancelPendingOrder } from "./CancelPendingOrder.jsx";
 import { RedeemProCode } from "./RedeemProCode.jsx";
 import { CloudUsageExport } from "./CloudUsageExport.jsx";
 import { CloudActionDialog } from "./CloudActionDialog.jsx";
@@ -294,11 +296,13 @@ function CloudMachineList({ auth, machineLimit, accountRevision, selfHosted = fa
   );
 }
 
-function RestoreCloudOrder({ recent, pendingOrders, conflictOrders, userId, payments = [], footerActions }) {
+function RestoreCloudOrder({ recent, pendingOrders, conflictOrders, userId, auth, refresh, payments = [], footerActions, cancelOutcome, cancellationOrders = {}, onCancellationResult }) {
   const navigate = useNavigate();
   const [orderId, setOrderId] = useState(recent?.order_id && CLOUD_ORDER_ID_PATTERN.test(recent.order_id) ? recent.order_id : "");
   const [invalid, setInvalid] = useState(false);
   const [lookupOpen, setLookupOpen] = useState(false);
+  const cancelNotice = useRef(null);
+  useEffect(() => { if (["cancelled", "not_cancelled"].includes(cancelOutcome)) cancelNotice.current?.focus(); }, [cancelOutcome]);
   const lookupId = useId();
   const inputRef = useRef(null);
   useEffect(() => {
@@ -310,11 +314,15 @@ function RestoreCloudOrder({ recent, pendingOrders, conflictOrders, userId, paym
       ["paid", "partially_refunded", "refunded"].includes(order.payment_state)).map((order) => order.id),
   ].map((id) => id.toLowerCase()));
   const orders = [...(conflictOrders || []), ...(pendingOrders || []).filter((order) =>
-    order.retry_payment_conflict_at || !paidOrderIds.has(order.id.toLowerCase()))].filter(
-    (order, index, all) => { return all.findIndex((item) => item.id === order.id) === index; },
+    order.retry_payment_conflict_at || !paidOrderIds.has(order.id.toLowerCase()))].map((order) => {
+    const updated = cancellationOrders[order.id];
+    return updated && !order.retry_payment_conflict_at ? { ...order, ...updated, cancel_requested_at: order.cancel_requested_at || updated.cancel_requested_at } : order;
+  }).filter(
+    (order, index, all) => { return (order.retry_payment_conflict_at || !["closed", "paid"].includes(order.status)) && all.findIndex((item) => item.id === order.id) === index; },
   );
   return (
     <div className="mt-2 space-y-3">
+      {["cancelled", "not_cancelled"].includes(cancelOutcome) ? <p ref={cancelNotice} tabIndex={-1} role="status" className="text-sm">{copy(cancelOutcome === "cancelled" ? "cloud.order_cancel.done" : "cloud.order_cancel.paid")}</p> : null}
       {recent?.request_id && !recent.order_id ? (
         <Link
           to={`/billing/checkout?sku=${encodeURIComponent(recent.sku)}`}
@@ -337,7 +345,7 @@ function RestoreCloudOrder({ recent, pendingOrders, conflictOrders, userId, paym
             if (Number.isInteger(order.amount_cents) && order.amount_cents >= 0 && ["USD", "CNY"].includes(order.currency)) {
               amount = formatCloudMoney(order.amount_cents, order.currency);
             }
-            const status = copy(order.retry_payment_conflict_at ? "cloud.action.review_duplicate_payment" : "cloud.history.pending");
+            const status = copy(order.retry_payment_conflict_at ? "cloud.action.review_duplicate_payment" : order.cancel_requested_at ? "cloud.order_cancel.pending_label" : order.cancel_verification_pending ? "cloud.order_cancel.unverified_label" : "cloud.history.pending");
             return (
             <li key={order.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-3 sm:col-span-3 sm:grid-cols-subgrid">
               <p className="col-start-1 row-start-1 text-sm tabular-nums">{date || status}</p>
@@ -346,7 +354,7 @@ function RestoreCloudOrder({ recent, pendingOrders, conflictOrders, userId, paym
                 {order.provider ? <span>{cloudProviderLabel(order.provider)}</span> : null}
                 {date ? <>{order.provider ? <span aria-hidden>·</span> : null}<span>{status}</span></> : null}
               </div> : null}
-              <Link
+              {!order.cancel_requested_at && !order.cancel_verification_pending ? <Link
                 to={`/billing/checkout?order=${encodeURIComponent(order.id)}`}
                 onClick={(event) => {
                   if (order.retry_payment_conflict_at || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
@@ -359,7 +367,10 @@ function RestoreCloudOrder({ recent, pendingOrders, conflictOrders, userId, paym
                 <span>{order.retry_payment_conflict_at
                   ? copy("cloud.action.review_duplicate_payment")
                   : copy("cloud.action.resume_order")}</span>
-              </Link>
+              </Link> : null}
+              <CancelPendingOrder order={order} auth={auth} refresh={refresh} onResult={(outcome, updated) => {
+                onCancellationResult?.(order.id, outcome, updated);
+              }} />
             </li>
             );
           })}
@@ -475,6 +486,9 @@ export function CloudMembershipAccount({ account, auth, loading, error, refresh,
   const [actionError, setActionError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [canceling, setCanceling] = useState(null);
+  const cancellationScope = `${auth.user?.id}:${getInsforgeInstanceFingerprint()}`;
+  const [cancellationState, setCancellationState] = useState(null);
+  const cancellation = cancellationState?.scope === cancellationScope ? cancellationState : null;
   const lock = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
@@ -739,7 +753,24 @@ export function CloudMembershipAccount({ account, auth, loading, error, refresh,
           title={copy("cloud.billing.title")} icon={CreditCard} wide>
             {actionError ? <div className="mb-3"><BillingNotice error={actionError} context="account" /></div> : null}
             <RestoreCloudOrder
+              key={cancellationScope}
+              cancelOutcome={cancellation?.outcome}
+              cancellationOrders={cancellation?.orders}
+              onCancellationResult={(id, outcome, updated) => {
+                if (updated?.id !== id || !["pending", "ready", "closed", "paid"].includes(updated.status)) return;
+                // Retain authoritative receipts across dialog closure and failed refreshes.
+                setCancellationState((previous) => ({
+                  scope: cancellationScope,
+                  outcome,
+                  orders: {
+                    ...(previous?.scope === cancellationScope ? previous.orders : {}),
+                    [id]: { status: updated.status, cancel_requested_at: updated.cancel_requested_at, cancel_verification_pending: updated.cancel_verification_pending === true },
+                  },
+                }));
+              }}
               userId={auth.user?.id}
+              auth={auth}
+              refresh={refresh}
               recent={readCloudPurchase(auth.user?.id)}
               pendingOrders={account?.pending_orders}
               conflictOrders={account?.conflict_orders}
@@ -753,7 +784,7 @@ export function CloudMembershipAccount({ account, auth, loading, error, refresh,
         </CloudActionDialog> : null}
         {membership?.can_read_cloud ? <CloudUsageExport auth={auth} layout="settings-row"
           dialogOpen={activeDialog === "export"} onDialogOpenChange={(open) => setActiveDialog(open ? "export" : null)} /> : null}
-        <RedeemProCode account={account} auth={auth} refresh={refresh} layout="settings-row"
+        <RedeemProCode account={account} auth={auth} refresh={refresh} onManageBilling={() => setActiveDialog("billing")} layout="settings-row"
           dialogOpen={activeDialog === "redeem"} onDialogOpenChange={(open) => setActiveDialog(open ? "redeem" : null)} />
         {syncControl ? <section>{syncControl}</section> : null}
       </section>

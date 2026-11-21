@@ -17,6 +17,7 @@ const curated = require("../src/lib/pricing/curated-overrides.json");
 const argon = { input: 2, output: 10, cache_read: 0.1, cache_write: 0 };
 const carbon = { input: 2, output: 10, cache_read: 0.1, cache_write: 0 };
 const hydrogen = { input: 1.5, output: 7.5, cache_read: 0.075, cache_write: 0 };
+const neon = { input: 3, output: 15, cache_read: 0.15, cache_write: 0 };
 const wonder = { input: 4, output: 20, cache_read: 0.2, cache_write: 0 };
 const grok47 = { input: 2, output: 6, cache_read: 0.5, cache_write: 0 };
 const grok47Fast = { input: 4, output: 12, cache_read: 1, cache_write: 0 };
@@ -35,6 +36,7 @@ test("Gemini 4 and Muse Wonder effort variants resolve offline at their publishe
     ["gemini-4-argon", argon, ["", "-minimal", "-low", "-medium", "-high"]],
     ["gemini-4-carbon", carbon, ["", "-low", "-medium", "-high"]],
     ["gemini-4-hydrogen", hydrogen, ["", "-low", "-medium", "-high", "-xhigh"]],
+    ["gemini-4-neon", neon, ["", "-low", "-medium", "-high", "-xhigh", "-minimal"]],
     ["muse-wonder-1.0", wonder, ["", "-minimal", "-low", "-medium", "-high", "-xhigh", "-extra-high", "-max"]],
   ]) {
     for (const effort of efforts) {
@@ -46,7 +48,7 @@ test("Gemini 4 and Muse Wonder effort variants resolve offline at their publishe
       assert.equal(pricing.getModelPricingInfo(name, { source: "cursor" }).status, "priced", name);
     }
   }
-  for (const name of ["gemini-4-carbon-cyber-permissive", "gemini-4-hydrogen-lite", "muse-wonder-full-1.0"]) {
+  for (const name of ["gemini-4-carbon-cyber-permissive", "gemini-4-hydrogen-lite", "gemini-4-neon-lite", "muse-wonder-full-1.0"]) {
     assert.equal(lookupPricing(name, { curated, litellm: {}, source: "cursor" }).hit, false, name);
   }
 });
@@ -54,6 +56,9 @@ test("Gemini 4 and Muse Wonder effort variants resolve offline at their publishe
 test("normalizeCursorModel maps Cursor screenshot ids to curated keys", () => {
   assert.equal(normalizeCursorModel("gemini-4-argon-high"), "gemini-4-argon");
   assert.equal(normalizeCursorModel("gemini-4-argon-minimal"), "gemini-4-argon");
+  assert.equal(normalizeCursorModel("gemini-4-neon-xhigh"), "gemini-4-neon");
+  assert.equal(normalizeCursorModel("gemini-4.neon-low"), "gemini-4-neon");
+  assert.equal(normalizeCursorModel("gemini-4-neon-minimal"), "gemini-4-neon");
   assert.equal(normalizeCursorModel("grok-4.7-high-fast"), "cursor-grok-4.7-fast");
   assert.equal(normalizeCursorModel("grok-4.7-high"), "cursor-grok-4.7");
   assert.equal(normalizeCursorModel("grok-4.6-medium-fast"), "cursor-grok-4.6-fast");
@@ -160,6 +165,13 @@ test("1MTok row costs match published Cursor rates", () => {
   }) - 12.1) < 1e-9);
   assert.ok(Math.abs(pricing.computeRowCost({
     source: "cursor",
+    model: "gemini-4-neon-high",
+    input_tokens: 1_000_000,
+    cached_input_tokens: 1_000_000,
+    output_tokens: 1_000_000,
+  }) - 18.15) < 1e-9);
+  assert.ok(Math.abs(pricing.computeRowCost({
+    source: "cursor",
     model: "grok-4.7-high-fast",
     input_tokens: 1_000_000,
     cached_input_tokens: 1_000_000,
@@ -200,6 +212,11 @@ for (const slug of [
       ["gemini-4-hydrogen-xhigh", hydrogen],
       ["gemini-4-hydrogen-high", hydrogen],
       ["gemini-4.hydrogen-low", hydrogen],
+      ["gemini-4-neon", neon],
+      ["gemini-4-neon-xhigh", neon],
+      ["gemini-4-neon-high", neon],
+      ["gemini-4.neon-low", neon],
+      ["google/gemini-4-neon", neon],
       ["muse-wonder-1.0-max", wonder],
       ["muse-wonder-1.0-high", wonder],
       ["meta/muse-wonder-1.0", wonder],
@@ -219,7 +236,7 @@ for (const slug of [
     assert.equal(context.getModelPricing("composer-2.5-fast").input, 3);
     // Must not collapse Grok 4.7 Fast onto xAI grok-4 ($3).
     assert.equal(context.getModelPricing("grok-4.7-high-fast").input, 4);
-    for (const name of ["gemini-4-carbon-cyber-permissive", "gemini-4-hydrogen-lite", "muse-wonder-full-1.0"]) {
+    for (const name of ["gemini-4-carbon-cyber-permissive", "gemini-4-hydrogen-lite", "gemini-4-neon-lite", "muse-wonder-full-1.0"]) {
       assert.equal(context.getModelPricing(name).input, 0, name);
     }
   });

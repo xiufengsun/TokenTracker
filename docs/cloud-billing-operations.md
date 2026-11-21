@@ -203,3 +203,29 @@ The production audit on 2026-10-10 found default anonymous/authenticated grants 
 - [ ] Publish an announcement or unified desktop release only under its own scope and evidence; no announcement or desktop release was made by the price activation.
 
 Waffo SDK 0.25.0, its integration skill, official MoR information, developer terms and privacy links were checked in the earlier acceptance. Merchant approval and genuine sandbox payment/refund evidence are recorded separately. Live launch and fixed-month payment/full refund have been verified. Other live billing modes, future renewals and bank/merchant settlement retain their own acceptance boundaries; recheck applicable contract fees when reconciling actual revenue.
+
+
+## Pending-order cancellation (source-only; requires separate deployment approval)
+
+Apply `20261117090000_cloud-order-cancellation.sql` before deploying the changed billing function.
+The UI's cancellation request does not cancel subscription renewal, refund payments, create a
+replacement checkout, or redeem a gift. The new operation ledger tracks every checkout creation
+and ambiguous recovery invocation. Cancellation intent blocks new local checkout/retry issuance;
+read-only provider reconciliation and payment webhooks remain enabled. Never use the generic
+unpaid-close RPC to bypass an intent's stricter finality checks.
+
+Never-issued drafts can close atomically. Issued links remain **processing** until a known receipt's
+session-family expiry and independently confirmed terminal unpaid attempts, matching the persisted
+attempt set, permit atomic finalization. Expiry alone is not payment finality. No subscription cancel
+API is invoked; a raced successful payment wins and retains its entitlement and renewal settings.
+Transaction-local authorization uses a privileged marker table keyed by the current transaction, because official InsForge migration guards reject session-configuration statements. The atomic tracked-claim RPC creates its operation receipt in the claim transaction. Legacy
+handlers may coexist during rollout: their old claim RPC remains supported, but claims made
+without that atomic wrapper are marked uncertain and never treated as never-issued drafts.
+Pre-migration issued/claimed orders are deliberately marked `checkout_tracking_uncertain`: their
+historical in-flight creation operations cannot be reconstructed. They may remain processing even
+after expiry; do not clear this flag based on a timer or promise automatic completion. Unknown or
+failed operation receipts also fail closed. This limitation must be visible in rollout review.
+
+Local screenshot fixture: `/cancel-order-preview.html?state=processing` in Vite. The `draft`, `error`,
+and `paid` variants use the real component with synthetic data and no payment requests. Do not use
+production accounts or real gift codes for acceptance tests.

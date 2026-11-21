@@ -126,7 +126,19 @@ function getModelPricing(model, opts = {}) {
     litellm: state.litellmPerMillionMap,
     source: lookupSource,
   });
-  if (result.hit) return result.value;
+  if (result.hit) {
+    const value = result.value;
+    // Price the recorded bucket, not today's date, across the GPT-6.2 launch
+    // promotion. Undated model displays use the currently effective multiplier.
+    const at = typeof opts === "object" ? opts.at : undefined;
+    const parsed = at == null ? NaN : Date.parse(at);
+    const timestamp = Number.isFinite(parsed) ? parsed : Date.now();
+    if (value.ultrafast_promotion_ends_at &&
+        timestamp >= Date.parse(value.ultrafast_promotion_ends_at)) {
+      return { ...value, ultrafast_multiplier: value.ultrafast_regular_multiplier };
+    }
+    return value;
+  }
 
   state.negativeCache.add(cacheKey);
   return ZERO_PRICING;
@@ -153,7 +165,9 @@ function getModelPricingInfo(model, opts = {}) {
     info = computeModelPricingInfo(model, opts, sourceKey);
     pricingInfoCache.entries.set(cacheKey, info);
   }
-  return { ...info };
+  // The info cache must not freeze a time-limited speed promotion.
+  const rates = info.ultrafast_multiplier == null ? null : getModelPricing(model, opts);
+  return { ...info, ...(rates ? { ultrafast_multiplier: rates.ultrafast_multiplier } : null) };
 }
 
 function computeModelPricingInfo(model, opts, sourceKey) {
@@ -223,7 +237,7 @@ function isDeepSeekOffPeak(row) {
 }
 
 function getRowPricing(row) {
-  const pricing = getModelPricing(row?.model, { source: row?.source });
+  const pricing = getModelPricing(row?.model, { source: row?.source, at: row?.hour_start || row?.timestamp });
   // AStudio uses iFlytek MaaS fixed prices and does not inherit DeepSeek public API
   // time-based discounts.
   if (String(row?.source || "").toLowerCase() === "acode") return pricing;
@@ -267,7 +281,7 @@ function rowSubsetContext(row, reasoningIncludedInOutput) {
   const usesOpenAILongContextTier =
     model === "gpt-5.6" || model.includes("gpt-5.6-sol") || model.includes("gpt-6-astra") ||
     model.includes("gpt-6-sol") || model.includes("gpt-6.1-sol") ||
-    model.includes("gpt-6.1-terra");
+    model.includes("gpt-6.1-terra") || /gpt-6[.-]2-(?:astra|sol)/.test(model);
   // Both premium families below read "observed subset" columns: how much of the
   // row's own token columns came from requests with a given property. They are
   // annotations, never addends — total_tokens stays the sum of the base columns

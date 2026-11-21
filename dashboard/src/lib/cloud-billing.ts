@@ -58,6 +58,8 @@ export type CloudOrder = {
   checkout_url?: string | null;
   expires_at?: string | null;
   retry_payment_conflict_at?: string | null;
+  cancel_requested_at?: string | null;
+  checkout_tracking_uncertain?: boolean;
 };
 export type CloudGift = {
   id: string;
