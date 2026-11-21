@@ -71,6 +71,8 @@ const {
   piAgentDirCollidesWithOmp,
   resolvePrimeAgentSessionFiles,
   resolvePrimeAgentDir,
+  resolveDeepaiCodeSessionsDir,
+  resolveDeepaiCodeSessionFiles,
   resolveCraftSessionFiles,
   resolveCraftConfigDir,
   resolveReasonixHome,
@@ -550,6 +552,11 @@ async function cmdStatus(argv = []) {
   const primeAgentDir = resolvePrimeAgentDir(process.env);
   const primeAgentInstalled = Boolean(primeAgentDir) && fssync.existsSync(path.join(primeAgentDir, "sessions"));
   const primeAgentFiles = primeAgentInstalled ? resolvePrimeAgentSessionFiles(process.env) : [];
+
+  // DeepAI Code — passive scan of the pi-style sessions it embeds.
+  const deepaiCodeSessionsDir = resolveDeepaiCodeSessionsDir(process.env);
+  const deepaiCodeInstalled = Boolean(deepaiCodeSessionsDir) && fssync.existsSync(deepaiCodeSessionsDir);
+  const deepaiCodeFiles = deepaiCodeInstalled ? resolveDeepaiCodeSessionFiles(process.env) : [];
 
   // Craft Agents — passive scan only (no hooks).
   const craftConfigDir = resolveCraftConfigDir(process.env);
@@ -1174,6 +1181,9 @@ async function cmdStatus(argv = []) {
         prime_agent: primeAgentInstalled
           ? { installed: true, files: primeAgentFiles.length }
           : { installed: false },
+        deepai: deepaiCodeInstalled
+          ? { installed: true, files: deepaiCodeFiles.length }
+          : { installed: false },
         craft: craftInstalled
           ? { installed: true, files: craftFiles.length }
           : { installed: false },
@@ -1378,6 +1388,9 @@ async function cmdStatus(argv = []) {
         : null,
       primeAgentInstalled
         ? `- Prime Agent: passive reader (${primeAgentFiles.length} session jsonl file${primeAgentFiles.length !== 1 ? "s" : ""} found)`
+        : null,
+      deepaiCodeInstalled
+        ? `- DeepAI Code: passive reader (${deepaiCodeFiles.length} session jsonl file${deepaiCodeFiles.length !== 1 ? "s" : ""} found)`
         : null,
       craftInstalled
         ? `- Craft Agents: passive reader (${craftFiles.length} session jsonl file${craftFiles.length !== 1 ? "s" : ""} found)`

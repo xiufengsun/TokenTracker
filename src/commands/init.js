@@ -74,6 +74,7 @@ const {
   resolvePiAgentDir,
   piAgentDirCollidesWithOmp,
   resolvePrimeAgentDir,
+  resolveDeepaiCodeSessionsDir,
   resolveMinimaxCodeSessionsDir,
   resolveCommandCodeHome,
   resolveLmstudioLogFiles,
@@ -167,6 +168,7 @@ const SUPPORTED_PROVIDERS = [
   "Cline",
   "MiniMax Code",
   "Command Code",
+  "DeepAI Code",
 ];
 
 async function cmdInit(argv, options = {}) {
@@ -866,6 +868,15 @@ async function applyIntegrationSetup({
     const commandCodeProjectsDir = path.join(resolveCommandCodeHome(process.env), "projects");
     if (fssync.existsSync(commandCodeProjectsDir)) {
       summary.push({ label: "Command Code", status: "detected", detail: "Passive session reader (no hook needed)" });
+    }
+  }
+
+  // DeepAI Code: passive reader of ~/.deepai-code/userdata/deepai/pi/*/sessions —
+  // no hook installation needed.
+  {
+    const deepaiCodeSessionsDir = resolveDeepaiCodeSessionsDir(process.env);
+    if (deepaiCodeSessionsDir && fssync.existsSync(deepaiCodeSessionsDir)) {
+      summary.push({ label: "DeepAI Code", status: "detected", detail: "Passive session reader (no hook needed)" });
     }
   }
 

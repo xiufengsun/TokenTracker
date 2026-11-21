@@ -17541,6 +17541,93 @@ function resolvePrimeAgentDefaultModel() {
   return "prime-agent-unknown";
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DeepAI Code (DeepAI's Electron coding agent, ~/.deepai-code) — passive reader
+//
+// DeepAI Code embeds pi and launches it with its own agent directory, so the
+// sessions are plain pi JSONL and reuse the pi-family parser verbatim:
+//   ~/.deepai-code/userdata/deepai/pi/<scope>/sessions/--<cwd>--/<ts>_<id>.jsonl
+//
+// Records carry pi-shaped usage (input excludes cacheRead) and every message is
+// stamped provider:"deepai" with a DeepAI gateway model id (deepseek-v4.1-flash,
+// glm-5.3-flash, deepai-cyber, ...). DeepAI bills these through its own plan and
+// the app always reports usage.cost.total = 0, so the cost block is ignored and
+// normal pricing applies. The app ships signed-release only, so it lands in a
+// userdata dir (`~/.deepai-code/userdata`) rather than a roamed profile.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DEEPAI_CODE_SOURCE = "deepai";
+
+function resolveDeepaiCodeUserdataDir(env = process.env) {
+  if (env.TOKENTRACKER_DEEPAI_CODE_USERDATA) {
+    return expandHomePath(env.TOKENTRACKER_DEEPAI_CODE_USERDATA.trim(), env);
+  }
+  const home = env.HOME || require("node:os").homedir();
+  if (process.platform === "win32") {
+    return pickWin32ProviderPath({
+      env,
+      nativeValue: path.join(home, ".deepai-code", "userdata"),
+      wslProviderDir: ".deepai-code/userdata",
+    });
+  }
+  return path.join(home, ".deepai-code", "userdata");
+}
+
+// Each embedded pi runtime keeps its own agent dir at
+// <userdata>/deepai/pi/<scope>/ — today only "deepai", but the scope segment
+// is app-owned, so discover them instead of hardcoding one.
+function resolveDeepaiCodeAgentDirs(env = process.env) {
+  if (env.TOKENTRACKER_DEEPAI_CODE_AGENT_DIR) {
+    return [expandHomePath(env.TOKENTRACKER_DEEPAI_CODE_AGENT_DIR.trim(), env)];
+  }
+  const userdataDir = resolveDeepaiCodeUserdataDir(env);
+  if (!userdataDir) return [];
+  const piRoot = path.join(userdataDir, "deepai", "pi");
+  const discovered = [];
+  let entries = [];
+  try { entries = fssync.readdirSync(piRoot, { withFileTypes: true }); } catch { entries = []; }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const agentDir = path.join(piRoot, entry.name);
+    if (fssync.existsSync(path.join(agentDir, "sessions"))) discovered.push(agentDir);
+  }
+  if (discovered.length > 0) {
+    discovered.sort((a, b) => a.localeCompare(b));
+    return discovered;
+  }
+  // No sessions on disk yet — return the canonical path so status can report
+  // it consistently with the other passive providers.
+  return [path.join(piRoot, "deepai")];
+}
+
+function resolveDeepaiCodeSessionsDir(env = process.env) {
+  const agentDirs = resolveDeepaiCodeAgentDirs(env);
+  return agentDirs.length > 0 ? path.join(agentDirs[0], "sessions") : null;
+}
+
+// Same discovery walk as pi/OmO; the agent dirs are DeepAI-owned paths, so the
+// shared helper is reused instead of duplicated.
+function resolveDeepaiCodeSessionFiles(env = process.env) {
+  const files = [];
+  for (const agentDir of resolveDeepaiCodeAgentDirs(env)) {
+    files.push(...collectPiStyleSessionFiles(agentDir));
+  }
+  files.sort((a, b) => a.localeCompare(b));
+  return files;
+}
+
+async function parseDeepaiCodeIncremental(options = {}) {
+  return parsePiLikeIncremental({
+    ...options,
+    // Own state key: DeepAI Code must never share pi's seenIds/offsets, or
+    // alternating syncs between the two roots would drop or replay messages.
+    stateKey: "deepai",
+    resolveSessionFiles: resolveDeepaiCodeSessionFiles,
+    resolveDefaultModel: () => `${DEEPAI_CODE_SOURCE}-unknown`,
+    sourceForProvider: () => DEEPAI_CODE_SOURCE,
+  });
+}
+
 // Pi is a router: the same session can send turns to Anthropic, GitHub
 // Copilot, or another backend. Keep provider names in the queue source so
 // those turns cannot collapse into one bucket (or inherit the wrong pricing).
@@ -26705,6 +26792,12 @@ module.exports = {
   resolvePrimeAgentSessionFiles,
   resolvePrimeAgentDefaultModel,
   parsePrimeAgentIncremental,
+  DEEPAI_CODE_SOURCE,
+  resolveDeepaiCodeUserdataDir,
+  resolveDeepaiCodeAgentDirs,
+  resolveDeepaiCodeSessionsDir,
+  resolveDeepaiCodeSessionFiles,
+  parseDeepaiCodeIncremental,
   resolveMinimaxCodeHome,
   resolveMinimaxCodeSessionsDir,
   resolveMinimaxCodeSessionFiles,
