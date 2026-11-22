@@ -6,7 +6,7 @@
 
 ### AI に使ったコストを正確に把握 — すべての CLI を横断して
 
-**47 種類の AI コーディングツール**からトークン数を自動収集し、ローカルで集計、美しいダッシュボードで本当のコスト推移を可視化します。クラウドアカウント不要、API キー不要、セットアップ不要 — コマンド 1 つで完了です。
+**48 種類の AI コーディングツール**からトークン数を自動収集し、ローカルで集計、美しいダッシュボードで本当のコスト推移を可視化します。クラウドアカウント不要、API キー不要、セットアップ不要 — コマンド 1 つで完了です。
 
 [![npm version](https://img.shields.io/npm/v/tokentracker-cli.svg?color=blue)](https://www.npmjs.com/package/tokentracker-cli)
 [![npm downloads](https://img.shields.io/npm/dm/tokentracker-cli.svg?color=brightgreen)](https://www.npmjs.com/package/tokentracker-cli)
@@ -88,7 +88,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ## ✨ 機能
 
-- 🔌 **47 種類の AI ツールを標準対応** — Claude Code、Codex CLI、AStudio、Cursor、Gemini CLI、Antigravity、Kiro、OpenCode、OpenSquilla、OpenClaw、Every Code、Hermes Agent、GitHub Copilot、Kimi Code、CodeBuddy、WorkBuddy、Grok Build、oh-my-pi、OmO、pi、Dots、Prime Agent、Craft Agents、Reasonix、Muse Code、Kilo CLI、Kilo Code、Roo Code、Zed Agent、Goose、Droid、Mimo Code、DuMate、ZCode、Qoder、AnythingLLM Desktop、Claude Science、DeepSeek Harness、TRAE Work CN、LM Studio、Unsloth Studio、Devin CLI、Cline、MiniMax Code、Command Code、TRAE
+- 🔌 **48 種類の AI ツールを標準対応** — Claude Code、Codex CLI、AStudio、Cursor、Gemini CLI、Antigravity、Kiro、OpenCode、OpenSquilla、OpenClaw、Every Code、Hermes Agent、GitHub Copilot、Kimi Code、CodeBuddy、WorkBuddy、Grok Build、oh-my-pi、OmO、pi、Dots、Prime Agent、Craft Agents、Reasonix、Muse Code、Kilo CLI、Kilo Code、Roo Code、Zed Agent、Goose、Droid、Mimo Code、DuMate、ZCode、Qoder、AnythingLLM Desktop、Claude Science、DeepSeek Harness、TRAE Work CN、LM Studio、Unsloth Studio、Devin CLI、Cline、MiniMax Code、Command Code、DeepAI Code、TRAE
 - 🏠 **ローカルファースト** — すべてマシン上で動作。アカウントや API キーなしでログをローカル解析します。
 - 🚀 **ゼロコンフィグ** — Hook は初回実行で自動インストール。0 からダッシュボードまで 30 秒。
 - 📊 **美しいダッシュボード** — 使用トレンド、モデル別コスト内訳、GitHub スタイルのアクティビティヒートマップ、プロジェクト別の帰属表示
@@ -207,6 +207,7 @@ brew install xiufengsun/tokentracker/tokentracker
 | **Cline**（CLI v3 / デスクトップアプリ） | ✅ 自動 | パッシブリーダー (`~/.cline/data/sessions/<id>/*.messages.json`)。各ターンの `metrics` は使用量差分で、`inputTokens` には cache 読み書きが、`outputTokens` には reasoning が既に含まれるため、キャッシュ済みプレフィックスは差し引かれ、reasoning は二重計上されません。Cline 自身が報告する `cost` を優先します。`cline-free/*`・`cline-pass/*` のゲートウェイモデルは $0 扱い。VS Code 拡張の globalStorage は読み取りません。パス上書き: `TOKENTRACKER_CLINE_SESSIONS_DIR`、`TOKENTRACKER_CLINE_DATA_DIR`、`TOKENTRACKER_CLINE_HOME`、`CLINE_SESSION_DATA_DIR`、`CLINE_DATA_DIR`、`CLINE_DIR` |
 | **MiniMax Code** | ✅ 自動 | パッシブリーダー (`~/.minimax/v2/sessions/YYYY/MM/DD/<session>/messages.jsonl`)。`message_id` で重複排除し、メッセージごとにルーティング先の上流モデルを記録します。常に 0 の `usage.cost` は使わず通常の料金表で計算します。ディレクトリは `TOKENTRACKER_MINIMAX_HOME` で上書き可能 |
 | **Command Code** | ✅ 自動 | パッシブなセッションログリーダー (`~/.commandcode/projects/<cwd-slug>/<session-id>.jsonl`、`*.checkpoints.jsonl` スナップショットと `.prompts.` 補助ファイルはスキップ)。トランスクリプトをローカルでスキャンし、トークン数や CLI の表示用見積もり `costUsd` など、必要な使用量メタデータを抽出します。費用は Token Tracker の共通モデル料金表で推定します。キャッシュを含む input からキャッシュ読み取り・書き込みの両方を差し引き、二重計上を防ぎます。Token Tracker はプロンプト・応答・コードの本文を保存・アップロードしません。ディレクトリは `TOKENTRACKER_COMMANDCODE_HOME` で上書き可能 |
+| **DeepAI Code** | ✅ 自動 | DeepAI Code が内蔵する pi 形式セッション (`~/.deepai-code/userdata/deepai/pi/*/sessions/**/*.jsonl`) のパッシブリーダー。pi の使用量規約 (キャッシュ入力は別計上、`usage.reasoning` は `output` の内数で二重計上しない) に従い、専用の `deepai` カーソル名前空間（`pi` のカーソル状態とは分離）を使用します。常に 0 の `usage.cost.total` は無視し、通常のモデル料金表を適用します。トークン数・モデル ID・タイムスタンプのみを読み取ります。`TOKENTRACKER_DEEPAI_CODE_USERDATA` または `TOKENTRACKER_DEEPAI_CODE_AGENT_DIR` で上書き可能 |
 | **Claude Science** | ✅ 自動 | パッシブな SQLite リーダー (`~/.claude-science/operon-cli.db`、`frames` テーブルの token カウンタのみ。prompt・成果物・研究内容は読みません)。ネイティブ Windows 版はなく、Windows では WSL 内で動作するアプリを読み取ります。 |
 | **DeepSeek Harness** | ✅ 自動 | パッシブなセッションリーダー (`~/.dsh/sessions/**/session.jsonl[.zstd]`、セッションヘッダーと assistant イベントを解析し、複数フレームの zstd 展開に対応) |
 | **TRAE（国際版）** | ✅ 自動 | TRAE / TRAE SOLO のローカル SQLCipher 使用量を共有アプリケーションキーで読み取ります。必要に応じて `TOKENTRACKER_TRAE_SQLCIPHER_KEY` で上書きできます。ベンダー API は呼び出しません。[設定と制限](docs/trae.md)。 |
@@ -233,7 +234,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 | 機能 | **[TokenTracker](https://github.com/xiufengsun/TokenTracker)** | **[ccusage](https://github.com/ccusage/ccusage)** | **[Tokscale](https://github.com/junhoyeo/tokscale)** |
 |---|:---:|:---:|:---:|
-| **対応 AI ツール数** | **47** | マルチエージェント | マルチエージェント |
+| **対応 AI ツール数** | **48** | マルチエージェント | マルチエージェント |
 | **主なインターフェース** | ネイティブデスクトップアプリ & Web ダッシュボード | ターミナル CLI | ターミナル TUI & CLI |
 | **ローカルファースト解析** | ✅ | ✅ | ✅ |
 | **ネイティブデスクトップアプリ** | ✅ macOS, Windows, Linux | ❌ | ❌ |
@@ -249,7 +250,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ```mermaid
 flowchart LR
-    A["AI coding tools<br/>Claude Code · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · DuMate · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE · TRAE Work CN · LM Studio · Unsloth Studio · Devin CLI · MiniMax Code · Cline · Command Code"]
+    A["AI coding tools<br/>Claude Code · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · DuMate · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE · TRAE Work CN · LM Studio · Unsloth Studio · Devin CLI · MiniMax Code · Cline · Command Code · DeepAI Code"]
     A -->|hooks trigger| B[Token Tracker]
     B -->|parse logs<br/>30-min UTC buckets| C[(Local SQLite)]
     C --> D[Web Dashboard]
