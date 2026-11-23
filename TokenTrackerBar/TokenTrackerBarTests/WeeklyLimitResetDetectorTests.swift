@@ -8,6 +8,10 @@ final class WeeklyLimitResetDetectorTests: XCTestCase {
         [("codex", "codex.primary", "5h", pct, resetAt)]
     }
 
+    private func antigravityReading(_ pct: Double, resetAt: Double) -> [(provider: String, windowKey: String, windowLabel: String, usedPercent: Double, resetAt: Double?)] {
+        [("antigravity", "antigravity.tertiary", "Gemini 7d", pct, resetAt)]
+    }
+
     func testFirstObservationRecordsBaselineWithoutEvent() {
         let (events, snap) = detector.evaluate(readings: reading(90, resetAt: 5000), snapshot: .init(), now: 1000)
         XCTAssertTrue(events.isEmpty, "first observation should never celebrate")
@@ -78,6 +82,32 @@ final class WeeklyLimitResetDetectorTests: XCTestCase {
         let (_, baseline) = detector.evaluate(readings: reading(80, resetAt: 5000), snapshot: .init(), now: 1000)
         let (events, _) = detector.evaluate(readings: reading(82, resetAt: 5300), snapshot: baseline, now: 1300)
         XCTAssertTrue(events.isEmpty, "advancing reset_at without a usage drop must not celebrate")
+    }
+
+    func testAntigravitySlidingResetWithUsageDropBeforeDeadlineDoesNotFire() {
+        let previousReset = 1_000.0 + 7 * 24 * 3600
+        let (_, baseline) = detector.evaluate(
+            readings: antigravityReading(40, resetAt: previousReset), snapshot: .init(), now: 1_000
+        )
+        let (events, updated) = detector.evaluate(
+            readings: antigravityReading(10, resetAt: previousReset + 120), snapshot: baseline, now: 1_120
+        )
+        XCTAssertTrue(events.isEmpty)
+        XCTAssertNil(updated.lastEventAt["antigravity.tertiary"])
+        XCTAssertEqual(updated.lastPercent["antigravity.tertiary"], 10)
+        XCTAssertEqual(updated.lastResetAt["antigravity.tertiary"], previousReset + 120)
+    }
+
+    func testAntigravityResetFiresAtPreviousDeadline() {
+        let week = 7.0 * 24 * 3600
+        let previousReset = 1_000.0 + week
+        let (_, baseline) = detector.evaluate(
+            readings: antigravityReading(40, resetAt: previousReset), snapshot: .init(), now: 1_000
+        )
+        let (events, _) = detector.evaluate(
+            readings: antigravityReading(0, resetAt: previousReset + week), snapshot: baseline, now: previousReset
+        )
+        XCTAssertEqual(events.map(\.windowKey), ["antigravity.tertiary"])
     }
 
     func testCooldownSuppressesRepeat() {
