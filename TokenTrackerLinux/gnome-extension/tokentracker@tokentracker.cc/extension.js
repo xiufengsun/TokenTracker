@@ -75,6 +75,7 @@ const PROVIDER_NAMES = {
     commandCode: 'Command Code', devin: 'Devin', qoder: 'Qoder',
     qoderCn: 'Qoder CN', codingPlan: 'Coding Plan', agentPlan: 'Agent Plan',
     workbuddy: 'WorkBuddy', workbuddyAi: 'WorkBuddy AI',
+    muse: 'Muse Code',
 };
 
 const WINDOW_NAMES = {
