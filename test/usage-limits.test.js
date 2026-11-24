@@ -4173,6 +4173,122 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
     }
   });
 
+  it("does not attach a contradictory leftover hub record to another process", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-antigravity-stale-hub-"));
+    try {
+      const daemonDir = path.join(tmp, ".gemini", "antigravity", "daemon");
+      fs.mkdirSync(daemonDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(daemonDir, "hub_18765.json"),
+        JSON.stringify({
+          pid: 999,
+          httpPort: 18765,
+          httpsPort: 18766,
+          csrfToken: "stale-token",
+        }),
+        "utf8",
+      );
+
+      const resolved = resolveAntigravityHubDiscovery({
+        configured: true,
+        pid: 456,
+        csrfToken: null,
+        hubPort: null,
+        httpsPort: null,
+        extensionPort: null,
+      }, { home: tmp, ports: [35345] });
+
+      assert.equal(resolved.csrfToken, null);
+      assert.equal(resolved.hubPort, null);
+      assert.equal(resolved.httpsPort, null);
+      assert.deepEqual(mergeAntigravityProbePorts(resolved, [35345]), [35345]);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("still uses a working agy HTTP port when a leftover hub record is stale", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-antigravity-stale-hub-fetch-"));
+    try {
+      const daemonDir = path.join(tmp, ".gemini", "antigravity", "daemon");
+      fs.mkdirSync(daemonDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(daemonDir, "hub_18765.json"),
+        JSON.stringify({
+          pid: 999,
+          httpPort: 18765,
+          httpsPort: 18766,
+          csrfToken: "stale-token",
+        }),
+        "utf8",
+      );
+      const commandRunner = (command) => {
+        if (command === "/bin/ps") {
+          return { stdout: "456 agy\n", status: 0 };
+        }
+        if (command === binaryProbe) {
+          return { stdout: "/usr/bin/lsof\n", status: 0 };
+        }
+        if (String(command).endsWith("lsof")) {
+          return {
+            stdout: "agy 456 me 14u IPv4 0x123 0t0 TCP 127.0.0.1:35345 (LISTEN)\n",
+            status: 0,
+          };
+        }
+        return { stdout: "", stderr: "", status: 1 };
+      };
+      const calls = [];
+      const requestFn = async ({ path: requestPath, csrfToken, scheme, port }) => {
+        calls.push({ endpoint: requestPath.split("/").pop(), csrfToken, scheme, port });
+        if (port !== 35345 || csrfToken) {
+          throw new Error(`HTTP 401: unauthorized`);
+        }
+        if (requestPath.includes("GetStatus") || requestPath.includes("GetUnleashData")) {
+          throw new Error("HTTP 404: removed");
+        }
+        if (requestPath.includes("RetrieveUserQuotaSummary") || requestPath.includes("GetUserStatus")) {
+          if (requestPath.includes("GetUserStatus") && scheme === "http") {
+            return {
+              userStatus: {
+                cascadeModelConfigData: {
+                  clientModelConfigs: [
+                    {
+                      label: "Gemini 3 Pro",
+                      modelOrAlias: { model: "gemini-3-pro" },
+                      quotaInfo: {
+                        remainingFraction: 0.5,
+                        resetTime: "2026-05-22T00:00:00.000Z",
+                      },
+                    },
+                  ],
+                },
+              },
+            };
+          }
+          if (requestPath.includes("RetrieveUserQuotaSummary")) {
+            throw new Error("HTTP 404: not found");
+          }
+        }
+        throw new Error(`unexpected ${requestPath}`);
+      };
+
+      const result = await fetchAntigravityLimits({
+        platform: "linux",
+        home: tmp,
+        commandRunner,
+        requestFn,
+        nowMs: Date.parse("2026-05-21T00:00:00.000Z"),
+      });
+
+      assert.equal(result.error, null);
+      assert.equal(result.configured, true);
+      assert.ok(calls.every((call) => call.csrfToken == null && call.port === 35345));
+      assert.ok(result.primary_window || result.tertiary_window);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("detects agy CLI process from ps output (no csrf, no path)", async () => {
     const commandRunner = () => ({
       stdout: `

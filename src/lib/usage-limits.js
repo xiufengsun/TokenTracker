@@ -3713,10 +3713,21 @@ function resolveAntigravityHubDiscovery(processInfo, { home, ports } = {}) {
     if (byPort.length === 1) return applyAntigravityHubRecord(processInfo, byPort[0]);
   }
 
-  if (records.length === 1 && !processInfo.csrfToken) {
-    return applyAntigravityHubRecord(processInfo, records[0]);
+  const record = records.length === 1 ? records[0] : null;
+  if (record && !processInfo.csrfToken && antigravityHubRecordAgrees(processInfo, record, knownPorts)) {
+    return applyAntigravityHubRecord(processInfo, record);
   }
   return processInfo;
+}
+
+function antigravityHubRecordAgrees(processInfo, record, knownPorts) {
+  if (!record) return false;
+  if (processInfo?.pid && record.pid && record.pid !== processInfo.pid) return false;
+  if (knownPorts && knownPorts.size > 0) {
+    const sharesPort = knownPorts.has(record.httpPort) || knownPorts.has(record.httpsPort);
+    if (!sharesPort) return false;
+  }
+  return true;
 }
 
 async function probeAntigravityPort(port, csrfToken, { timeoutMs, requestFn, scheme = "https", signal } = {}) {
