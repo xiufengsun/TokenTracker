@@ -208,6 +208,24 @@ test("Cursor family normalization preserves unknown Batch and Flex delivery iden
   assert.ok(pricing.computeRowCost({ source: "cursor", model: "grok-4.7", input_tokens: 1_000_000 }) > 0);
 });
 
+test("source normalization cannot reprice unknown Batch/Flex as a standard family rate", () => {
+  const tokens = { input_tokens: 1_000_000, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0 };
+  assert.equal(pricing.computeRowCost({ source: "antigravity", model: "gemini-3.1-pro", ...tokens }), 1.25);
+  for (const [source, model] of [
+    ["antigravity", "gemini-3.1-pro-flex"],
+    ["antigravity", "Gemini 3.1 Pro (Flex)"],
+    ["cursor", "grok-4.7 (Batch)"],
+    ["zed", "GPT-5.4 (Batch)"],
+    ["zed", "gpt-5.4-batch"],
+  ]) {
+    assert.equal(pricing.getModelPricingInfo(model, { source }).status, "unpriced", `${source} ${model}`);
+    assert.equal(pricing.computeRowCost({ source, model, ...tokens }), 0, `${source} ${model}`);
+  }
+  const litellm = { "gemini-3.1-pro-flex": { input: 0.4, output: 1.2 } };
+  assert.equal(lookupPricing("Gemini 3.1 Pro (Flex)", { curated: emptyCurated, litellm, source: "antigravity" }).value.input, 0.4);
+  assert.equal(pricing.computeRowCost({ source: "grok", model: "grok-4.7-batch", total_cost_usd: 0.2, ...tokens }), 0.2);
+});
+
 test("invalid retained rates never replace the current memory or disk catalog", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tt-invalid-price-"));
   const cachePath = path.join(dir, "prices.json");

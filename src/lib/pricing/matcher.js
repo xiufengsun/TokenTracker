@@ -243,6 +243,20 @@ function buildDotRestoredModel(model) {
   return restored === lower ? "" : restored;
 }
 
+function hasDeliveryTier(model) {
+  return typeof model === "string" && /(?:^|[-/:_\s.(])(?:batch|flex)(?:$|[-/:_\s.)])/i.test(model);
+}
+
+// Keep Batch/Flex tokens, including parenthetical labels, so a later family
+// remap cannot inherit a standard synchronous rate.
+function deliveryPreservingForm(model) {
+  return model.trim().toLowerCase()
+    .replace(/\(([^)]*)\)/g, (_, inner) => (/\b(?:batch|flex)\b/i.test(inner) ? `-${inner}-` : " "))
+    .replace(/[^a-z0-9./]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-");
+}
+
 function lookupExactCaseInsensitive(table, model) {
   if (!table || !model) return null;
   if (table[model]) return table[model];
@@ -302,7 +316,11 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
   }
   const normalize =
     typeof source === "string" ? SOURCE_MODEL_NORMALIZERS[source.toLowerCase()] : null;
-  const lookupModel = normalize ? normalize(model) : model;
+  const rawHasDelivery = hasDeliveryTier(model);
+  let lookupModel = normalize ? normalize(model) : model;
+  // Source family maps must not erase a delivery SKU into a priced base model.
+  // Exact curated/LiteLLM keys still win below on this preserved identity.
+  if (rawHasDelivery && !hasDeliveryTier(lookupModel)) lookupModel = deliveryPreservingForm(model);
   const lower = lookupModel.toLowerCase();
   const dotForm = buildDotRestoredModel(lookupModel);
 
@@ -380,7 +398,7 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
 
   // Batch/Flex are separate delivery SKUs: absent an exact published/curated
   // entry, never price them through a standard-rate suffix/fuzzy alias.
-  if (/(?:^|[-/:_])(?:batch|flex)(?:$|[-/:_])/.test(lower)) {
+  if (rawHasDelivery || /(?:^|[-/:_])(?:batch|flex)(?:$|[-/:_])/.test(lower)) {
     return { hit: false, source: "unverified-delivery-tier", value: null };
   }
 
