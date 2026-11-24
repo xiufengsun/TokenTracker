@@ -1395,3 +1395,17 @@ test("Grok incomplete parent invalidates child cost and preserves diagnostic fla
     assert.equal(session.cost_usd, 0.0002);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+
+test("free Grok session model costs agree with the zero session total", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tt-grok-free-cost-"));
+  try {
+    const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const file = writeGrokSessionFixture(home, { sessionId: id, updates: [grokUpdate(id, "turn_completed", {
+      usage: { modelUsage: { "grok-build-free": { inputTokens: 100, costUsd: 1 } } },
+    }, { timestamp: 1795478400, agentTimestampMs: 1795478400000 })] });
+    const session = await scanGrokSession(file);
+    assert.equal(session.cost_usd, 0);
+    assert.equal(session.model_usage[0].cost_usd, 0);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});

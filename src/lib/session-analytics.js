@@ -365,6 +365,9 @@ function repriceSessionRecord(record) {
   }
   if (record.source === "grok" && Array.isArray(record.usage_buckets) && record.usage_buckets.some((bucket) => normalizeCostCoverage(bucket.cost_coverage))) {
     record.cost_usd = record.usage_buckets.reduce((sum, bucket) => sum + computeRowCost({ ...bucket, source: "grok" }), 0);
+    // Reconcile model rows after the legacy provider-total shortcut above;
+    // in particular free-model telemetry must never reintroduce a dollar cost.
+    for (const row of record.model_usage || []) row.cost_usd = sessionModelCost(record, row);
     const coverages = record.usage_buckets.map((bucket) => normalizeCostCoverage(bucket.cost_coverage));
     const hasReported = coverages.some((coverage) => coverage?.reported_events > 0);
     const hasMissing = coverages.some((coverage) => !coverage || coverage.missing_events > 0);
