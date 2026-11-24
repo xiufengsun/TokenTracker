@@ -1,3 +1,4 @@
+import { attachCloudCostProvenance, coveredRowCost, cloudCostSource, type CloudCostProvenance } from "./cloud/cost-provenance.ts";
 /**
  * InsForge Edge: account-wide usage broken down by source + model (cross-device, by user_id).
  * Mirrors local-api.js `tokentracker-usage-model-breakdown` response schema.
@@ -543,6 +544,9 @@ function getModelPricing(model: string, source = "") {
   const exact = MODEL_PRICING[model];
   if (exact) return exact;
   const lower = model.toLowerCase();
+  // Unknown delivery SKUs must not inherit a standard synchronous rate.
+  // An explicitly curated exact Batch/Flex key above remains authoritative.
+  if (/(?:^|[-/:_\s.(])(?:batch|flex)(?:$|[-/:_\s.)])/.test(lower)) return ZERO_PRICING;
   if (source === "cline" && lower.endsWith(":free")) return ZERO_PRICING;
   // Free gateway SKUs append `-free` to the paid id (deepseek-v4.1-flash-free,
   // minimax-m2.5-free, Muse *-contributor-free). Exact MODEL_PRICING hits above
@@ -803,6 +807,7 @@ interface GroupedRow {
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
   total_cost_usd?: number | null;
+  cost_provenance?: CloudCostProvenance;
   conversations: number | null;
   pricing_tier?: string;
 }
@@ -814,7 +819,7 @@ interface GroupedRow {
 // a database that predates that column simply stop at index 8.
 type CompactDim = [string | null, string | null, string | null, number | string,
   number | string, number | string, number | string, number | string, number | string,
-  number | string];
+  number | string, CloudCostProvenance?];
 
 interface ModelBreakdownWire {
   source_names: (string | null)[];
@@ -888,6 +893,13 @@ async function fetchCompactDims(
       });
       if (error) throw new Error(error.message);
       const dims = decodeModelBreakdownWire(data);
+      const proven = await attachCloudCostProvenance(client, dims.map(dim => ({
+        source: dim[0] || "", model: dim[1] || "unknown", pricing_tier: dim[2] || "peak",
+        input_tokens: dim[4], output_tokens: dim[5], cached_input_tokens: dim[6],
+        cache_creation_input_tokens: dim[7], reasoning_output_tokens: dim[8],
+      })), { p_user_id: userId, p_device_id: requestedDeviceId, p_from: fromIso, p_to: toIso,
+        p_tz: tz, p_offset_min: tzOffsetMinutes, p_range_from: rangeFrom, p_range_to: rangeTo });
+      proven.forEach((row, index) => { if (row.cost_provenance) dims[index][10] = row.cost_provenance; });
       compactCache.set(cacheKey, { fetchedAt: Date.now(), dims });
       if (compactCache.size > 64) {
         const oldest = compactCache.keys().next().value;
@@ -904,8 +916,62 @@ async function fetchCompactDims(
   return pending;
 }
 
+function computeRowCost(row: GroupedRow): number {
+  if (row.source === "grok") {
+    const free = String(row.model || "").toLowerCase();
+    if (free.includes("build-free") || free.includes("free-tier") || free.endsWith("-free")) return 0;
+  }
+  if (row.cost_provenance && (row.source === "grok" || row.source === "cursor")) {
+    const cost = coveredRowCost(row, computeRowCost);
+    if (cost !== undefined) return cost;
+  }
+  if (row.source === "cursor" && /^grok-bot-/i.test(String(row.model || ""))) return 0;
+
+  // LM Studio developer-server and LM Link traffic is local inference. Its
+  // logs do not represent Bionic Secure Cloud billing.
+  if (row.source === "lmstudio") return 0;
+  // Pi's GitHub Copilot provider is subscription-backed. Keep its token
+  // counts, but do not reprice the recorded Claude model as Anthropic API use.
+  if (row.source === "pi-github-copilot" || row.source === "pi-copilot") return 0;
+  const reportedCost = Number(row.total_cost_usd);
+  if (
+    SOURCES_WITH_AUTHORITATIVE_COST.has(row.source) &&
+    Number.isFinite(reportedCost) &&
+    reportedCost > 0
+  ) return reportedCost;
+  // WorkBuddy's auto-router logs model="auto"; price it as its default Hunyuan
+  // model (hy3-preview-agent) so it isn't billed as Cursor's composer-1. Mirrors
+  // normalizeWorkbuddyModel in src/lib/pricing/matcher.js.
+  const rawModel = String(row.model || "").trim();
+  const unslothUnpriced =
+    row.source === "unsloth" && /^(local|unpriced)\//i.test(rawModel);
+  const modelForPricing = unslothUnpriced
+    ? "__tokentracker_unpriced_unsloth_model__"
+    : row.source === "workbuddy" && rawModel.toLowerCase() === "auto"
+      ? "hy3-preview-agent"
+      : rawModel;
+  const p = getRowPricing({ ...row, model: modelForPricing });
+  // Codex / every-code fold reasoning into output_tokens (OpenAI convention),
+  // so charging reasoning_output_tokens again at the output rate double-counts.
+  // Must stay in lockstep with src/lib/pricing/index.js:computeRowCost and
+  // tokentracker-leaderboard-refresh.ts (both guard on source).
+  const reasoningCost =
+    row.source === "codex" || row.source === "acode" || row.source === "every-code" ||
+      row.source === "cline" || row.source === "omo" || row.source === "muse"
+      ? 0
+      : (Number(row.reasoning_output_tokens) || 0) * (p.output || 0);
+  return (
+    ((Number(row.input_tokens) || 0) * (p.input || 0) +
+      (Number(row.output_tokens) || 0) * (p.output || 0) +
+      (Number(row.cached_input_tokens) || 0) * (p.cache_read || 0) +
+      (Number(row.cache_creation_input_tokens) || 0) * ((p.cache_write ?? 0)) +
+      reasoningCost) /
+    1_000_000
+  );
+}
+
 function getUsageModelPricing(model: string, source: string) {
-  if (source === "cursor" && /^grok-bot-(default|automation|cua)$/i.test(model.trim())) {
+  if (source === "cursor" && /^grok-bot-/i.test(model.trim())) {
     return { status: "unpriced", source: "cursor_subscription", ...ZERO_PRICING };
   }
   const lower = model.toLowerCase();
@@ -1026,6 +1092,7 @@ async function handleAccountRequest(req: Request): Promise<Response> {
     cache_creation_input_tokens: Number(d[7]) || 0,
     reasoning_output_tokens: Number(d[8]) || 0,
     conversations: Number(d[9]) || 0,
+    cost_provenance: d[10],
   }));
 
   interface ModelAgg {
@@ -1033,6 +1100,8 @@ async function handleAccountRequest(req: Request): Promise<Response> {
     model_id: string;
     totals: Totals;
     totalCostUsd: number;
+    costSource?: string;
+    hasAllocatedCost?: boolean;
   }
   interface SourceAgg {
     source: string;
@@ -1087,31 +1156,11 @@ async function handleAccountRequest(req: Request): Promise<Response> {
     ma.totals.cache_creation_input_tokens += Number(row.cache_creation_input_tokens) || 0;
     ma.totals.reasoning_output_tokens += Number(row.reasoning_output_tokens) || 0;
     ma.totals.conversation_count += Number(row.conversations) || 0;
-    const unslothUnpriced = src === "unsloth" && /^(local|unpriced)\//i.test(mdl);
-    const modelForPricing = unslothUnpriced
-      ? "__tokentracker_unpriced_unsloth_model__"
-      : src === "workbuddy" && mdl.toLowerCase() === "auto"
-        ? "hy3-preview-agent"
-        : mdl;
-    const p = getRowPricing({ ...row, model: modelForPricing });
-    const subscriptionBacked =
-      src === "pi-github-copilot" || src === "pi-copilot" || src === "lmstudio";
-    const reasoningIncludedInOutput =
-      src === "codex" || src === "acode" || src === "every-code" ||
-      src === "cline" || src === "omo" || src === "muse";
-    const reportedCost = Number(row.total_cost_usd);
-    ma.totalCostUsd += subscriptionBacked
-      ? 0
-      : SOURCES_WITH_AUTHORITATIVE_COST.has(src) &&
-          Number.isFinite(reportedCost) &&
-          reportedCost > 0
-        ? reportedCost
-      : ((Number(row.input_tokens) || 0) * (p.input || 0) +
-        (Number(row.output_tokens) || 0) * (p.output || 0) +
-        (Number(row.cached_input_tokens) || 0) * (p.cache_read || 0) +
-        (Number(row.cache_creation_input_tokens) || 0) * (p.cache_write ?? 0) +
-        (reasoningIncludedInOutput ? 0 : (Number(row.reasoning_output_tokens) || 0) * (p.output || 0))) /
-        1_000_000;
+    ma.totalCostUsd += computeRowCost(row);
+    const costSource = cloudCostSource(row, getUsageModelPricing(mdl, src).status === "priced");
+    ma.costSource = ma.costSource && ma.costSource !== costSource ? "mixed" : costSource;
+    ma.hasAllocatedCost ||= Boolean(row.cost_provenance?.has_allocated);
+
   }
 
   const sources = Array.from(bySource.values()).map((s) => {
@@ -1121,7 +1170,8 @@ async function handleAccountRequest(req: Request): Promise<Response> {
           model: m.model,
           model_id: m.model_id,
           pricing: getUsageModelPricing(m.model, s.source),
-          cost_source: "model_pricing",
+          cost_source: m.costSource || "model_pricing",
+          ...(m.hasAllocatedCost ? { has_allocated_cost: true } : {}),
           totals: { ...m.totals, total_cost_usd: m.totalCostUsd.toFixed(6) },
         };
       })

@@ -97,3 +97,20 @@ test("Claude custom usage remains visible with unknown pricing in the local mode
   assert.equal(model.pricing.status, "unpriced");
   assert.equal(Number(model.totals.total_cost_usd), 0);
 });
+
+test("local model aggregation preserves proportional allocation as an independent disclosure", async (t) => {
+  const { eventCostCoverage } = require("../src/lib/cost-provenance");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-allocated-disclosure-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const queuePath = path.join(dir, "queue.jsonl");
+  const row = { source: "grok", model: "opaque-worker", input_tokens: 100, total_tokens: 100 };
+  await writeQueue(queuePath, [
+    { ...row, hour_start: "2026-11-24T01:00:00Z", cost_coverage: eventCostCoverage(row, 1, "grok_allocated", true) },
+    { ...row, hour_start: "2026-11-24T02:00:00Z", cost_coverage: eventCostCoverage(row, 2, "grok_ticks") },
+  ]);
+  const result = await callEndpoint(queuePath, "/functions/tokentracker-usage-model-breakdown?from=2026-11-24&to=2026-11-24&tz=UTC");
+  const model = result.sources[0].models[0];
+  assert.equal(model.cost_source, "mixed");
+  assert.equal(model.has_allocated_cost, true);
+  assert.equal(Number(model.totals.total_cost_usd), 3);
+});

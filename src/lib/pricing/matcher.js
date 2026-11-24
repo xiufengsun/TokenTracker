@@ -139,6 +139,8 @@ function normalizeCursorModel(model) {
     .replace(/-{2,}/g, "-");
   const parts = m.split("-");
   const isFast = parts.includes("fast");
+  // Preserve delivery SKUs before any family normalization/exact base lookup.
+  if (parts.includes("batch") || parts.includes("flex")) return m;
 
   if (/^gemini-4[.-](argon|carbon|hydrogen|neon)(?:-(minimal|low|medium|high|xhigh))?$/.test(m)) {
     return m.replace(/^gemini-4\./, "gemini-4-").replace(/-(minimal|low|medium|high|xhigh)$/, "");
@@ -241,6 +243,20 @@ function buildDotRestoredModel(model) {
   return restored === lower ? "" : restored;
 }
 
+function hasDeliveryTier(model) {
+  return typeof model === "string" && /(?:^|[-/:_\s.(])(?:batch|flex)(?:$|[-/:_\s.)])/i.test(model);
+}
+
+// Keep Batch/Flex tokens, including parenthetical labels, so a later family
+// remap cannot inherit a standard synchronous rate.
+function deliveryPreservingForm(model) {
+  return model.trim().toLowerCase()
+    .replace(/\(([^)]*)\)/g, (_, inner) => (/\b(?:batch|flex)\b/i.test(inner) ? `-${inner}-` : " "))
+    .replace(/[^a-z0-9./]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-");
+}
+
 function lookupExactCaseInsensitive(table, model) {
   if (!table || !model) return null;
   if (table[model]) return table[model];
@@ -277,13 +293,34 @@ function lookupContainedExactCaseInsensitive(table, model) {
   return null;
 }
 
+// Relays may prepend multiple path segments. The nearest explicit vendor,
+// not the first router segment, identifies a provider-sensitive alias.
+const MODEL_VENDORS = new Set(["openai", "anthropic", "xai", "google", "gemini", "deepseek", "mistral", "cohere", "meta", "qwen", "moonshot", "xiaomi", "zai"]);
+const MODEL_ROUTERS = new Set(["openrouter", "litellm", "bedrock", "vertex_ai", "azure"]);
+function canonicalModelProvider(model) {
+  if (/^claude-/.test(model)) return "anthropic";
+  if (/^grok-(?!bot-)/.test(model)) return "xai";
+  if (/^(?:gpt-|o[1-9](?:-|$))/.test(model)) return "openai";
+  if (/^gemini-/.test(model)) return "google";
+  return null;
+}
+function explicitModelProvider(model) {
+  const prefixes = model.toLowerCase().split("/").slice(0, -1);
+  return prefixes.findLast((part) => MODEL_VENDORS.has(part))
+    || (prefixes.length && !MODEL_ROUTERS.has(prefixes.at(-1)) ? prefixes.at(-1) : null);
+}
+
 function lookupPricing(model, { curated, litellm, source } = {}) {
   if (!model || typeof model !== "string") {
     return { hit: false, source: "empty", value: null };
   }
   const normalize =
     typeof source === "string" ? SOURCE_MODEL_NORMALIZERS[source.toLowerCase()] : null;
-  const lookupModel = normalize ? normalize(model) : model;
+  const rawHasDelivery = hasDeliveryTier(model);
+  let lookupModel = normalize ? normalize(model) : model;
+  // Source family maps must not erase a delivery SKU into a priced base model.
+  // Exact curated/LiteLLM keys still win below on this preserved identity.
+  if (rawHasDelivery && !hasDeliveryTier(lookupModel)) lookupModel = deliveryPreservingForm(model);
   const lower = lookupModel.toLowerCase();
   const dotForm = buildDotRestoredModel(lookupModel);
 
@@ -304,6 +341,11 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
   // and fuzzy matching can turn an unresolved router into a priced model.
   if (sourceKey === "acode" && (lower === "auto" || lower.endsWith("-auto"))) {
     return { hit: false, source: "miss", value: null };
+  }
+  // Opaque subscription product IDs are not public xAI SKUs, even if an
+  // upstream catalog later guesses an alias.
+  if (sourceKey === "cursor" && /^grok-bot-/.test(lower.trim())) {
+    return { hit: false, source: "cursor_subscription", value: null };
   }
   const sourceExact = curated.source_exact?.[sourceKey];
   if (sourceExact) {
@@ -340,13 +382,24 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
     return { hit: true, source: "curated:exact", value: curated.exact["qwen4-max"] };
   }
 
-  // 2. LiteLLM exact
+  // 2. LiteLLM exact (preserve a fully-qualified exact rate before normalization).
+  if (litellm && litellm[model]) return { hit: true, source: "litellm:exact", value: litellm[model] };
   if (litellm && litellm[lookupModel]) {
     return { hit: true, source: "litellm:exact", value: litellm[lookupModel] };
+  }
+  const bareModel = lower.split("/").at(-1);
+  if (model.includes("/") && explicitModelProvider(model) === canonicalModelProvider(bareModel) && canonicalModelProvider(bareModel) && litellm?.[bareModel]) {
+    return { hit: true, source: "litellm:canonical-provider", value: litellm[bareModel] };
   }
   const litellmDotExact = lookupExactCaseInsensitive(litellm, dotForm);
   if (litellmDotExact) {
     return { hit: true, source: "litellm:exact-dot", value: litellmDotExact };
+  }
+
+  // Batch/Flex are separate delivery SKUs: absent an exact published/curated
+  // entry, never price them through a standard-rate suffix/fuzzy alias.
+  if (rawHasDelivery || /(?:^|[-/:_])(?:batch|flex)(?:$|[-/:_])/.test(lower)) {
+    return { hit: false, source: "unverified-delivery-tier", value: null };
   }
 
   // Free gateway SKUs carry a `-free` suffix on the paid model id
@@ -496,35 +549,49 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
     }
   }
 
-  // 5b. LiteLLM provider-prefix strip. Queue rows store the bare model name
-  // (e.g. "mimo-v2.5-pro"), but LiteLLM keys are provider-qualified (e.g.
-  // "openrouter/xiaomi/mimo-v2.5-pro"), so the exact lookups above miss. Match
-  // any key whose path suffix equals the bare model. When several providers
-  // expose the same model, pick the lexicographically smallest key so the
-  // resolved price is deterministic and independent of JSON ordering. Runs
-  // AFTER curated alias/fuzzy so e.g. Cursor's "auto" still resolves to
-  // composer-1 rather than a LiteLLM "*/auto" entry.
+  // Provider aliases are safe only when the actual provider disambiguates, or
+  // all candidate rates agree. A CLI/router name is not a model vendor.
   if (litellm) {
-    const suffix = "/" + lower;
-    let best = null;
-    for (const key of Object.keys(litellm)) {
-      if (key.length > suffix.length && key.toLowerCase().endsWith(suffix)) {
-        if (best === null || key < best) best = key;
+    const provider = explicitModelProvider(model) || ({ grok: "xai", codex: "openai", claude: "anthropic" })[sourceKey];
+    const suffix = "/" + lower.split("/").at(-1);
+    let candidates = Object.keys(litellm).filter((key) =>
+      key.length > suffix.length && key.toLowerCase().endsWith(suffix));
+    if (provider) candidates = candidates.filter((key) => explicitModelProvider(key) === provider);
+    if (candidates.length) {
+      const fields = ["input", "output", "cache_read", "cache_write"];
+      const signature = (key) => JSON.stringify(fields.map((field) => litellm[key][field] ?? null));
+      if (new Set(candidates.map(signature)).size > 1) {
+        return { hit: false, source: "ambiguous", value: null };
       }
+      candidates.sort();
+      return { hit: true, source: "litellm:prefix-strip", value: litellm[candidates[0]] };
     }
-    if (best) return { hit: true, source: "litellm:prefix-strip", value: litellm[best] };
+    // A known provider must not fall through to a different vendor/reseller.
+    if (provider && Object.keys(litellm).some((key) => key.toLowerCase().endsWith(suffix))) {
+      return { hit: false, source: "provider-mismatch", value: null };
+    }
   }
 
   // 6. LiteLLM reverse substring (longest-key first)
   if (litellm) {
     const sorted = getSortedKeys(litellm);
+    const matches = [];
     for (const key of sorted) {
       const keyLower = key.toLowerCase();
+      const provider = explicitModelProvider(model) || ({ grok: "xai", codex: "openai", claude: "anthropic" })[sourceKey];
+      const keyProvider = explicitModelProvider(key) || canonicalModelProvider(keyLower);
+      if (provider && keyProvider && keyProvider !== provider) continue;
       // Only accept if model is a superset of key (model contains key), to
       // avoid e.g. "gpt-5" matching "gpt-5-pro" in the wrong direction.
       if (lower.includes(keyLower) || (dotForm && dotForm.includes(keyLower))) {
-        return { hit: true, source: "litellm:fuzzy", value: litellm[key] };
+        matches.push(key);
       }
+    }
+    const best = matches.filter((key) => key.length === matches[0]?.length);
+    if (best.length) {
+      const rates = (key) => JSON.stringify(["input", "output", "cache_read", "cache_write"].map((field) => litellm[key][field] ?? null));
+      if (new Set(best.map(rates)).size > 1) return { hit: false, source: "ambiguous", value: null };
+      return { hit: true, source: "litellm:fuzzy", value: litellm[best.sort()[0]] };
     }
   }
 

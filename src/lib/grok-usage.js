@@ -9,6 +9,8 @@
 // already the non-cached portion. Keep the two shapes distinct instead of
 // subtracting cache tokens twice.
 
+const { amount, eventCostCoverage } = require("./cost-provenance");
+
 const USD_TICKS_PER_USD = 10_000_000_000;
 
 function nonNegative(value) {
@@ -26,16 +28,16 @@ function firstBoolean(...values) {
 function reportedCostUsd(usage, { costIsPartial, usageIsIncomplete }) {
   if (costIsPartial || usageIsIncomplete) return null;
 
-  const ticks = Number(
+  const ticks = amount(
     usage.costUsdTicks ??
       usage.totalCostUsdTicks ??
       usage.cost_usd_ticks ??
       usage.total_cost_usd_ticks,
   );
-  if (Number.isFinite(ticks) && ticks >= 0) return ticks / USD_TICKS_PER_USD;
+  if (ticks !== null) return ticks / USD_TICKS_PER_USD;
 
-  const usd = Number(usage.costUsd ?? usage.totalCostUsd ?? usage.cost_usd ?? usage.total_cost_usd);
-  return Number.isFinite(usd) && usd >= 0 ? usd : null;
+  const usd = amount(usage.costUsd ?? usage.totalCostUsd ?? usage.cost_usd ?? usage.total_cost_usd);
+  return usd;
 }
 
 function normalizeGrokUsage(usage) {
@@ -73,7 +75,7 @@ function normalizeGrokUsage(usage) {
   const costIsPartial = firstBoolean(usage.costIsPartial, usage.cost_is_partial);
   const usageIsIncomplete = firstBoolean(usage.usageIsIncomplete, usage.usage_is_incomplete);
 
-  return {
+  const result = {
     input_tokens: inputTokens,
     cached_input_tokens: cachedInput,
     cache_creation_input_tokens: cacheCreationInput,
@@ -87,9 +89,16 @@ function normalizeGrokUsage(usage) {
     model_calls: nonNegative(usage.modelCalls ?? usage.model_calls),
     api_duration_ms: nonNegative(usage.apiDurationMs ?? usage.api_duration_ms),
   };
+  const hasTicks = [usage.costUsdTicks, usage.totalCostUsdTicks, usage.cost_usd_ticks, usage.total_cost_usd_ticks].some((value) => amount(value) !== null);
+  result.cost_coverage = eventCostCoverage(result, result.total_cost_usd, hasTicks ? "grok_ticks" : "grok_usd");
+  return result;
 }
 
 module.exports = {
   USD_TICKS_PER_USD,
   normalizeGrokUsage,
+  readGrokReportedCost: (usage) => reportedCostUsd(usage || {}, {
+    costIsPartial: firstBoolean(usage?.costIsPartial, usage?.cost_is_partial),
+    usageIsIncomplete: firstBoolean(usage?.usageIsIncomplete, usage?.usage_is_incomplete),
+  }),
 };

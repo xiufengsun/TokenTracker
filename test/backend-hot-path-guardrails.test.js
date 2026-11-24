@@ -321,7 +321,8 @@ test("total leaderboard shards the model-granular response without changing pric
   assert.match(edgeSource, /shardIndex \+= 2/u);
   assert.match(edgeSource, /TOTAL_USER_SHARDS\.slice\(shardIndex, shardIndex \+ 2\)\.map/u);
   assert.match(edgeSource, /"leaderboard_usage_compact_total_shard"/u);
-  assert.match(edgeSource, /totalRows\.push\(\.\.\.decodeCompactLeaderboardUsage\(result\.data as CompactLeaderboardUsage\)\)/u);
+  assert.match(edgeSource, /attachCloudCostProvenance\(client, decodeCompactLeaderboardUsage\(result\.data as CompactLeaderboardUsage\)/u);
+  assert.match(edgeSource, /totalRows\.push\(\.\.\.\(result\.data as HourlyRow\[\]\)\)/u);
   assert.match(
     edgeSource,
     /for \(const row of grouped\)[\s\S]*agg\.estimated_cost_usd \+= computeRowCost\(row\)/u,
@@ -545,11 +546,11 @@ test("leaderboard bans block token issuance and usage ingestion", () => {
       < devicePoll.indexOf("issueDeviceToken(client, row.user_id"),
     "device-flow polling must reject the account before issuing a token",
   );
-  assert.ok(
-    ingest.indexOf("if (isLeaderboardBlockedUser(userId))")
-      < ingest.indexOf('cloudRpc(client, "cloud_ingest_usage"'),
-    "ingest must reject the account before writing usage",
-  );
+  const writeAt = ingest.indexOf("const result = await cloudRpc(client,");
+  assert.ok(writeAt >= 0 && ingest.indexOf("if (isLeaderboardBlockedUser(userId))") < writeAt,
+    "ingest must reject the account before either legacy or versioned usage writes");
+  assert.ok(ingest.indexOf("if (isLeaderboardBlockedUser(userId))") < ingest.indexOf('if (body.kind === "cost_capabilities")'),
+    "blocked accounts must be rejected before the capability probe too");
 
   // A heuristic anomaly flag must NOT gate the write path. The detector is
   // automatic, and tokentracker-leaderboard-refresh already drops flagged

@@ -1,3 +1,4 @@
+const { normalizeCostCoverage } = require("../cost-provenance");
 const { hasUnknownBackendCost, TOKEN_FIELDS } = require("../claude-backend");
 // Public pricing API. Replaces the hard-coded MODEL_PRICING table that used
 // to live in src/lib/local-api.js. Keeps the same synchronous shape so all
@@ -57,6 +58,7 @@ const seedRaw = loadSeedSync();
 
 const state = {
   loaded: false,
+  generation: 0,
   loadingPromise: null,
   revision: 0,
   litellmRawMap: seedRaw, // raw per-token; field shape from LiteLLM JSON
@@ -65,6 +67,11 @@ const state = {
   // negativeCache prevents re-walking the LiteLLM map for models we've already
   // determined are unknown. Cleared on every reload.
   negativeCache: new Set(),
+  refreshPromise: null,
+  refreshOptions: null,
+  lastRefreshAttempt: 0,
+  fetchedAt: null,
+  refreshFailed: false,
 };
 
 function defaultCachePath() {
@@ -82,6 +89,8 @@ async function ensurePricingLoaded(opts = {}) {
       state.litellmRawMap = data || {};
       state.litellmPerMillionMap = buildLitellmPerMillionMap(state.litellmRawMap);
       state.source = source;
+      state.refreshOptions = { ...opts, cachePath };
+      state.fetchedAt = source === "upstream" ? new Date().toISOString() : null;
       state.loaded = true;
       state.revision += 1;
       state.negativeCache.clear();
@@ -94,10 +103,52 @@ async function ensurePricingLoaded(opts = {}) {
   return state.loadingPromise;
 }
 
+// Misses never block a synchronous calculation. Only initialized server processes
+// refresh automatically; a module import (tests, offline tools) does not fetch.
+function refreshPricing(opts = {}) {
+  if (state.refreshPromise) return state.refreshPromise;
+  const now = opts.now ?? Date.now();
+  if (state.lastRefreshAttempt && now - state.lastRefreshAttempt < 60_000) return Promise.resolve(false);
+  state.lastRefreshAttempt = now;
+  const generation = state.generation;
+  const options = { ...(state.refreshOptions || {}), ...opts };
+  state.refreshPromise = (async () => {
+    try {
+      const result = await loadLitellmData({ ...options, cachePath: options.cachePath || defaultCachePath(), ttlMs: 0 });
+      if (generation !== state.generation) return false;
+      if (result.source !== "upstream") { state.refreshFailed = true; return false; }
+      const map = buildLitellmPerMillionMap(result.data);
+      if (!Object.keys(map).length) { state.refreshFailed = true; return false; }
+      state.litellmRawMap = result.data;
+      state.litellmPerMillionMap = map;
+      state.source = result.source;
+      state.fetchedAt = new Date().toISOString();
+      state.refreshFailed = false;
+      state.revision += 1;
+      state.negativeCache.clear();
+      return true;
+    } catch (_) { if (generation === state.generation) state.refreshFailed = true; return false; }
+    finally { if (generation === state.generation) state.refreshPromise = null; }
+  })();
+  return state.refreshPromise;
+}
+
+function getPricingHealth() {
+  return { source: state.source, revision: state.revision, fetched_at: state.fetchedAt,
+    refreshing: !!state.refreshPromise, status: state.refreshFailed || (state.fetchedAt && Date.now() - Date.parse(state.fetchedAt) > 24 * 60 * 60_000) ? "stale" : state.fetchedAt ? "fresh" : "cached",
+    known_models: Object.keys(state.litellmPerMillionMap).length };
+}
+
 // For tests: drop loaded state so a fresh call can re-load. Seeds with the
 // bundled snapshot so getModelPricing() still works without ensurePricingLoaded.
 function resetPricingForTests() {
+  state.generation += 1;
   state.loaded = false;
+  state.refreshOptions = null;
+  state.lastRefreshAttempt = 0;
+  state.refreshFailed = false;
+  state.fetchedAt = null;
+  state.refreshPromise = null;
   state.loadingPromise = null;
   state.litellmRawMap = seedRaw;
   state.litellmPerMillionMap = buildLitellmPerMillionMap(seedRaw);
@@ -119,7 +170,10 @@ function getModelPricing(model, opts = {}) {
     lookupSource = opts.source.toLowerCase();
   }
   const cacheKey = lookupSource ? `${lookupSource}\0${model}` : model;
-  if (state.negativeCache.has(cacheKey)) return ZERO_PRICING;
+  if (state.negativeCache.has(cacheKey)) {
+    if (state.refreshOptions) void refreshPricing();
+    return ZERO_PRICING;
+  }
 
   const result = lookupPricing(model, {
     curated: curatedOverrides,
@@ -141,6 +195,7 @@ function getModelPricing(model, opts = {}) {
   }
 
   state.negativeCache.add(cacheKey);
+  if (state.refreshOptions) void refreshPricing();
   return ZERO_PRICING;
 }
 
@@ -165,6 +220,7 @@ function getModelPricingInfo(model, opts = {}) {
     info = computeModelPricingInfo(model, opts, sourceKey);
     pricingInfoCache.entries.set(cacheKey, info);
   }
+  if (info.status === "unpriced" && state.refreshOptions) void refreshPricing();
   // The info cache must not freeze a time-limited speed promotion.
   const rates = info.ultrafast_multiplier == null ? null : getModelPricing(model, opts);
   return { ...info, ...(rates ? { ultrafast_multiplier: rates.ultrafast_multiplier } : null) };
@@ -186,7 +242,7 @@ function computeModelPricingInfo(model, opts, sourceKey) {
   return {
     status: !result.hit ? "unpriced" : [rates.input, rates.output, rates.cache_read, rates.cache_write]
       .some((value) => Number(value) > 0) ? "priced" : "free",
-    source: result.hit ? result.source : null,
+    source: result.hit || result.source === "ambiguous" ? result.source : null,
     input: Number(rates.input) || 0,
     output: Number(rates.output) || 0,
     cache_read: Number(rates.cache_read) || 0,
@@ -359,6 +415,18 @@ function speedTierSubsetCost(row, prefix, pricing, ctx) {
 // computeRowCost in src/lib/local-api.js. Moved here so vite mock + local
 // server share one source of truth.
 function computeRowCost(row) {
+  if (row?.source === "grok") {
+    const grokModel = String(row?.model || "").toLowerCase();
+    if (grokModel.includes("build-free") || grokModel.includes("free-tier") || grokModel.endsWith("-free")) return 0;
+  }
+  const coverage = normalizeCostCoverage(row?.cost_coverage);
+  if (coverage && ["cursor", "grok"].includes(row?.source)) {
+    // Only uncovered tokens are estimated. Never apply a complete bucket's
+    // premiums to a partial subset, or replace an explicit reported zero.
+    const unreported = { source: row.source, model: row.model, hour_start: row.hour_start,
+      ...Object.fromEntries(Object.entries(coverage.unreported_tokens).map(([key, value]) => [key, Math.min(value, Math.max(0, Number(row[key]) || 0))])) };
+    return coverage.reported_usd + (coverage.missing_events > 0 ? computeRowCost(unreported) : 0);
+  }
   if (hasUnknownBackendCost(row)) {
     // Existing totals without provenance retain their historical estimate. Only
     // the custom-gateway subset is excluded from model pricing.
@@ -491,6 +559,7 @@ function speedTierCost(row, prefix, multiplierKey) {
 // computeRowCost(row) by construction (issue #886: surface the Fast/Ultrafast
 // split that the parser already records).
 function computeRowTierCosts(row) {
+  if (normalizeCostCoverage(row?.cost_coverage)) return { priority: 0, ultrafast: 0 };
   if (!row || typeof row !== "object") return { standard: 0, priority: 0, ultrafast: 0 };
   const priority = speedTierCost(row, SPEED_TIERS[0].prefix, SPEED_TIERS[0].multiplierKey);
   const ultrafast = speedTierCost(row, SPEED_TIERS[1].prefix, SPEED_TIERS[1].multiplierKey);
@@ -508,6 +577,8 @@ const MODEL_PRICING = curatedOverrides.exact;
 
 module.exports = {
   ensurePricingLoaded,
+  refreshPricing,
+  getPricingHealth,
   getPricingRevision,
   getModelPricing,
   getModelPricingInfo,

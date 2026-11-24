@@ -1,3 +1,4 @@
+const { mergeCostCoverage, eventCostCoverage } = require("./cost-provenance");
 const { preserveLegacyClaudeGroups, preserveLegacyClaudePrefix, createBackendResolver, mergeBackendUsage, claudeLines } = require("./claude-backend");
 const { claudeUserIdentity, collectClaudeForkAliases } = require("./claude-user-identity");
 const fs = require("node:fs/promises");
@@ -51,7 +52,7 @@ const {
   devinUsageSql,
   buildDevinUsageEvents,
 } = require("./devin-usage");
-const { USD_TICKS_PER_USD, normalizeGrokUsage } = require("./grok-usage");
+const { USD_TICKS_PER_USD, normalizeGrokUsage, readGrokReportedCost } = require("./grok-usage");
 const { resolveTraeDbPaths, readTraeUsageRows } = require("./trae-db");
 const { normalizeTraeUsage, normalizeTraeModel, traeTimestamp } = require("./trae-usage");
 
@@ -3720,6 +3721,7 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
           total_tokens: zeroTotals.total_tokens,
           billable_total_tokens: zeroTotals.billable_total_tokens,
           total_cost_usd: zeroTotals.total_cost_usd,
+          ...(zeroTotals.cost_coverage ? { cost_coverage: zeroTotals.cost_coverage } : {}),
           conversation_count: zeroTotals.conversation_count,
         }));
       }
@@ -3741,6 +3743,7 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
           total_tokens: totals.total_tokens,
           billable_total_tokens: totals.billable_total_tokens ?? totals.total_tokens,
           total_cost_usd: totals.total_cost_usd || 0,
+          ...(totals.cost_coverage ? { cost_coverage: totals.cost_coverage } : {}),
           usage_precision: usagePrecision || undefined,
           ...prioritySubsetOf(totals),
           ...(totals.backend_usage ? { backend_usage: totals.backend_usage } : {}),
@@ -3775,6 +3778,7 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
             total_tokens: zeroTotals.total_tokens,
             billable_total_tokens: zeroTotals.billable_total_tokens,
             total_cost_usd: zeroTotals.total_cost_usd,
+            ...(zeroTotals.cost_coverage ? { cost_coverage: zeroTotals.cost_coverage } : {}),
             conversation_count: zeroTotals.conversation_count,
           }),
         );
@@ -3799,6 +3803,7 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
               total_tokens: zeroTotals.total_tokens,
               billable_total_tokens: zeroTotals.billable_total_tokens,
               total_cost_usd: zeroTotals.total_cost_usd,
+              ...(zeroTotals.cost_coverage ? { cost_coverage: zeroTotals.cost_coverage } : {}),
               conversation_count: zeroTotals.conversation_count,
             }),
           );
@@ -3829,6 +3834,7 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
             total_tokens: totals.total_tokens,
             billable_total_tokens: totals.billable_total_tokens ?? totals.total_tokens,
             total_cost_usd: totals.total_cost_usd || 0,
+            ...(totals.cost_coverage ? { cost_coverage: totals.cost_coverage } : {}),
             usage_precision: usagePrecision || undefined,
             ...prioritySubsetOf(totals),
             ...(totals.backend_usage ? { backend_usage: totals.backend_usage } : {}),
@@ -3861,6 +3867,7 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
           total_tokens: zeroTotals.total_tokens,
           billable_total_tokens: zeroTotals.billable_total_tokens,
           total_cost_usd: zeroTotals.total_cost_usd,
+          ...(zeroTotals.cost_coverage ? { cost_coverage: zeroTotals.cost_coverage } : {}),
           conversation_count: zeroTotals.conversation_count,
         }),
       );
@@ -3885,6 +3892,7 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
             total_tokens: zeroTotals.total_tokens,
             billable_total_tokens: zeroTotals.billable_total_tokens,
             total_cost_usd: zeroTotals.total_cost_usd,
+            ...(zeroTotals.cost_coverage ? { cost_coverage: zeroTotals.cost_coverage } : {}),
             conversation_count: zeroTotals.conversation_count,
           }),
         );
@@ -3911,6 +3919,7 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
         total_tokens: unknownBucket.totals.total_tokens,
         billable_total_tokens: unknownBucket.totals.billable_total_tokens ?? unknownBucket.totals.total_tokens,
         total_cost_usd: unknownBucket.totals.total_cost_usd || 0,
+        ...(unknownBucket.totals.cost_coverage ? { cost_coverage: unknownBucket.totals.cost_coverage } : {}),
         usage_precision: usagePrecision || undefined,
         ...prioritySubsetOf(unknownBucket.totals),
         ...(unknownBucket.totals.backend_usage ? { backend_usage: unknownBucket.totals.backend_usage } : {}),
@@ -3962,6 +3971,7 @@ async function enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
           total_tokens: group.totals.total_tokens,
           billable_total_tokens: group.totals.billable_total_tokens ?? group.totals.total_tokens,
           total_cost_usd: group.totals.total_cost_usd || 0,
+          ...(group.totals.cost_coverage ? { cost_coverage: group.totals.cost_coverage } : {}),
           ...prioritySubsetOf(group.totals),
           ...(group.totals.backend_usage ? { backend_usage: group.totals.backend_usage } : {}),
           conversation_count: group.totals.conversation_count,
@@ -4021,6 +4031,7 @@ async function enqueueTouchedProjectBuckets({
         total_tokens: totals.total_tokens,
         billable_total_tokens: totals.billable_total_tokens ?? totals.total_tokens,
         total_cost_usd: totals.total_cost_usd || 0,
+        ...(totals.cost_coverage ? { cost_coverage: totals.cost_coverage } : {}),
         conversation_count: totals.conversation_count,
       }),
     );
@@ -4623,6 +4634,7 @@ function prioritySubsetOf(totals) {
 }
 
 function addTotals(target, delta) {
+  mergeCostCoverage(target, delta);
   mergeBackendUsage(target, delta);
   for (const [field] of SPEED_TIER_SUBSET_FIELDS) {
     const value = Number(delta?.[field]) || 0;
@@ -4642,6 +4654,7 @@ function addTotals(target, delta) {
 }
 
 function subtractTotals(target, totals) {
+  mergeCostCoverage(target, totals, -1);
   for (const [field] of PRIORITY_SUBSET_FIELDS) {
     const current = Number(target[field]) || 0;
     if (current <= 0) continue;
@@ -4695,7 +4708,7 @@ function totalsKey(totals) {
   // tier keep their previously persisted queuedKey and are not re-enqueued.
   const priority = PRIORITY_SUBSET_FIELDS.map(([field]) => Number(totals[field]) || 0);
   const ultrafast = ULTRAFAST_SUBSET_FIELDS.map(([field]) => Number(totals[field]) || 0);
-  let key = base;
+  let key = totals.cost_coverage ? base + "|c:" + JSON.stringify(totals.cost_coverage) : base;
   if (priority.some((value) => value > 0)) key += `|p:${priority.join(",")}`;
   if (ultrafast.some((value) => value > 0)) key += `|u:${ultrafast.join(",")}`;
   return key;
@@ -21297,7 +21310,7 @@ async function parseCopilotAppDbIncremental({
 
 const GROK_ESTIMATED_INPUT_RATIO = 0.8;
 // v5: split cache creation + reasoning correctly and retain reported cost.
-const GROK_CURSOR_VERSION = 5;
+const GROK_CURSOR_VERSION = 6;
 
 function resolveGrokBuildHome(env = process.env) {
   if (env.TOKENTRACKER_GROK_HOME) return env.TOKENTRACKER_GROK_HOME;
@@ -21419,6 +21432,18 @@ function grokSessionIdFor(sess) {
     normalizeModelInput(sess?.sessionId) ||
     (normalizeModelInput(sess?.sessionDir) ? path.basename(sess.sessionDir) : null)
   );
+}
+
+function dedupeGrokBuildSessions(sessions) {
+  const seen = new Set();
+  const deduped = [];
+  for (const sess of Array.isArray(sessions) ? sessions : []) {
+    const sessionId = grokSessionIdFor(sess);
+    if (!sessionId || seen.has(sessionId)) continue;
+    seen.add(sessionId);
+    deduped.push(sess);
+  }
+  return deduped;
 }
 
 function grokModelFromSignals(signals) {
@@ -21583,6 +21608,27 @@ function extractGrokTurnUsageEvents(record, fallbackTimestamp, fallbackModel, li
       if (event) events.push(event);
     }
   }
+  if (events.length > 0) {
+    const parentCost = readGrokReportedCost(usage);
+    const known = events.filter((event) => event.model !== "grok-build-free" && event.cost_coverage?.reported_events > 0);
+    const missing = events.filter((event) => event.model !== "grok-build-free" && !event.cost_coverage?.reported_events);
+    const knownCost = known.reduce((sum, event) => sum + event.total_cost_usd, 0);
+    const tokens = missing.reduce((sum, event) => sum + event.total_tokens, 0);
+    if (parentCost != null && parentCost >= knownCost && tokens > 0) {
+      for (const event of missing) {
+        event.total_cost_usd = (parentCost - knownCost) * event.total_tokens / tokens;
+        event.cost_coverage = eventCostCoverage(event, event.total_cost_usd, "grok_allocated", true);
+      }
+    }
+    if (usage.costIsPartial || usage.usageIsIncomplete || usage.cost_is_partial || usage.usage_is_incomplete) {
+      for (const event of events) {
+        event.total_cost_usd = 0;
+        event.usage_is_incomplete ||= Boolean(usage.usageIsIncomplete || usage.usage_is_incomplete);
+        event.cost_is_partial ||= Boolean(usage.costIsPartial || usage.cost_is_partial);
+        event.cost_coverage = eventCostCoverage(event, null, null);
+      }
+    }
+  }
   if (events.length === 0) {
     const event = normalizeGrokTurnUsage(usage, fallbackModel, timestamp, baseEventId);
     if (event) events.push(event);
@@ -21606,14 +21652,14 @@ function extractGrokContextTokenEvent(record, fallbackTimestamp, lineIndex) {
 async function readGrokUpdateTokenEvents(updatesPath, fallbackTimestamp, prevOffsetEntry, options = {}) {
   const fallbackModel = options.fallbackModel || "grok-build";
   if (!updatesPath) {
-    return { turnEvents: [], contextEvents: [], offsetEntry: null };
+    return { turnEvents: [], contextEvents: [], offsetEntry: null, readFailed: true };
   }
   let stat;
   try {
     stat = fssync.statSync(updatesPath);
-    if (!stat.isFile()) return { turnEvents: [], contextEvents: [], offsetEntry: null };
+    if (!stat.isFile()) return { turnEvents: [], contextEvents: [], offsetEntry: null, readFailed: true };
   } catch {
-    return { turnEvents: [], contextEvents: [], offsetEntry: null };
+    return { turnEvents: [], contextEvents: [], offsetEntry: null, readFailed: true };
   }
 
   // updates.jsonl is append-only. Turn usage is additive per turn_completed, so
@@ -21676,7 +21722,7 @@ async function readGrokUpdateTokenEvents(updatesPath, fallbackTimestamp, prevOff
     // Stream error mid-read: discard partial events and do not advance the
     // offset, so the next sync re-extracts from the same range exactly once
     // instead of double-counting already-parsed turn events.
-    return { turnEvents: [], contextEvents: [], offsetEntry: prevOffsetEntry || null };
+    return { turnEvents: [], contextEvents: [], offsetEntry: prevOffsetEntry || null, readFailed: true };
   }
 
   // When the file does not end on a newline, the final emitted line is a
@@ -21840,10 +21886,54 @@ async function parseGrokBuildIncremental({
   env = process.env
 } = {}) {
   if (queuePath) await ensureDir(path.dirname(queuePath));
-  const hourlyState = normalizeHourlyState(cursors?.hourly);
   const grokState = cursors.grok && typeof cursors.grok === "object" ? { ...cursors.grok } : {};
+  const originalSessionSnapshots = normalizeGrokSessionSnapshots(grokState);
   const prevVersion = Number(grokState.version) || 0;
   const needsTurnUsageMigration = prevVersion < GROK_CURSOR_VERSION;
+  // A failed migration must leave both token/cost snapshots and version intact.
+  const hourlyState = normalizeHourlyState(needsTurnUsageMigration ? structuredClone(cursors?.hourly) : cursors?.hourly);
+  const sessionList = dedupeGrokBuildSessions(
+    Array.isArray(sessions) && sessions.length > 0 ? sessions : resolveGrokBuildSessions(env),
+  );
+  if (needsTurnUsageMigration && prevVersion > 0 && sessionList.length === 0) {
+    return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
+  }
+  if (needsTurnUsageMigration && prevVersion >= 5) {
+    const available = new Set(sessionList.map(grokSessionIdFor));
+    const previous = originalSessionSnapshots;
+    if (Object.entries(previous).some(([id, snapshot]) => snapshot.totalTokens > 0 && !available.has(id))) {
+      throw new Error("Grok usage rebuild deferred: previously counted sessions are unavailable");
+    }
+    if (queuePath) {
+      let raw = "";
+      try { raw = await fs.readFile(queuePath, "utf8"); } catch (error) { if (error.code !== "ENOENT") throw error; }
+      const latest = new Map();
+      for (const line of raw.split("\n")) {
+        if (!line.trim()) continue;
+        let row;
+        try { row = JSON.parse(line); } catch { throw new Error("Grok usage rebuild deferred: queue inventory is invalid"); }
+        if (row?.source === "grok") latest.set(bucketKey("grok", row.model || DEFAULT_MODEL, row.hour_start), row);
+      }
+      const queued = [...latest.values()].reduce((sum, row) => sum + normalizeNonNegativeNumber(row.total_tokens), 0);
+      const inventoried = Object.values(previous).reduce((sum, snapshot) => sum + normalizeNonNegativeNumber(snapshot.totalTokens), 0);
+      if (queued > inventoried) throw new Error("Grok usage rebuild deferred: prior session inventory is incomplete");
+    }
+    const previousOffsets = grokState.updateOffsets && typeof grokState.updateOffsets === "object" ? grokState.updateOffsets : {};
+    for (const sess of sessionList) {
+      const updatesPath = grokUpdatesPathForSession(sess);
+      const recorded = updatesPath ? previousOffsets[updatesPath] : null;
+      if (!updatesPath || recorded == null || !Number.isFinite(Number(recorded.size))) continue;
+      let size = 0;
+      try { size = (await fs.stat(updatesPath)).size; }
+      catch (error) {
+        if (error.code === "ENOENT") throw new Error("Grok usage rebuild deferred: previously counted sessions are unavailable");
+        throw new Error("Grok usage rebuild deferred: a session could not be read");
+      }
+      if (size < Number(recorded.size)) {
+        throw new Error("Grok usage rebuild deferred: a previously counted session log is incomplete");
+      }
+    }
+  }
 
   // v3 and earlier treated context-window totalTokens as cumulative spend;
   // v4 still overlapped output/reasoning, discarded cache creation, and ignored
@@ -21854,7 +21944,7 @@ async function parseGrokBuildIncremental({
   // (sessions already counted under the old scanner) still applies.
   let sessionSnapshots;
   if (needsTurnUsageMigration) {
-    const normalized = normalizeGrokSessionSnapshots(grokState);
+    const normalized = originalSessionSnapshots;
     sessionSnapshots = {};
     for (const [sessionId, snapshot] of Object.entries(normalized)) {
       if (!snapshot?.legacySeen) continue;
@@ -21880,8 +21970,9 @@ async function parseGrokBuildIncremental({
       ? grokState.updateOffsets
       : {};
 
+  const migrateProjectCosts = needsTurnUsageMigration && prevVersion === 5;
   const projectEnabled = typeof projectQueuePath === "string" && projectQueuePath.length > 0;
-  const projectState = projectEnabled ? normalizeProjectState(cursors?.projectHourly) : null;
+  const projectState = projectEnabled ? normalizeProjectState(needsTurnUsageMigration ? structuredClone(cursors?.projectHourly) : cursors?.projectHourly) : null;
   const projectTouchedBuckets = projectEnabled ? new Set() : null;
   const projectMetaCache = projectEnabled ? new Map() : null;
   const publicRepoCache = projectEnabled ? new Map() : null;
@@ -21889,24 +21980,39 @@ async function parseGrokBuildIncremental({
   // turn_completed events into project.queue.jsonl without re-appending totals.
   const projectUpdateOffsets =
     projectEnabled &&
+    !migrateProjectCosts &&
     grokState.projectUpdateOffsets &&
     typeof grokState.projectUpdateOffsets === "object"
       ? { ...grokState.projectUpdateOffsets }
       : {};
-  const projectSessionSnapshots = projectEnabled
+  const originalProjectSessionSnapshots = projectEnabled
+    ? normalizeGrokSessionSnapshots({
+        sessionSnapshots: grokState.projectSessionSnapshots,
+      })
+    : {};
+  const originalProjectBucketTokens = projectEnabled
+    ? Object.values(cursors?.projectHourly?.buckets || {}).reduce((sum, bucket) => (
+      bucket?.source === "grok" ? sum + normalizeNonNegativeNumber(bucket.totals?.total_tokens) : sum
+    ), 0)
+    : 0;
+  const projectSessionSnapshots = projectEnabled && !migrateProjectCosts
     ? normalizeGrokSessionSnapshots({
         sessionSnapshots: grokState.projectSessionSnapshots,
       })
     : {};
 
+  if (projectEnabled && migrateProjectCosts) {
+    for (const [key, bucket] of Object.entries(projectState.buckets || {})) {
+      if (bucket.source !== "grok") continue;
+      bucket.totals = initTotals();
+      projectTouchedBuckets.add(key);
+    }
+  }
+
   // Rebuilt from the sessions seen this scan, so entries for deleted session
   // dirs are pruned and the cursor stays bounded by the on-disk session count.
   const updateOffsets = {};
   const touchedBuckets = new Set();
-
-  const sessionList = Array.isArray(sessions) && sessions.length > 0
-    ? sessions
-    : resolveGrokBuildSessions(env);
 
   let eventsAggregated = 0;
 
@@ -21952,6 +22058,9 @@ async function parseGrokBuildIncremental({
       updatesPath ? prevUpdateOffsets[updatesPath] : null,
       { fallbackModel: model },
     );
+    if (needsTurnUsageMigration && prevVersion >= 5 && updates.readFailed && originalSessionSnapshots[sessionId]?.source === "turn_usage") {
+      throw new Error("Grok usage rebuild deferred: a session could not be read");
+    }
     if (updatesPath && updates.offsetEntry) {
       updateOffsets[updatesPath] = updates.offsetEntry;
     }
@@ -21972,6 +22081,7 @@ async function parseGrokBuildIncremental({
         total_tokens: event.total_tokens,
         billable_total_tokens: event.billable_total_tokens,
         total_cost_usd: event.total_cost_usd,
+        ...(event.cost_coverage ? { cost_coverage: event.cost_coverage } : {}),
         conversation_count: event.conversation_count || 1,
       };
       pendingBucketDeltas.push({ model: eventModel, hourStartStr, delta, usagePrecision: "reported" });
@@ -22111,6 +22221,10 @@ async function parseGrokBuildIncremental({
             { fallbackModel: model },
           );
 
+          if (migrateProjectCosts && projectUpdates.readFailed && originalSessionSnapshots[sessionId]?.source === "turn_usage") {
+            throw new Error("Grok usage rebuild deferred: a project session could not be read");
+          }
+
           for (const event of projectUpdates.turnEvents) {
             projectSawTurnUsage = true;
             const hourStartStr =
@@ -22127,6 +22241,8 @@ async function parseGrokBuildIncremental({
               reasoning_output_tokens: event.reasoning_output_tokens,
               total_tokens: event.total_tokens,
               billable_total_tokens: event.billable_total_tokens,
+              total_cost_usd: eventModel === "grok-build-free" ? 0 : event.total_cost_usd || 0,
+              cost_coverage: eventModel === "grok-build-free" ? eventCostCoverage(event, null, null) : event.cost_coverage,
               conversation_count: event.conversation_count || 1,
             };
             projectPendingDeltas.push({ model: eventModel, hourStartStr, delta });
@@ -22236,6 +22352,31 @@ async function parseGrokBuildIncremental({
   }
 
   if (projectEnabled) pruneMissingGrokProjectUpdateOffsets(projectUpdateOffsets);
+
+  if (needsTurnUsageMigration && prevVersion >= 5) {
+    for (const [sessionId, snapshot] of Object.entries(originalSessionSnapshots)) {
+      const previousTokens = normalizeNonNegativeNumber(snapshot.totalTokens);
+      if (previousTokens === 0) continue;
+      if (normalizeNonNegativeNumber(sessionSnapshots[sessionId]?.totalTokens) < previousTokens) {
+        throw new Error("Grok usage rebuild deferred: rebuilt session history is smaller than the prior snapshot");
+      }
+    }
+    if (projectEnabled) {
+      for (const [sessionId, snapshot] of Object.entries(originalProjectSessionSnapshots)) {
+        const previousTokens = normalizeNonNegativeNumber(snapshot.totalTokens);
+        if (previousTokens === 0) continue;
+        if (normalizeNonNegativeNumber(projectSessionSnapshots[sessionId]?.totalTokens) < previousTokens) {
+          throw new Error("Grok usage rebuild deferred: rebuilt project history is smaller than the prior snapshot");
+        }
+      }
+      const rebuiltProjectBucketTokens = Object.values(projectState?.buckets || {}).reduce((sum, bucket) => (
+        bucket?.source === "grok" ? sum + normalizeNonNegativeNumber(bucket.totals?.total_tokens) : sum
+      ), 0);
+      if (rebuiltProjectBucketTokens < originalProjectBucketTokens) {
+        throw new Error("Grok usage rebuild deferred: rebuilt project history is smaller than the prior snapshot");
+      }
+    }
+  }
 
   let bucketsQueued = queuePath
     ? await enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
@@ -26838,6 +26979,7 @@ module.exports = {
   resolveGrokBuildHome,
   resolveGrokBuildSessions,
   parseGrokBuildIncremental,
+  extractGrokTurnUsageEvents,
 
   // Antigravity (Google Gemini) - Session logs parser
   ANTIGRAVITY_CURSOR_VERSION,

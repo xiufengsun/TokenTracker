@@ -412,7 +412,7 @@ test("a v29 sidecar that counted a failed v1 retry is rebuilt without force", as
   const sidecar = resolveSessionSidecarPath(home);
   const metaPath = sidecar + ".meta.json";
   const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
-  assert.equal(meta.version, 31);
+  assert.equal(meta.version, 32);
   meta.version = 29;
   const stale = {
     ...fresh[0],
@@ -436,7 +436,7 @@ test("a v29 sidecar that counted a failed v1 retry is rebuilt without force", as
   assert.equal(warm[0].performance.estimated_request_count, 0);
   assert.equal(warm[0].performance.estimated_tokens_per_second, null);
   assert.equal(warm[0].tokens.total_tokens, 400);
-  assert.equal(JSON.parse(fs.readFileSync(metaPath, "utf8")).version, 31);
+  assert.equal(JSON.parse(fs.readFileSync(metaPath, "utf8")).version, 32);
 });
 
 test("a seeded fork is attributed to the transcript that created each message", async (t) => {

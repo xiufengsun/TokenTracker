@@ -173,6 +173,7 @@ test("normalizeGrokUsage handles ACP cache writes, reasoning, and cost completen
     usage_is_incomplete: false,
     model_calls: 2,
     api_duration_ms: 456,
+    cost_coverage: { version: 1, reported_usd: 0.0123, reported_events: 1, missing_events: 0, allocated_events: 0, origins: ["grok_ticks"], unreported_tokens: { input_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 } },
   });
 
   const partial = normalizeGrokUsage({
@@ -264,7 +265,7 @@ test("parseGrokBuildIncremental prefers turn_completed.usage over context-window
   });
 
   assert.equal(result.eventsAggregated, 2);
-  assert.equal(cursors.grok.version, 5);
+  assert.equal(cursors.grok.version, 6);
 
   const snap = cursors.grok.sessionSnapshots[fixture.sessionId];
   assert.ok(snap);
@@ -371,7 +372,7 @@ test("parseGrokBuildIncremental falls back to context watermark only without tur
   assert.equal(rows[0].usage_precision, "estimated");
 });
 
-test("v4 -> v5 migration rebuilds Grok rows with mutually exclusive token columns", async () => {
+test("v4 -> v6 migration rebuilds Grok rows with mutually exclusive token columns", async () => {
   const fixture = makeSession({
     turns: [
       {
@@ -452,7 +453,7 @@ test("v4 -> v5 migration rebuilds Grok rows with mutually exclusive token column
     env: fixture.env,
   });
 
-  assert.equal(cursors.grok.version, 5);
+  assert.equal(cursors.grok.version, 6);
   assert.equal(cursors.grok.sessionSnapshots[fixture.sessionId].totalTokens, 81_000);
   const rows = dedupeQueue(readQueue(queuePath));
   const row = rows.find((r) => r.model === "grok-4.5");
@@ -514,7 +515,7 @@ test("parseGrokBuildIncremental backfills project usage from session cwd", async
   });
   const globalRowsBefore = readQueue(queuePath).length;
   assert.ok(globalRowsBefore > 0);
-  assert.equal(cursors.grok.version, 5);
+  assert.equal(cursors.grok.version, 6);
   assert.equal(fs.existsSync(projectQueuePath), false);
 
   const result = await parseGrokBuildIncremental({
@@ -526,7 +527,7 @@ test("parseGrokBuildIncremental backfills project usage from session cwd", async
   });
   assert.equal(readQueue(queuePath).length, globalRowsBefore, "project backfill must not re-emit global usage");
   assert.equal(result.projectBucketsQueued, 1);
-  assert.equal(cursors.grok.version, 5);
+  assert.equal(cursors.grok.version, 6);
 
   const projectRows = readQueue(projectQueuePath);
   assert.equal(projectRows.length, 1);
@@ -669,7 +670,7 @@ test("parseGrokBuildIncremental skips project attribution when cwd has no git", 
   assert.ok(first.bucketsQueued > 0);
   assert.equal(first.projectBucketsQueued, 0);
   assert.equal(fs.existsSync(projectQueuePath), false);
-  assert.equal(cursors.grok.version, 5);
+  assert.equal(cursors.grok.version, 6);
   const updatesPath = path.join(fixture.sessionDir, "updates.jsonl");
   assert.equal(cursors.grok.projectUpdateOffsets?.[updatesPath], undefined);
 
@@ -796,4 +797,191 @@ test("sync.js does not skip cursor commit when Grok only queues project buckets"
   const src = fs.readFileSync(path.join(__dirname, "../src/commands/sync.js"), "utf8");
   assert.match(src, /grokScanResult\.projectBucketsQueued/);
   assert.match(src, /!\(grokResult\.projectBucketsQueued > 0\)/);
+});
+
+test("top-level Grok costs allocate only the unreported remainder with explicit provenance", async () => {
+  const fixture = makeSession({ turns: [{ usage: {
+    costUsdTicks: 10_000_000_000,
+    modelUsage: {
+      "grok-4.5-build": { inputTokens: 100, outputTokens: 0, costUsdTicks: 2_500_000_000 },
+      "opaque-worker": { inputTokens: 300, outputTokens: 0 },
+    },
+  } }] });
+  const queuePath = path.join(fixture.root, "queue.jsonl");
+  try {
+    await parseGrokBuildIncremental({ sessions: resolveGrokBuildSessions(fixture.env), cursors: {}, queuePath });
+    const rows = dedupeQueue(readQueue(queuePath));
+    const known = rows.find((row) => row.model === "grok-4.5-build");
+    const allocated = rows.find((row) => row.model === "opaque-worker");
+    assert.equal(known.cost_coverage.reported_usd, 0.25);
+    assert.equal(allocated.cost_coverage.reported_usd, 0.75);
+    assert.equal(allocated.cost_coverage.allocated_events, 1);
+    assert.deepEqual(allocated.cost_coverage.origins, ["grok_allocated"]);
+    assert.equal(computeRowCost(allocated), 0.75);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test("Grok v6 coverage migration retains prior snapshots and version when a log cannot be read", async () => {
+  const fixture = makeSession({ turns: [{ usage: { inputTokens: 100, costUsd: 1 } }] });
+  try {
+    const queuePath = path.join(fixture.root, "queue.jsonl");
+    const cursors = {};
+    const session = resolveGrokBuildSessions(fixture.env)[0];
+    await parseGrokBuildIncremental({ sessions: [session], cursors, queuePath });
+    cursors.grok.version = 5;
+    const before = JSON.stringify(cursors);
+    const queued = fs.readFileSync(queuePath, "utf8");
+    const queueOnly = structuredClone(cursors);
+    delete queueOnly.grok.sessionSnapshots;
+    const queueOnlyBefore = JSON.stringify(queueOnly);
+    await assert.rejects(parseGrokBuildIncremental({ sessions: [session], cursors: queueOnly, queuePath }), /prior session inventory is incomplete/);
+    assert.equal(JSON.stringify(queueOnly), queueOnlyBefore);
+    const unavailable = structuredClone(cursors);
+    unavailable.grok.sessionSnapshots["missing-old-session"] = { source: "turn_usage", totalTokens: 100 };
+    const unavailableBefore = JSON.stringify(unavailable);
+    await assert.rejects(parseGrokBuildIncremental({ sessions: [session], cursors: unavailable, queuePath }), /previously counted sessions are unavailable/);
+    assert.equal(JSON.stringify(unavailable), unavailableBefore);
+    assert.equal(fs.readFileSync(queuePath, "utf8"), queued);
+    await assert.rejects(parseGrokBuildIncremental({ sessions: [{ ...session, updatesPath: path.join(fixture.root, "missing.jsonl") }], cursors, queuePath }), /rebuild deferred/);
+    assert.equal(JSON.stringify(cursors), before);
+    assert.equal(fs.readFileSync(queuePath, "utf8"), queued);
+    await parseGrokBuildIncremental({ sessions: [session], cursors, queuePath });
+    const stable = fs.readFileSync(queuePath, "utf8");
+    await parseGrokBuildIncremental({ sessions: [session], cursors, queuePath });
+    assert.equal(fs.readFileSync(queuePath, "utf8"), stable, "retry then repeated scan remains idempotent");
+    assert.equal(cursors.grok.version, 6);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+
+test("Grok v6 coverage migration retains prior snapshots when a counted log is truncated", async () => {
+  const fixture = makeSession({ turns: [
+    { usage: { inputTokens: 100, costUsd: 1 } },
+    { usage: { inputTokens: 100, costUsd: 1 } },
+  ] });
+  try {
+    const queuePath = path.join(fixture.root, "queue.jsonl");
+    const cursors = {};
+    const session = resolveGrokBuildSessions(fixture.env)[0];
+    await parseGrokBuildIncremental({ sessions: [session], cursors, queuePath });
+    assert.equal(readQueue(queuePath).reduce((sum, row) => sum + row.total_tokens, 0), 200);
+    cursors.grok.version = 5;
+    const before = JSON.stringify(cursors);
+    const queued = fs.readFileSync(queuePath, "utf8");
+    const updatesPath = path.join(fixture.sessionDir, "updates.jsonl");
+    const complete = fs.readFileSync(updatesPath, "utf8");
+    fs.writeFileSync(updatesPath, complete.split("\n").filter(Boolean)[0] + "\n");
+    await assert.rejects(parseGrokBuildIncremental({ sessions: [session], cursors, queuePath }), /previously counted session log is incomplete/);
+    assert.equal(JSON.stringify(cursors), before);
+    assert.equal(fs.readFileSync(queuePath, "utf8"), queued);
+    fs.writeFileSync(updatesPath, complete);
+    await parseGrokBuildIncremental({ sessions: [session], cursors, queuePath });
+    assert.equal(cursors.grok.version, 6);
+    assert.equal(cursors.grok.sessionSnapshots[fixture.sessionId].totalTokens, 200);
+    assert.equal(readQueue(queuePath).at(-1).total_tokens, 200);
+    const stable = fs.readFileSync(queuePath, "utf8");
+    await parseGrokBuildIncremental({ sessions: [session], cursors, queuePath });
+    assert.equal(fs.readFileSync(queuePath, "utf8"), stable);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test("Grok v6 coverage migration does not double-count a hook session already in inventory", async () => {
+  const fixture = makeSession({ turns: [{ usage: { inputTokens: 100, costUsd: 1 } }] });
+  try {
+    const queuePath = path.join(fixture.root, "queue.jsonl");
+    const cursors = {};
+    const session = resolveGrokBuildSessions(fixture.env)[0];
+    await parseGrokBuildIncremental({ sessions: [session], cursors, queuePath });
+    assert.equal(readQueue(queuePath).at(-1).total_tokens, 100);
+    cursors.grok.version = 5;
+    const hook = { ...session, sessionId: fixture.sessionId };
+    await parseGrokBuildIncremental({ sessions: [hook, session], cursors, queuePath });
+    assert.equal(cursors.grok.version, 6);
+    assert.equal(cursors.grok.sessionSnapshots[fixture.sessionId].totalTokens, 100);
+    assert.equal(readQueue(queuePath).at(-1).total_tokens, 100);
+    const stable = fs.readFileSync(queuePath, "utf8");
+    await parseGrokBuildIncremental({ sessions: [hook, session], cursors, queuePath });
+    assert.equal(cursors.grok.sessionSnapshots[fixture.sessionId].totalTokens, 100);
+    assert.equal(fs.readFileSync(queuePath, "utf8"), stable);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test("Grok v6 coverage migration retains project history when checkout attribution is lost", async () => {
+  const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-grok-lost-checkout-"));
+  writeGitOrigin(repoDir, "https://github.com/acme/grok-project.git");
+  const fixture = makeSession({ cwd: repoDir, summaryInfo: { cwd: repoDir }, turns: [{ usage: { inputTokens: 200, costUsd: 2 } }] });
+  try {
+    const queuePath = path.join(fixture.root, "queue.jsonl");
+    const projectQueuePath = path.join(fixture.root, "project.queue.jsonl");
+    const cursors = {};
+    const options = { sessions: resolveGrokBuildSessions(fixture.env), cursors, queuePath, projectQueuePath, env: fixture.env };
+    await parseGrokBuildIncremental(options);
+    assert.equal(readQueue(projectQueuePath).at(-1).total_tokens, 200);
+    cursors.grok.version = 5;
+    const before = JSON.stringify(cursors);
+    const queued = fs.readFileSync(queuePath, "utf8");
+    const project = fs.readFileSync(projectQueuePath, "utf8");
+    fs.rmSync(repoDir, { recursive: true, force: true });
+    await assert.rejects(parseGrokBuildIncremental(options), /rebuilt project history is smaller than the prior snapshot/);
+    assert.equal(JSON.stringify(cursors), before);
+    assert.equal(fs.readFileSync(queuePath, "utf8"), queued);
+    assert.equal(fs.readFileSync(projectQueuePath, "utf8"), project);
+    writeGitOrigin(repoDir, "https://github.com/acme/grok-project.git");
+    await parseGrokBuildIncremental(options);
+    assert.equal(cursors.grok.version, 6);
+    assert.equal(cursors.grok.projectSessionSnapshots[fixture.sessionId].totalTokens, 200);
+    assert.equal(readQueue(projectQueuePath).at(-1).total_tokens, 200);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); fs.rmSync(repoDir, { recursive: true, force: true }); }
+});
+
+test("Grok v5-to-v6 migration rebuilds project evidence without mixing old bucket costs", async () => {
+  const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-grok-covered-project-"));
+  writeGitOrigin(repoDir, "https://github.com/acme/grok-project.git");
+  const fixture = makeSession({ cwd: repoDir, summaryInfo: { cwd: repoDir }, turns: [{ usage: { inputTokens: 100, costUsd: 0.5 } }] });
+  try {
+    const queuePath = path.join(fixture.root, "queue.jsonl");
+    const projectQueuePath = path.join(fixture.root, "project.queue.jsonl");
+    const cursors = {};
+    const options = { sessions: resolveGrokBuildSessions(fixture.env), cursors, queuePath, projectQueuePath, env: fixture.env };
+    await parseGrokBuildIncremental(options);
+    cursors.grok.version = 5;
+    for (const bucket of Object.values(cursors.projectHourly.buckets)) delete bucket.totals.cost_coverage;
+    fs.writeFileSync(projectQueuePath, readQueue(projectQueuePath).map(({ cost_coverage, ...row }) => JSON.stringify(row)).join("\n") + "\n");
+    appendGrokTurn(fixture.sessionDir, { usage: { inputTokens: 100 } }, { timestampMs: 1784357103000, eventId: "uncovered" });
+    await parseGrokBuildIncremental(options);
+    const row = readQueue(projectQueuePath).at(-1);
+    assert.equal(row.total_tokens, 200);
+    assert.equal(row.cost_coverage.reported_usd, 0.5);
+    assert.equal(row.cost_coverage.missing_events, 1);
+    assert.equal(row.cost_coverage.unreported_tokens.input_tokens, 100);
+    const stable = fs.readFileSync(projectQueuePath, "utf8");
+    await parseGrokBuildIncremental(options);
+    assert.equal(fs.readFileSync(projectQueuePath, "utf8"), stable);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); fs.rmSync(repoDir, { recursive: true, force: true }); }
+});
+
+test("Grok project migration read failure is atomic with global and project cursors", async () => {
+  const { Readable } = require("node:stream");
+  const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-grok-project-read-"));
+  writeGitOrigin(repoDir, "https://github.com/acme/grok-project.git");
+  const fixture = makeSession({ cwd: repoDir, summaryInfo: { cwd: repoDir }, turns: [{ usage: { inputTokens: 100, costUsd: 1 } }] });
+  const original = fs.createReadStream;
+  try {
+    const queuePath = path.join(fixture.root, "queue.jsonl");
+    const projectQueuePath = path.join(fixture.root, "project.queue.jsonl");
+    const cursors = {};
+    const options = { sessions: resolveGrokBuildSessions(fixture.env), cursors, queuePath, projectQueuePath, env: fixture.env };
+    await parseGrokBuildIncremental(options);
+    cursors.grok.version = 5;
+    const before = JSON.stringify(cursors);
+    const queued = fs.readFileSync(queuePath, "utf8");
+    const project = fs.readFileSync(projectQueuePath, "utf8");
+    let reads = 0;
+    fs.createReadStream = (file, opts) => file === path.join(fixture.sessionDir, "updates.jsonl") && ++reads === 2
+      ? new Readable({ read() { this.destroy(Object.assign(new Error("private path EACCES"), { code: "EACCES" })); } }) : original(file, opts);
+    await assert.rejects(parseGrokBuildIncremental(options), /project session could not be read/);
+    assert.equal(JSON.stringify(cursors), before);
+    assert.equal(fs.readFileSync(queuePath, "utf8"), queued);
+    assert.equal(fs.readFileSync(projectQueuePath, "utf8"), project);
+  } finally { fs.createReadStream = original; fs.rmSync(fixture.root, { recursive: true, force: true }); fs.rmSync(repoDir, { recursive: true, force: true }); }
 });

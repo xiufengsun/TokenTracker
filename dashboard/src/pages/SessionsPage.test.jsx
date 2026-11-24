@@ -193,6 +193,17 @@ const makeThreadSession = (overrides) => ({
 });
 
 describe("SessionsPage", () => {
+  it("does not render the coverage and calculation disclosure", async () => {
+    getSessions.mockResolvedValue({
+      ...response,
+      data_health: { skipped_units: 2, complete_through: null, sources: [{ source: "grok", status: "partial" }] },
+    });
+    render(<SessionsPage />);
+    expect(await screen.findByText("Fix authentication flow")).toBeInTheDocument();
+    expect(screen.queryByText(copy("usage.evidence.title"))).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("{time}");
+  });
+
   it("shows unknown-only Claude session cost as Unpriced instead of free", async () => {
     getSessions.mockResolvedValue({ ...response, session_count: 1, returned_count: 1,
       sessions: [{ ...response.sessions[0], cost_usd: 0, cost_is_partial: true }] });

@@ -12047,7 +12047,7 @@ test("parseGrokBuildIncremental reads Grok updates metadata by event timestamp",
     assert.equal(queued[1].input_tokens, 120);
     assert.equal(queued[1].output_tokens, 30);
     assert.equal(queued[1].conversation_count, 2);
-    assert.equal(cursors.grok.version, 5);
+    assert.equal(cursors.grok.version, 6);
     assert.equal(cursors.grok.sessionSnapshots["grok-session-updates"].totalTokens, 250);
     assert.equal(cursors.grok.sessionSnapshots["grok-session-updates"].source, "updates");
     assert.equal(cursors.grok.sessionSnapshots["grok-session-updates"].lastEventId, "evt-2");
@@ -12381,7 +12381,7 @@ test("parseGrokBuildIncremental upgrades legacy Grok cursor by rebuilding from u
       queuePath,
     });
     assert.ok(firstRun.eventsAggregated >= 1);
-    assert.equal(cursors.grok.version, 5);
+    assert.equal(cursors.grok.version, 6);
     assert.equal(cursors.grok.sessionSnapshots["grok-session-v2"].totalTokens, 250);
 
     // Second sync must not double-count the rebuilt totals.

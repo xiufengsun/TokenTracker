@@ -4497,6 +4497,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
   let skipped = 0;
   let batches = 0;
   let cloudAccess = null;
+  let coverageSupported = false;
   const uploadId = crypto.randomUUID();
   const deadline = Date.now() + maxDurationMs;
   let batchBudget = Math.min(maxBatches, 100);
@@ -4535,6 +4536,25 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
       if (anonKey) headers.apikey = anonKey;
       // Re-read after parsing/each batch so switching off stops an active drain.
       if (!canUpload()) break;
+      const needsCoverage = result.buckets.some(bucket => bucket.cost_coverage != null);
+      if (needsCoverage && !coverageSupported) {
+        const probeBudget = deadline - Date.now();
+        if (probeBudget <= 0) break;
+        requestSignal = AbortSignal.timeout(Math.max(1, Math.ceil(probeBudget)));
+        const probe = await fetchFunctionResponse(functionUrlFor(root, INGEST_SLUG), {
+          method: "POST", headers, signal: requestSignal, body: JSON.stringify({ kind: "cost_capabilities" }),
+        });
+        let capabilities = {};
+        try { capabilities = JSON.parse(await probe.text()); } catch { /* unsupported legacy server */ }
+        if (!probe.ok || !Array.isArray(capabilities.cost_coverage_versions) || !capabilities.cost_coverage_versions.includes(1)) {
+          const error = new Error("Cloud cost coverage v1 unavailable; usage retained locally until the server supports it");
+          error.code = probe.status === 401 ? "CLOUD_DEVICE_TOKEN_REJECTED" : "CLOUD_COST_COVERAGE_UNSUPPORTED";
+          error.status = probe.ok ? 409 : probe.status;
+          throw error;
+        }
+        coverageSupported = true;
+      }
+      if (!canUpload()) break;
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) break;
       requestSignal = AbortSignal.timeout(Math.max(1, Math.ceil(remainingMs)));
@@ -4544,6 +4564,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
         signal: requestSignal,
         body: JSON.stringify({
           upload_id: uploadId,
+          ...(needsCoverage ? { cost_coverage_version: 1 } : {}),
           hourly: result.buckets,
           ...(result.sessionStates.length > 0
             ? { account_session_states: result.sessionStates }
@@ -4566,6 +4587,12 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
         throw err;
       }
 
+      if (needsCoverage && data.cost_coverage_version !== 1) {
+        const error = new Error("Cloud did not acknowledge cost coverage v1; queue offset retained");
+        error.code = "CLOUD_COST_COVERAGE_UNSUPPORTED";
+        error.status = 409;
+        throw error;
+      }
       cloudAccess = data;
       if (data.upload_scope === "community") batchBudget = Math.min(batchBudget, 10);
       inserted += Number(data?.inserted || 0);

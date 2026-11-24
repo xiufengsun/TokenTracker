@@ -1,3 +1,4 @@
+import { attachCloudCostProvenance, coveredRowCost, type CloudCostProvenance } from "./cloud/cost-provenance.ts";
 /**
  * Tokentracker leaderboard profile (DETAIL).
  *
@@ -482,6 +483,9 @@ function getModelPricing(model: string, source = "") {
   const exact = MODEL_PRICING[model];
   if (exact) return exact;
   const lower = model.toLowerCase();
+  // Unknown delivery SKUs must not inherit a standard synchronous rate.
+  // An explicitly curated exact Batch/Flex key above remains authoritative.
+  if (/(?:^|[-/:_\s.(])(?:batch|flex)(?:$|[-/:_\s.)])/.test(lower)) return ZERO_PRICING;
   if (source === "cline" && lower.endsWith(":free")) return ZERO_PRICING;
   // Free gateway SKUs append `-free` to the paid id (deepseek-v4.1-flash-free,
   // minimax-m2.5-free, Muse *-contributor-free). Exact MODEL_PRICING hits above
@@ -717,6 +721,7 @@ interface UsageRow {
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
   total_cost_usd?: number | null;
+  cost_provenance?: CloudCostProvenance;
   pricing_tier?: string;
 }
 
@@ -727,6 +732,16 @@ interface GroupedRow extends UsageRow {
 }
 
 function computeRowCost(row: UsageRow): number {
+  if (row.source === "grok") {
+    const free = String(row.model || "").toLowerCase();
+    if (free.includes("build-free") || free.includes("free-tier") || free.endsWith("-free")) return 0;
+  }
+  if (row.cost_provenance && (row.source === "grok" || row.source === "cursor")) {
+    const cost = coveredRowCost(row, computeRowCost);
+    if (cost !== undefined) return cost;
+  }
+  if (row.source === "cursor" && /^grok-bot-/i.test(String(row.model || ""))) return 0;
+
   // LM Studio developer-server and LM Link traffic is local inference. Its
   // logs do not represent Bionic Secure Cloud billing.
   if (row.source === "lmstudio") return 0;
@@ -935,7 +950,7 @@ async function fetchDailyGroupedRows(
     ? await client.database.rpc("account_usage_grouped_cached", { ...common, p_device_id: null })
     : await client.database.rpc("account_usage_grouped", { ...common, p_device_ids: [] });
   if (error) throw new Error(error.message);
-  return (Array.isArray(data) ? data : []) as GroupedRow[];
+  return await attachCloudCostProvenance(client, (Array.isArray(data) ? data : []) as GroupedRow[], { ...common, p_device_id: null });
 }
 
 export default async function (req: Request): Promise<Response> {

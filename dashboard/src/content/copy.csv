@@ -2207,3 +2207,23 @@ cloud.order_cancel.unverified,dashboard,Cloud,CancelPendingOrder,unverified,This
 cloud.order_cancel.pending_label,dashboard,Cloud,CancelPendingOrder,pending_label,Cancellation processing,Unconfirmed request is not proof of accepted cancellation,active
 cloud.order_cancel.unverified_label,dashboard,Cloud,CancelPendingOrder,unverified_label,Verification required,Unconfirmed request is not proof of accepted cancellation,active
 cloud.order_cancel.unknown,dashboard,Cloud,CancelPendingOrder,unknown,Cancellation status is unconfirmed. Do not pay through old links or create another order. Check cancellation status again; code redemption may remain unavailable until verified.,Unconfirmed request is not proof of accepted cancellation,active
+usage.evidence.title,ui,UsageDataDetails,UsageEvidence,title,Data coverage and calculation details,Coverage and cost provenance disclosure,active
+usage.evidence.unknown,ui,UsageDataDetails,UsageEvidence,unknown,Unknown,Coverage and cost provenance disclosure,active
+usage.evidence.scope,ui,UsageDataDetails,UsageEvidence,scope,"This view contains local session logs supported by the session scanner, not all provider usage.",Coverage and cost provenance disclosure,active
+usage.evidence.checked,ui,UsageDataDetails,UsageEvidence,checked,Last inventory check: {time},Coverage and cost provenance disclosure,active
+usage.evidence.latest,ui,UsageDataDetails,UsageEvidence,latest,Latest observed event: {time} (not a completeness cutoff),Coverage and cost provenance disclosure,active
+usage.evidence.complete,ui,UsageDataDetails,UsageEvidence,complete,Verified complete through: {time},Coverage and cost provenance disclosure,active
+usage.evidence.coverage,ui,UsageDataDetails,UsageEvidence,coverage,Skipped scan units: {skipped}. Malformed-record coverage is not measured.,Coverage and cost provenance disclosure,active
+usage.evidence.observed,ui,UsageDataDetails,UsageEvidence,observed,Observed; completeness not verified,Coverage and cost provenance disclosure,active
+usage.evidence.partial,ui,UsageDataDetails,UsageEvidence,partial,Partial scan,Coverage and cost provenance disclosure,active
+usage.evidence.not_observed,ui,UsageDataDetails,UsageEvidence,not_observed,No inventory observed; not proof of zero usage,Coverage and cost provenance disclosure,active
+usage.evidence.pricing,ui,UsageDataDetails,UsageEvidence,pricing,Price table: {status}; last successful fetch: {time},Coverage and cost provenance disclosure,active
+usage.evidence.comparison,ui,UsageDataDetails,UsageEvidence,comparison,"Local logs, deduplicated uploaded cloud-account usage, and eligible public leaderboard snapshots have different scopes. Cloud and leaderboard cutoffs are unknown here; this disclosure does not reconcile or repair their totals.",Coverage and cost provenance disclosure,active
+usage.evidence.reported,ui,UsageDataDetails,UsageEvidence,reported,"Recorded source amount (USD), including explicit zero. The source amount is not necessarily an out-of-pocket bill.",Coverage and cost provenance disclosure,active
+usage.evidence.allocated,ui,UsageDataDetails,UsageEvidence,allocated,"Some recorded turn cost is allocated across models by token share; per-model amounts are allocation estimates, not measured prices.",Coverage and cost provenance disclosure,active
+usage.evidence.mixed,ui,UsageDataDetails,UsageEvidence,mixed,Includes multiple calculation sources. Only uncovered tokens with known model rates are estimated; unavailable amounts stay unpriced.,Coverage and cost provenance disclosure,active
+usage.evidence.unpriced,ui,UsageDataDetails,UsageEvidence,unpriced,No verified rate or source amount is available; these tokens have no dollar value assigned.,Coverage and cost provenance disclosure,active
+usage.evidence.estimated,ui,UsageDataDetails,UsageEvidence,estimated,"API-equivalent estimate: uncached input, cache reads, cache writes and output use their model rates. Reasoning is not charged twice. This is not an actual bill.",Coverage and cost provenance disclosure,active
+usage.evidence.subscription,ui,UsageDataDetails,UsageEvidence,subscription,Grok Bot is subscription-product usage; no mapping to a public xAI model price is assumed.,Coverage and cost provenance disclosure,active
+usage.evidence.source,ui,UsageDataDetails,UsageEvidence,source,{source} — {status},Scan source and measured state,active
+usage.evidence.discovery,ui,UsageDataDetails,UsageEvidence,coverage,Directory discovery failures: {failed}. Paths and errors stay private.,Coverage and cost provenance disclosure,active
