@@ -21434,6 +21434,18 @@ function grokSessionIdFor(sess) {
   );
 }
 
+function dedupeGrokBuildSessions(sessions) {
+  const seen = new Set();
+  const deduped = [];
+  for (const sess of Array.isArray(sessions) ? sessions : []) {
+    const sessionId = grokSessionIdFor(sess);
+    if (!sessionId || seen.has(sessionId)) continue;
+    seen.add(sessionId);
+    deduped.push(sess);
+  }
+  return deduped;
+}
+
 function grokModelFromSignals(signals) {
   return (
     normalizeModelInput(signals?.primaryModelId) ||
@@ -21880,7 +21892,9 @@ async function parseGrokBuildIncremental({
   const needsTurnUsageMigration = prevVersion < GROK_CURSOR_VERSION;
   // A failed migration must leave both token/cost snapshots and version intact.
   const hourlyState = normalizeHourlyState(needsTurnUsageMigration ? structuredClone(cursors?.hourly) : cursors?.hourly);
-  const sessionList = Array.isArray(sessions) && sessions.length > 0 ? sessions : resolveGrokBuildSessions(env);
+  const sessionList = dedupeGrokBuildSessions(
+    Array.isArray(sessions) && sessions.length > 0 ? sessions : resolveGrokBuildSessions(env),
+  );
   if (needsTurnUsageMigration && prevVersion > 0 && sessionList.length === 0) {
     return { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
   }

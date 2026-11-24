@@ -885,6 +885,27 @@ test("Grok v6 coverage migration retains prior snapshots when a counted log is t
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
 
+test("Grok v6 coverage migration does not double-count a hook session already in inventory", async () => {
+  const fixture = makeSession({ turns: [{ usage: { inputTokens: 100, costUsd: 1 } }] });
+  try {
+    const queuePath = path.join(fixture.root, "queue.jsonl");
+    const cursors = {};
+    const session = resolveGrokBuildSessions(fixture.env)[0];
+    await parseGrokBuildIncremental({ sessions: [session], cursors, queuePath });
+    assert.equal(readQueue(queuePath).at(-1).total_tokens, 100);
+    cursors.grok.version = 5;
+    const hook = { ...session, sessionId: fixture.sessionId };
+    await parseGrokBuildIncremental({ sessions: [hook, session], cursors, queuePath });
+    assert.equal(cursors.grok.version, 6);
+    assert.equal(cursors.grok.sessionSnapshots[fixture.sessionId].totalTokens, 100);
+    assert.equal(readQueue(queuePath).at(-1).total_tokens, 100);
+    const stable = fs.readFileSync(queuePath, "utf8");
+    await parseGrokBuildIncremental({ sessions: [hook, session], cursors, queuePath });
+    assert.equal(cursors.grok.sessionSnapshots[fixture.sessionId].totalTokens, 100);
+    assert.equal(fs.readFileSync(queuePath, "utf8"), stable);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
 test("Grok v6 coverage migration retains project history when checkout attribution is lost", async () => {
   const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-grok-lost-checkout-"));
   writeGitOrigin(repoDir, "https://github.com/acme/grok-project.git");
