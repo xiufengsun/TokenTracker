@@ -1,3 +1,4 @@
+import { attachCloudCostProvenance, coveredRowCost, type CloudCostProvenance } from "./cloud/cost-provenance.ts";
 /**
  * Tokentracker leaderboard profile (DETAIL).
  *
@@ -717,6 +718,7 @@ interface UsageRow {
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
   total_cost_usd?: number | null;
+  cost_provenance?: CloudCostProvenance;
   pricing_tier?: string;
 }
 
@@ -727,6 +729,16 @@ interface GroupedRow extends UsageRow {
 }
 
 function computeRowCost(row: UsageRow): number {
+  if (row.source === "grok") {
+    const free = String(row.model || "").toLowerCase();
+    if (free.includes("build-free") || free.includes("free-tier") || free.endsWith("-free")) return 0;
+  }
+  if (row.cost_provenance && (row.source === "grok" || row.source === "cursor")) {
+    const cost = coveredRowCost(row, computeRowCost);
+    if (cost !== undefined) return cost;
+  }
+  if (row.source === "cursor" && /^grok-bot-/i.test(String(row.model || ""))) return 0;
+
   // LM Studio developer-server and LM Link traffic is local inference. Its
   // logs do not represent Bionic Secure Cloud billing.
   if (row.source === "lmstudio") return 0;
@@ -935,7 +947,7 @@ async function fetchDailyGroupedRows(
     ? await client.database.rpc("account_usage_grouped_cached", { ...common, p_device_id: null })
     : await client.database.rpc("account_usage_grouped", { ...common, p_device_ids: [] });
   if (error) throw new Error(error.message);
-  return (Array.isArray(data) ? data : []) as GroupedRow[];
+  return await attachCloudCostProvenance(client, (Array.isArray(data) ? data : []) as GroupedRow[], { ...common, p_device_id: null });
 }
 
 export default async function (req: Request): Promise<Response> {

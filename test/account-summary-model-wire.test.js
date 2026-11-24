@@ -1,3 +1,4 @@
+const { inlineCostProvenance } = require("./helpers/edge-cost-provenance");
 "use strict";
 
 const assert = require("node:assert/strict");
@@ -96,7 +97,7 @@ function loadEdge(endpoint, data, { legacy = false, mutation } = {}) {
   }
   if (mutation) source = mutation(source);
   source += `\nexport { ${decoder} as decode };`;
-  const code = transformSync(source, { loader: "ts", format: "cjs", target: "es2022" }).code;
+  const code = transformSync(inlineCostProvenance(source), { loader: "ts", format: "cjs", target: "es2022" }).code;
   const calls = [];
   const context = {
     module: { exports: {} }, exports: {}, Request, Response, URL, Headers, Date: FixedDate,

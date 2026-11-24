@@ -191,11 +191,13 @@ SET search_path TO public,pg_temp SET statement_timeout TO '8s' AS $fn$
     FROM eligible
   ), picked AS (
     SELECT DISTINCT ON (user_id,cluster,hour_start,source,model) * FROM ranked WHERE rank=1
-    ORDER BY user_id,cluster,hour_start,source,model,(cost_coverage IS NOT NULL) DESC,device_id
+    ORDER BY user_id,cluster,hour_start,source,model,
+      (coalesce((cost_coverage->>'reported_events')::bigint,0)>0 OR (cost_coverage IS NULL AND source='grok' AND total_cost_usd>0)) DESC,
+      (cost_coverage IS NOT NULL) DESC,device_id
   ), conflicts AS (
     SELECT user_id,cluster,hour_start,source,model,
       count(DISTINCT jsonb_build_object('usd',coalesce(cost_coverage->'reported_usd',to_jsonb(total_cost_usd)),
-        'unreported_tokens',cost_coverage->'unreported_tokens')) FILTER (
+        'unreported_tokens',coalesce(cost_coverage->'unreported_tokens','{"input_tokens":0,"cached_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}'::jsonb))) FILTER (
           WHERE coalesce((cost_coverage->>'reported_events')::bigint,0)>0
             OR (cost_coverage IS NULL AND source='grok' AND total_cost_usd>0))>1 AS ambiguous
     FROM ranked WHERE rank=1 GROUP BY user_id,cluster,hour_start,source,model

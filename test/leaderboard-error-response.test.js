@@ -1,3 +1,4 @@
+const { inlineCostProvenance } = require("./helpers/edge-cost-provenance");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -8,7 +9,7 @@ const { transformSync } = require("esbuild");
 function fixture(client) {
   const source = fs.readFileSync(path.resolve(__dirname, "../dashboard/edge-patches/tokentracker-leaderboard-refresh.ts"), "utf8")
     .replace('import { createClient } from "npm:@insforge/sdk";', "const createClient = () => __fixtureClient;");
-  const compiled = transformSync(source, { loader: "ts", format: "cjs", target: "node20" }).code;
+  const compiled = transformSync(inlineCostProvenance(source), { loader: "ts", format: "cjs", target: "node20" }).code;
   const module = { exports: {} };
   const env = { INSFORGE_BASE_URL: "https://backend.test", INSFORGE_SERVICE_ROLE_KEY: "fixture-service",
     LEADERBOARD_REFRESH_SECRET: "fixture-refresh", LEADERBOARD_BLOCKED_USER_IDS: "11111111-1111-4111-8111-111111111111" };

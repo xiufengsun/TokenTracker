@@ -1,3 +1,4 @@
+import { attachCloudCostProvenance, coveredRowCost, type CloudCostProvenance } from "./cloud/cost-provenance.ts";
 /**
  * InsForge Edge: account-wide usage summary (cross-device, aggregated by user_id).
  * Mirrors local-api.js `tokentracker-usage-summary` response schema.
@@ -760,6 +761,7 @@ interface GroupedRow {
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
   total_cost_usd?: number | null;
+  cost_provenance?: CloudCostProvenance;
   conversations: number | null;
   pricing_tier?: string;
 }
@@ -782,7 +784,7 @@ interface GroupedRow {
  *                  [from, to].
  */
 interface CompactSummary {
-  cost_dims: [string | null, string | null, string | null, number | string, number | string, number | string, number | string, number | string][];
+  cost_dims: [string | null, string | null, string | null, number | string, number | string, number | string, number | string, number | string, CloudCostProvenance?][];
   day_rollup: [string, number | string, number | string][];
   range_totals: Record<string, number | string>;
 }
@@ -881,6 +883,13 @@ async function fetchCompactSummary(
       });
       if (error) throw new Error(error.message);
       const value = decodeSummaryWire(data);
+      const proven = await attachCloudCostProvenance(client, value.cost_dims.map(dim => ({
+        source: dim[0] || "", model: dim[1] || "unknown", pricing_tier: dim[2] || "peak",
+        input_tokens: dim[3], output_tokens: dim[4], cached_input_tokens: dim[5],
+        cache_creation_input_tokens: dim[6], reasoning_output_tokens: dim[7],
+      })), { p_user_id: userId, p_device_id: requestedDeviceId, p_from: fromIso, p_to: toIso,
+        p_tz: tz, p_offset_min: tzOffsetMinutes, p_range_from: rangeFrom, p_range_to: rangeTo });
+      proven.forEach((row, index) => { if (row.cost_provenance) value.cost_dims[index][8] = row.cost_provenance; });
       compactCache.set(cacheKey, { fetchedAt: Date.now(), value });
       if (compactCache.size > 64) {
         const oldest = compactCache.keys().next().value;
@@ -898,6 +907,16 @@ async function fetchCompactSummary(
 }
 
 function computeRowCost(row: GroupedRow): number {
+  if (row.source === "grok") {
+    const free = String(row.model || "").toLowerCase();
+    if (free.includes("build-free") || free.includes("free-tier") || free.endsWith("-free")) return 0;
+  }
+  if (row.cost_provenance && (row.source === "grok" || row.source === "cursor")) {
+    const cost = coveredRowCost(row, computeRowCost);
+    if (cost !== undefined) return cost;
+  }
+  if (row.source === "cursor" && /^grok-bot-/i.test(String(row.model || ""))) return 0;
+
   // LM Studio developer-server and LM Link traffic is local inference. Its
   // logs do not represent Bionic Secure Cloud billing.
   if (row.source === "lmstudio") return 0;
@@ -953,6 +972,7 @@ interface DayRoll {
 function costOfDim(dim: CompactSummary["cost_dims"][number]): number {
   return computeRowCost({
     bucket: "",
+    cost_provenance: dim[8],
     source: dim[0] ?? "",
     model: dim[1] ?? "unknown",
     pricing_tier: dim[2] ?? undefined,

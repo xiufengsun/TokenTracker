@@ -1,3 +1,4 @@
+import { attachCloudCostProvenance, coveredRowCost, type CloudCostProvenance } from "./cloud/cost-provenance.ts";
 /**
  * InsForge Edge：排行榜快照刷新。
  * 从 tokentracker_hourly 聚合数据，按 period 写入 tokentracker_leaderboard_snapshots。
@@ -749,6 +750,16 @@ function getRowPricing(row: { model?: string; source?: string; hour_start?: stri
 }
 
 function computeRowCost(row: HourlyRow): number {
+  if (row.source === "grok") {
+    const free = String(row.model || "").toLowerCase();
+    if (free.includes("build-free") || free.includes("free-tier") || free.endsWith("-free")) return 0;
+  }
+  if (row.cost_provenance && (row.source === "grok" || row.source === "cursor")) {
+    const cost = coveredRowCost(row, computeRowCost);
+    if (cost !== undefined) return cost;
+  }
+  if (row.source === "cursor" && /^grok-bot-/i.test(String(row.model || ""))) return 0;
+
   // LM Studio developer-server and LM Link traffic is local inference. Its
   // logs do not represent Bionic Secure Cloud billing.
   if (row.source === "lmstudio") return 0;
@@ -857,6 +868,7 @@ interface HourlyRow {
   cache_creation_input_tokens: number;
   reasoning_output_tokens: number;
   total_cost_usd?: number | null;
+  cost_provenance?: CloudCostProvenance;
   pricing_tier?: string;
 }
 
@@ -1305,12 +1317,21 @@ export default async function (req: Request): Promise<Response> {
       const totalRows: HourlyRow[] = [];
       for (let shardIndex = 0; shardIndex < TOTAL_USER_SHARDS.length; shardIndex += 2) {
         const shardBatch = await Promise.all(
-          TOTAL_USER_SHARDS.slice(shardIndex, shardIndex + 2).map(({ from, to }) =>
-            client.database.rpc(
-              "leaderboard_usage_compact_total_shard",
-              { p_to: rangeEnd, p_user_from: from, p_user_to: to },
-            )
-          ),
+          TOTAL_USER_SHARDS.slice(shardIndex, shardIndex + 2).map(async ({ from, to }) => {
+            const result = await client.database.rpc("leaderboard_usage_compact_total_shard", {
+              p_to: rangeEnd, p_user_from: from, p_user_to: to,
+            });
+            if (result.error) return result;
+            try {
+              const rows = await attachCloudCostProvenance(client, decodeCompactLeaderboardUsage(result.data as CompactLeaderboardUsage), {
+                p_user_id: null, p_device_id: null, p_from: "1970-01-01T00:00:00Z", p_to: rangeEnd,
+                p_user_from: from, p_user_to: to,
+              });
+              return { ...result, data: rows };
+            } catch {
+              return { data: null, error: { message: "Cost provenance unavailable for token snapshot" } };
+            }
+          }),
         );
         const failedShard = shardBatch.find((result) => result.error);
         if (failedShard?.error) {
@@ -1318,7 +1339,7 @@ export default async function (req: Request): Promise<Response> {
           break;
         }
         for (const result of shardBatch) {
-          totalRows.push(...decodeCompactLeaderboardUsage(result.data as CompactLeaderboardUsage));
+          totalRows.push(...(result.data as HourlyRow[]));
         }
       }
       groupedData = rpcErr ? null : totalRows;
@@ -1328,7 +1349,15 @@ export default async function (req: Request): Promise<Response> {
         { p_from: rangeStart, p_to: rangeEnd },
       );
       rpcErr = result.error;
-      groupedData = rpcErr ? null : decodeCompactLeaderboardUsage(result.data as CompactLeaderboardUsage);
+      if (!rpcErr) {
+        try {
+          groupedData = await attachCloudCostProvenance(client, decodeCompactLeaderboardUsage(result.data as CompactLeaderboardUsage), {
+            p_user_id: null, p_device_id: null, p_from: rangeStart, p_to: rangeEnd,
+          });
+        } catch {
+          rpcErr = { message: "Cost provenance unavailable for token snapshot" };
+        }
+      }
     }
     const __tAfterRpc = Date.now();
     if (rpcErr) {

@@ -48,7 +48,8 @@ test("each total shard expands its own dictionary before concatenation", () => {
   const rows = [...decode(first), ...decode(second)];
   assert.equal(rows.at(-1).user_id, "user-b");
   assert.equal(rows.at(-1).model, "deepseek-v4-pro");
-  assert.match(edge, /totalRows\.push\(\.\.\.decodeCompactLeaderboardUsage\(result\.data as CompactLeaderboardUsage\)\)/);
+  assert.match(edge, /attachCloudCostProvenance\(client, decodeCompactLeaderboardUsage\(result\.data as CompactLeaderboardUsage\)/);
+  assert.match(edge, /totalRows\.push\(\.\.\.\(result\.data as HourlyRow\[\]\)\)/);
 });
 
 test("a malformed dictionary response fails instead of replacing the snapshot with partial data", () => {

@@ -79,7 +79,7 @@ export async function attachCloudCostProvenance<T extends object>(
       covered[field] = raw.covered_tokens[field];
     }
     evidence.set(key, { version: 1, reported_usd: raw.reported_usd, covered_tokens: covered,
-      has_reported: raw.has_reported, has_missing: raw.has_missing, has_allocated: raw.has_allocated, origins: [...new Set(raw.origins)] });
+      has_reported: raw.has_reported, has_missing: raw.has_missing, has_allocated: raw.has_allocated, origins: [...new Set<string>(raw.origins)] });
   }
   if (evidence.size !== inventory.size) throw failure();
   return rows.map(row => isCostProvenanceModel(row as CostRow) ? { ...row, cost_provenance: evidence.get(keyOf(row as CostRow))! } : row);
