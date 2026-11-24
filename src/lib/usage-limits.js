@@ -2569,11 +2569,15 @@ async function detectAntigravityProcess({
     sawProcess = true;
     const csrfToken = extractCommandFlag(parsed.command, "--csrf_token") || null;
     const extensionPort = extractFirstNumber(extractCommandFlag(parsed.command, "--extension_server_port"));
+    const hubPort = extractFirstNumber(extractCommandFlag(parsed.command, "--hub-port"));
+    const httpsPort = extractFirstNumber(extractCommandFlag(parsed.command, "--https_server_port"));
     return {
       configured: true,
       pid: parsed.pid,
       csrfToken,
       extensionPort: Number.isFinite(extensionPort) ? extensionPort : null,
+      hubPort: Number.isFinite(hubPort) ? hubPort : null,
+      httpsPort: Number.isFinite(httpsPort) ? httpsPort : null,
     };
   }
 
@@ -3588,22 +3592,171 @@ function normalizeAntigravityQuotaSummary(body) {
   };
 }
 
-async function probeAntigravityPort(port, csrfToken, { timeoutMs, requestFn, scheme = "https", signal } = {}) {
-  try {
-    await requestLocalJson({
-      scheme,
-      port,
-      path: "/exa.language_server_pb.LanguageServerService/GetUnleashData",
-      body: antigravityUnleashBody(),
-      csrfToken,
-      timeoutMs,
-      requestFn,
-      signal,
-    });
-    return true;
-  } catch (_error) {
-    return false;
+// Antigravity 2.34 / agy 1.5.14 removed GetUnleashData (HTTP 404). Probe a
+// short fallback list instead of treating that 404 as "no API port".
+const ANTIGRAVITY_PROBE_ENDPOINTS = Object.freeze([
+  "GetStatus",
+  "GetUnleashData",
+  "GetUserStatus",
+]);
+function antigravityRpcPath(endpoint) {
+  return `/exa.language_server_pb.LanguageServerService/${endpoint}`;
+}
+
+function isAntigravityUnimplementedProbeError(error) {
+  return /^HTTP (404|501)\b/.test(String(error?.message || ""));
+}
+
+function isSuccessfulAntigravityProbeBody(endpoint, body) {
+  if (body == null || typeof body !== "object" || Array.isArray(body)) return false;
+  if (endpoint !== "GetUserStatus") return true;
+  const status = body.userStatus;
+  return Boolean(status) && typeof status === "object" && !Array.isArray(status);
+}
+
+function antigravityProbeBody(endpoint) {
+  return endpoint === "GetUnleashData" ? antigravityUnleashBody() : antigravityDefaultBody();
+}
+
+function isUsableAntigravityPort(port) {
+  return Number.isInteger(port) && port > 0 && port <= 65535;
+}
+
+function pushUniqueAntigravityPort(ports, port) {
+  if (isUsableAntigravityPort(port) && !ports.includes(port)) ports.push(port);
+}
+
+function declaredAntigravityPorts(processInfo = {}) {
+  const ports = [];
+  for (const port of [processInfo.hubPort, processInfo.httpsPort, processInfo.extensionPort]) {
+    pushUniqueAntigravityPort(ports, port);
   }
+  return ports;
+}
+
+function mergeAntigravityProbePorts(processInfo, discoveredPorts) {
+  const ports = declaredAntigravityPorts(processInfo);
+  for (const port of discoveredPorts || []) pushUniqueAntigravityPort(ports, port);
+  return ports;
+}
+
+function parseAntigravityHubDiscoveryJson(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(raw || ""));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const csrfToken = typeof parsed.csrfToken === "string" ? parsed.csrfToken : "";
+  if (!csrfToken || /\s/.test(csrfToken)) return null;
+  const httpPort = isUsableAntigravityPort(parsed.httpPort) ? parsed.httpPort : null;
+  const httpsPort = isUsableAntigravityPort(parsed.httpsPort) ? parsed.httpsPort : null;
+  if (httpPort == null && httpsPort == null) return null;
+  const pid = Number.isSafeInteger(parsed.pid) && parsed.pid > 0 && parsed.pid <= 0xffffffff
+    ? parsed.pid
+    : null;
+  return { pid, httpPort, httpsPort, csrfToken };
+}
+
+function listAntigravityHubDiscoveryRecords({ home } = {}) {
+  const daemonDir = path.join(home || os.homedir(), ".gemini", "antigravity", "daemon");
+  let entries;
+  try {
+    entries = fs.readdirSync(daemonDir);
+  } catch {
+    return [];
+  }
+  const records = [];
+  for (const name of entries) {
+    if (!/^hub_\d+\.json$/i.test(name)) continue;
+    try {
+      const record = parseAntigravityHubDiscoveryJson(
+        fs.readFileSync(path.join(daemonDir, name), "utf8"),
+      );
+      if (record) records.push(record);
+    } catch {
+      // unreadable or malformed file
+    }
+  }
+  return records;
+}
+
+function applyAntigravityHubRecord(processInfo, record) {
+  if (!record) return processInfo;
+  return {
+    ...processInfo,
+    csrfToken: processInfo.csrfToken || record.csrfToken,
+    hubPort: processInfo.hubPort || record.httpPort,
+    httpsPort: processInfo.httpsPort || record.httpsPort,
+  };
+}
+
+function resolveAntigravityHubDiscovery(processInfo, { home, ports } = {}) {
+  if (!processInfo?.configured || processInfo.error) return processInfo;
+  const records = listAntigravityHubDiscoveryRecords({ home });
+  if (!records.length) return processInfo;
+
+  const byPid = processInfo.pid
+    ? records.filter((record) => record.pid === processInfo.pid)
+    : [];
+  if (byPid.length === 1) return applyAntigravityHubRecord(processInfo, byPid[0]);
+
+  const knownPorts = new Set([
+    ...declaredAntigravityPorts(processInfo),
+    ...(ports || []).filter(isUsableAntigravityPort),
+  ]);
+  if (knownPorts.size > 0) {
+    const byPort = records.filter((record) =>
+      knownPorts.has(record.httpPort) || knownPorts.has(record.httpsPort),
+    );
+    if (byPort.length === 1) return applyAntigravityHubRecord(processInfo, byPort[0]);
+  }
+
+  const record = records.length === 1 ? records[0] : null;
+  if (record && !processInfo.csrfToken && antigravityHubRecordAgrees(processInfo, record, knownPorts)) {
+    return applyAntigravityHubRecord(processInfo, record);
+  }
+  return processInfo;
+}
+
+function antigravityHubRecordAgrees(processInfo, record, knownPorts) {
+  if (!record) return false;
+  if (processInfo?.pid && record.pid && record.pid !== processInfo.pid) return false;
+  if (knownPorts && knownPorts.size > 0) {
+    const sharesPort = knownPorts.has(record.httpPort) || knownPorts.has(record.httpsPort);
+    if (!sharesPort) return false;
+  }
+  return true;
+}
+
+async function probeAntigravityPort(port, csrfToken, { timeoutMs, requestFn, scheme = "https", signal } = {}) {
+  const startedAtMs = performance.now();
+  for (const endpoint of ANTIGRAVITY_PROBE_ENDPOINTS) {
+    if (signal?.aborted) return false;
+    const remainingMs = Number.isFinite(timeoutMs)
+      ? Math.floor(timeoutMs - (performance.now() - startedAtMs))
+      : timeoutMs;
+    if (Number.isFinite(remainingMs) && remainingMs <= 0) return false;
+    try {
+      const body = await requestLocalJson({
+        scheme,
+        port,
+        path: antigravityRpcPath(endpoint),
+        body: antigravityProbeBody(endpoint),
+        csrfToken,
+        timeoutMs: remainingMs,
+        requestFn,
+        signal,
+      });
+      if (isSuccessfulAntigravityProbeBody(endpoint, body)) return true;
+      return false;
+    } catch (error) {
+      if (isAntigravityUnimplementedProbeError(error)) continue;
+      return false;
+    }
+  }
+  return false;
 }
 
 function hasAntigravityInstallEvidence({ home } = {}) {
@@ -4242,7 +4395,7 @@ async function fetchAntigravityLimits({
     if (processScanTimeoutMs <= 0) {
       throw new Error(ANTIGRAVITY_BUDGET_EXHAUSTED_MESSAGE);
     }
-    const processInfo = await detectAntigravityProcess({
+    let processInfo = await detectAntigravityProcess({
       commandRunner,
       platform,
       timeoutMs: processScanTimeoutMs,
@@ -4266,12 +4419,17 @@ async function fetchAntigravityLimits({
     if (portScanTimeoutMs <= 0) {
       throw new Error(ANTIGRAVITY_BUDGET_EXHAUSTED_MESSAGE);
     }
-    const ports = await listAntigravityPorts(processInfo.pid, {
+    const discoveredPorts = await listAntigravityPorts(processInfo.pid, {
       commandRunner,
       platform,
       timeoutMs: portScanTimeoutMs,
       signal,
     });
+    processInfo = resolveAntigravityHubDiscovery(processInfo, {
+      home,
+      ports: discoveredPorts,
+    });
+    const ports = mergeAntigravityProbePorts(processInfo, discoveredPorts);
     let workingPort = null;
     let workingScheme = "https";
     // Each probe draws from the same budget, so a long port list cannot multiply it:
@@ -4283,11 +4441,13 @@ async function fetchAntigravityLimits({
         workingPort = port;
         break;
       }
-      // agy CLI serves both HTTPS and HTTP; no CSRF needed
-      if (!processInfo.csrfToken) {
+      // agy CLI serves HTTP without CSRF. 2.34 hub files also advertise an
+      // HTTP port that should be probed with the recovered token.
+      const tryHttp = !processInfo.csrfToken || port === processInfo.hubPort;
+      if (tryHttp) {
         const httpProbeTimeoutMs = budgetedTimeoutMs(ANTIGRAVITY_LOCAL_REQUEST_TIMEOUT_MS);
         if (httpProbeTimeoutMs <= 0) break;
-        if (await probeAntigravityPort(port, null, { timeoutMs: httpProbeTimeoutMs, requestFn, scheme: "http", signal })) {
+        if (await probeAntigravityPort(port, processInfo.csrfToken, { timeoutMs: httpProbeTimeoutMs, requestFn, scheme: "http", signal })) {
           workingPort = port;
           workingScheme = "http";
           break;
@@ -5377,6 +5537,11 @@ module.exports = {
   parseSsListeningPorts,
   listAntigravityPorts,
   detectAntigravityProcess,
+  parseAntigravityHubDiscoveryJson,
+  listAntigravityHubDiscoveryRecords,
+  resolveAntigravityHubDiscovery,
+  mergeAntigravityProbePorts,
+  probeAntigravityPort,
   fetchAntigravityLimits,
   fetchCopilotLimits,
   readCopilotAuth,
