@@ -853,6 +853,38 @@ test("Grok v6 coverage migration retains prior snapshots and version when a log 
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
 
+
+test("Grok v6 coverage migration retains prior snapshots when a counted log is truncated", async () => {
+  const fixture = makeSession({ turns: [
+    { usage: { inputTokens: 100, costUsd: 1 } },
+    { usage: { inputTokens: 100, costUsd: 1 } },
+  ] });
+  try {
+    const queuePath = path.join(fixture.root, "queue.jsonl");
+    const cursors = {};
+    const session = resolveGrokBuildSessions(fixture.env)[0];
+    await parseGrokBuildIncremental({ sessions: [session], cursors, queuePath });
+    assert.equal(readQueue(queuePath).reduce((sum, row) => sum + row.total_tokens, 0), 200);
+    cursors.grok.version = 5;
+    const before = JSON.stringify(cursors);
+    const queued = fs.readFileSync(queuePath, "utf8");
+    const updatesPath = path.join(fixture.sessionDir, "updates.jsonl");
+    const complete = fs.readFileSync(updatesPath, "utf8");
+    fs.writeFileSync(updatesPath, complete.split("\n").filter(Boolean)[0] + "\n");
+    await assert.rejects(parseGrokBuildIncremental({ sessions: [session], cursors, queuePath }), /previously counted session log is incomplete/);
+    assert.equal(JSON.stringify(cursors), before);
+    assert.equal(fs.readFileSync(queuePath, "utf8"), queued);
+    fs.writeFileSync(updatesPath, complete);
+    await parseGrokBuildIncremental({ sessions: [session], cursors, queuePath });
+    assert.equal(cursors.grok.version, 6);
+    assert.equal(cursors.grok.sessionSnapshots[fixture.sessionId].totalTokens, 200);
+    assert.equal(readQueue(queuePath).at(-1).total_tokens, 200);
+    const stable = fs.readFileSync(queuePath, "utf8");
+    await parseGrokBuildIncremental({ sessions: [session], cursors, queuePath });
+    assert.equal(fs.readFileSync(queuePath, "utf8"), stable);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
 test("Grok v5-to-v6 migration rebuilds project evidence without mixing old bucket costs", async () => {
   const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-grok-covered-project-"));
   writeGitOrigin(repoDir, "https://github.com/acme/grok-project.git");

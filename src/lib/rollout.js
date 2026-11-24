@@ -21904,6 +21904,21 @@ async function parseGrokBuildIncremental({
       const inventoried = Object.values(previous).reduce((sum, snapshot) => sum + normalizeNonNegativeNumber(snapshot.totalTokens), 0);
       if (queued > inventoried) throw new Error("Grok usage rebuild deferred: prior session inventory is incomplete");
     }
+    const previousOffsets = grokState.updateOffsets && typeof grokState.updateOffsets === "object" ? grokState.updateOffsets : {};
+    for (const sess of sessionList) {
+      const updatesPath = grokUpdatesPathForSession(sess);
+      const recorded = updatesPath ? previousOffsets[updatesPath] : null;
+      if (!updatesPath || recorded == null || !Number.isFinite(Number(recorded.size))) continue;
+      let size = 0;
+      try { size = (await fs.stat(updatesPath)).size; }
+      catch (error) {
+        if (error.code === "ENOENT") throw new Error("Grok usage rebuild deferred: previously counted sessions are unavailable");
+        throw new Error("Grok usage rebuild deferred: a session could not be read");
+      }
+      if (size < Number(recorded.size)) {
+        throw new Error("Grok usage rebuild deferred: a previously counted session log is incomplete");
+      }
+    }
   }
 
   // v3 and earlier treated context-window totalTokens as cumulative spend;
@@ -22313,6 +22328,16 @@ async function parseGrokBuildIncremental({
   }
 
   if (projectEnabled) pruneMissingGrokProjectUpdateOffsets(projectUpdateOffsets);
+
+  if (needsTurnUsageMigration && prevVersion >= 5) {
+    for (const [sessionId, snapshot] of Object.entries(originalSessionSnapshots)) {
+      const previousTokens = normalizeNonNegativeNumber(snapshot.totalTokens);
+      if (previousTokens === 0) continue;
+      if (normalizeNonNegativeNumber(sessionSnapshots[sessionId]?.totalTokens) < previousTokens) {
+        throw new Error("Grok usage rebuild deferred: rebuilt session history is smaller than the prior snapshot");
+      }
+    }
+  }
 
   let bucketsQueued = queuePath
     ? await enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets })
