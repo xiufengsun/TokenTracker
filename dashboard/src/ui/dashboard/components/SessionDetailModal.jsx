@@ -193,6 +193,7 @@ export function SessionDetailModal({ session, subagents = [], onClose }) {
             ) : null}
             <p className="mt-3 text-xs leading-5 text-oai-gray-500 dark:text-oai-gray-400">
               {copy("sessions.detail.cost_source")} · {costSourceLabel(session.cost_source)}
+              {session.has_allocated_cost ? ` · ${copy("usage.evidence.allocated")}` : ""}
               {session.cost_is_partial ? <span className="text-amber-700 dark:text-amber-300"> · {copy("sessions.cost.partial_title")}</span> : null}
               {session.usage_is_incomplete ? <span className="text-amber-700 dark:text-amber-300"> · {copy("sessions.badge.partial_usage")}</span> : null}
             </p>

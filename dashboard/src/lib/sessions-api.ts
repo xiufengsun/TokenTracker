@@ -117,6 +117,7 @@ export interface SessionRow {
   combined_cost_usd: number;
   cost_usd: number;
   cost_source: "provider_reported" | "model_pricing" | "mixed" | null;
+  has_allocated_cost?: boolean;
   usage_precision: "reported" | "reported_incomplete" | "mixed" | "unavailable" | null;
   usage_is_incomplete: boolean;
   cost_is_partial: boolean;
@@ -151,6 +152,7 @@ export interface SessionsResponse {
   returned_count: number;
   sessions: SessionRow[];
   facets?: SessionFacets;
+  data_health?: Record<string, unknown>;
   provenance?: Record<string, unknown>;
   error?: string;
 }

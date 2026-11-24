@@ -388,7 +388,7 @@ export function UsageOverview({
   );
   const allModels = useMemo(() => buildAllModels(fleetData), [fleetData]);
   const allUsage = allModels.reduce((sum, model) => sum + (Number(model.usage) || 0), 0);
-  const allCost = providers.reduce((sum, provider) => sum + (Number(provider.usd) || 0), 0);
+  const allCost = fleetData.reduce((sum, provider) => sum + (Number(provider.usd) || 0), 0);
   const activeProvider =
     expandedProvider == null
       ? null
@@ -918,7 +918,7 @@ function ModelUsageRows({ models, color }) {
     <div className="space-y-3">
       {models.map((model) => {
         const tokensLabel = modelTokensCellLabel(model, formatTokens);
-        const costLabel = formatCost(model.cost, currency, rate);
+        const costLabel = formatCost(model.cost, currency, rate) || (model.cost === 0 && ["provider_reported", "allocated"].includes(model.costSource) ? formatUsdCurrency(0, { currency, rate }) : null);
         // A blank cost cell on a token-backed row means "no published rate",
         // not "free" — spell it out instead of leaving an empty column that
         // reads as broken. Request-only rows (no tokens) keep the blank cell:
@@ -958,6 +958,13 @@ function ModelUsageRows({ models, color }) {
               <>
                 <ModelTokenSplits tokens={model.tokens} />
                 <ModelSpeedTierRows model={model} />
+                <p className="px-1 pb-2 text-[11px] leading-relaxed text-oai-gray-500 dark:text-oai-gray-400">
+                  {copy(model.costSource === "provider_reported" ? "usage.evidence.reported"
+                    : model.costSource === "allocated" ? "usage.evidence.allocated"
+                    : model.costSource === "mixed" ? "usage.evidence.mixed" : isUnpricedModel(model) ? "usage.evidence.unpriced" : "usage.evidence.estimated")}
+                  {model.hasAllocatedCost && model.costSource !== "allocated" ? ` ${copy("usage.evidence.allocated")}` : ""}
+                  {model.pricing?.source === "cursor_subscription" ? <> {copy("usage.evidence.subscription")}</> : null}
+                </p>
               </>
             )}
             <div
