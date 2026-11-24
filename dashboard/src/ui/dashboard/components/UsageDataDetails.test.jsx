@@ -3,7 +3,6 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import { copy } from "../../../lib/copy";
-import { UsageDataDetails } from "./UsageDataDetails.jsx";
 import { UsageOverview } from "./UsageOverview.jsx";
 import { SessionDetailModal } from "./SessionDetailModal.jsx";
 import { buildFleetData } from "../../../lib/model-breakdown";
@@ -12,12 +11,13 @@ import { LocaleProvider } from "../../foundation/LocaleProvider.jsx";
 vi.mock("./ContextBreakdownPanel.jsx", () => ({ ContextBreakdownPanel: () => null }));
 vi.mock("../../../hooks/useTheme.js", () => ({ useTheme: () => ({ resolvedTheme: "light" }) }));
 
-it("discloses unknown cutoffs without claiming healthy or reconciled data", async () => {
-  const user = userEvent.setup();
-  const { container } = render(<UsageDataDetails health={{ skipped_units: 2, complete_through: null, comparison: { reconciled: false }, sources: [{ source: "grok", status: "partial" }] }} />);
-  await user.click(screen.getByText(copy("usage.evidence.title")));
-  expect(screen.getByText(copy("usage.evidence.comparison"))).toBeVisible();
-  expect(screen.getByText(copy("usage.evidence.complete", { time: copy("usage.evidence.unknown") }))).toBeVisible();
+it("does not render the coverage disclosure on the usage overview", () => {
+  const { container } = render(<UsageOverview period="day" periods={["day"]} summaryLabel="Total" summaryValue="100" fleetData={[{
+    source: "cursor", label: "CURSOR", usage: 100, totalPercent: "100", usd: 0,
+    models: [{ id: "grok-bot-default", name: "grok-bot-default", share: 100, usage: 100, cost: 0, costSource: "provider_reported", pricing: { status: "unpriced", source: "cursor_subscription" }, tokens: { input: 100, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 } }],
+  }]} />);
+  expect(screen.queryByText(copy("usage.evidence.title"))).toBeNull();
+  expect(container.textContent).not.toContain("{time}");
   expect(container.textContent).not.toContain("≥");
 });
 
@@ -30,8 +30,11 @@ it("shows recorded-zero and subscription meaning inside model details only", asy
   expect(screen.queryByText(copy("usage.evidence.reported"))).toBeNull();
   await user.click(screen.getByRole("button", { name: /CURSOR:/i }));
   await user.click(screen.getByRole("button", { name: /grok-bot-default/i }));
-  expect(screen.getByText(copy("usage.evidence.reported"), { exact: false })).toBeVisible();
+  const explanation = screen.getByText(copy("usage.evidence.reported"), { exact: false });
+  expect(explanation).toBeVisible();
   expect(screen.getByText(copy("usage.evidence.subscription"), { exact: false })).toBeVisible();
+  expect(explanation.tagName).toBe("P");
+  expect(explanation.className).not.toMatch(/(?:^|\s)p[xltr]?-/);
 });
 
 it("keeps allocation explanation when a model combines direct and allocated amounts", async () => {

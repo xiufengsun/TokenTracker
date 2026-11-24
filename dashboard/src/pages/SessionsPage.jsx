@@ -1,4 +1,3 @@
-import { UsageDataDetails } from "../ui/dashboard/components/UsageDataDetails.jsx";
 import React, { useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Calendar, ChevronRight, Copy, Info, RefreshCw, Search, X as XIcon } from "lucide-react";
 import { Input, Select } from "../ui/components";
@@ -816,7 +815,6 @@ export function SessionsPage() {
             </section>
           ) : null}
 
-          {!isLoading && data ? <UsageDataDetails health={data.data_health} /> : null}
 
           {!isLoading && data ? (
             <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">

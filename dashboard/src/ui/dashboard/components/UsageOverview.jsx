@@ -958,7 +958,7 @@ function ModelUsageRows({ models, color }) {
               <>
                 <ModelTokenSplits tokens={model.tokens} />
                 <ModelSpeedTierRows model={model} />
-                <p className="px-1 pb-2 text-[11px] leading-relaxed text-oai-gray-500 dark:text-oai-gray-400">
+                <p className="pb-2 text-[11px] leading-relaxed text-oai-gray-500 dark:text-oai-gray-400">
                   {copy(model.costSource === "provider_reported" ? "usage.evidence.reported"
                     : model.costSource === "allocated" ? "usage.evidence.allocated"
                     : model.costSource === "mixed" ? "usage.evidence.mixed" : isUnpricedModel(model) ? "usage.evidence.unpriced" : "usage.evidence.estimated")}

@@ -1,7 +1,7 @@
 import React from "react";
 import { copy } from "../../../lib/copy";
 
-// Deliberately a disclosure, not a new KPI or an assertion of reconciliation.
+// Kept as non-mounted scan-health copy plumbing. The dashboard and sessions UI no longer render this disclosure.
 export function UsageDataDetails({ health }) {
   const unknown = copy("usage.evidence.unknown");
   const date = (value) => { return value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : unknown; };
