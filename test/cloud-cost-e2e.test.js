@@ -137,3 +137,17 @@ test("cost side-wire fails closed on stale basis, ambiguity, missing/extra rows 
   for (const data of [[], [v, v], [{ ...v, ambiguous: true }], [{ ...v, user_id: "other" }], [{ ...v, basis: { ...v.basis, input_tokens: 11 } }], [{ ...v, reported_usd: -1 }], [{ ...v, origins: ["/home/private/prompt"] }]]) await assert.rejects(attach(data), /unavailable/);
   assert.equal((await module.attachCloudCostProvenance(client, [{ source: "codex", model: "gpt-6" }], {})).length, 1, "old non-Grok clients/rows do not need the new RPC");
 });
+
+test("all five cloud consumers preserve reported USD but never estimate unknown Batch/Flex at standard rates", () => {
+  const names = ["tokentracker-account-summary", "tokentracker-account-daily", "tokentracker-account-model-breakdown", "tokentracker-leaderboard-profile", "tokentracker-leaderboard-refresh"];
+  for (const name of names) {
+    const module = edge(name, {}, "\nexport { computeRowCost, getModelPricing };"), tokens = { input_tokens: 1000000, cached_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
+    assert.equal(module.getModelPricing("grok-4.7", "grok").input, 2);
+    for (const model of ["grok-4.7-batch", "grok-4.7:batch", "grok-4.7_flex", "xai/grok-4.7-build-fast-flex", "openai/gpt-6.1-sol-batch"]) {
+      const row = { source: "grok", model, ...tokens };
+      assert.equal(module.computeRowCost(row), 0, `${name}: ${model} unknown delivery is unpriced`);
+      row.cost_provenance = { version: 1, reported_usd: 0.2, covered_tokens: { ...tokens, input_tokens: 0 }, has_reported: true, has_missing: true, has_allocated: false, origins: ["grok_usd"] };
+      assert.equal(module.computeRowCost(row), 0.2, `${name}: real reported USD survives, uncovered tokens stay unpriced`);
+    }
+  }
+});
