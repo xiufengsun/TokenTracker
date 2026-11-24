@@ -142,7 +142,7 @@ test("health is allowlisted, scopes differ, latest event is not completeness", (
   assert.equal(normalizeCostCoverage({ ...eventCostCoverage({}, 1, "grok_ticks"), origins: ["/secret"] }), null);
 });
 
-test("legacy cloud upload stays schema-compatible and strips local provenance", async () => {
+test("versioned cloud upload retains cost provenance without gateway metadata", async () => {
   const { readQueueBatch } = require("../src/commands/sync");
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tt-cloud-compat-"));
   try {
@@ -151,7 +151,7 @@ test("legacy cloud upload stays schema-compatible and strips local provenance", 
     await fs.writeFile(file, JSON.stringify({ ...row, cost_coverage: eventCostCoverage(row, 0.1, "cursor_csv_cost") }) + "\n");
     const result = await readQueueBatch(file, 0, 10);
     assert.equal(result.buckets.length, 1);
-    assert.equal(result.buckets[0].cost_coverage, undefined);
+    assert.equal(result.buckets[0].cost_coverage.reported_usd, 0.1);
     assert.equal(result.buckets[0].total_cost_usd, 0.1);
     assert.equal(JSON.parse((await fs.readFile(file, "utf8")).trim()).cost_coverage.version, 1, "raw local derived queue retained");
   } finally { await fs.rm(dir, { recursive: true, force: true }); }

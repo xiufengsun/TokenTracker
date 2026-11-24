@@ -4,6 +4,7 @@
  */
 import { createClient } from "npm:@insforge/sdk";
 import { cloudRpc, cloudFailure } from "./cloud/access.ts";
+import { uploadCostCoverage } from "./cloud/cost-provenance.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -93,6 +94,17 @@ export default async function (req: Request): Promise<Response> {
     return json({ error: "Account blocked" }, 403);
   }
 
+  if (body.kind === "cost_capabilities") {
+    const { data, error } = await client.database.rpc("usage_cost_capabilities_v1", {});
+    if (error || !Array.isArray(data?.cost_coverage_versions) || !data.cost_coverage_versions.includes(1)) {
+      return json({ error: "Cost coverage unavailable", code: "cloud_cost_coverage_unavailable" }, 503);
+    }
+    return json({ cost_coverage_versions: [1] });
+  }
+  if (body.cost_coverage_version !== undefined && body.cost_coverage_version !== 1) {
+    return json({ error: "Unsupported cost coverage version" }, 400);
+  }
+
   const buckets = Array.isArray(body.buckets)
     ? body.buckets
     : Array.isArray(body.hourly)
@@ -173,7 +185,18 @@ export default async function (req: Request): Promise<Response> {
     return json({ error: "Too many buckets (max 500)" }, 400);
   }
 
-  const mappedRows = buckets.map((b: Record<string, unknown>) => ({
+  if (buckets.some(b => !b || typeof b !== "object" || Array.isArray(b))) return json({ error: "Invalid usage bucket" }, 400);
+  if (buckets.some(b => b.cost_coverage != null) && body.cost_coverage_version !== 1) {
+    return json({ error: "Cost coverage v1 acknowledgement required" }, 400);
+  }
+  let coverageRows: (Record<string, unknown> | null)[];
+  try {
+    coverageRows = buckets.map(b => b.cost_coverage == null ? null : uploadCostCoverage(b.cost_coverage, {
+      ...b, source: b.source || "unknown", model: b.model || "unknown", total_cost_usd: Number(b.total_cost_usd) || 0,
+    }));
+  } catch { return json({ error: "Invalid cost coverage" }, 400); }
+
+  const mappedRows = buckets.map((b: Record<string, unknown>, index: number) => ({
     user_id: userId,
     device_id: deviceId,
     hour_start: b.hour_start,
@@ -187,6 +210,7 @@ export default async function (req: Request): Promise<Response> {
     total_tokens: b.total_tokens || 0,
     billable_total_tokens: b.billable_total_tokens || 0,
     total_cost_usd: Number(b.total_cost_usd) || 0,
+    ...(coverageRows[index] ? { cost_coverage: coverageRows[index] } : {}),
     // The CLI queue rows name this field `conversation_count`; older upload
     // paths sent `conversations`. Reading only `conversations` zeroed the
     // column for every CLI upload since 2026-04-18 — accept both.
@@ -211,14 +235,14 @@ export default async function (req: Request): Promise<Response> {
     if (!prev
       || (Number(r.total_tokens) || 0) > (Number(prev.total_tokens) || 0)
       || ((Number(r.total_tokens) || 0) === (Number(prev.total_tokens) || 0)
-        && (Number(r.conversations) || 0) > (Number(prev.conversations) || 0))) {
+        && (Number(r.conversations) || 0) >= (Number(prev.conversations) || 0))) {
       dedupedMap.set(key, r);
     }
   }
   const rows = Array.from(dedupedMap.values());
 
   try {
-    const result = await cloudRpc(client, "cloud_ingest_usage", {
+    const result = await cloudRpc(client, body.cost_coverage_version === 1 ? "cloud_ingest_usage_cost_v1" : "cloud_ingest_usage", {
       p_token_hash: tokenHash, p_rows: rows, p_states: stateRows,
       p_upload_id: typeof body.upload_id === "string" && /^[0-9a-f-]{36}$/i.test(body.upload_id)
         ? body.upload_id : null,
