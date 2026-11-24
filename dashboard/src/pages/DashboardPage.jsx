@@ -7,6 +7,7 @@ import { useTrendData } from "../hooks/use-trend-data.js";
 import { useUsageData } from "../hooks/use-usage-data.js";
 import { useUsageLimits } from "../hooks/use-usage-limits.js";
 import { useUsageModelBreakdown } from "../hooks/use-usage-model-breakdown.js";
+import { buildProfileOptions, mergeKnownProfiles, profileSourceIds } from "../lib/profile-filter.js";
 import {
   isAccessTokenReady,
   normalizeAccessToken,
@@ -380,6 +381,11 @@ export function DashboardPage({
 
   const [storedDevice, setSelectedDevice] = useState(null);
   const selectedDevice = storedDevice && (storedDevice.startsWith("local:") !== accountView) ? storedDevice : null;
+  // Split Claude profiles (tokentracker split-scan-roots) exist only in local
+  // data, so the profile choice is ignored in the account (cloud) view.
+  const [storedProfile, setSelectedProfile] = useState("");
+  const [knownProfiles, setKnownProfiles] = useState([]);
+  const selectedProfile = accountView ? "" : storedProfile;
   const [currentDeviceId, setCurrentDeviceId] = useState(() => getCurrentDeviceId());
   useEffect(() => {
     const refreshCurrentDevice = () => setCurrentDeviceId(getCurrentDeviceId());
@@ -535,6 +541,7 @@ export function DashboardPage({
     accountRevision,
     accountViewResolving,
     deviceId: selectedDevice,
+    profile: selectedProfile,
   });
   const {
     daily: dailyBreakdownDaily,
@@ -562,6 +569,7 @@ export function DashboardPage({
     // main usage/detail cards. Without this, choosing a device only filtered
     // some cards while the daily table continued to show account-wide rows.
     deviceId: selectedDevice,
+    profile: selectedProfile,
   });
 
   const {
@@ -583,6 +591,17 @@ export function DashboardPage({
     accountViewResolving,
     deviceId: selectedDevice,
   });
+
+  // The Profile selector lists the sources the (unfiltered) breakdown reports
+  // for a provider that has split profiles, and remembers them across periods.
+  useEffect(() => {
+    const ids = profileSourceIds((modelBreakdown?.sources || []).map((s) => s?.source));
+    if (ids.length) setKnownProfiles((prev) => mergeKnownProfiles(prev, ids));
+  }, [modelBreakdown]);
+  const profileOptions = useMemo(
+    () => (accountView ? [] : buildProfileOptions(knownProfiles)),
+    [accountView, knownProfiles, resolvedLocale],
+  );
 
   const [projectUsageLimit, setProjectUsageLimit] = useState(3);
   const {
@@ -632,6 +651,7 @@ export function DashboardPage({
     accountRevision,
     accountViewResolving,
     deviceId: selectedDevice,
+    profile: selectedProfile,
   });
 
   // Stable useTrendData config handed to the zoom modal so it can hold its OWN
@@ -654,11 +674,12 @@ export function DashboardPage({
       accountRevision,
       accountViewResolving,
       deviceId: selectedDevice,
+      profile: selectedProfile,
     }),
     [
       baseUrl, accessToken, guestAllowed, cacheKey, trendTimeZone, trendTzOffsetMinutes, mockNow,
       accountView, accountAccessToken, accountRevision, accountViewResolving,
-      selectedDevice,
+      selectedDevice, selectedProfile,
     ],
   );
 
@@ -681,6 +702,7 @@ export function DashboardPage({
     accountRevision,
     accountViewResolving,
     deviceId: selectedDevice,
+    profile: selectedProfile,
   });
 
   const {
@@ -937,6 +959,7 @@ export function DashboardPage({
       to || "",
       todayKey || "",
       selectedDevice || "all",
+      selectedProfile || "all",
       timeZone || "",
       tzOffsetMinutes ?? "",
     ].join("\u001f"),
@@ -948,6 +971,7 @@ export function DashboardPage({
       from,
       period,
       selectedDevice,
+      selectedProfile,
       timeZone,
       todayKey,
       to,
@@ -1531,6 +1555,9 @@ export function DashboardPage({
         if (accountView && !publicMode) recordCloudPromptIntent(auth?.userId, "view");
         setSelectedDevice(v || null);
       }}
+      profileOptions={profileOptions}
+      selectedProfile={selectedProfile}
+      onProfileChange={(v) => setSelectedProfile(v || "")}
       deviceUsageBlock={deviceUsageBlock}
       localHistoryOnly={!accountView && activeDevices.some((device) => device.imported_at)}
       localHistoryRevision={accountView ? 0 : localUsageRevision}

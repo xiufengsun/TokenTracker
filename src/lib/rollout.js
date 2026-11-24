@@ -1,3 +1,4 @@
+const { baseSource } = require("./profile-source");
 const { preserveLegacyClaudeGroups, preserveLegacyClaudePrefix, createBackendResolver, mergeBackendUsage, claudeLines } = require("./claude-backend");
 const { claudeUserIdentity, collectClaudeForkAliases } = require("./claude-user-identity");
 const fs = require("node:fs/promises");
@@ -1087,7 +1088,7 @@ async function parseClaudeIncremental({
   const seenMessageHashes = new Set(prevHashes);
   const defaultSource = normalizeSourceInput(source) || "claude";
   preserveLegacyClaudeGroups(files.filter((entry) =>
-    (typeof entry === "string" ? defaultSource : normalizeSourceInput(entry?.source) || defaultSource) === "claude"
+    baseSource(typeof entry === "string" ? defaultSource : normalizeSourceInput(entry?.source) || defaultSource) === "claude"
   ).map((entry) => typeof entry === "string" ? entry : entry?.path), path.dirname(queuePath));
   // Resolve all changed-file lineage before counting: fork files may sort first.
   const forkTimes = new Map();
@@ -1158,7 +1159,7 @@ async function parseClaudeIncremental({
     const truncated = sameInode && prevOffset > st.size;
     const startOffset = sameInode && !truncated ? prevOffset : 0;
 
-    if (fileSource === "claude") preserveLegacyClaudePrefix(filePath, path.dirname(queuePath), startOffset);
+    if (baseSource(fileSource) === "claude") preserveLegacyClaudePrefix(filePath, path.dirname(queuePath), startOffset);
     let fileId = null;
     if (seenFileIds) {
       const cachedFileId =
@@ -1293,7 +1294,7 @@ async function parseClaudeIncremental({
       projectKey,
       seenMessageHashes,
       forkAliases,
-      backendResolver: fileSource === "claude" ? createBackendResolver(filePath, path.dirname(queuePath)) : null,
+      backendResolver: baseSource(fileSource) === "claude" ? createBackendResolver(filePath, path.dirname(queuePath)) : null,
     });
 
     cursors.files[key] = {

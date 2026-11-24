@@ -252,8 +252,12 @@ function buildTimeZoneParams({ timeZone, tzOffsetMinutes }: AnyRecord = {}) {
   return params;
 }
 
-function buildFilterParams({ source, model, device }: AnyRecord = {}) {
+function buildFilterParams({ source, model, device, profile }: AnyRecord = {}) {
   const params: AnyRecord = {};
+  // One split profile of a provider ("claude@work", or "claude" for the native
+  // ~/.claude). Only the local server understands it; see profile-source.js.
+  const normalizedProfile = typeof profile === "string" ? profile.trim().toLowerCase() : "";
+  if (normalizedProfile) params.profile = normalizedProfile;
   const normalizedSource = typeof source === "string" ? source.trim().toLowerCase() : "";
   if (normalizedSource) params.source = normalizedSource;
   const normalizedModel = typeof model === "string" ? model.trim() : "";
@@ -269,6 +273,7 @@ export async function getUsageSummary({
   source,
   model,
   device,
+  profile,
   timeZone,
   tzOffsetMinutes,
   rolling = false,
@@ -278,7 +283,7 @@ export async function getUsageSummary({
     return getMockUsageSummary({ from, to, seed: accessToken, rolling });
   }
   const tzParams = buildTimeZoneParams({ timeZone, tzOffsetMinutes });
-  const filterParams = buildFilterParams({ source, model, device });
+  const filterParams = buildFilterParams({ source, model, device, profile });
   const rollingParams = rolling ? { rolling: "1" } : {};
   return fetchLocalJson(PATHS.usageSummary, { from, to, ...filterParams, ...tzParams, ...rollingParams }, { accessToken });
 }
@@ -736,6 +741,7 @@ export async function getUsageDaily({
   source,
   model,
   device,
+  profile,
   timeZone,
   tzOffsetMinutes,
   accessToken,
@@ -744,7 +750,7 @@ export async function getUsageDaily({
     return getMockUsageDaily({ from, to, seed: accessToken });
   }
   const tzParams = buildTimeZoneParams({ timeZone, tzOffsetMinutes });
-  const filterParams = buildFilterParams({ source, model, device });
+  const filterParams = buildFilterParams({ source, model, device, profile });
   return fetchLocalJson(PATHS.usageDaily, { from, to, ...filterParams, ...tzParams }, { accessToken });
 }
 
@@ -753,6 +759,7 @@ export async function getUsageHourly({
   source,
   model,
   device,
+  profile,
   timeZone,
   tzOffsetMinutes,
   accessToken,
@@ -761,7 +768,7 @@ export async function getUsageHourly({
     return getMockUsageHourly({ day, seed: accessToken });
   }
   const tzParams = buildTimeZoneParams({ timeZone, tzOffsetMinutes });
-  const filterParams = buildFilterParams({ source, model, device });
+  const filterParams = buildFilterParams({ source, model, device, profile });
   const params = day ? { day, ...filterParams, ...tzParams } : { ...filterParams, ...tzParams };
   return fetchLocalJson(PATHS.usageHourly, params, { accessToken });
 }
@@ -772,6 +779,7 @@ export async function getUsageMonthly({
   source,
   model,
   device,
+  profile,
   timeZone,
   tzOffsetMinutes,
   accessToken,
@@ -780,7 +788,7 @@ export async function getUsageMonthly({
     return getMockUsageMonthly({ months, to, seed: accessToken });
   }
   const tzParams = buildTimeZoneParams({ timeZone, tzOffsetMinutes });
-  const filterParams = buildFilterParams({ source, model, device });
+  const filterParams = buildFilterParams({ source, model, device, profile });
   return fetchLocalJson(PATHS.usageMonthly, {
     ...(months ? { months: String(months) } : {}),
     ...(to ? { to } : {}),
@@ -875,6 +883,7 @@ export async function getUsageHeatmap({
   source,
   model,
   device,
+  profile,
   timeZone,
   tzOffsetMinutes,
   accessToken,
@@ -883,7 +892,7 @@ export async function getUsageHeatmap({
     return getMockUsageHeatmap({ weeks, to, weekStartsOn, seed: accessToken });
   }
   const tzParams = buildTimeZoneParams({ timeZone, tzOffsetMinutes });
-  const filterParams = buildFilterParams({ source, model, device });
+  const filterParams = buildFilterParams({ source, model, device, profile });
   return fetchLocalJson(PATHS.usageHeatmap, {
     weeks: String(weeks),
     to,

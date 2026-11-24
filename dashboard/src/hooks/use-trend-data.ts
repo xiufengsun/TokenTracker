@@ -40,6 +40,7 @@ export function useTrendData({
   accountRevision = 0,
   accountViewResolving = false,
   deviceId = null,
+  profile = null,
 }: any = {}) {
   const useCloud = Boolean(accountView && accountAccessToken);
   const scopeKey = useCloud ? "cloud" : "local";
@@ -75,7 +76,7 @@ export function useTrendData({
     if (!cacheKey) return null;
     const host = safeHost(baseUrl) || "default";
     const tzKey = getTimeZoneCacheKey({ timeZone, offsetMinutes: tzOffsetMinutes });
-    const deviceScope = `${deviceId || "all"}${useCloud || !accountRevision ? "" : `.r${accountRevision}`}`;
+    const deviceScope = `${deviceId || "all"}${profile ? `.p-${profile}` : ""}${useCloud || !accountRevision ? "" : `.r${accountRevision}`}`;
     if (mode === "hourly") {
       const dayKey = to || from || "day";
       return `tokentracker.trend.${cacheKey}.${scopeKey}.${host}.hourly.${dayKey}.${tzKey}.${deviceScope}`;
@@ -138,6 +139,7 @@ export function useTrendData({
     accountAccessToken,
     accountRevision,
     deviceId,
+    profile,
     timeZone,
     tzOffsetMinutes,
     sharedEnabled,
@@ -212,6 +214,7 @@ export function useTrendData({
           accessToken: tokenForFetch,
           day,
           device: deviceId,
+          profile: useCloud ? null : profile,
           timeZone,
           tzOffsetMinutes,
         });
@@ -222,6 +225,7 @@ export function useTrendData({
           months,
           to,
           device: deviceId,
+          profile: useCloud ? null : profile,
           timeZone,
           tzOffsetMinutes,
         });
@@ -232,6 +236,7 @@ export function useTrendData({
           from,
           to,
           device: deviceId,
+          profile: useCloud ? null : profile,
           timeZone,
           tzOffsetMinutes,
         });
@@ -370,6 +375,7 @@ export function useTrendData({
     accountAccessToken,
     accountRevision,
     deviceId,
+    profile,
     beginRequest,
   ]);
 

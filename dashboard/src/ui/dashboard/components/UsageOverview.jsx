@@ -264,6 +264,9 @@ export function UsageOverview({
   selectedDevice = "",
   dataRevision = 0,
   onDeviceChange,
+  profileOptions = [],
+  selectedProfile = "",
+  onProfileChange,
   accountView = false,
   accountScopeSwitchable = false,
 }) {
@@ -320,13 +323,15 @@ export function UsageOverview({
   const gradientTo = isDark ? "rgba(10,10,10,0)" : "rgba(255,255,255,0)";
 
   const showSummarySkeleton = summaryLoading && !hasSummary;
+  // Only offered when a provider was split into profiles: one option is "All".
+  const showProfileSelect = profileOptions.length > 1;
   const showProviderSkeleton = providersLoading && !fleetData.some(hasProviderModels);
 
   // A new time/device scope collapses back to the card grid — drill-down
   // stays an explicit user action rather than a forced default.
   useEffect(() => {
     setExpandedProvider(null);
-  }, [period, from, to, selectedDevice, dataRevision]);
+  }, [period, from, to, selectedDevice, selectedProfile, dataRevision]);
 
   const handleTablistKeyDown = (event) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -501,6 +506,16 @@ export function UsageOverview({
                     ? copy("usage.overview.scope_switch_aria")
                     : copy("dashboard.device_filter.aria")
                 }
+                matchTriggerWidth
+                className="h-8 px-3 text-xs font-medium rounded-md border-oai-gray-300 dark:border-oai-gray-700 bg-oai-white dark:bg-oai-gray-900 text-oai-black dark:text-oai-white hover:border-oai-brand hover:text-oai-brand hover:[&_svg]:text-oai-brand transition-colors duration-200"
+              />
+            ) : null}
+            {showProfileSelect ? (
+              <Select
+                value={selectedProfile}
+                onValueChange={onProfileChange}
+                options={profileOptions}
+                ariaLabel={copy("dashboard.profile_filter.aria")}
                 matchTriggerWidth
                 className="h-8 px-3 text-xs font-medium rounded-md border-oai-gray-300 dark:border-oai-gray-700 bg-oai-white dark:bg-oai-gray-900 text-oai-black dark:text-oai-white hover:border-oai-brand hover:text-oai-brand hover:[&_svg]:text-oai-brand transition-colors duration-200"
               />
