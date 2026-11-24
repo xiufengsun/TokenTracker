@@ -136,6 +136,9 @@ export const PROVIDER_LIMIT_SPECS = {
     },
   },
   antigravity: {
+    // Unpinned desktop quota shows this window, not the first listed one, so
+    // listing 5h first does not swap the default away from the weekly cap.
+    defaultQuotaKey: "claude-weekly",
     windows(data) {
       return [
         // 5h above 7d within each model group, matching Claude/Codex. The

@@ -27,12 +27,17 @@ export function desktopQuotaRows(snapshot) {
 export function selectQuotaRows(rows, selected) {
   const pinned = selected.map(id => rows.find(row => row.id === id)).filter(Boolean);
   if (selected.length) return pinned;
-  const providers = new Set();
-  return rows.filter(row => {
-    if (providers.has(row.provider)) return false;
-    providers.add(row.provider);
-    return true;
-  }).slice(0, 2);
+  // One row per provider, in provider order: the spec's defaultQuotaKey when
+  // that window is present, otherwise the provider's first listed window.
+  const byProvider = new Map();
+  for (const row of rows) {
+    const preferred = PROVIDER_LIMIT_SPECS[row.provider]?.defaultQuotaKey;
+    const current = byProvider.get(row.provider);
+    if (!current || (preferred && row.id === `${row.provider}:${preferred}` && current.id !== row.id)) {
+      byProvider.set(row.provider, row);
+    }
+  }
+  return [...byProvider.values()].slice(0, 2);
 }
 
 /** A provider failure must not erase its last known windows or look like a reset. */
