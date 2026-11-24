@@ -138,10 +138,12 @@ export const PROVIDER_LIMIT_SPECS = {
   antigravity: {
     windows(data) {
       return [
-        { key: "claude-weekly", labelKey: "limits.label.antigravity_claude_weekly", window: data.primary_window },
+        // 5h above 7d within each model group, matching Claude/Codex. The
+        // slot mapping (3p-weekly → primary, …) is unchanged; only display order.
         { key: "claude-5h", labelKey: "limits.label.antigravity_claude_5h", window: data.secondary_window },
-        { key: "gemini-weekly", labelKey: "limits.label.antigravity_gemini_weekly", window: data.tertiary_window },
+        { key: "claude-weekly", labelKey: "limits.label.antigravity_claude_weekly", window: data.primary_window },
         { key: "gemini-5h", labelKey: "limits.label.antigravity_gemini_5h", window: data.quaternary_window },
+        { key: "gemini-weekly", labelKey: "limits.label.antigravity_gemini_weekly", window: data.tertiary_window },
       ];
     },
   },
