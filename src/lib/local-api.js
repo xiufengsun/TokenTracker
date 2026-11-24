@@ -1,3 +1,4 @@
+const { normalizeCostCoverage } = require("./cost-provenance");
 const { hasUnknownBackendCost } = require("./claude-backend");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -3065,8 +3066,11 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           sa.models.set(mdl, { model: mdl, model_id: mdl, pricing: getModelPricingInfo(mdl, { source: src }), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0, total_cost_usd: "0" } });
         const ma = sa.models.get(mdl);
         if (hasUnknownBackendCost(row)) ma.pricing = getModelPricingInfo(mdl, row);
-        const reportedCost = ["grok", "cline"].includes(src) && Number(row.total_cost_usd) > 0;
-        const costSource = reportedCost ? "provider_reported" : "model_pricing";
+        const coverage = normalizeCostCoverage(row.cost_coverage);
+        const reportedCost = coverage ? coverage.reported_events > 0 : ["grok", "cline"].includes(src) && Number(row.total_cost_usd) > 0;
+        const costSource = reportedCost && coverage?.missing_events > 0 ? "mixed"
+          : coverage?.allocated_events > 0 ? "allocated" : reportedCost ? "provider_reported" : "model_pricing";
+        if (coverage?.allocated_events > 0) ma.has_allocated_cost = true;
         ma.cost_source = ma.cost_source && ma.cost_source !== costSource ? "mixed" : costSource;
         ma.totals.total_tokens += row.total_tokens || 0;
         ma.totals.billable_total_tokens += row.billable_total_tokens ?? row.total_tokens ?? 0;

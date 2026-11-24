@@ -6,6 +6,7 @@
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
+const { writeFileAtomic } = require("../fs");
 
 const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -65,7 +66,24 @@ async function fetchUpstream({ url = LITELLM_PRICING_URL, timeoutMs = DEFAULT_FE
   }
 }
 
+const RATE_FIELDS = ["input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost", "cache_creation_input_token_cost"];
+function validateCatalog(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Invalid pricing catalog");
+  let hasInput = false;
+  for (const [name, entry] of Object.entries(data)) {
+    if (name.startsWith("_") || !entry || typeof entry !== "object") continue;
+    for (const key of RATE_FIELDS) {
+      const value = entry[key];
+      if (value == null) continue;
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error("Invalid pricing catalog");
+      if (key === "input_cost_per_token") hasInput = true;
+    }
+  }
+  if (!hasInput) throw new Error("Invalid pricing catalog");
+}
+
 async function writeCache(cachePath, data) {
+  validateCatalog(data);
   await fsp.mkdir(path.dirname(cachePath), { recursive: true });
   // Persist only the slimmed shape (4 cost fields) to keep disk small and
   // make the cache file easy to inspect/edit.
@@ -100,7 +118,7 @@ async function writeCache(cachePath, data) {
     },
     ...slim,
   };
-  await fsp.writeFile(cachePath, JSON.stringify(payload) + "\n");
+  await writeFileAtomic(cachePath, JSON.stringify(payload) + "\n", { mode: 0o600 });
   return slim;
 }
 
@@ -130,6 +148,7 @@ async function loadLitellmData({
     try {
       const data = await readJsonAsync(cachePath);
       delete data._meta;
+      validateCatalog(data);
       return { data, source: "disk-cache" };
     } catch (e) {
       log("warn", `[pricing] disk cache unreadable: ${e?.message || e}`);
@@ -150,6 +169,7 @@ async function loadLitellmData({
     try {
       const data = await readJsonAsync(cachePath);
       delete data._meta;
+      validateCatalog(data);
       log("warn", "[pricing] using stale disk cache");
       return { data, source: "stale-cache" };
     } catch (e) {

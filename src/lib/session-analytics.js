@@ -1,4 +1,5 @@
 "use strict";
+const { mergeCostCoverage, normalizeCostCoverage } = require("./cost-provenance");
 const { createBackendResolver, mergeBackendUsage, claudeLines } = require("./claude-backend");
 
 // Metadata-only session analytics sidecar.
@@ -29,14 +30,14 @@ const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
-const { listClaudeProjectFiles, listRolloutFilesDeep, claudeMessageDedupKey, normalizeClaudeUsage, readZcodeDbMessages, coerceEpochMs, resolveZcodeInstallPaths, normalizeOpencodeModelFields, normalizeOpencodeTokens, deriveOpencodeMessageFingerprint, resolveDshHomes } = require("./rollout");
+const { listClaudeProjectFiles, listRolloutFilesDeep, claudeMessageDedupKey, normalizeClaudeUsage, readZcodeDbMessages, coerceEpochMs, resolveZcodeInstallPaths, normalizeOpencodeModelFields, normalizeOpencodeTokens, deriveOpencodeMessageFingerprint, resolveDshHomes, extractGrokTurnUsageEvents } = require("./rollout");
 const { parseCodexRolloutFile } = require("./codex-rollout-parser");
 const { computeRowCost, getModelPricingInfo, getPricingRevision } = require("./pricing");
 const { normalizePerformance, mergePerformance, createClaudePerformanceCollector, createCodexPerformanceCollector, createZcodePerformanceCollector } = require("./session-performance");
 const { readSqliteJsonRows, readSqliteJsonRowsAsync } = require("./sqlite-reader");
 const { resolveZcodeNativeDbPath, resolveInstallPaths } = require("./install-resolver");
 const { readCursorStateSummary } = require("./cursor-store");
-const { USD_TICKS_PER_USD, normalizeGrokUsage } = require("./grok-usage");
+const { USD_TICKS_PER_USD } = require("./grok-usage");
 const wsl = require("./wsl-probe");
 const { discoverKimiWireFiles, kimiSessionDependencies, readKimiSessions } = require("./kimi-session");
 const { discoverOmpSessionFiles, ompSessionDependencies, readOmpSessions } = require("./omp-session");
@@ -104,7 +105,8 @@ const {
 // ~/.pi/agent/sessions/**/*.jsonl, with pi-subagents fork transcripts folded into
 // their parent session. A new source always takes the next number: bumping the
 // version invalidates every cached row, so one must never be reused.
-const SIDECAR_VERSION = 31;
+// v32 preserves cost coverage and scan evidence; existing derived rows rebuild.
+const SIDECAR_VERSION = 32;
 // Invalidate only Codex token summaries; other sources keep their cached rows.
 const CODEX_USAGE_VERSION = 1;
 const EDIT_TOOLS = new Set([
@@ -156,6 +158,7 @@ function tokenTotals(usage) {
 }
 
 function addTotals(target, delta) {
+  mergeCostCoverage(target, delta);
   mergeBackendUsage(target, delta);
   for (const key of ["input_tokens", "cached_input_tokens", "cache_creation_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens"]) {
     target[key] = finite(target[key]) + finite(delta?.[key]);
@@ -303,6 +306,12 @@ function serializeSessionRecord(row) {
 // GPT-6.2's dated Ultrafast promotion must use usage time, never the date
 // a session is opened. Preserve all other models' existing pricing behavior.
 function sessionModelCost(record, row) {
+  if (record.source === "grok" && Array.isArray(record.usage_buckets)) {
+    const buckets = record.usage_buckets.filter((bucket) => bucket.model === row.model);
+    if (buckets.some((bucket) => normalizeCostCoverage(bucket.cost_coverage))) {
+      return buckets.reduce((sum, bucket) => sum + computeRowCost({ ...bucket, source: "grok" }), 0);
+    }
+  }
   if (!/gpt-6[.-]2-(?:astra|sol)/i.test(String(row.model))) {
     return computeRowCost({ source: record.source, ...row });
   }
@@ -353,6 +362,15 @@ function repriceSessionRecord(record) {
       : sessionModelCost(record, { model: record.model, ...record.tokens });
     if (record.cost_source !== "provider_reported" && finite(record.total_tokens || record.tokens?.total_tokens) > 0
       && getModelPricingInfo(record.model, { source: record.source }).status === "unpriced") record.cost_is_partial = true;
+  }
+  if (record.source === "grok" && Array.isArray(record.usage_buckets) && record.usage_buckets.some((bucket) => normalizeCostCoverage(bucket.cost_coverage))) {
+    record.cost_usd = record.usage_buckets.reduce((sum, bucket) => sum + computeRowCost({ ...bucket, source: "grok" }), 0);
+    const coverages = record.usage_buckets.map((bucket) => normalizeCostCoverage(bucket.cost_coverage));
+    const hasReported = coverages.some((coverage) => coverage?.reported_events > 0);
+    const hasMissing = coverages.some((coverage) => !coverage || coverage.missing_events > 0);
+    record.cost_source = hasReported ? (hasMissing ? "mixed" : "provider_reported") : "model_pricing";
+    record.has_allocated_cost = coverages.some((coverage) => coverage?.allocated_events > 0);
+    record.cost_is_partial = record.usage_buckets.some((bucket) => bucket.cost_is_partial || bucket.usage_is_incomplete || (normalizeCostCoverage(bucket.cost_coverage)?.missing_events > 0 && getModelPricingInfo(bucket.model, { source: "grok" }).status === "unpriced"));
   }
   record.cost_per_edit = record.edit_turns > 0 ? record.cost_usd / record.edit_turns : null;
   return record;
@@ -1156,15 +1174,15 @@ async function scanGrokSession(filePath) {
     if (sessionUpdate === "turn_completed") {
       closeTurn();
       const usage = update.usage;
-      const normalizedUsage = normalizeGrokUsage(usage);
-      if (normalizedUsage) {
+      const normalizedEvents = extractGrokTurnUsageEvents(obj, grokTimestampIso(obj), model, usageEvents);
+      for (const normalizedUsage of normalizedEvents) {
         usageEvents += 1;
         addTotals(tokens, normalizedUsage);
         modelCalls += finite(normalizedUsage.model_calls);
         apiDurationMs += finite(normalizedUsage.api_duration_ms);
         usageIsIncomplete ||= normalizedUsage.usage_is_incomplete;
         costIsPartial ||= normalizedUsage.cost_is_partial;
-        if (normalizedUsage.total_cost_usd != null) {
+        if (normalizedUsage.cost_coverage?.reported_events > 0) {
           providerCostEvents += 1;
           providerCostUsd = Math.round(
             (providerCostUsd + normalizedUsage.total_cost_usd) * USD_TICKS_PER_USD,
@@ -1173,13 +1191,15 @@ async function scanGrokSession(filePath) {
         const usageMs = Date.parse(grokTimestampIso(obj));
         if (Number.isFinite(usageMs) && normalizedUsage.total_tokens > 0) {
           const timestamp = new Date(Math.floor(usageMs / 60_000) * 60_000).toISOString();
-          const bucketModel = pickGrokModel(usage, model) || model || "unknown";
+          const bucketModel = normalizedUsage.model || model || "unknown";
           const bucketKey = `${timestamp}\u0000${bucketModel}`;
           const bucket = usageBuckets.get(bucketKey) || { timestamp, model: bucketModel, ...emptyTotals(), usage_events: 0, provider_cost_usd: 0 };
           addTotals(bucket, normalizedUsage);
           mergeUsageMetadata(bucket, normalizedUsage);
+          if (normalizedUsage.cost_is_partial) bucket.cost_is_partial = true;
+          if (normalizedUsage.usage_is_incomplete) bucket.usage_is_incomplete = true;
           bucket.usage_events = finite(bucket.usage_events) + 1;
-          if (normalizedUsage.total_cost_usd != null) {
+          if (normalizedUsage.cost_coverage?.reported_events > 0) {
             bucket.provider_cost_usd = finite(bucket.provider_cost_usd) + Number(normalizedUsage.total_cost_usd);
           }
           usageBuckets.set(bucketKey, bucket);
@@ -1208,6 +1228,13 @@ async function scanGrokSession(filePath) {
     model = normalizeSessionModel(signals.primaryModelId) || model;
   }
 
+  const modelUsage = new Map();
+  for (const bucket of usageBuckets.values()) {
+    const row = modelUsage.get(bucket.model) || { model: bucket.model, ...emptyTotals() };
+    addTotals(row, bucket);
+    modelUsage.set(bucket.model, row);
+  }
+
   const hasCompleteProviderCost = usageEvents > 0
     && providerCostEvents === usageEvents
     && !usageIsIncomplete
@@ -1232,6 +1259,7 @@ async function scanGrokSession(filePath) {
     subagent_types: Object.fromEntries([...subagentTypes.entries()].sort()),
     tokens,
     usage_buckets: [...usageBuckets.values()],
+    model_usage: [...modelUsage.values()],
     usage_events: usageEvents,
     usage_precision: usageIsIncomplete ? "reported_incomplete" : (usageEvents > 0 ? "reported" : "unavailable"),
     usage_is_incomplete: usageIsIncomplete,
@@ -2384,6 +2412,7 @@ function readSidecar(sidecarPath) {
 
 function readSidecarWithMeta(sidecarPath, meta) {
   const rows = readSidecar(sidecarPath);
+  Object.defineProperty(rows, "scanHealth", { value: { checked_at: meta?.checked_at || null, sources: meta?.source_health || null }, enumerable: false });
   if (Number.isFinite(meta?.skipped_files)) {
     Object.defineProperty(rows, "skippedFiles", { value: meta.skipped_files, enumerable: false });
   }
@@ -2515,6 +2544,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   // Files we could not turn into a row (permission denied, half-written line,
   // vanished mid-scan). Swallowing these silently made sessions disappear with
   // no signal at all; count them so the API can say so.
+  const sourceHealth = Object.fromEntries(Object.keys(discovered).map((source) => [source, { status: "not_observed", discovered_units: 0, failed_units: 0 }]));
   let skippedFiles = 0;
   let incompleteCodexUsage = false;
   let incompleteZcodeScan = false;
@@ -2524,9 +2554,13 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   let incompleteDshScan = false;
   let incompletePiScan = false;
   for (const entry of entries) {
+    const health = sourceHealth[entry.source] ||= { status: "unknown", discovered_units: 0, failed_units: 0 };
+    health.discovered_units += 1;
+    health.status = "observed";
     const cacheKey = sessionFileCacheKey(entry.source, entry.filePath);
     const statKey = analyticsEntryStatKey(entry.source, entry.filePath);
     if (!statKey) {
+      health.failed_units += 1;
       skippedFiles += 1;
       if (entry.source === "codex") incompleteCodexUsage = true;
       if (entry.source === "zcode") incompleteZcodeScan = true;
@@ -2563,6 +2597,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
         // makes the whole batch partial: flag it incomplete and keep the last
         // complete rows instead of caching a silently smaller inventory.
         if (Array.isArray(scanned) && Number.isFinite(scanned.skippedFiles)) {
+          health.failed_units += scanned.skippedFiles;
           skippedFiles += scanned.skippedFiles;
           if (entry.source === "dsh" && scanned.skippedFiles > 0) {
             incompleteDshScan = true;
@@ -2570,6 +2605,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
           }
         }
       } catch (error) {
+        health.failed_units += 1;
         // One active/partial session must not poison the sidecar, but do not
         // pretend it never existed either.
         skippedFiles += 1;
@@ -2651,6 +2687,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       generated_at: generatedAt,
       checked_at: generatedAt,
       skipped_files: skippedFiles,
+      source_health: sourceHealth,
       files: nextFiles,
     })}\n`);
     await fsp.rm(incompleteZcodePath, { force: true });
@@ -2662,6 +2699,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   }
   // Non-enumerable so the array still behaves exactly like a plain row list
   // for every existing caller (map/filter/JSON of the rows is unaffected).
+  Object.defineProperty(sessions, "scanHealth", { value: { checked_at: new Date().toISOString(), sources: sourceHealth }, enumerable: false });
   Object.defineProperty(sessions, "skippedFiles", { value: skippedFiles, enumerable: false });
   Object.defineProperty(sessions, "incompleteDirs", { value: incompleteDirs, enumerable: false });
   return sessions;
@@ -3048,6 +3086,7 @@ function toSessionBrowserRow(row, { includeBuckets = true, includeModelDetail = 
     combined_cost_usd: finite(row.combined_cost_usd || row.cost_usd),
     cost_usd: finite(row.cost_usd),
     cost_source: row.cost_source || null,
+    ...(row.has_allocated_cost ? { has_allocated_cost: true } : {}),
     usage_precision: row.usage_precision || null,
     usage_is_incomplete: Boolean(row.usage_is_incomplete),
     cost_is_partial: Boolean(row.cost_is_partial),
@@ -3338,6 +3377,7 @@ function listSessionsForBrowser(sessions, { from = "", to = "", limit = 0, inclu
     lifetime_session_count: merged.length,
     returned_count: limited.length,
     skipped_files: finite(sessions?.skippedFiles),
+    data_health: require("./usage-health").sessionHealth(sessions, { from, to }),
     facets,
     sessions: limited.map((row) => toSessionBrowserRow(row, { includeBuckets, includeModelDetail })),
     provenance: {

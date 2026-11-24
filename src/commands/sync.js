@@ -4687,9 +4687,12 @@ async function readQueueBatch(queuePath, startOffset, maxBuckets) {
       bucket = require("../lib/local-api").normalizeQueueRow(bucket);
       // Backend origins are local provenance; the current cloud accounting
       // schema has no backend dimension. Do not disclose gateway hosts there.
-      if (bucket.backend_usage) {
+      if (bucket.backend_usage || bucket.cost_coverage) {
         bucket = { ...bucket };
         delete bucket.backend_usage;
+        // Coverage v1 is local-only: legacy cloud rows cannot represent
+        // reported zero or covered/uncovered token subsets.
+        delete bucket.cost_coverage;
       }
       bucketMap.set(`${source}|${model}|${hourStart}`, bucket);
       linesRead += 1;
