@@ -885,6 +885,34 @@ test("Grok v6 coverage migration retains prior snapshots when a counted log is t
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
 
+test("Grok v6 coverage migration retains project history when checkout attribution is lost", async () => {
+  const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-grok-lost-checkout-"));
+  writeGitOrigin(repoDir, "https://github.com/acme/grok-project.git");
+  const fixture = makeSession({ cwd: repoDir, summaryInfo: { cwd: repoDir }, turns: [{ usage: { inputTokens: 200, costUsd: 2 } }] });
+  try {
+    const queuePath = path.join(fixture.root, "queue.jsonl");
+    const projectQueuePath = path.join(fixture.root, "project.queue.jsonl");
+    const cursors = {};
+    const options = { sessions: resolveGrokBuildSessions(fixture.env), cursors, queuePath, projectQueuePath, env: fixture.env };
+    await parseGrokBuildIncremental(options);
+    assert.equal(readQueue(projectQueuePath).at(-1).total_tokens, 200);
+    cursors.grok.version = 5;
+    const before = JSON.stringify(cursors);
+    const queued = fs.readFileSync(queuePath, "utf8");
+    const project = fs.readFileSync(projectQueuePath, "utf8");
+    fs.rmSync(repoDir, { recursive: true, force: true });
+    await assert.rejects(parseGrokBuildIncremental(options), /rebuilt project history is smaller than the prior snapshot/);
+    assert.equal(JSON.stringify(cursors), before);
+    assert.equal(fs.readFileSync(queuePath, "utf8"), queued);
+    assert.equal(fs.readFileSync(projectQueuePath, "utf8"), project);
+    writeGitOrigin(repoDir, "https://github.com/acme/grok-project.git");
+    await parseGrokBuildIncremental(options);
+    assert.equal(cursors.grok.version, 6);
+    assert.equal(cursors.grok.projectSessionSnapshots[fixture.sessionId].totalTokens, 200);
+    assert.equal(readQueue(projectQueuePath).at(-1).total_tokens, 200);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); fs.rmSync(repoDir, { recursive: true, force: true }); }
+});
+
 test("Grok v5-to-v6 migration rebuilds project evidence without mixing old bucket costs", async () => {
   const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "tt-grok-covered-project-"));
   writeGitOrigin(repoDir, "https://github.com/acme/grok-project.git");

@@ -21971,6 +21971,16 @@ async function parseGrokBuildIncremental({
     typeof grokState.projectUpdateOffsets === "object"
       ? { ...grokState.projectUpdateOffsets }
       : {};
+  const originalProjectSessionSnapshots = projectEnabled
+    ? normalizeGrokSessionSnapshots({
+        sessionSnapshots: grokState.projectSessionSnapshots,
+      })
+    : {};
+  const originalProjectBucketTokens = projectEnabled
+    ? Object.values(cursors?.projectHourly?.buckets || {}).reduce((sum, bucket) => (
+      bucket?.source === "grok" ? sum + normalizeNonNegativeNumber(bucket.totals?.total_tokens) : sum
+    ), 0)
+    : 0;
   const projectSessionSnapshots = projectEnabled && !migrateProjectCosts
     ? normalizeGrokSessionSnapshots({
         sessionSnapshots: grokState.projectSessionSnapshots,
@@ -22335,6 +22345,21 @@ async function parseGrokBuildIncremental({
       if (previousTokens === 0) continue;
       if (normalizeNonNegativeNumber(sessionSnapshots[sessionId]?.totalTokens) < previousTokens) {
         throw new Error("Grok usage rebuild deferred: rebuilt session history is smaller than the prior snapshot");
+      }
+    }
+    if (projectEnabled) {
+      for (const [sessionId, snapshot] of Object.entries(originalProjectSessionSnapshots)) {
+        const previousTokens = normalizeNonNegativeNumber(snapshot.totalTokens);
+        if (previousTokens === 0) continue;
+        if (normalizeNonNegativeNumber(projectSessionSnapshots[sessionId]?.totalTokens) < previousTokens) {
+          throw new Error("Grok usage rebuild deferred: rebuilt project history is smaller than the prior snapshot");
+        }
+      }
+      const rebuiltProjectBucketTokens = Object.values(projectState?.buckets || {}).reduce((sum, bucket) => (
+        bucket?.source === "grok" ? sum + normalizeNonNegativeNumber(bucket.totals?.total_tokens) : sum
+      ), 0);
+      if (rebuiltProjectBucketTokens < originalProjectBucketTokens) {
+        throw new Error("Grok usage rebuild deferred: rebuilt project history is smaller than the prior snapshot");
       }
     }
   }
