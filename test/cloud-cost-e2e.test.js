@@ -143,7 +143,7 @@ test("all five cloud consumers preserve reported USD but never estimate unknown 
   for (const name of names) {
     const module = edge(name, {}, "\nexport { computeRowCost, getModelPricing };"), tokens = { input_tokens: 1000000, cached_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
     assert.equal(module.getModelPricing("grok-4.7", "grok").input, 2);
-    for (const model of ["grok-4.7-batch", "grok-4.7:batch", "grok-4.7_flex", "xai/grok-4.7-build-fast-flex", "openai/gpt-6.1-sol-batch"]) {
+    for (const model of ["grok-4.7-batch", "grok-4.7:batch", "grok-4.7_flex", "grok-4.7 (Batch)", "grok-4.7 flex", "xai/grok-4.7-build-fast-flex", "openai/gpt-6.1-sol-batch"]) {
       const row = { source: "grok", model, ...tokens };
       assert.equal(module.computeRowCost(row), 0, `${name}: ${model} unknown delivery is unpriced`);
       row.cost_provenance = { version: 1, reported_usd: 0.2, covered_tokens: { ...tokens, input_tokens: 0 }, has_reported: true, has_missing: true, has_allocated: false, origins: ["grok_usd"] };

@@ -546,7 +546,7 @@ function getModelPricing(model: string, source = "") {
   const lower = model.toLowerCase();
   // Unknown delivery SKUs must not inherit a standard synchronous rate.
   // An explicitly curated exact Batch/Flex key above remains authoritative.
-  if (/(?:^|[-_/:])(batch|flex)(?:$|[-_/:])/.test(lower)) return ZERO_PRICING;
+  if (/(?:^|[-/:_\s.(])(?:batch|flex)(?:$|[-/:_\s.)])/.test(lower)) return ZERO_PRICING;
   if (source === "cline" && lower.endsWith(":free")) return ZERO_PRICING;
   // Free gateway SKUs append `-free` to the paid id (deepseek-v4.1-flash-free,
   // minimax-m2.5-free, Muse *-contributor-free). Exact MODEL_PRICING hits above
