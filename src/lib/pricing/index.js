@@ -415,7 +415,10 @@ function speedTierSubsetCost(row, prefix, pricing, ctx) {
 // computeRowCost in src/lib/local-api.js. Moved here so vite mock + local
 // server share one source of truth.
 function computeRowCost(row) {
-  if (row?.source === "grok" && /(?:build-free|free-tier)|-free$/.test(String(row?.model || "").toLowerCase())) return 0;
+  if (row?.source === "grok") {
+    const grokModel = String(row?.model || "").toLowerCase();
+    if (grokModel.includes("build-free") || grokModel.includes("free-tier") || grokModel.endsWith("-free")) return 0;
+  }
   const coverage = normalizeCostCoverage(row?.cost_coverage);
   if (coverage && ["cursor", "grok"].includes(row?.source)) {
     // Only uncovered tokens are estimated. Never apply a complete bucket's

@@ -225,3 +225,17 @@ test("invalid retained rates never replace the current memory or disk catalog", 
     }
   } finally { pricing.resetPricingForTests(); await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+test("Grok free selectors retain canonical, tier and suffix semantics without affecting Cursor", () => {
+  for (const model of ["grok-build-free", "grok-4.5-build-free", "grok-4.7-free-tier", "grok-4.7-free"]) {
+    const row = { source: "grok", model, input_tokens: 100, total_cost_usd: 1 };
+    row.cost_coverage = eventCostCoverage(row, 1, "grok_usd");
+    assert.equal(pricing.computeRowCost(row), 0, model);
+  }
+  const paid = { source: "grok", model: "grok-4.7", input_tokens: 100 };
+  paid.cost_coverage = eventCostCoverage(paid, 1, "grok_usd");
+  assert.equal(pricing.computeRowCost(paid), 1);
+  const cursor = { ...paid, source: "cursor", model: "grok-bot-free" };
+  cursor.cost_coverage = eventCostCoverage(cursor, 1, "cursor_csv_cost");
+  assert.equal(pricing.computeRowCost(cursor), 1);
+});
