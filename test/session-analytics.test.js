@@ -1346,3 +1346,66 @@ test("a Codex session whose only model signal is session_meta attributes rather 
   assert.equal(session.model_usage[0].model_attribution, "selected");
   assert.ok(session.cost_usd > 0, "an attributed model is priced; unknown is not");
 });
+
+test("Grok session models share allocated and mixed queue cost semantics across ranges", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tt-grok-covered-session-"));
+  try {
+    const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const file = writeGrokSessionFixture(home, { sessionId: id, updates: [
+      grokUpdate(id, "turn_completed", { usage: { costUsd: 1, modelUsage: {
+        "opaque-a": { inputTokens: 100, costUsd: 0 },
+        "opaque-b": { inputTokens: 300 },
+      } } }, { timestamp: 1795478400, agentTimestampMs: 1795478400000 }),
+      grokUpdate(id, "turn_completed", { usage: { modelUsage: {
+        "opaque-b": { inputTokens: 50 },
+      } } }, { timestamp: 1795564800, agentTimestampMs: 1795564800000 }),
+    ] });
+    const session = await scanGrokSession(file);
+    assert.equal(session.total_tokens, 450);
+    assert.equal(session.cost_usd, 1);
+    assert.equal(session.cost_source, "mixed");
+    assert.equal(session.model_usage.find((row) => row.model === "opaque-a").cost_usd, 0);
+    assert.equal(session.model_usage.find((row) => row.model === "opaque-b").cost_usd, 1);
+    const allocated = session.usage_buckets.find((row) => row.model === "opaque-b" && row.cost_coverage.allocated_events);
+    assert.equal(allocated.cost_coverage.reported_usd, 1);
+    assert.equal(allocated.cost_coverage.origins.includes("grok_allocated"), true);
+    const oneDay = listSessionsForBrowser([session], { from: "2026-11-25", to: "2026-11-25", timeZone: "UTC" });
+    // Only the missing-cost event falls on day two: lifetime dollars must not leak.
+    assert.equal(oneDay.sessions.length, 1);
+    assert.equal(oneDay.sessions[0].total_tokens, 50);
+    assert.equal(oneDay.sessions[0].cost_usd, 0);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test("Grok incomplete parent invalidates child cost and preserves diagnostic flags", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tt-grok-incomplete-cost-"));
+  try {
+    const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const file = writeGrokSessionFixture(home, { sessionId: id, updates: [grokUpdate(id, "turn_completed", { usage: {
+      usageIsIncomplete: true, costIsPartial: true, costUsd: 1,
+      modelUsage: { "grok-4.7": { inputTokens: 100, costUsd: 1 } },
+    } }, { timestamp: 1795478400, agentTimestampMs: 1795478400000 })] });
+    const session = await scanGrokSession(file);
+    assert.equal(session.usage_is_incomplete, true);
+    assert.equal(session.cost_is_partial, true);
+    assert.equal(session.usage_precision, "reported_incomplete");
+    assert.equal(session.provenance.cost, "model_pricing");
+    assert.equal(session.provider_cost_usd, null);
+    assert.equal(session.cost_source, "model_pricing");
+    assert.equal(session.cost_usd, 0.0002);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+
+test("free Grok session model costs agree with the zero session total", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tt-grok-free-cost-"));
+  try {
+    const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const file = writeGrokSessionFixture(home, { sessionId: id, updates: [grokUpdate(id, "turn_completed", {
+      usage: { modelUsage: { "grok-build-free": { inputTokens: 100, costUsd: 1 } } },
+    }, { timestamp: 1795478400, agentTimestampMs: 1795478400000 })] });
+    const session = await scanGrokSession(file);
+    assert.equal(session.cost_usd, 0);
+    assert.equal(session.model_usage[0].cost_usd, 0);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});

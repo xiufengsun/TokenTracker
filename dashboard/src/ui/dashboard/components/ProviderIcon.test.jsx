@@ -71,6 +71,17 @@ describe("ProviderIcon", () => {
     expect(icon?.querySelector("circle")).toBeNull();
   });
 
+  it("renders DeepAI Code with the DeepAI mark instead of the placeholder", () => {
+    for (const provider of ["deepai", "DEEPAI", "deepai-code"]) {
+      const { container } = render(<ProviderIcon provider={provider} size={18} />);
+      const icon = container.querySelector("svg");
+
+      expect(icon).toHaveAttribute("width", "18");
+      expect(icon?.querySelector("path")).not.toBeNull();
+      expect(container.querySelector(".text-oai-gray-400")).toBeNull();
+    }
+  });
+
   it("renders the buddy mascot for both WorkBuddy variants instead of the placeholder", () => {
     // The international build reports its own source slug (`workbuddy-ai`),
     // which the dashboard cards label WORKBUDDY-AI — it used to fall through

@@ -155,6 +155,13 @@ function totalsClient({ snapshot = { total_tokens: '9000', estimated_cost_usd: '
     async rpc(name, args) {
       if (name === 'user_badges_full' || name === 'cloud_pro_badges') return { data: [] };
       requests.push({ rpc: name, args });
+      if (name === "usage_cost_provenance_v1") {
+        const tokens = { input_tokens: 60, output_tokens: 40, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0 };
+        return { data: { version: 1, rows: [{ user_id: userId, bucket: new Date().toISOString().slice(0, 10),
+          source: "grok", model: "grok", pricing_tier: "peak", basis: tokens, covered_tokens: tokens,
+          reported_usd: 2, has_reported: true, has_missing: false, has_allocated: false, ambiguous: false,
+          origins: ["legacy_grok_total_cost_usd"] }] } };
+      }
       return { data: [{ bucket: new Date().toISOString().slice(0, 10), source: 'grok', model: 'grok',
         total_tokens: 100, input_tokens: 60, output_tokens: 40, total_cost_usd: 2 }] };
     },

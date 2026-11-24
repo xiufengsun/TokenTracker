@@ -360,24 +360,13 @@ test("matcher: lookupPricing strips a LiteLLM provider prefix for bare queue mod
   assert.equal(r.value.input, 1);
 });
 
-test("matcher: prefix-strip is deterministic across providers (smallest key wins, order-independent)", () => {
-  const curated = { exact: {}, alias: {}, fuzzy: [] };
-  // Two providers expose the same model at different cache rates. JSON
-  // insertion order must NOT decide the winner — the lexicographically
-  // smallest key ("novita/..." < "openrouter/...") always wins.
-  const a = { input: 0.1, output: 0.3, cache_read: 0.01 };
-  const b = { input: 0.1, output: 0.3, cache_read: 0.02 };
-  const r1 = matcher.lookupPricing("mimo-v2-flash", {
-    curated,
-    litellm: { "openrouter/xiaomi/mimo-v2-flash": a, "novita/xiaomimimo/mimo-v2-flash": b },
-  });
-  const r2 = matcher.lookupPricing("mimo-v2-flash", {
-    curated,
-    litellm: { "novita/xiaomimimo/mimo-v2-flash": b, "openrouter/xiaomi/mimo-v2-flash": a },
-  });
-  assert.equal(r1.source, "litellm:prefix-strip");
-  assert.equal(r1.value.cache_read, 0.02, "novita key (smallest) wins");
-  assert.equal(r2.value.cache_read, 0.02, "winner independent of insertion order");
+test("matcher: conflicting provider aliases stay unpriced independent of ordering", () => {
+  const entries = { "zprovider/ambiguous-model": { input: 1 }, "aprovider/ambiguous-model": { input: 2 } };
+  for (const litellm of [entries, Object.fromEntries(Object.entries(entries).reverse())]) {
+    const result = matcher.lookupPricing("ambiguous-model", { curated: { exact: {}, alias: {}, fuzzy: [] }, litellm });
+    assert.equal(result.hit, false);
+    assert.equal(result.source, "ambiguous");
+  }
 });
 
 test("matcher: CURATED alias beats a LiteLLM provider-prefixed bare collision (auto → composer-1)", () => {

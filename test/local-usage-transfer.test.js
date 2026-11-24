@@ -314,3 +314,32 @@ test("local transfer preserves Claude backend provenance and rejects unsanitized
   snapshot.rows[0].backend_usage[0].backend_origin += "/secret";
   await assert.rejects(b.service.preview(snapshot), { code: "invalid_snapshot" });
 });
+
+test("v2 local snapshots preserve zero and mixed cost evidence; v1 stays supported", async (t) => {
+  const { eventCostCoverage, mergeCostCoverage } = require("../src/lib/cost-provenance");
+  const { computeRowCost } = require("../src/lib/pricing");
+  const reported = { input_tokens: 1_000_000, cost_coverage: eventCostCoverage({}, 1, "grok_ticks") };
+  const missing = { input_tokens: 1_000_000 };
+  missing.cost_coverage = eventCostCoverage(missing, null, null);
+  const mixed = { input_tokens: 0 };
+  mergeCostCoverage(mixed, reported); mixed.input_tokens += reported.input_tokens;
+  mergeCostCoverage(mixed, missing); mixed.input_tokens += missing.input_tokens;
+  const entries = [row(2_000_000, { ...mixed, source: "grok", model: "grok-4.7", output_tokens: 0, total_cost_usd: 1 }),
+    row(1_000_000, { source: "grok", model: "grok-4.7", hour_start: "2026-10-18T11:00:00.000Z", cost_coverage: eventCostCoverage({}, 0, "grok_ticks") })];
+  const a = await machine(t, "machine-covered-a", entries.map((entry) => ({ ...entry, prompt: "PRIVATE" })));
+  const b = await machine(t, "machine-covered-b", []);
+  const snapshot = await a.service.exportSnapshot();
+  assert.equal(snapshot.schema, "tokentracker.local-usage.v2");
+  assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE|prompt/);
+  await apply(b.service, snapshot);
+  const restored = await b.service.view([]);
+  assert.deepEqual(restored.map(computeRowCost), entries.map(computeRowCost));
+  assert.deepEqual(restored.map(computeRowCost), [3, 0]);
+  const malicious = structuredClone(snapshot);
+  malicious.rows[0].cost_coverage.prompt = "PRIVATE";
+  await assert.rejects(b.service.preview(malicious), { code: "invalid_snapshot" });
+  const legacy = await machine(t, "machine-legacy-v1", [row(100)]);
+  const oldSnapshot = await legacy.service.exportSnapshot();
+  assert.equal(oldSnapshot.schema, "tokentracker.local-usage.v1");
+  await apply(b.service, oldSnapshot);
+});

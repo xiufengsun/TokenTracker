@@ -252,7 +252,7 @@ export function modelSpeedTierStandard(model: any): ModelSpeedTierSplit | null {
  */
 export function isUnpricedModel(model: any) {
   if (model?.unpriced === true) return true;
-  return model?.costSource !== "provider_reported" && model?.pricing?.status === "unpriced";
+  return !["provider_reported", "allocated"].includes(model?.costSource) && model?.pricing?.status === "unpriced";
 }
 
 function addTotalsInto(target: any, add: any) {
@@ -306,6 +306,8 @@ function mergeSourcesByAlias(sources: any[]) {
         merged.models.set(id, modelRow);
       } else {
         modelRow.tiers = mergeSpeedTiers(modelRow.tiers ?? null, modelTiers);
+        if (modelRow.cost_source !== model?.cost_source && (modelRow.cost_source || model?.cost_source)) modelRow.cost_source = "mixed";
+        if (model?.has_allocated_cost) modelRow.has_allocated_cost = true;
       }
       addTotalsInto(modelRow.totals, model?.totals);
     }
@@ -376,17 +378,12 @@ export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) 
           const name = resolveModelName(model, safeCopy("shared.placeholder.short"));
           const id = resolveModelId(model);
           const explicitModelCost = toFiniteNumber(model?.totals?.total_cost_usd);
-          // Request-only models book no cost — the endpoint total is a literal
-          // 0 and there is no token base to prorate entry cost from, so keep
-          // null and let the UI show "—" instead of a fabricated "$0.00".
-          const modelCost =
-            modelTokens <= 0
-              ? null
-              : explicitModelCost != null
-                ? explicitModelCost
-                : entry.totalCost > 0 && entry.totalTokens > 0
-                  ? (modelTokens / entry.totalTokens) * entry.totalCost
-                  : null;
+          // Tokens are not a prerequisite for a recorded request-only charge.
+          const hasRecordedCost = ["provider_reported", "allocated", "mixed"].includes(model?.cost_source);
+          const modelCost = explicitModelCost != null && (modelTokens > 0 || hasRecordedCost)
+            ? explicitModelCost
+            : modelTokens > 0 && entry.totalCost > 0 && entry.totalTokens > 0
+              ? (modelTokens / entry.totalTokens) * entry.totalCost : null;
           // Per-model token-type splits feed the expandable detail rows in
           // the All-models and per-provider model lists. The API already
           // returns them; previously they were dropped here. Speed tiers were
@@ -409,6 +406,7 @@ export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) 
             tiers: model?.tiers ?? null,
             pricing: model?.pricing || null,
             costSource: model?.cost_source || null,
+            ...(model?.has_allocated_cost ? { hasAllocatedCost: true } : {}),
           };
         })
         .filter(Boolean);
@@ -489,7 +487,11 @@ export function buildAllModels(fleetData: any) {
       tokens: { input: 0, output: 0, cached: 0, cacheCreate: 0, reasoning: 0 },
       tiers: null as ModelSpeedTiers | null,
       pricing: null as any,
+      costSources: new Set<string>(),
+      hasAllocatedCost: false,
     };
+    if (model?.costSource) current.costSources.add(model.costSource);
+    current.hasAllocatedCost ||= Boolean(model?.hasAllocatedCost || model?.costSource === "allocated");
     current.usage += usage;
     current.requests += requests;
     // Combine token-type splits across tools alongside the usage total.
@@ -538,6 +540,8 @@ export function buildAllModels(fleetData: any) {
       tokens: { ...model.tokens },
       tiers: model.tiers,
       pricing: model.pricing,
+      ...(model.hasAllocatedCost ? { hasAllocatedCost: true } : {}),
+      ...(model.costSources.size ? { costSource: model.costSources.size === 1 ? [...model.costSources][0] : "mixed" } : {}),
       share: totalUsage > 0
         ? Math.round((model.usage / totalUsage) * 1000) / 10
         : 0,

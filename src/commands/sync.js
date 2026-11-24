@@ -104,6 +104,8 @@ const {
   piAgentDirCollidesWithOmp,
   resolvePrimeAgentSessionFiles,
   parsePrimeAgentIncremental,
+  resolveDeepaiCodeSessionFiles,
+  parseDeepaiCodeIncremental,
   resolveMinimaxCodeSessionFiles,
   parseMinimaxCodeIncremental,
   resolveCraftSessionFiles,
@@ -368,6 +370,7 @@ const AUTO_SYNC_SOURCES = new Set([
   "droid",
   "dumate",
   "dsh",
+  "deepai",
   "every-code",
   "gemini",
   "goose",
@@ -2891,6 +2894,36 @@ async function cmdSync(argv, context = {}) {
       }
     }
 
+    // ── DeepAI Code — passive reader for the pi-style sessions it embeds
+    // (~/.deepai-code/userdata/deepai/pi/*/sessions/**/*.jsonl) ──
+    let deepaiResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
+    const deepaiFiles = sourceAllowed("deepai")
+      ? mergeBothFileSources({ resolveFiles: resolveDeepaiCodeSessionFiles, env: process.env })
+      : [];
+    if (deepaiFiles.length > 0) {
+      if (progress?.enabled) {
+        progress.start(`Parsing DeepAI Code ${renderBar(0)} | buckets 0`);
+      }
+      try {
+        deepaiResult = await parseDeepaiCodeIncremental({
+          sessionFiles: deepaiFiles,
+          cursors,
+          queuePath,
+          projectQueuePath,
+          env: process.env,
+          onProgress: (p) => {
+            if (!progress?.enabled) return;
+            const pct = p.total > 0 ? p.index / p.total : 1;
+            progress.update(
+              `Parsing DeepAI Code ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(p.total)} files | buckets ${formatNumber(p.bucketsQueued)}`,
+            );
+          },
+        });
+      } catch (err) {
+        warnProviderParseFailure("DeepAI Code", err, opts);
+      }
+    }
+
     // ── Prime Agent — passive ~/.prime/agent/sessions/*.jsonl usage reader ──
     let primeAgentResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
     const primeAgentFiles = sourceAllowed("prime-agent")
@@ -3468,6 +3501,7 @@ async function cmdSync(argv, context = {}) {
       omoResult.recordsProcessed +
       piResult.recordsProcessed +
       primeAgentResult.recordsProcessed +
+      deepaiResult.recordsProcessed +
       minimaxCodeResult.recordsProcessed +
       craftResult.recordsProcessed +
       reasonixResult.recordsProcessed +
@@ -3516,6 +3550,7 @@ async function cmdSync(argv, context = {}) {
       omoResult.bucketsQueued +
       piResult.bucketsQueued +
       primeAgentResult.bucketsQueued +
+      deepaiResult.bucketsQueued +
       minimaxCodeResult.bucketsQueued +
       craftResult.bucketsQueued +
       reasonixResult.bucketsQueued +
@@ -3552,6 +3587,7 @@ async function cmdSync(argv, context = {}) {
       !workbuddyAiResult.projectCursorUpdated &&
       !(grokResult.projectBucketsQueued > 0) &&
       !(commandCodeResult.projectBucketsQueued > 0) &&
+      !(deepaiResult.projectBucketsQueued > 0) &&
       !commandCodeResult.schemaMigrated &&
       !codexColdAuditDue &&
       !codexFallbackRetryRan &&
@@ -4461,6 +4497,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
   let skipped = 0;
   let batches = 0;
   let cloudAccess = null;
+  let coverageSupported = false;
   const uploadId = crypto.randomUUID();
   const deadline = Date.now() + maxDurationMs;
   let batchBudget = Math.min(maxBatches, 100);
@@ -4499,6 +4536,25 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
       if (anonKey) headers.apikey = anonKey;
       // Re-read after parsing/each batch so switching off stops an active drain.
       if (!canUpload()) break;
+      const needsCoverage = result.buckets.some(bucket => bucket.cost_coverage != null);
+      if (needsCoverage && !coverageSupported) {
+        const probeBudget = deadline - Date.now();
+        if (probeBudget <= 0) break;
+        requestSignal = AbortSignal.timeout(Math.max(1, Math.ceil(probeBudget)));
+        const probe = await fetchFunctionResponse(functionUrlFor(root, INGEST_SLUG), {
+          method: "POST", headers, signal: requestSignal, body: JSON.stringify({ kind: "cost_capabilities" }),
+        });
+        let capabilities = {};
+        try { capabilities = JSON.parse(await probe.text()); } catch { /* unsupported legacy server */ }
+        if (!probe.ok || !Array.isArray(capabilities.cost_coverage_versions) || !capabilities.cost_coverage_versions.includes(1)) {
+          const error = new Error("Cloud cost coverage v1 unavailable; usage retained locally until the server supports it");
+          error.code = probe.status === 401 ? "CLOUD_DEVICE_TOKEN_REJECTED" : "CLOUD_COST_COVERAGE_UNSUPPORTED";
+          error.status = probe.ok ? 409 : probe.status;
+          throw error;
+        }
+        coverageSupported = true;
+      }
+      if (!canUpload()) break;
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) break;
       requestSignal = AbortSignal.timeout(Math.max(1, Math.ceil(remainingMs)));
@@ -4508,6 +4564,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
         signal: requestSignal,
         body: JSON.stringify({
           upload_id: uploadId,
+          ...(needsCoverage ? { cost_coverage_version: 1 } : {}),
           hourly: result.buckets,
           ...(result.sessionStates.length > 0
             ? { account_session_states: result.sessionStates }
@@ -4530,6 +4587,12 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
         throw err;
       }
 
+      if (needsCoverage && data.cost_coverage_version !== 1) {
+        const error = new Error("Cloud did not acknowledge cost coverage v1; queue offset retained");
+        error.code = "CLOUD_COST_COVERAGE_UNSUPPORTED";
+        error.status = 409;
+        throw error;
+      }
       cloudAccess = data;
       if (data.upload_scope === "community") batchBudget = Math.min(batchBudget, 10);
       inserted += Number(data?.inserted || 0);

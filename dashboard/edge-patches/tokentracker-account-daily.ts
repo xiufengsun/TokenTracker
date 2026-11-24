@@ -1,3 +1,4 @@
+import { attachCloudCostProvenance, coveredRowCost, type CloudCostProvenance } from "./cloud/cost-provenance.ts";
 /**
  * InsForge Edge: account-wide daily usage (cross-device, aggregated by user_id).
  * Mirrors local-api.js `tokentracker-usage-daily` response schema.
@@ -524,6 +525,9 @@ function getModelPricing(model: string, source = "") {
   const exact = MODEL_PRICING[model];
   if (exact) return exact;
   const lower = model.toLowerCase();
+  // Unknown delivery SKUs must not inherit a standard synchronous rate.
+  // An explicitly curated exact Batch/Flex key above remains authoritative.
+  if (/(?:^|[-/:_\s.(])(?:batch|flex)(?:$|[-/:_\s.)])/.test(lower)) return ZERO_PRICING;
   if (source === "cline" && lower.endsWith(":free")) return ZERO_PRICING;
   // Free gateway SKUs append `-free` to the paid id (deepseek-v4.1-flash-free,
   // minimax-m2.5-free, Muse *-contributor-free). Exact MODEL_PRICING hits above
@@ -773,6 +777,7 @@ interface GroupedRow {
   cache_creation_input_tokens: number | null;
   reasoning_output_tokens: number | null;
   total_cost_usd?: number | null;
+  cost_provenance?: CloudCostProvenance;
   conversations: number | null;
   pricing_tier?: string;
 }
@@ -791,7 +796,7 @@ interface CompactDaily {
     number | string, number | string, number | string, Record<string, number | string> | null][];
   // [day, source, model, pricing_tier, input, output, cache_read, cache_write, reasoning]
   cost_dims: [string, string | null, string | null, string | null, number | string,
-    number | string, number | string, number | string, number | string][];
+    number | string, number | string, number | string, number | string, CloudCostProvenance?][];
 }
 
 interface DailyWire {
@@ -881,6 +886,13 @@ async function fetchCompactDaily(
       });
       if (error) throw new Error(error.message);
       const value = decodeDailyWire(data);
+      const proven = await attachCloudCostProvenance(client, value.cost_dims.map(dim => ({
+        bucket: dim[0], source: dim[1] || "", model: dim[2] || "unknown", pricing_tier: dim[3] || "peak",
+        input_tokens: dim[4], output_tokens: dim[5], cached_input_tokens: dim[6],
+        cache_creation_input_tokens: dim[7], reasoning_output_tokens: dim[8],
+      })), { p_user_id: userId, p_device_id: requestedDeviceId, p_from: fromIso, p_to: toIso,
+        p_trunc: "day", p_tz: tz, p_offset_min: tzOffsetMinutes, p_range_from: rangeFrom, p_range_to: rangeTo });
+      proven.forEach((row, index) => { if (row.cost_provenance) value.cost_dims[index][9] = row.cost_provenance; });
       compactCache.set(cacheKey, { fetchedAt: Date.now(), value });
       if (compactCache.size > 64) {
         const oldest = compactCache.keys().next().value;
@@ -898,6 +910,16 @@ async function fetchCompactDaily(
 }
 
 function computeRowCost(row: GroupedRow): number {
+  if (row.source === "grok") {
+    const free = String(row.model || "").toLowerCase();
+    if (free.includes("build-free") || free.includes("free-tier") || free.endsWith("-free")) return 0;
+  }
+  if (row.cost_provenance && (row.source === "grok" || row.source === "cursor")) {
+    const cost = coveredRowCost(row, computeRowCost);
+    if (cost !== undefined) return cost;
+  }
+  if (row.source === "cursor" && /^grok-bot-/i.test(String(row.model || ""))) return 0;
+
   // LM Studio developer-server and LM Link traffic is local inference. Its
   // logs do not represent Bionic Secure Cloud billing.
   if (row.source === "lmstudio") return 0;
@@ -1053,11 +1075,12 @@ export default async function (req: Request): Promise<Response> {
   // day's rows already summed per (source, model, pricing_tier); computeRowCost
   // is linear in every token column, so adding the dims up per day gives the
   // same total the per-day rows did.
-  for (const [day, source, model, tier, i, o, cr, cw, rs] of compact.cost_dims) {
+  for (const [day, source, model, tier, i, o, cr, cw, rs, provenance] of compact.cost_dims) {
     const a = byDay.get(day);
     if (!a) continue;
     a.total_cost_usd += computeRowCost({
       bucket: day,
+      cost_provenance: provenance,
       source: source as string,
       model: model as string,
       pricing_tier: tier ?? undefined,
