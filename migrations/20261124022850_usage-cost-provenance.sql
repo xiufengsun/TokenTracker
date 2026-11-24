@@ -85,6 +85,7 @@ BEGIN
       END IF;
     END LOOP;
     EXECUTE def;
+  IF to_regprocedure('public.cloud_restore_usage_archive(uuid,uuid,uuid,date)') IS NOT NULL THEN
   def := pg_get_functiondef('public.cloud_restore_usage_archive(uuid,uuid,uuid,date)'::regprocedure);
     patches := ARRAY[
       ARRAY['created_at=c.created_at,updated_at=c.updated_at,total_cost_usd=c.total_cost_usd','created_at=c.created_at,updated_at=c.updated_at,total_cost_usd=c.total_cost_usd,cost_coverage=c.cost_coverage'],
@@ -101,6 +102,10 @@ BEGIN
       END IF;
     END LOOP;
     EXECUTE def;
+  ELSIF to_regclass('public.tokentracker_usage_archive_manifest') IS NOT NULL
+     OR to_regclass('public.tokentracker_usage_archive_generations') IS NOT NULL THEN
+    RAISE EXCEPTION 'Incomplete archive baseline; cost migration not applied';
+  END IF;
   def := pg_get_functiondef('public.refresh_tokentracker_device_identity(uuid,uuid,text,text)'::regprocedure);
   patches := ARRAY[
     ARRAY[E'      total_cost_usd\n    )',E'      total_cost_usd, cost_coverage\n    )'],
@@ -147,6 +152,47 @@ END $fn$;
 REVOKE ALL ON FUNCTION public.usage_cost_capabilities_v1(),public.cloud_ingest_usage_cost_v1(text,text,jsonb,jsonb,text) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.usage_cost_capabilities_v1(),public.cloud_ingest_usage_cost_v1(text,text,jsonb,jsonb,text) TO project_admin;
 
+-- Production may be hot-only. Do not install/activate archival as a pricing
+-- prerequisite. Dynamic SQL keeps absent optional relations out of parse-time
+-- dependencies; partial/later unpatched installations fail closed.
+CREATE OR REPLACE FUNCTION public.usage_cost_inventory_v1(
+  p_user_id uuid,p_from timestamptz,p_to timestamptz,p_user_from uuid,p_user_to uuid
+) RETURNS SETOF public.tokentracker_hourly LANGUAGE plpgsql STABLE SECURITY INVOKER
+SET search_path TO public,pg_temp SET statement_timeout TO '8s' AS $fn$
+BEGIN
+  RETURN QUERY
+SELECT h.* FROM public.tokentracker_hourly h
+    WHERE (h.source='grok' OR (h.source='cursor' AND lower(h.model) LIKE 'grok-bot-%'))
+      AND (p_user_id IS NULL OR h.user_id=p_user_id)
+      AND (p_user_from IS NULL OR h.user_id>=p_user_from) AND (p_user_to IS NULL OR h.user_id<p_user_to)
+      AND h.hour_start>=p_from AND h.hour_start<p_to;
+  IF to_regclass('public.tokentracker_usage_archive_manifest') IS NULL
+    AND to_regclass('public.tokentracker_usage_archive_generations') IS NULL THEN
+    RETURN;
+  END IF;
+  IF to_regclass('public.tokentracker_usage_archive_manifest') IS NULL
+    OR to_regclass('public.tokentracker_usage_archive_generations') IS NULL
+    OR to_regprocedure('public.cloud_restore_usage_archive(uuid,uuid,uuid,date)') IS NULL THEN
+    RAISE EXCEPTION 'Incomplete archive cost baseline';
+  END IF;
+  IF strpos(pg_get_functiondef('public.cloud_restore_usage_archive(uuid,uuid,uuid,date)'::regprocedure),'cost_coverage=c.cost_coverage')=0 THEN
+    RAISE EXCEPTION 'Archive cost migration must be reapplied';
+  END IF;
+  RETURN QUERY EXECUTE $cold$
+SELECT h.* FROM public.tokentracker_usage_archive_manifest m
+    JOIN public.tokentracker_usage_archive_generations g ON g.id=m.generation_id AND g.status='committed'
+    CROSS JOIN LATERAL jsonb_populate_recordset(NULL::public.tokentracker_hourly,g.payload) h
+    WHERE ($1 IS NULL OR m.user_id=$1)
+      AND ($4 IS NULL OR m.user_id>=$4) AND ($5 IS NULL OR m.user_id<$5)
+      AND m.day>=($2 AT TIME ZONE 'UTC')::date AND m.day<=(($3-interval '1 microsecond') AT TIME ZONE 'UTC')::date
+      AND g.payload @? '$[*] ? (@.source == "grok" || (@.source == "cursor" && @.model like_regex "^grok-bot-" flag "i"))'
+      AND (h.source='grok' OR (h.source='cursor' AND lower(h.model) LIKE 'grok-bot-%'))
+      AND h.hour_start>=$2 AND h.hour_start<$3
+  $cold$ USING p_user_id,p_from,p_to,p_user_from,p_user_to;
+END $fn$;
+REVOKE ALL ON FUNCTION public.usage_cost_inventory_v1(uuid,timestamptz,timestamptz,uuid,uuid) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.usage_cost_inventory_v1(uuid,timestamptz,timestamptz,uuid,uuid) TO project_admin;
+
 -- Versioned additive side wire: existing compact/token RPCs and maintained
 -- leaderboard rollups remain byte-compatible, with no historical rebuild.
 -- Edge checks every returned basis vector against its token wire; races/stale
@@ -159,24 +205,10 @@ CREATE OR REPLACE FUNCTION public.usage_cost_provenance_v1(
 ) RETURNS jsonb LANGUAGE sql STABLE SECURITY INVOKER
 SET search_path TO public,pg_temp SET statement_timeout TO '8s' AS $fn$
   WITH candidates AS (
-    SELECT h.* FROM public.tokentracker_hourly h
-    WHERE (h.source='grok' OR (h.source='cursor' AND lower(h.model) LIKE 'grok-bot-%'))
-      AND (p_user_id IS NULL OR h.user_id=p_user_id)
-      AND (p_user_from IS NULL OR h.user_id>=p_user_from) AND (p_user_to IS NULL OR h.user_id<p_user_to)
-      AND h.hour_start>=p_from AND h.hour_start<p_to
-    UNION ALL
-    SELECT h.* FROM public.tokentracker_usage_archive_manifest m
-    JOIN public.tokentracker_usage_archive_generations g ON g.id=m.generation_id AND g.status='committed'
-    CROSS JOIN LATERAL jsonb_populate_recordset(NULL::public.tokentracker_hourly,g.payload) h
-    WHERE (p_user_id IS NULL OR m.user_id=p_user_id)
-      AND (p_user_from IS NULL OR m.user_id>=p_user_from) AND (p_user_to IS NULL OR m.user_id<p_user_to)
-      AND m.day>=(p_from AT TIME ZONE 'UTC')::date AND m.day<=((p_to-interval '1 microsecond') AT TIME ZONE 'UTC')::date
-      AND g.payload @? '$[*] ? (@.source == "grok" || (@.source == "cursor" && @.model like_regex "^grok-bot-" flag "i"))'
-      AND (h.source='grok' OR (h.source='cursor' AND lower(h.model) LIKE 'grok-bot-%'))
-      AND h.hour_start>=p_from AND h.hour_start<p_to
+    SELECT * FROM public.usage_cost_inventory_v1(p_user_id,p_from,p_to,p_user_from,p_user_to)
   ), revisions AS (
     SELECT DISTINCT ON (user_id,device_id,hour_start,source,model) * FROM candidates
-    ORDER BY user_id,device_id,hour_start,source,model,archive_revision DESC
+    ORDER BY user_id,device_id,hour_start,source,model,coalesce((to_jsonb(candidates)->>'archive_revision')::bigint,0) DESC
   ), eligible AS (
     SELECT h.*,CASE WHEN h.source='cursor' THEN 'account' ELSE coalesce(dm.machine_cluster_id,h.device_id::text) END AS cluster
     FROM revisions h

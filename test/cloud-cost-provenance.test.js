@@ -168,3 +168,23 @@ test("guarded migration preserves unrelated installed fixes and fails closed on 
     assert.equal((await drift.db.query("SELECT to_regprocedure('public.usage_cost_capabilities_v1()')::text AS name")).rows[0].name, null);
   } finally { await drift.db.close(); }
 });
+
+
+test("cost contract installs on the production hot-only baseline without enabling archival", async () => {
+  const f = await fixture({ archive: false, apply: false });
+  try {
+    const before = (await f.db.query("SELECT count(*)::integer AS n FROM tokentracker_hourly")).rows[0].n;
+    await f.db.exec(migration(COST_MIGRATION));
+    assert.equal((await f.db.query("SELECT count(*)::integer AS n FROM tokentracker_hourly")).rows[0].n, before);
+    assert.equal((await f.db.query("SELECT to_regclass('public.tokentracker_usage_archive_manifest')::text AS name")).rows[0].name, null);
+    await f.ingest([row(0)]);
+    assert.equal((await costRows(f)).rows[0].reported_usd, 0);
+    assert.equal((await costRows(f)).rows[0].has_reported, true);
+    await f.db.exec(migration(COST_MIGRATION));
+    assert.equal((await costRows(f)).rows[0].basis.input_tokens, 100);
+    await f.db.exec("CREATE TABLE tokentracker_usage_archive_manifest(id integer)");
+    await assert.rejects(costRows(f), /Incomplete archive cost baseline/);
+    await assert.rejects(f.db.exec(migration(COST_MIGRATION)), /Incomplete archive baseline/);
+    await f.db.exec("ROLLBACK");
+  } finally { await f.db.close(); }
+});
