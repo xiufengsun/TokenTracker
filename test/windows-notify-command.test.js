@@ -90,6 +90,22 @@ test("Windows notify commands keep a spaced bundled Node executable instead of P
 });
 
 
+
+test("Windows notify commands treat 8.3 short-name tildes as portable", () => {
+  const notify = "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\tt Jane Doe hook\\notify.cjs";
+  const embedded = "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\tt Jane Doe hook\\EmbeddedServer\\node.exe";
+  const command = buildHookCommand(notify, "claude", { platform: "win32", execPath: embedded });
+  assert.equal(
+    command,
+    `powershell.exe -NoProfile -Command "& 'C:/Users/RUNNER~1/AppData/Local/Temp/tt Jane Doe hook/EmbeddedServer/node.exe' 'C:/Users/RUNNER~1/AppData/Local/Temp/tt Jane Doe hook/notify.cjs' --source=claude"`,
+  );
+  const safeExec = buildHookCommand(notify, "claude", {
+    platform: "win32",
+    execPath: "C:\\Users\\RUNNER~1\\nodejs\\node.exe",
+  });
+  assert.equal(safeExec, 'C:/Users/RUNNER~1/nodejs/node.exe "C:/Users/RUNNER~1/AppData/Local/Temp/tt Jane Doe hook/notify.cjs" --source=claude');
+});
+
 test("Windows hook repair does not treat a notify command with trailing actions as the same hook", async (t) => {
   const { notifyIdentity } = require("../src/lib/notify-command");
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tt-windows-hook-trail-"));

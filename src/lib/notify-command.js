@@ -17,14 +17,14 @@ function isCrossShellPortablePath(value) {
   const text = String(value || "").replace(/\\/g, "/");
   if (!text) return false;
   if (/[\u0000-\u001f$`"%!^&|<>;()]/.test(text)) return false;
-  return /^(?:[A-Za-z]:)?[A-Za-z0-9_./ @'+-]*$/.test(text);
+  return /^(?:[A-Za-z]:)?[A-Za-z0-9_./ @'+~-]*$/.test(text);
 }
 
 // PowerShell only needs `&` when the executable is quoted. Keep the portable
 // command unquoted so it also runs in bash and cmd.
 function isUnquotedSafePath(value) {
   const text = String(value || "").replace(/\\/g, "/");
-  return /^(?:[A-Za-z]:)?[A-Za-z0-9_./+-]+$/.test(text);
+  return /^(?:[A-Za-z]:)?[A-Za-z0-9_./+~-]+$/.test(text);
 }
 
 function toForwardSlashPath(value) {
