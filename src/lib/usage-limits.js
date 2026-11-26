@@ -3607,6 +3607,11 @@ function isAntigravityUnimplementedProbeError(error) {
   return /^HTTP (404|501)\b/.test(String(error?.message || ""));
 }
 
+function isAntigravityHttpStatusError(error) {
+  const message = String(error?.message || "");
+  return /^HTTP \d{3}\b/.test(message) || message.startsWith("Invalid JSON response");
+}
+
 function isSuccessfulAntigravityProbeBody(endpoint, body) {
   if (body == null || typeof body !== "object" || Array.isArray(body)) return false;
   if (endpoint !== "GetUserStatus") return true;
@@ -3730,14 +3735,15 @@ function antigravityHubRecordAgrees(processInfo, record, knownPorts) {
   return true;
 }
 
-async function probeAntigravityPort(port, csrfToken, { timeoutMs, requestFn, scheme = "https", signal } = {}) {
+async function probeAntigravityPortResult(port, csrfToken, { timeoutMs, requestFn, scheme = "https", signal } = {}) {
   const startedAtMs = performance.now();
+  let responded = false;
   for (const endpoint of ANTIGRAVITY_PROBE_ENDPOINTS) {
-    if (signal?.aborted) return false;
+    if (signal?.aborted) return { ok: false, responded };
     const remainingMs = Number.isFinite(timeoutMs)
       ? Math.floor(timeoutMs - (performance.now() - startedAtMs))
       : timeoutMs;
-    if (Number.isFinite(remainingMs) && remainingMs <= 0) return false;
+    if (Number.isFinite(remainingMs) && remainingMs <= 0) return { ok: false, responded };
     try {
       const body = await requestLocalJson({
         scheme,
@@ -3749,14 +3755,20 @@ async function probeAntigravityPort(port, csrfToken, { timeoutMs, requestFn, sch
         requestFn,
         signal,
       });
-      if (isSuccessfulAntigravityProbeBody(endpoint, body)) return true;
-      return false;
+      responded = true;
+      if (isSuccessfulAntigravityProbeBody(endpoint, body)) return { ok: true, responded };
+      return { ok: false, responded };
     } catch (error) {
+      if (isAntigravityHttpStatusError(error)) responded = true;
       if (isAntigravityUnimplementedProbeError(error)) continue;
-      return false;
+      return { ok: false, responded };
     }
   }
-  return false;
+  return { ok: false, responded };
+}
+
+async function probeAntigravityPort(port, csrfToken, options) {
+  return (await probeAntigravityPortResult(port, csrfToken, options)).ok;
 }
 
 function hasAntigravityInstallEvidence({ home } = {}) {
@@ -3964,6 +3976,92 @@ async function writeAntigravityLinuxSecretRaw(raw, options = {}) {
   return Boolean(result && !result.error && result.status === 0);
 }
 
+const ANTIGRAVITY_WINDOWS_CREDENTIAL_TARGET = "gemini:antigravity";
+const WINDOWS_CREDENTIAL_BLOB_PREFIX = "agy-cred-b64:";
+
+/** Decode a Windows Credential Manager blob as UTF-8 first, then UTF-16 if needed. */
+function decodeAntigravityWindowsCredentialBlob(bytes) {
+  const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || []);
+  if (!buffer.length) return null;
+  const utf8 = buffer.toString("utf8").replace(/\0+$/g, "").trim();
+  if (parseAntigravityCredentialPayload(utf8)) return utf8;
+  if (buffer.length >= 2 && buffer.length % 2 === 0) {
+    const utf16 = buffer.toString("utf16le").replace(/\0+$/g, "").trim();
+    if (parseAntigravityCredentialPayload(utf16)) return utf16;
+  }
+  return null;
+}
+
+
+/** Read the agy Windows Credential Manager entry; missing or unreadable entries return null. */
+function readAntigravityWindowsCredentialRaw({ credentialRunner, timeoutMs = 2000 } = {}) {
+  const runner = typeof credentialRunner === "function" ? credentialRunner : defaultAntigravityWindowsCredentialRunner;
+  if (runner === defaultAntigravityWindowsCredentialRunner && process.platform !== "win32") return null;
+  try {
+    const result = runner(ANTIGRAVITY_WINDOWS_CREDENTIAL_TARGET, { timeoutMs });
+    if (!result || result.error || result.status !== 0) return null;
+    const stdout = typeof result.stdout === "string"
+      ? result.stdout
+      : Buffer.isBuffer(result.stdout)
+        ? result.stdout.toString("utf8")
+        : "";
+    const trimmed = stdout.trim();
+    if (trimmed.startsWith(WINDOWS_CREDENTIAL_BLOB_PREFIX)) {
+      try {
+        return decodeAntigravityWindowsCredentialBlob(
+          Buffer.from(trimmed.slice(WINDOWS_CREDENTIAL_BLOB_PREFIX.length), "base64"),
+        );
+      } catch {
+        return null;
+      }
+    }
+    return trimmed || null;
+  } catch {
+    return null;
+  }
+}
+
+function defaultAntigravityWindowsCredentialRunner(target, { timeoutMs = 2000 } = {}) {
+  if (process.platform !== "win32") return { status: 1, stdout: "" };
+  if (target !== ANTIGRAVITY_WINDOWS_CREDENTIAL_TARGET) return { status: 1, stdout: "" };
+  // CredRead the generic credential whose target is the Windows form of the
+  // macOS Keychain item (service "gemini", account "antigravity").
+  const script = [
+    "Add-Type -TypeDefinition @'",
+    "using System;",
+    "using System.Runtime.InteropServices;",
+    "using System.Text;",
+    "public static class AgyCred {",
+    "  [DllImport(\"Advapi32.dll\", SetLastError=true, CharSet=CharSet.Unicode)]",
+    "  public static extern bool CredRead(string target, int type, int reservedFlag, out IntPtr credPtr);",
+    "  [DllImport(\"Advapi32.dll\", SetLastError=true)] public static extern void CredFree(IntPtr cred);",
+    "  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]",
+    "  public struct CREDENTIAL { public int Flags; public int Type; public IntPtr TargetName; public IntPtr Comment; public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten; public int CredentialBlobSize; public IntPtr CredentialBlob; public int Persist; public int AttributeCount; public IntPtr Attributes; public IntPtr TargetAlias; public IntPtr UserName; }",
+    "  public static string ReadGeneric(string target) {",
+    "    IntPtr ptr;",
+    "    if (!CredRead(target, 1, 0, out ptr) || ptr == IntPtr.Zero) return null;",
+    "    try {",
+    "      var cred = Marshal.PtrToStructure<CREDENTIAL>(ptr);",
+    "      if (cred.CredentialBlob == IntPtr.Zero || cred.CredentialBlobSize <= 0) return null;",
+    "      var bytes = new byte[cred.CredentialBlobSize];",
+    "      Marshal.Copy(cred.CredentialBlob, bytes, 0, cred.CredentialBlobSize);",
+    "      return Convert.ToBase64String(bytes);",
+    "    } finally { CredFree(ptr); }",
+    "  }",
+    "}",
+    "'@",
+    "[Console]::Out.Write('agy-cred-b64:' + [AgyCred]::ReadGeneric('gemini:antigravity'))",
+  ].join("\n");
+  return cp.spawnSync("powershell.exe", [
+    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script,
+  ], {
+    encoding: "utf8",
+    timeout: timeoutMs,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+}
+
 /**
  * Select credentials from token files and the platform keyring. Prefer fresh
  * credentials, then unknown expiry, then the most recently expired candidate.
@@ -3975,6 +4073,7 @@ async function loadAntigravityCredentials({
   platform = process.platform,
   securityRunner,
   secretToolRunner,
+  credentialRunner,
   nowMs = Date.now(),
   timeoutMs = 2000,
   signal,
@@ -3989,6 +4088,10 @@ async function loadAntigravityCredentials({
     const raw = await readAntigravityLinuxSecretRaw({ secretToolRunner, timeoutMs, signal });
     const parsed = parseAntigravityCredentialPayload(raw);
     if (parsed) candidates.push({ ...parsed, source: "keyring", path: null });
+  }
+  if ((platform === "win32" || typeof credentialRunner === "function") && timeoutMs > 0 && !signal?.aborted) {
+    const parsed = parseAntigravityCredentialPayload(readAntigravityWindowsCredentialRaw({ credentialRunner, timeoutMs }));
+    if (parsed) candidates.push({ ...parsed, source: "credential-manager", path: null });
   }
   return pickAntigravityCredentials(candidates, nowMs);
 }
@@ -4202,6 +4305,7 @@ async function fetchAntigravityRemoteLimits({
   platform = process.platform,
   securityRunner,
   secretToolRunner,
+  credentialRunner,
   fetchImpl = fetch,
   nowMs = Date.now(),
   signal,
@@ -4210,7 +4314,7 @@ async function fetchAntigravityRemoteLimits({
   if (isAntigravityQuotaDisabled()) return null;
   const resolvedCreds = creds !== undefined
     ? creds
-    : await loadAntigravityCredentials({ home, platform, securityRunner, secretToolRunner, nowMs, signal });
+    : await loadAntigravityCredentials({ home, platform, securityRunner, secretToolRunner, credentialRunner, nowMs, signal });
   if (!resolvedCreds) return null;
 
   const loadWithToken = async (accessToken) => {
@@ -4266,11 +4370,11 @@ function antigravityCredentialsNeedReauth(creds, { nowMs, remoteError } = {}) {
  * credentials for reauthentication even when cached quota remains usable.
  * The provider path passes its selected creds to avoid repeating discovery.
  */
-async function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, secretToolRunner, remoteError, creds } = {}) {
+async function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, secretToolRunner, credentialRunner, remoteError, creds } = {}) {
   const cached = readAntigravityLimitsCache({ home, nowMs });
   const resolvedCreds = creds !== undefined
     ? creds
-    : await loadAntigravityCredentials({ home, platform, securityRunner, secretToolRunner, nowMs });
+    : await loadAntigravityCredentials({ home, platform, securityRunner, secretToolRunner, credentialRunner, nowMs });
   if (cached) {
     return antigravityCredentialsNeedReauth(resolvedCreds, { nowMs, remoteError })
       ? { ...cached, auth_action_required: "reauth" }
@@ -4314,6 +4418,7 @@ async function fetchAntigravityLimits({
   platform = process.platform,
   securityRunner,
   secretToolRunner,
+  credentialRunner,
   signal,
 } = {}) {
   if (isAntigravityQuotaDisabled()) return { configured: false, error: null };
@@ -4338,6 +4443,7 @@ async function fetchAntigravityLimits({
     platform,
     securityRunner,
     secretToolRunner,
+    credentialRunner,
     nowMs,
     timeoutMs: budgetedTimeoutMs(2000),
     signal,
@@ -4373,6 +4479,7 @@ async function fetchAntigravityLimits({
           platform,
           securityRunner,
           secretToolRunner,
+          credentialRunner,
           fetchImpl,
           nowMs,
           signal,
@@ -4408,6 +4515,7 @@ async function fetchAntigravityLimits({
         platform,
         securityRunner,
         secretToolRunner,
+        credentialRunner,
         remoteError,
         creds,
       });
@@ -4437,13 +4545,17 @@ async function fetchAntigravityLimits({
     for (const port of ports) {
       const probeTimeoutMs = budgetedTimeoutMs(ANTIGRAVITY_LOCAL_REQUEST_TIMEOUT_MS);
       if (probeTimeoutMs <= 0) break;
-      if (await probeAntigravityPort(port, processInfo.csrfToken, { timeoutMs: probeTimeoutMs, requestFn, signal })) {
+      const httpsProbe = await probeAntigravityPortResult(port, processInfo.csrfToken, { timeoutMs: probeTimeoutMs, requestFn, signal });
+      if (httpsProbe.ok) {
         workingPort = port;
         break;
       }
-      // agy CLI serves HTTP without CSRF. 2.34 hub files also advertise an
-      // HTTP port that should be probed with the recovered token.
-      const tryHttp = !processInfo.csrfToken || port === processInfo.hubPort;
+      // Skip the plain-HTTP fallback on a port that already answered over TLS.
+      // agy 1.5.17 serves HTTPS on both loopback ports and requires a CSRF
+      // token; probing the same port with HTTP only logs a handshake error.
+      // Still try HTTP when HTTPS never got a response, or when a hub file
+      // advertises this port as HTTP and a CSRF token is known.
+      const tryHttp = !httpsProbe.responded && (!processInfo.csrfToken || port === processInfo.hubPort);
       if (tryHttp) {
         const httpProbeTimeoutMs = budgetedTimeoutMs(ANTIGRAVITY_LOCAL_REQUEST_TIMEOUT_MS);
         if (httpProbeTimeoutMs <= 0) break;
@@ -4523,6 +4635,7 @@ async function fetchAntigravityLimits({
       platform,
       securityRunner,
       secretToolRunner,
+      credentialRunner,
       remoteError: remoteError || error,
       creds,
     });
@@ -5527,6 +5640,9 @@ module.exports = {
   normalizeAntigravityQuotaSummary,
   loadAntigravityCredentials,
   readAntigravityLinuxSecretRaw,
+  readAntigravityWindowsCredentialRaw,
+  decodeAntigravityWindowsCredentialBlob,
+  probeAntigravityPortResult,
   writeAntigravityLinuxSecretRaw,
   refreshAntigravityAccessToken,
   ANTIGRAVITY_OAUTH_CLIENT_ID,

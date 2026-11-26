@@ -1086,6 +1086,12 @@ async function parseClaudeIncremental({
   // (e.g. subagent file created after main session was already parsed).
   const prevHashes = Array.isArray(cursors.claudeHashes) ? cursors.claudeHashes : [];
   const seenMessageHashes = new Set(prevHashes);
+  // Also index bare message.id values so a persisted `msgId:requestId` matches a
+  // later `sdk-cli` copy that only carries message.id (#1167).
+  for (const hash of prevHashes) {
+    const bare = claudeBareMessageId(hash);
+    if (bare) seenMessageHashes.add(bare);
+  }
   const defaultSource = normalizeSourceInput(source) || "claude";
   preserveLegacyClaudeGroups(files.filter((entry) =>
     (typeof entry === "string" ? defaultSource : normalizeSourceInput(entry?.source) || defaultSource) === "claude"
@@ -3207,8 +3213,8 @@ async function parseClaudeFile({
     const usage = obj?.message?.usage || obj?.usage;
     if (!usage || typeof usage !== "object") continue;
 
-    const dedupHash = seenMessageHashes ? claudeMessageDedupKey(obj) : null;
-    if (dedupHash && seenMessageHashes.has(dedupHash)) continue;
+    const dedupKeys = seenMessageHashes ? claudeMessageDedupKeys(obj) : [];
+    if (dedupKeys.some((key) => seenMessageHashes.has(key))) continue;
 
     const model = normalizeModelInput(obj?.message?.model || obj?.model) || DEFAULT_MODEL;
     const tokenTimestamp = typeof obj?.timestamp === "string" ? obj.timestamp : null;
@@ -3217,7 +3223,7 @@ async function parseClaudeFile({
     const delta = normalizeClaudeUsage(usage);
     if (!delta || isAllZeroUsage(delta)) continue;
 
-    if (dedupHash) seenMessageHashes.add(dedupHash);
+    for (const key of dedupKeys) seenMessageHashes.add(key);
     delta.conversation_count = 0;
     const backend = backendResolver?.(obj, lineStart, byteOffset);
     if (backend) delta.backend_usage = [{ ...delta, ...backend }];
@@ -5441,11 +5447,30 @@ function isOmOClaudeSdkMirror(obj) {
   return obj?.entrypoint === "sdk-ts" && obj?.userType === "external";
 }
 
-function claudeMessageDedupKey(obj) {
+function claudeBareMessageId(hash) {
+  if (typeof hash !== "string" || !hash || hash.startsWith("u:")) return null;
+  const colon = hash.indexOf(":");
+  return colon > 0 ? hash.slice(0, colon) : null;
+}
+
+function claudeMessageDedupKeys(obj) {
   const msgId = typeof obj?.message?.id === "string" && obj.message.id ? obj.message.id : null;
-  if (!msgId) return null;
+  if (!msgId) return [];
   const reqId = typeof obj?.requestId === "string" && obj.requestId ? obj.requestId : null;
-  return reqId ? `${msgId}:${reqId}` : msgId;
+  return reqId ? [`${msgId}:${reqId}`, msgId] : [msgId];
+}
+
+function claudeMessageDedupKey(obj) {
+  return claudeMessageDedupKeys(obj)[0] || null;
+}
+
+function claudeMessageAlreadySeen(seen, keys) {
+  return Boolean(seen) && (keys || []).some((key) => seen.has(key));
+}
+
+function rememberClaudeMessage(seen, keys) {
+  if (!seen) return;
+  for (const key of keys || []) seen.add(key);
 }
 
 function normalizeClaudeUsage(u) {
@@ -26968,6 +26993,10 @@ module.exports = {
   toUtcHalfHourStart,
   totalsKey,
   claudeMessageDedupKey,
+  claudeMessageDedupKeys,
+  claudeBareMessageId,
+  claudeMessageAlreadySeen,
+  rememberClaudeMessage,
   normalizeClaudeUsage,
   groupBucketKey,
   // Exposed for regression tests covering nested-group remote URLs.

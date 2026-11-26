@@ -161,6 +161,8 @@ const {
   toUtcHalfHourStart,
   totalsKey,
   claudeMessageDedupKey,
+  claudeMessageDedupKeys,
+  rememberClaudeMessage,
   coerceEpochMs,
   hasZcodeCursorState,
   resolveZcodeInstallPaths,
@@ -7971,8 +7973,7 @@ async function collectClaudeMessageHashes(filePaths) {
       } catch (_e) {
         continue;
       }
-      const hash = claudeMessageDedupKey(obj);
-      if (hash) hashes.add(hash);
+      rememberClaudeMessage(hashes, claudeMessageDedupKeys(obj));
     }
     rl.close();
     stream.close?.();
