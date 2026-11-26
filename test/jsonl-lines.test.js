@@ -67,9 +67,6 @@ test("physicalJsonlRecords skips an oversized record and resumes at the next LF 
 });
 
 test("physicalJsonlRecords mustContain skips terminated records without decoding but always decodes the unterminated tail", async () => {
-  // The needle straddles a chunk boundary; a skipped record must not be
-  // decoded (its invalid UTF-8 would otherwise surface as utf8Valid:false);
-  // the tail lacks the needle because it may still be mid-write.
   const chunks = [
     Buffer.from('{"usa'),
     Buffer.from('ge":1}\n'),
