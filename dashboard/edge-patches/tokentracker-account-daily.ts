@@ -891,7 +891,7 @@ async function fetchCompactDaily(
         input_tokens: dim[4], output_tokens: dim[5], cached_input_tokens: dim[6],
         cache_creation_input_tokens: dim[7], reasoning_output_tokens: dim[8],
       })), { p_user_id: userId, p_device_id: requestedDeviceId, p_from: fromIso, p_to: toIso,
-        p_trunc: "day", p_tz: tz, p_offset_min: tzOffsetMinutes, p_range_from: rangeFrom, p_range_to: rangeTo });
+        p_trunc: "day", p_tz: tz, p_offset_min: tzOffsetMinutes, p_range_from: rangeFrom, p_range_to: rangeTo }, true);
       proven.forEach((row, index) => { if (row.cost_provenance) value.cost_dims[index][9] = row.cost_provenance; });
       compactCache.set(cacheKey, { fetchedAt: Date.now(), value });
       if (compactCache.size > 64) {

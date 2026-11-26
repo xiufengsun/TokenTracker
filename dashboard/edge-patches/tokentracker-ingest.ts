@@ -4,7 +4,7 @@
  */
 import { createClient } from "npm:@insforge/sdk";
 import { cloudRpc, cloudFailure } from "./cloud/access.ts";
-import { uploadCostCoverage } from "./cloud/cost-provenance.ts";
+import { COST_TOKEN_FIELDS, uploadCostCoverage } from "./cloud/cost-provenance.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -186,9 +186,6 @@ export default async function (req: Request): Promise<Response> {
   }
 
   if (buckets.some(b => !b || typeof b !== "object" || Array.isArray(b))) return json({ error: "Invalid usage bucket" }, 400);
-  if (buckets.some(b => b.cost_coverage != null) && body.cost_coverage_version !== 1) {
-    return json({ error: "Cost coverage v1 acknowledgement required" }, 400);
-  }
   let coverageRows: (Record<string, unknown> | null)[];
   try {
     coverageRows = buckets.map(b => b.cost_coverage == null ? null : uploadCostCoverage(b.cost_coverage, {
@@ -232,6 +229,17 @@ export default async function (req: Request): Promise<Response> {
   for (const r of mappedRows) {
     const key = `${r.hour_start}|${r.source}|${r.model}`;
     const prev = dedupedMap.get(key);
+    if (prev && prev.source === "cursor" && prev.cost_coverage &&
+        Number(prev.total_tokens) === Number(r.total_tokens) &&
+        Number(prev.conversations) === Number(r.conversations) &&
+        COST_TOKEN_FIELDS.every(field => Number(prev[field]) === Number(r[field]))) {
+      const previousReports = Number(prev.cost_coverage.reported_events);
+      const reports = Number(r.cost_coverage?.reported_events) || 0;
+      const fromCursor = (coverage: Record<string, unknown> | undefined) =>
+        Array.isArray(coverage?.origins) && coverage.origins.includes("cursor_total_cents");
+      if (previousReports > reports || (previousReports === reports &&
+          fromCursor(prev.cost_coverage) && !fromCursor(r.cost_coverage))) continue;
+    }
     if (!prev
       || (Number(r.total_tokens) || 0) > (Number(prev.total_tokens) || 0)
       || ((Number(r.total_tokens) || 0) === (Number(prev.total_tokens) || 0)
@@ -242,13 +250,13 @@ export default async function (req: Request): Promise<Response> {
   const rows = Array.from(dedupedMap.values());
 
   try {
-    const result = await cloudRpc(client, body.cost_coverage_version === 1 ? "cloud_ingest_usage_cost_v1" : "cloud_ingest_usage", {
+    const result = await cloudRpc(client, "cloud_ingest_usage", {
       p_token_hash: tokenHash, p_rows: rows, p_states: stateRows,
       p_upload_id: typeof body.upload_id === "string" && /^[0-9a-f-]{36}$/i.test(body.upload_id)
         ? body.upload_id : null,
     });
     if (!result.ok) return cloudFailure(result, corsHeaders);
-    return json(result);
+    return json(body.cost_coverage_version === 1 ? { ...result, cost_coverage_version: 1 } : result);
   } catch (error) {
     console.error("cloud ingest transaction failed", (error as Error).message);
     return json({ error: "Cloud access unavailable", code: "cloud_access_unavailable" }, 503);

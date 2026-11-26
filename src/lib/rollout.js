@@ -1,4 +1,4 @@
-const { mergeCostCoverage, eventCostCoverage } = require("./cost-provenance");
+const { COST_TOKEN_FIELDS, mergeCostCoverage, eventCostCoverage } = require("./cost-provenance");
 const { preserveLegacyClaudeGroups, preserveLegacyClaudePrefix, createBackendResolver, mergeBackendUsage, claudeLines } = require("./claude-backend");
 const { claudeUserIdentity, collectClaudeForkAliases } = require("./claude-user-identity");
 const fs = require("node:fs/promises");
@@ -7879,6 +7879,42 @@ async function resolveProjectContextForDb({
 
 // ── Cursor (API-based) ──
 
+function mergeCursorGrokBotUsage(csv, events) {
+  const { isCursorGrokBot } = require("./cursor-config");
+  const key = r => JSON.stringify([toUtcHalfHourStart(r.date), r.model.toLowerCase()]);
+  const grouped = records => {
+    const groups = new Map();
+    for (const record of records) {
+      if (!isCursorGrokBot(record.model)) continue;
+      const bucket = key(record);
+      if (!groups.has(bucket)) groups.set(bucket, []);
+      groups.get(bucket).push(record);
+    }
+    return groups;
+  };
+  const csvGroups = grouped(csv);
+  const eventGroups = grouped(events);
+  function tokenBasis(rows) {
+    return ["inputTokens", "cacheReadTokens", "cacheWriteTokens", "outputTokens"]
+      .map(field => rows.reduce((sum, row) => sum + (row[field] || 0), 0));
+  }
+  const replacements = new Map();
+  for (const [bucket, eventRows] of eventGroups) {
+    const csvRows = csvGroups.get(bucket);
+    // Keep the CSV inventory if the two feeds disagree. The amount belongs to
+    // the Cursor snapshot that reported it, and may cover only part of a bucket.
+    const eventBasis = tokenBasis(eventRows);
+    if (!csvRows || (csvRows.length === eventRows.length &&
+        tokenBasis(csvRows).every((n, i) => n === eventBasis[i]) &&
+        (eventRows.every(row => row.tokenUsage.totalCents !== undefined) ||
+          !csvRows.some(row => row.cost > 0)))) {
+      replacements.set(bucket, eventRows);
+    }
+  }
+  return csv.filter(row => !isCursorGrokBot(row.model) || !replacements.has(key(row)))
+    .concat([...replacements.values()].flat());
+}
+
 /**
  * Incremental parser for Cursor usage data fetched via API.
  *
@@ -7893,6 +7929,7 @@ async function parseCursorApiIncremental({
   queuePath,
   onProgress,
   source,
+  grokBotRecords = [],
 }) {
   await ensureDir(path.dirname(queuePath));
   const defaultSource = normalizeSourceInput(source) || "cursor";
@@ -7906,9 +7943,13 @@ async function parseCursorApiIncremental({
   let latestTs = lastTs;
   let eventsAggregated = 0;
   const cb = typeof onProgress === "function" ? onProgress : null;
+  const { normalizeCursorUsage, isCursorGrokBot } = require("./cursor-config");
+  const previousBotTotals = new Map();
+  const csvRecords = records;
+  records = mergeCursorGrokBotUsage(csvRecords, grokBotRecords);
   const total = records.length;
 
-  if (records.length > 0) {
+  if (csvRecords.length > 0) {
     // Guard (2026-06 audit): only wipe buckets the fetched export can
     // actually rebuild. The wipe-then-refill design assumes the CSV is a
     // FULL-history export; if Cursor ever windows or truncates the export,
@@ -7917,7 +7958,7 @@ async function parseCursorApiIncremental({
     // record onward is identical for full exports and fail-safe for
     // partial ones.
     let earliestBucketStart = null;
-    for (const record of records) {
+    for (const record of csvRecords) {
       if (!record?.date) continue;
       const b = toUtcHalfHourStart(record.date);
       if (b && (!earliestBucketStart || b < earliestBucketStart)) earliestBucketStart = b;
@@ -7929,7 +7970,7 @@ async function parseCursorApiIncremental({
       for (const [key, bucket] of Object.entries(hourlyState.buckets || {})) {
         const parsed = parseBucketKey(key);
         const sourceKey = normalizeSourceInput(parsed.source) || DEFAULT_SOURCE;
-        if (sourceKey !== defaultSource) continue;
+        if (sourceKey !== defaultSource || isCursorGrokBot(parsed.model)) continue;
         if (!bucket?.totals) continue;
         if (parsed.hourStart && parsed.hourStart < earliestBucketStart) continue;
         bucket.totals = initTotals();
@@ -7943,7 +7984,6 @@ async function parseCursorApiIncremental({
     const recordDate = record.date;
     if (!recordDate) continue;
 
-    const { normalizeCursorUsage } = require("./cursor-config");
     const delta = normalizeCursorUsage(record);
     // isAllZeroUsage reads only the token fields, so a request-only row (0
     // tokens across every column — e.g. bot/automation requests, issue #998)
@@ -7959,8 +7999,13 @@ async function parseCursorApiIncremental({
 
     const model = normalizeModelInput(record.model) || DEFAULT_MODEL;
     const bucket = getHourlyBucket(hourlyState, defaultSource, model, bucketStart);
+    const key = bucketKey(defaultSource, model, bucketStart);
+    if (isCursorGrokBot(model) && !touchedBuckets.has(key)) {
+      previousBotTotals.set(key, bucket.totals);
+      bucket.totals = initTotals();
+    }
     addTotals(bucket.totals, delta);
-    touchedBuckets.add(bucketKey(defaultSource, model, bucketStart));
+    touchedBuckets.add(key);
 
     eventsAggregated += 1;
 
@@ -7979,6 +8024,17 @@ async function parseCursorApiIncremental({
     }
   }
 
+  for (const [key, prior] of previousBotTotals) {
+    const current = hourlyState.buckets[key].totals;
+    const previousCost = prior.cost_coverage;
+    if (previousCost?.origins.includes("cursor_total_cents") &&
+        !current.cost_coverage?.origins.includes("cursor_total_cents") &&
+        prior.conversation_count === current.conversation_count &&
+        COST_TOKEN_FIELDS.every(field => prior[field] === current[field])) {
+      current.cost_coverage = previousCost;
+      current.total_cost_usd = prior.total_cost_usd;
+    }
+  }
   const bucketsQueued = await enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets });
   hourlyState.updatedAt = new Date().toISOString();
   cursors.hourly = hourlyState;

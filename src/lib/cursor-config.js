@@ -245,6 +245,90 @@ function fetchCursorUsageSummary({ cookie, timeoutMs = 30000, fetchImpl = fetch 
   });
 }
 
+function isCursorGrokBot(model) {
+  return typeof model === "string" && /^grok-bot-/i.test(model);
+}
+
+async function fetchCursorGrokBotUsage({
+  accessToken, sinceMs, untilMs, fetchImpl = fetch,
+}) {
+  const signal = AbortSignal.timeout(60000);
+  async function request(method, body = {}) {
+    const response = await fetchImpl(`${CURSOR_RPC_ORIGIN}/aiserver.v1.DashboardService/${method}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "Connect-Protocol-Version": "1",
+      },
+      body: JSON.stringify(body),
+      signal,
+      redirect: "error",
+    });
+    if (!response.ok) throw new Error(`Cursor ${method} returned ${response.status}`);
+    const result = await response.json();
+    if (!result || typeof result !== "object" || Array.isArray(result) ||
+        "error" in result || "message" in result || "code" in result) {
+      throw new Error(`Invalid Cursor ${method} response`);
+    }
+    return result;
+  }
+  const [{ teams = [] }, { userId }] = await Promise.all([request("GetTeams"), request("GetMe")]);
+  if (!Number.isSafeInteger(userId) || userId <= 0 || !Array.isArray(teams) ||
+      teams.some(team => !Number.isSafeInteger(team?.id) || team.id <= 0)) {
+    throw new Error("Invalid Cursor account membership");
+  }
+  const records = [];
+  const pageSize = 1000;
+  for (const teamId of [null, ...new Set(teams.map(team => team.id))]) {
+    const scope = teamId === null ? {} : { teamId, userId };
+    const pageRequest = page => request("GetFilteredUsageEvents", {
+      ...scope, page, pageSize, startDate: String(sinceMs), endDate: String(untilMs),
+    });
+    const first = await pageRequest(1);
+    const total = first.totalUsageEventsCount ?? (Object.keys(first).length === 0 ? 0 : null);
+    if (!Number.isSafeInteger(total) || total < 0) throw new Error("Invalid Cursor usage event count");
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    function collect(page, number) {
+      const events = page.usageEventsDisplay ?? (total === 0 ? [] : null);
+      if (!Array.isArray(events) || (number > 1 && page.totalUsageEventsCount !== total) ||
+          events.length !== Math.min(pageSize, total - (number - 1) * pageSize)) {
+        throw new Error("Incomplete Cursor usage event pages");
+      }
+      // A repeated billable event can be real. Only complete, stable page sets
+      // are accepted, and all occurrences in them contribute to the total.
+      for (const event of events) {
+        if (!isCursorGrokBot(event?.model)) continue;
+        const timestamp = Number(event.timestamp);
+        if (!Number.isSafeInteger(timestamp)) throw new Error("Invalid Cursor usage timestamp");
+        if (timestamp < sinceMs || timestamp > untilMs) continue;
+        const usage = event.tokenUsage ?? {};
+        const counts = [usage.inputTokens ?? 0, usage.cacheReadTokens ?? 0,
+          usage.cacheWriteTokens ?? 0, usage.outputTokens ?? 0];
+        const cents = usage.totalCents;
+        if (counts.some(n => !Number.isSafeInteger(n) || n < 0) ||
+            (cents !== undefined && (!Number.isFinite(cents) || cents < 0))) {
+          throw new Error("Invalid Cursor Grok Bot usage totals");
+        }
+        const [inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens] = counts;
+        records.push({
+          date: new Date(timestamp).toISOString(),
+          model: event.model,
+          inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens,
+          tokenUsage: { totalCents: cents },
+        });
+      }
+    }
+    collect(first, 1);
+    for (let start = 2; start <= pageCount; start += 6) {
+      const count = Math.min(6, pageCount - start + 1);
+      const pages = await Promise.all(Array.from({ length: count }, (_, i) => pageRequest(start + i)));
+      pages.forEach((page, i) => collect(page, start + i));
+    }
+  }
+  return records;
+}
+
 function readProtoVarint(buffer, offset) {
   let value = 0n;
   let shift = 0n;
@@ -613,6 +697,8 @@ module.exports = {
   extractCursorAuth,
   extractCursorSessionToken,
   fetchCursorUsageCsv,
+  fetchCursorGrokBotUsage,
+  isCursorGrokBot,
   fetchCursorUsageSummary,
   decodeCursorSandAccessStatus,
   decodeCursorSandUsageStatus,
