@@ -30,6 +30,25 @@ afterEach(() => {
   invalidateAccountResponseCache();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
+describe("parallel account reads", () => {
+  it("keeps the original bearer and falls back after a secondary authentication error", async () => {
+    vi.stubEnv("VITE_TOKENTRACKER_CLOUDFLARE_READS", "1");
+    const accessToken = jwt();
+    const fetch = vi.fn().mockResolvedValueOnce(json({}, 401)).mockResolvedValueOnce(json({ from: "primary" }));
+    vi.stubGlobal("fetch", fetch);
+    expect(await fetchCloudUsageSummary({ accessToken })).toEqual({ from: "primary" });
+    expect(fetch.mock.calls.map(([url]) => new URL(url).hostname)).toEqual([
+      "api.tokentracker.cc", "srctyff5.function2.insforge.app",
+    ]);
+    expect(fetch.mock.calls[0][1]).toMatchObject({
+      credentials: "omit", redirect: "error", headers: { Authorization: "Bearer " + accessToken },
+    });
+    expect(fetch.mock.calls[0][1].headers).not.toHaveProperty("apikey");
+    expect(fetch.mock.calls[1][1].headers).toMatchObject({ apikey: "anon-key", Authorization: "Bearer " + accessToken });
+  });
 });
 
 describe("account response cache", () => {

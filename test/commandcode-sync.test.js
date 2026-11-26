@@ -146,7 +146,7 @@ test("cmdSync does not rewrite an unchanged cursor for fork copies", async () =>
   });
 });
 
-for (const [version, fileCacheVersion] of [[2, 1], [3, 2]]) {
+for (const [version, fileCacheVersion] of [[2, 1], [3, 2], [3, 3]]) {
   test(`cmdSync persists schema/cache migration once for unchanged v${version}/cache${fileCacheVersion}`, async () => {
     await withCommandCodeHome(async ({ filePath, queuePath, sync, readCursors }) => {
       await sync();
@@ -166,7 +166,7 @@ for (const [version, fileCacheVersion] of [[2, 1], [3, 2]]) {
       const migrated = await sync();
       assert.equal(migrated.cursor_commits, 1);
       assert.equal((await readCursors()).commandCode.version, 3);
-      assert.equal((await readCursors()).commandCode.fileCacheVersion, 3);
+      assert.equal((await readCursors()).commandCode.fileCacheVersion, 4);
       assert.deepEqual(fs.readFileSync(queuePath), queueBefore);
       const coreBefore = fs.readFileSync(migrated.cursor_path);
       const repeated = await sync();

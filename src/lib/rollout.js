@@ -1565,11 +1565,22 @@ async function parseOpencodeIncremental({
     const inode = st.ino || 0;
     const size = Number.isFinite(st.size) ? st.size : 0;
     const mtimeMs = Number.isFinite(st.mtimeMs) ? st.mtimeMs : 0;
+    const ctimeMs = Number.isFinite(st.ctimeMs) ? st.ctimeMs : 0;
+    const nlink = Number.isFinite(st.nlink) ? st.nlink : 0;
+    // OpenCode message files are small JSON snapshots. Hash the bytes even
+    // when stat metadata matches because Linux can reuse an inode and preserve
+    // size, mtime, ctime and nlink across a rewrite.
+    const raw = await fs.readFile(filePath).catch(() => null);
+    if (raw === null) continue;
+    const contentHash = crypto.createHash("sha256").update(raw).digest("hex");
     const unchanged =
       prev &&
       prev.inode === inode &&
       prev.size === size &&
       prev.mtimeMs === mtimeMs &&
+      prev.ctimeMs === ctimeMs &&
+      prev.nlink === nlink &&
+      prev.contentHash === contentHash &&
       prev.opencodeForkRepairVersion === 1;
     if (unchanged) {
       filesProcessed += 1;
@@ -1605,6 +1616,7 @@ async function parseOpencodeIncremental({
 
     const result = await parseOpencodeMessageFile({
       filePath,
+      raw,
       messageIndex,
       fingerprintIndex,
       fallbackTotals,
@@ -1622,6 +1634,9 @@ async function parseOpencodeIncremental({
       inode,
       size,
       mtimeMs,
+      ctimeMs,
+      nlink,
+      contentHash,
       lastTotals: result.lastTotals,
       messageKey: result.messageKey || null,
       opencodeForkRepairVersion: 1,
@@ -3375,6 +3390,7 @@ async function parseGeminiFile({
 
 async function parseOpencodeMessageFile({
   filePath,
+  raw: rawInput = null,
   messageIndex,
   fingerprintIndex,
   fallbackTotals,
@@ -3398,7 +3414,11 @@ async function parseOpencodeMessageFile({
       ? fallbackEntry.lastTotals
       : legacyTotals;
 
-  const raw = await fs.readFile(filePath, "utf8").catch(() => "");
+  const raw = rawInput === null
+    ? await fs.readFile(filePath, "utf8").catch(() => "")
+    : Buffer.isBuffer(rawInput)
+      ? rawInput.toString("utf8")
+      : String(rawInput);
   if (!raw.trim()) {
     return {
       messageKey: fallbackKey,
@@ -26197,7 +26217,7 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
 // non-owning duplicate is re-read rather than storing a second full ledger.
 const COMMAND_CODE_SOURCE = "command-code";
 const COMMAND_CODE_STATE_VERSION = 3;
-const COMMAND_CODE_FILE_CACHE_VERSION = 3;
+const COMMAND_CODE_FILE_CACHE_VERSION = 4;
 const COMMAND_CODE_HEADER_MAX_BYTES = 65536;
 const COMMAND_CODE_HOME_DIR = ".commandcode";
 const COMMAND_CODE_PROJECTS_DIR = "projects";
@@ -26488,7 +26508,14 @@ function normalizeCommandCodeState(raw) {
       const size = Number(value.size);
       const mtimeMs = Number(value.mtimeMs);
       if (!Number.isFinite(size) || !Number.isFinite(mtimeMs)) continue;
-      files[key] = { size, mtimeMs };
+      const file = { size, mtimeMs };
+      for (const field of ["ino", "ctimeMs", "nlink"]) {
+        if (Number.isFinite(Number(value[field]))) file[field] = Number(value[field]);
+      }
+      if (typeof value.contentHash === "string" && value.contentHash) {
+        file.contentHash = value.contentHash;
+      }
+      files[key] = file;
     }
   }
   const fileIndex = {};
@@ -26523,54 +26550,110 @@ function normalizeCommandCodeState(raw) {
 // TOCTOU shape CodeQL reports as js/file-system-race). Returns null for a
 // missing or non-file path while preserving durable history. Other observation
 // failures propagate before any queues or cursors are published.
+async function hashCommandCodeFile(handle, size) {
+  // A full digest is deliberate. The Linux QA fixture reproduced collisions
+  // across all available stat fields, so sampling or metadata-only checks
+  // would still be allowed to serve stale token totals.
+  const hash = crypto.createHash("sha256");
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let offset = 0;
+  while (offset < size) {
+    const length = Math.min(buffer.length, size - offset);
+    const { bytesRead } = await handle.read(buffer, 0, length, offset);
+    if (!bytesRead) return null;
+    hash.update(buffer.subarray(0, bytesRead));
+    offset += bytesRead;
+  }
+  return hash.digest("hex");
+}
+
 async function readCommandCodeSessionSnapshot(filePath, previous = null, headerRanges = null) {
   let handle;
   try {
     handle = await fs.open(filePath, "r");
     let stat = await handle.stat();
     if (!stat.isFile()) return null;
-    const metadata = { size: stat.size, mtimeMs: stat.mtimeMs };
+    const metadata = {
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      ino: stat.ino || 0,
+      ctimeMs: stat.ctimeMs,
+      nlink: stat.nlink || 0,
+    };
     if (
       previous &&
       previous.size === metadata.size &&
       previous.mtimeMs === metadata.mtimeMs &&
+      previous.ino === metadata.ino &&
+      previous.ctimeMs === metadata.ctimeMs &&
+      previous.nlink === metadata.nlink &&
       (!headerRanges || headerRanges.reduce((sum, range) => sum + range.length, 0) <= COMMAND_CODE_HEADER_MAX_BYTES)
     ) {
-      if (!headerRanges) return { ...metadata, unchanged: true, text: null };
-      // Store byte ranges, never cwd. Positional reads through this same handle
-      // refresh only header lines, preserving Unicode and leading whitespace
-      // without materializing any of the cached message bodies.
-      const headers = [];
-      let complete = true;
-      for (const { start, length } of headerRanges) {
-        const data = Buffer.alloc(length);
-        let offset = 0;
-        while (offset < length) {
-          const { bytesRead } = await handle.read(data, offset, length - offset, start + offset);
-          if (!bytesRead) { complete = false; break; }
-          offset += bytesRead;
-        }
-        if (!complete) break;
-        headers.push(data.toString("utf8"));
-      }
+      const contentHash = await hashCommandCodeFile(handle, stat.size);
       const finalStat = await handle.stat();
-      if (complete && finalStat.size === stat.size && finalStat.mtimeMs === stat.mtimeMs) {
-        return { ...metadata, unchanged: true, text: headers.join("\n") };
+      if (
+        !previous.contentHash ||
+        previous.contentHash !== contentHash ||
+        !contentHash ||
+        finalStat.size !== stat.size ||
+        finalStat.mtimeMs !== stat.mtimeMs ||
+        finalStat.ino !== stat.ino ||
+        finalStat.ctimeMs !== stat.ctimeMs ||
+        finalStat.nlink !== stat.nlink
+      ) {
+        stat = finalStat;
+      } else {
+        const headers = headerRanges
+          ? []
+          : null;
+        if (headers) {
+          for (const { start, length } of headerRanges) {
+            const data = Buffer.alloc(length);
+            let offset = 0;
+            while (offset < length) {
+              const { bytesRead } = await handle.read(data, offset, length - offset, start + offset);
+              if (!bytesRead) return { ...metadata, contentHash, unchanged: false, text: "" };
+              offset += bytesRead;
+            }
+            headers.push(data.toString("utf8"));
+          }
+        }
+        const afterHeaders = await handle.stat();
+        if (
+          afterHeaders.size === stat.size &&
+          afterHeaders.mtimeMs === stat.mtimeMs &&
+          afterHeaders.ino === stat.ino &&
+          afterHeaders.ctimeMs === stat.ctimeMs &&
+          afterHeaders.nlink === stat.nlink
+        ) {
+          return { ...metadata, contentHash, unchanged: true, text: headers?.join("\n") || null };
+        }
+        stat = afterHeaders;
       }
-      // The file changed during the header read. Rebuild through this handle;
-      // positional reads above did not advance its full-read file position.
-      stat = finalStat;
     }
     const data = await handle.readFile();
     const finalStat = await handle.stat();
-    const finalMetadata = { size: finalStat.size, mtimeMs: finalStat.mtimeMs };
+    const finalMetadata = {
+      size: finalStat.size,
+      mtimeMs: finalStat.mtimeMs,
+      ino: finalStat.ino || 0,
+      ctimeMs: finalStat.ctimeMs,
+      nlink: finalStat.nlink || 0,
+      contentHash: crypto.createHash("sha256").update(data).digest("hex"),
+    };
     // Appends and equal-size rewrites during a full read both need a retry:
     // old bytes must not be acknowledged under the rewritten file's metadata.
     if (
       finalMetadata.size !== data.length ||
       finalMetadata.size !== stat.size ||
-      finalMetadata.mtimeMs !== stat.mtimeMs
-    ) finalMetadata.mtimeMs = -1;
+      finalMetadata.mtimeMs !== stat.mtimeMs ||
+      finalMetadata.ino !== (stat.ino || 0) ||
+      finalMetadata.ctimeMs !== stat.ctimeMs ||
+      finalMetadata.nlink !== (stat.nlink || 0)
+    ) {
+      finalMetadata.mtimeMs = -1;
+      finalMetadata.ctimeMs = -1;
+    }
     return { ...finalMetadata, unchanged: false, text: data.toString("utf8") };
   } catch (error) {
     if (isCommandCodePathMissing(error)) return null;
@@ -26635,7 +26718,14 @@ async function parseCommandCodeIncremental({
       projectEnabled && ownsSnapshot ? index.headerRanges : null,
     );
     if (!snapshot) continue;
-    nextFiles[filePath] = { size: snapshot.size, mtimeMs: snapshot.mtimeMs };
+    nextFiles[filePath] = {
+      size: snapshot.size,
+      mtimeMs: snapshot.mtimeMs,
+      ino: snapshot.ino,
+      ctimeMs: snapshot.ctimeMs,
+      nlink: snapshot.nlink,
+      contentHash: snapshot.contentHash,
+    };
 
     const parsed = extractCommandCodeSessionUsage(snapshot.text);
 

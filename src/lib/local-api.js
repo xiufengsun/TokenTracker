@@ -1717,6 +1717,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           baseUrl: runtime.baseUrl || DEFAULT_BASE_URL,
           anonKey: runtime.anonKey,
           refreshToken,
+          preferCloudflare: process.env.TOKENTRACKER_CLOUDFLARE_READS === "1",
           timeoutMs: requestTimeoutMs,
           onSessionRefreshed: (session) => {
             getRuntime();
@@ -1947,7 +1948,9 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       if (String(req.method).toUpperCase() !== "GET") { json(res, { error: "Method Not Allowed" }, 405); return true; }
       const descriptor = { baseUrl: normalizeInstanceBaseUrl(selectedRuntime.baseUrl) || "",
         anonKey: selectedRuntime.configurationError ? null : selectedRuntime.anonKey,
-        dashboardUrl: normalizeInstanceBaseUrl(selectedRuntime.dashboardUrl) || "", configurationError: selectedRuntime.configurationError };
+        dashboardUrl: normalizeInstanceBaseUrl(selectedRuntime.dashboardUrl) || "", configurationError: selectedRuntime.configurationError,
+        sessionMigration: process.env.TOKENTRACKER_SESSION_MIGRATION === "1",
+        cloudflareReads: process.env.TOKENTRACKER_CLOUDFLARE_READS === "1" };
       const value = JSON.stringify(descriptor).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
       res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
       res.end(`window.__TOKENTRACKER_RUNTIME_CONFIG__=${value};`);
@@ -2081,6 +2084,13 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       try {
         const targetUrl = `${insforgeBase.replace(/\/$/, "")}${p}${url.search || ""}`;
         const proxyHeaders = buildProxyHeaders(req.headers);
+        // This server already verified the dashboard's loopback origin. The upstream
+        // receives a server request; the local WebView port is not a hosted web origin.
+        delete proxyHeaders.origin;
+        delete proxyHeaders.referer;
+        // Negotiate only codecs supported by this Node runtime. Chrome also
+        // advertises zstd, which embedded Node 22 cannot decode.
+        delete proxyHeaders["accept-encoding"];
         // Browser cookies survive changes to the loopback server's backend.
         // Only this instance's captured cookies can be relayed, including when
         // switching from a custom instance back to the official service.
@@ -2280,8 +2290,10 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           return true;
         }
         const allowRelayCapture = proxyRes.status < 400;
+        // fetch has already decoded gzip/br. The upstream byte count and
+        // encoding no longer describe the body returned on loopback.
         const responseHeaders = [...proxyRes.headers.entries()]
-          .filter(([k]) => !["transfer-encoding", "connection"].includes(k.toLowerCase()))
+          .filter(([k]) => !["transfer-encoding", "connection", "content-encoding", "content-length"].includes(k.toLowerCase()))
           .map(([k, v]) => {
             if (k.toLowerCase() === "set-cookie") {
               const rewritten = v.replace(/;\s*[Dd]omain=[^;]*/g, "; Domain=localhost");

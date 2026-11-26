@@ -256,7 +256,11 @@ export default async function (req: Request): Promise<Response> {
         ? body.upload_id : null,
     });
     if (!result.ok) return cloudFailure(result, corsHeaders);
-    return json(body.cost_coverage_version === 1 ? { ...result, cost_coverage_version: 1 } : result);
+    return json({
+      ...result,
+      ...(body.cost_coverage_version === 1 ? { cost_coverage_version: 1 } : {}),
+      ...(Deno.env.get("TOKENTRACKER_CLOUDFLARE_DUAL_WRITE") === "1" ? { cloudflare_mirror_ready: true } : {}),
+    });
   } catch (error) {
     console.error("cloud ingest transaction failed", (error as Error).message);
     return json({ error: "Cloud access unavailable", code: "cloud_access_unavailable" }, 503);

@@ -60,3 +60,21 @@ test("resolveRuntimeConfig normalizes timeout and flags", () => {
   assert.equal(result.debug, true);
   assert.equal(result.autoRetryNoSpawn, true);
 });
+
+test("the Cloudflare official host reuses only public defaults and binds each device token to its own deployment", () => {
+  const { CLOUDFLARE_API_URL, DEFAULT_ANON_KEY, DEFAULT_BASE_URL, DEFAULT_DASHBOARD_URL } = require("../src/lib/runtime-config");
+  const env = {};
+  assert.equal(resolveRuntimeConfig({ env }).baseUrl, DEFAULT_BASE_URL);
+  const cloud = resolveRuntimeConfig({ cli: { baseUrl: CLOUDFLARE_API_URL }, config: { baseUrl: DEFAULT_BASE_URL, deviceToken: "old" }, env });
+  assert.deepEqual([cloud.configurationError, cloud.deviceToken, cloud.anonKey, cloud.dashboardUrl],
+    [null, null, DEFAULT_ANON_KEY, DEFAULT_DASHBOARD_URL]);
+  const config = { baseUrl: CLOUDFLARE_API_URL, deviceToken: "bound" };
+  assert.equal(resolveRuntimeConfig({ config, env }).deviceToken, null);
+  assert.equal(resolveRuntimeConfig({ config: { ...config, deviceTokenBaseUrl: CLOUDFLARE_API_URL }, env }).deviceToken, "bound");
+  assert.equal(resolveRuntimeConfig({ config: { ...config, baseUrl: DEFAULT_BASE_URL, deviceTokenBaseUrl: CLOUDFLARE_API_URL }, env }).deviceToken, null);
+  for (const baseUrl of [CLOUDFLARE_API_URL + ".example.org", CLOUDFLARE_API_URL + "/other", "https://tt.workers.dev"]) {
+    const result = resolveRuntimeConfig({ cli: { baseUrl }, config, env });
+    assert.ok(result.configurationError);
+    assert.equal(result.deviceToken, null);
+  }
+});

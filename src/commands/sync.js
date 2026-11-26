@@ -212,7 +212,7 @@ const {
   resolveScanRoots,
   scanRootDirState,
 } = require("../lib/scan-roots");
-const { resolveRuntimeConfig, isLegacyInsforgeBaseUrl } = require("../lib/runtime-config");
+const { resolveRuntimeConfig, isLegacyInsforgeBaseUrl, DEFAULT_BASE_URL, CLOUDFLARE_API_URL } = require("../lib/runtime-config");
 const { resolveDeviceTokenPresence } = require("../lib/cloud-device-token");
 
 function formatSyncUploadSummaryLine({ runtimeDeviceToken, uploadResult, tokenPresentOnDisk }) {
@@ -3736,6 +3736,10 @@ async function cmdSync(argv, context = {}) {
       }
       try {
         let successfulDeviceToken = runtime.deviceToken;
+        const configuredMirror = runtimeConfig.cloudflareDualWrite;
+        let mirrorUsageToCloudflare = typeof configuredMirror === "boolean" ? configuredMirror : undefined;
+        if (process.env.TOKENTRACKER_CLOUDFLARE_DUAL_WRITE === "1") mirrorUsageToCloudflare = true;
+        if (process.env.TOKENTRACKER_CLOUDFLARE_DUAL_WRITE === "0") mirrorUsageToCloudflare = false;
         const drainWithToken = (deviceToken) =>
           drainQueueToCloud({
             baseUrl: runtime.baseUrl,
@@ -3746,6 +3750,7 @@ async function cmdSync(argv, context = {}) {
             maxBatches: opts.drain ? 100 : (autoUploadDecision?.maxBatches || 5),
             batchSize: autoUploadDecision?.batchSize || 200,
             maxDurationMs: UPLOAD_BUDGET_MS,
+            mirrorUsageToCloudflare,
             canUpload,
           });
         try {
@@ -4507,7 +4512,7 @@ const AUTO_RETRY_MAX_DELAY_MS = 2 * 60 * 60 * 1000;
 const INGEST_SLUG = "tokentracker-ingest";
 const MAX_INGEST_BUCKETS = 500;
 
-async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, queueStatePath, maxBatches = 5, batchSize = 200, maxDurationMs = UPLOAD_BUDGET_MS, canUpload = () => true }) {
+async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, queueStatePath, maxBatches = 5, batchSize = 200, maxDurationMs = UPLOAD_BUDGET_MS, mirrorUsageToCloudflare, canUpload = () => true }) {
   const state = (await readJson(queueStatePath)) || { offset: 0 };
   let offset = Number(state.offset || 0);
   let inserted = 0;
@@ -4515,6 +4520,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
   let batches = 0;
   let cloudAccess = null;
   let coverageSupported = false;
+  let cloudflareMirrorReady = false;
   const uploadId = crypto.randomUUID();
   const deadline = Date.now() + maxDurationMs;
   let batchBudget = Math.min(maxBatches, 100);
@@ -4611,6 +4617,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
         throw error;
       }
       cloudAccess = data;
+      cloudflareMirrorReady = !res.redirected && data?.cloudflare_mirror_ready === true;
       if (data.upload_scope === "community") batchBudget = Math.min(batchBudget, 10);
       inserted += Number(data?.inserted || 0);
       skipped += Number(data?.skipped || 0);
@@ -4629,6 +4636,23 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
     if (!requestTimedOut || batches === 0) {
       error.uploadResult = resultSoFar();
       throw error;
+    }
+  } finally {
+    // The source transaction retained accepted rows for the scheduled
+    // replicator. This second client request accelerates their D1 write.
+    // A failure here must never undo the acknowledged InsForge offset.
+    if ((mirrorUsageToCloudflare ?? cloudflareMirrorReady) && baseUrl === DEFAULT_BASE_URL && batches > 0 && canUpload()) {
+      try {
+        const response = await fetch(CLOUDFLARE_API_URL + "/functions/tokentracker-mirror-usage", {
+          method: "POST",
+          headers: { Authorization: "Bearer " + deviceToken },
+          redirect: "error",
+          signal: AbortSignal.timeout(2500),
+        });
+        await response.body?.cancel();
+      } catch {
+        // Cloudflare's next scheduled drain will retry the unacknowledged revisions.
+      }
     }
   }
   return resultSoFar();

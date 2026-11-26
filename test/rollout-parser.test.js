@@ -4501,6 +4501,7 @@ test("parseOpencodeIncremental updates totals after message rewrite with new tok
     await fs.writeFile(messagePath, JSON.stringify(messageV1), "utf8");
     const res = await parseOpencodeIncremental({ messageFiles: [messagePath], cursors, queuePath });
     assert.equal(res.bucketsQueued, 1);
+    const before = await fs.stat(messagePath);
 
     await fs.rm(messagePath);
     const messageV2 = buildOpencodeMessage({
@@ -4508,6 +4509,15 @@ test("parseOpencodeIncremental updates totals after message rewrite with new tok
       tokens: { input: 8, output: 0, reasoning: 0, cached: 0 },
     });
     await fs.writeFile(messagePath, JSON.stringify(messageV2), "utf8");
+    await fs.utimes(messagePath, before.atime, before.mtime);
+    const collision = await fs.stat(messagePath);
+    Object.assign(cursors.files[messagePath], {
+      inode: collision.ino,
+      size: collision.size,
+      mtimeMs: collision.mtimeMs,
+      ctimeMs: collision.ctimeMs,
+      nlink: collision.nlink,
+    });
 
     const resAgain = await parseOpencodeIncremental({
       messageFiles: [messagePath],

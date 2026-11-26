@@ -1,5 +1,11 @@
 export const OFFICIAL_INSFORGE_URL = "https://srctyff5.us-east.insforge.app";
 
+export const CLOUDFLARE_API_URL = "https://api.tokentracker.cc";
+
+export function isOfficialBackend(baseUrl) {
+  return baseUrl === OFFICIAL_INSFORGE_URL || baseUrl === CLOUDFLARE_API_URL;
+}
+
 export function isPublicAnonKey(value) {
   if (typeof value !== "string" || !value.trim()) return false;
   const key = value.trim();
@@ -27,7 +33,7 @@ export function validateInsforgeDeployment({ baseUrl, anonKey, strictPair = fals
   } catch {
     return { baseUrl: "", anonKey: "", errorCode: "invalid_backend_url" };
   }
-  const custom = normalized !== defaultBaseUrl.replace(/\/+$/, "");
+  const custom = normalized !== defaultBaseUrl.replace(/\/+$/, "") && normalized !== CLOUDFLARE_API_URL;
   if ((custom || strictPair) && !configuredKey)
     return { baseUrl: "", anonKey: "", errorCode: "missing_backend_anon_key" };
   if (custom && defaultAnonKey && configuredKey === defaultAnonKey)

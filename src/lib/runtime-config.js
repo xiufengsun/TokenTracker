@@ -1,4 +1,5 @@
 const DEFAULT_BASE_URL = "https://srctyff5.us-east.insforge.app";
+const CLOUDFLARE_API_URL = "https://api.tokentracker.cc";
 // InsForge projects this product has retired. b46ug8xu was production until
 // the 2026-04-19 migration to srctyff5 (0.5.67, commit 73f461b8); init
 // preserves any persisted config.baseUrl, so installs initialized before the
@@ -34,7 +35,9 @@ function resolveRuntimeConfig({ cli = {}, config = {}, env = process.env, defaul
   const configBase = normalizeInstanceBaseUrl(persistedBaseUrl || DEFAULT_BASE_URL);
   const envBase = normalizeInstanceBaseUrl(env?.TOKENTRACKER_INSFORGE_BASE_URL || baseUrl.value);
   const defaultBase = normalizeInstanceBaseUrl(defaults.baseUrl || DEFAULT_BASE_URL);
-  const custom = selectedBase !== DEFAULT_BASE_URL;
+  const custom = selectedBase !== DEFAULT_BASE_URL && selectedBase !== CLOUDFLARE_API_URL;
+  // Even two official deployments keep separate sessions until the device explicitly signs in.
+  const requireTokenBinding = selectedBase !== DEFAULT_BASE_URL;
   const anonKey = pickString(
     cli.anonKey,
     configBase === selectedBase ? config.anonKey : undefined,
@@ -51,9 +54,10 @@ function resolveRuntimeConfig({ cli = {}, config = {}, env = process.env, defaul
   );
   const deviceToken = pickString(
     cli.deviceToken,
-    configBase === selectedBase && (!custom || normalizeInstanceBaseUrl(config.deviceTokenBaseUrl) === selectedBase)
+    configBase === selectedBase && (normalizeInstanceBaseUrl(config.deviceTokenBaseUrl) === selectedBase ||
+      (!requireTokenBinding && !config.deviceTokenBaseUrl))
       ? config.deviceToken : undefined,
-    envBase === selectedBase && (!custom || normalizeInstanceBaseUrl(env?.TOKENTRACKER_INSFORGE_BASE_URL) === selectedBase)
+    envBase === selectedBase && (!requireTokenBinding || normalizeInstanceBaseUrl(env?.TOKENTRACKER_INSFORGE_BASE_URL) === selectedBase)
       ? env?.TOKENTRACKER_DEVICE_TOKEN : undefined,
     defaultBase === selectedBase ? defaults.deviceToken : undefined,
     null,
@@ -234,6 +238,7 @@ function clampInt(value, min, max) {
 }
 
 module.exports = {
+  CLOUDFLARE_API_URL,
   DEFAULT_BASE_URL,
   DEFAULT_ANON_KEY,
   DEFAULT_DASHBOARD_URL,

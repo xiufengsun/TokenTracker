@@ -18,6 +18,25 @@ const {
   __resetCloudAccountCacheForTests,
 } = require("../src/lib/cloud-account");
 
+test("parallel account reads try the official Cloudflare host and keep legacy auth on fallback", async () => {
+  const calls = [];
+  const data = await fetchAccountFunction({
+    slug: "tokentracker-account-summary",
+    anonKey: "public-anon",
+    accessToken: "legacy-access",
+    preferCloudflare: true,
+    fetchImpl: async (url, options) => {
+      calls.push([new URL(url).hostname, options.headers]);
+      return calls.length === 1 ? jsonResponse({}, false, 503) : jsonResponse({ ok: true });
+    },
+  });
+  assert.deepEqual(data, { ok: true });
+  assert.deepEqual(calls.map(([host]) => host), ["api.tokentracker.cc", "srctyff5.function2.insforge.app"]);
+  assert.equal(calls[0][1].apikey, undefined);
+  assert.equal(calls[1][1].apikey, "public-anon");
+  assert.equal(calls[0][1].Authorization, calls[1][1].Authorization);
+});
+
 function b64url(obj) {
   return Buffer.from(JSON.stringify(obj)).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }

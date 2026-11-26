@@ -173,6 +173,7 @@ describe("discoverT3AntigravityBrainDirs", () => {
     await fs.symlink(
       path.join(extraRoot, T3_ANTIGRAVITY_REL),
       aliasParent,
+      process.platform === "win32" ? "junction" : "dir",
     );
 
     const result = await discoverT3AntigravityBrainDirs({

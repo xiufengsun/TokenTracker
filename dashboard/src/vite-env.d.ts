@@ -12,6 +12,8 @@ interface ImportMetaEnv {
   readonly VITE_TOKENTRACKER_BACKEND_ANON_KEY?: string;
   readonly VITE_INSFORGE_BASE_URL?: string;
   readonly VITE_INSFORGE_ANON_KEY?: string;
+  readonly VITE_TOKENTRACKER_SESSION_MIGRATION?: string;
+  readonly VITE_TOKENTRACKER_CLOUDFLARE_READS?: string;
   readonly VITE_SENTRY_DSN?: string;
   readonly VITE_POSTHOG_KEY?: string;
 }

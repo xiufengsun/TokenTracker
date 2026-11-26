@@ -2295,7 +2295,23 @@ async function isDir(p) {
   }
 }
 
+const runtimeInstallInFlight = new Map();
+
 async function installLocalTrackerApp({ appDir }) {
+  const key = path.resolve(appDir);
+  const current = runtimeInstallInFlight.get(key);
+  if (current) return current;
+
+  const install = copyLocalTrackerApp({ appDir });
+  runtimeInstallInFlight.set(key, install);
+  try {
+    return await install;
+  } finally {
+    runtimeInstallInFlight.delete(key);
+  }
+}
+
+async function copyLocalTrackerApp({ appDir }) {
   // Test-only escape hatch: skip the ~10 MB runtime copy (src + dashboard/dist +
   // node_modules) when a test only exercises hook/config/notify wiring. Copying
   // the bundle per test case dominates the init test suite's wall time. Tests

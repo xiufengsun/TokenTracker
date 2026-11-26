@@ -10,7 +10,7 @@
 // functions. Those functions mirror the local `tokentracker-usage-*` response
 // schema exactly, so the popover renders the cloud payload unchanged.
 
-const { DEFAULT_BASE_URL, DEFAULT_ANON_KEY } = require("./runtime-config");
+const { DEFAULT_BASE_URL, DEFAULT_ANON_KEY, CLOUDFLARE_API_URL } = require("./runtime-config");
 const { expandHeatmapCompact } = require("./heatmap-compact");
 const { functionUrlFor, fetchFunctionResponse } = require("./function-url");
 
@@ -385,6 +385,7 @@ async function fetchAccountFunction({
   accessToken,
   slug,
   searchParams,
+  preferCloudflare = false,
   fetchImpl = fetch,
   timeoutMs,
 } = {}) {
@@ -405,6 +406,24 @@ async function fetchAccountFunction({
   }
 
   try {
+    if (preferCloudflare && root === DEFAULT_BASE_URL && Object.values(USAGE_TO_ACCOUNT_SLUG).includes(slug)) {
+      const secondary = new URL(functionUrlFor(CLOUDFLARE_API_URL, slug));
+      secondary.search = url.search;
+      const readDeadline = AbortSignal.timeout(1800);
+      try {
+        const response = await fetchImpl(secondary.toString(), {
+          method: "GET", redirect: "error", headers: { Accept: headers.Accept, Authorization: headers.Authorization },
+          signal: signal ? AbortSignal.any([signal, readDeadline]) : readDeadline,
+        });
+        if (response.ok) {
+          const data = await response.json();
+          return slug === HEATMAP_ACCOUNT_SLUG ? expandHeatmapCompact(data) : data;
+        }
+        await response.body?.cancel();
+      } catch {
+        // The primary backend can still serve the same InsForge session.
+      }
+    }
     const res = await fetchFunctionResponse(url.toString(), { method: "GET", headers, signal }, fetchImpl);
     if (!res || !res.ok) {
       const err = new Error(`Account fetch failed with HTTP ${res ? res.status : "?"}`);
@@ -414,7 +433,7 @@ async function fetchAccountFunction({
       if (typeof failure?.recovery_url === "string") err.recoveryUrl = failure.recovery_url;
       throw err;
     }
-  const data = await res.json();
+    const data = await res.json();
     return slug === HEATMAP_ACCOUNT_SLUG ? expandHeatmapCompact(data) : data;
   } finally {
     if (timeoutId) {
@@ -438,6 +457,7 @@ async function fetchAccountUsage({
   baseUrl = DEFAULT_BASE_URL,
   anonKey = DEFAULT_ANON_KEY,
   refreshToken,
+  preferCloudflare = false,
   fetchImpl = fetch,
   now = Date.now,
   timeoutMs,
@@ -485,8 +505,10 @@ async function fetchAccountUsage({
   // Keyed after the mint so rotation cannot invalidate the entry, and so a
   // revoked session fails here rather than being served from cache.
   const sub = decodeJwtSub(minted.accessToken);
+  const root = String(baseUrl || DEFAULT_BASE_URL).replace(/\/$/, "");
+  const readRoot = preferCloudflare && root === DEFAULT_BASE_URL ? CLOUDFLARE_API_URL : root;
   const cacheKey = sub
-    ? payloadCacheKey({ root: String(baseUrl || DEFAULT_BASE_URL).replace(/\/$/, ""), sub, slug, searchParams })
+    ? payloadCacheKey({ root: readRoot, sub, slug, searchParams })
     : null;
   const force = searchParams?.get("refresh") === "1";
   if (cacheKey && !force) {
@@ -516,7 +538,7 @@ async function fetchAccountUsage({
     pending = (async () => {
       try {
         const data = await fetchAccountFunction({
-          baseUrl, anonKey, accessToken: minted.accessToken, slug, searchParams,
+          baseUrl, anonKey, accessToken: minted.accessToken, slug, searchParams, preferCloudflare,
           fetchImpl, timeoutMs: getRemainingTimeout(),
         });
         if (generation === payloadGeneration && version === (payloadVersions.get(cacheKey) || 0) && cacheKey && data != null) {

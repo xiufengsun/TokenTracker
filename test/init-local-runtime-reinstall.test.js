@@ -68,7 +68,7 @@ test("init first sync keeps local data and credentials without uploading when no
       assert.equal(JSON.parse(await fs.readFile(path.join(trackerDir, "config.json"), "utf8")).deviceToken, "fixture-token");
       assert.equal(await fs.readFile(prefPath, "utf8").catch(() => null), enabled === null ? null : JSON.stringify({ enabled }));
     } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
+      await fs.rm(tmp, { recursive: true, force: true, maxRetries: 8 });
     }
   }
 });
@@ -118,7 +118,7 @@ test("init can rerun from installed local runtime without self-deleting app sour
 
     await fs.stat(path.join(tmp, ".tokentracker", "tracker", "app", "src", "commands", "init.js"));
   } finally {
-    await fs.rm(tmp, { recursive: true, force: true });
+    await fs.rm(tmp, { recursive: true, force: true, maxRetries: 8 });
   }
 });
 
@@ -151,6 +151,6 @@ test("installLocalTrackerApp replaces stale installed runtime and writes a packa
       "overlapping refreshes must preserve unchanged files");
     assert.equal(await fs.readFile(installedParser, "utf8"), copiedParser);
   } finally {
-    await fs.rm(tmp, { recursive: true, force: true });
+    await fs.rm(tmp, { recursive: true, force: true, maxRetries: 8 });
   }
 });
