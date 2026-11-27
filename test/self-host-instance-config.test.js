@@ -105,6 +105,33 @@ async function local(t, { cloudSync = false } = {}) {
   return { directory, queue, history, base, config, request };
 }
 
+test("the trusted auth relay delivers decompressed upstream JSON to a local dashboard", async t => {
+  const payload = { user: { id: "local-relay-check" } };
+  const zipped = require("node:zlib").gzipSync(Buffer.from(JSON.stringify(payload)));
+  const seen = [];
+  const upstream = http.createServer((req, res) => {
+    seen.push(req.headers);
+    res.writeHead(200, { "Content-Type": "application/json", "Content-Encoding": "gzip", "Content-Length": zipped.length });
+    res.end(zipped);
+  });
+  const base = await listen(upstream);
+  t.after(() => new Promise(resolve => { upstream.closeAllConnections(); upstream.close(resolve); }));
+  const app = await local(t);
+  await app.config({ baseUrl: base, anonKey: opaque(40), dashboardUrl: base });
+  const bad = await app.request("/api/auth/sessions/current", undefined, { Origin: "https://other.example" });
+  assert.equal(bad.status, 403);
+  assert.equal(seen.length, 0);
+  const good = await app.request("/api/auth/sessions/current", undefined, {
+    Origin: app.base, Referer: app.base + "/settings", "x-tokentracker-instance": base, "Accept-Encoding": "test-browser-codec",
+  });
+  assert.equal(good.status, 200);
+  assert.equal(good.headers.get("content-encoding"), null);
+  assert.deepEqual(await good.json(), payload);
+  assert.equal(seen[0].origin, undefined);
+  assert.equal(seen[0].referer, undefined);
+  assert.doesNotMatch(String(seen[0]["accept-encoding"]), /test-browser-codec/);
+});
+
 test("pure runtime parsing binds custom public keys and credentials to their selected instance", async () => {
   const before = fssync.existsSync(path.join(process.cwd(), "runtime-instance.json"));
   const a = "https://a.example.test"; const b = "https://b.example.test";
@@ -162,6 +189,16 @@ test("CLI init persists its own public configuration and resets cloud identity w
   await assert.rejects(run(["--base-url", b, "--anon-key", "ik_private-unsafe"]), /public anon key/);
   assert.equal(await fs.readFile(configPath, "utf8"), before);
   assert.equal(await fs.readFile(path.join(tracker, "queue.jsonl"), "utf8"), history);
+
+  const signedIn = { ...official, deviceToken: "official-device-token", deviceId: "official-device-id", user_id: "official-owner" };
+  const relayPath = path.join(tracker, "relay-cookies.json");
+  await fs.writeFile(configPath, JSON.stringify(signedIn));
+  await fs.writeFile(relayPath, "{}");
+  await fs.writeFile(path.join(tracker, "queue.state.json"), '{"offset":123}');
+  await run([]);
+  assert.deepEqual(JSON.parse(await fs.readFile(configPath, "utf8")), signedIn);
+  assert.equal(await fs.readFile(relayPath, "utf8"), "{}");
+  assert.equal(JSON.parse(await fs.readFile(path.join(tracker, "queue.state.json"), "utf8")).offset, 123);
 });
 
 test("device login rejects another dashboard before publishing any credentials", async t => {

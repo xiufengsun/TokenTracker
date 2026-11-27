@@ -1,0 +1,291 @@
+{
+  "before": {
+    "started_at": "2026-11-24T06:13:07.990Z",
+    "reference_rps": 3.4722222222222223,
+    "mix": "45% authenticated summary, 35% public community, 20% authenticated ingest",
+    "scenarios": [
+      {
+        "name": "reference mean",
+        "target_rps": 3.5,
+        "elapsed_s": 30.25,
+        "achieved_rps": 3.47,
+        "max_inflight": 4,
+        "max_schedule_lag_ms": 10,
+        "overall": {
+          "n": 105,
+          "statuses": {
+            "200": 105
+          },
+          "errors": {},
+          "p50_ms": 534,
+          "p95_ms": 1051,
+          "p99_ms": 1518
+        },
+        "routes": {
+          "summary": {
+            "n": 49,
+            "statuses": {
+              "200": 49
+            },
+            "errors": {},
+            "p50_ms": 535,
+            "p95_ms": 1051,
+            "p99_ms": 1257
+          },
+          "public": {
+            "n": 36,
+            "statuses": {
+              "200": 36
+            },
+            "errors": {},
+            "p50_ms": 294,
+            "p95_ms": 1064,
+            "p99_ms": 1705
+          },
+          "write": {
+            "n": 20,
+            "statuses": {
+              "200": 20
+            },
+            "errors": {},
+            "p50_ms": 579,
+            "p95_ms": 681,
+            "p99_ms": 1518
+          }
+        },
+        "pops": [
+          "SJC"
+        ]
+      },
+      {
+        "name": "4x reference",
+        "target_rps": 14,
+        "elapsed_s": 21.4,
+        "achieved_rps": 13.08,
+        "max_inflight": 13,
+        "max_schedule_lag_ms": 48,
+        "overall": {
+          "n": 280,
+          "statuses": {
+            "200": 279,
+            "503": 1
+          },
+          "errors": {
+            "cloud_access_unavailable": 1
+          },
+          "p50_ms": 549,
+          "p95_ms": 1217,
+          "p99_ms": 2044
+        },
+        "routes": {
+          "summary": {
+            "n": 126,
+            "statuses": {
+              "200": 126
+            },
+            "errors": {},
+            "p50_ms": 553,
+            "p95_ms": 1100,
+            "p99_ms": 1477
+          },
+          "public": {
+            "n": 98,
+            "statuses": {
+              "200": 98
+            },
+            "errors": {},
+            "p50_ms": 299,
+            "p95_ms": 1174,
+            "p99_ms": 1466
+          },
+          "write": {
+            "n": 56,
+            "statuses": {
+              "200": 55,
+              "503": 1
+            },
+            "errors": {
+              "cloud_access_unavailable": 1
+            },
+            "p50_ms": 601,
+            "p95_ms": 2044,
+            "p99_ms": 2176
+          }
+        },
+        "pops": [
+          "SJC"
+        ]
+      },
+      {
+        "name": "same device burst",
+        "max_inflight": 10,
+        "elapsed_s": 1.59,
+        "achieved_rps": 6.27,
+        "overall": {
+          "n": 10,
+          "statuses": {
+            "200": 4,
+            "503": 6
+          },
+          "errors": {
+            "cloud_access_unavailable": 6
+          },
+          "p50_ms": 1407,
+          "p95_ms": 1592,
+          "p99_ms": 1592
+        }
+      }
+    ],
+    "integrity": {
+      "attempted_unique_buckets": 86,
+      "accepted_unique_buckets": 79,
+      "baseline_tokens": 0,
+      "delta_tokens": 82190,
+      "delta_conversations": 79,
+      "all_accepted_buckets_accounted_for": true,
+      "replay_unchanged": true
+    },
+    "finished_at": "2026-11-24T06:14:09.049Z"
+  },
+  "after": {
+    "started_at": "2026-11-24T06:17:35.871Z",
+    "reference_rps": 3.4722222222222223,
+    "mix": "45% authenticated summary, 35% public community, 20% authenticated ingest",
+    "scenarios": [
+      {
+        "name": "reference mean",
+        "target_rps": 3.5,
+        "elapsed_s": 30.24,
+        "achieved_rps": 3.47,
+        "max_inflight": 4,
+        "max_schedule_lag_ms": 43,
+        "overall": {
+          "n": 105,
+          "statuses": {
+            "200": 105
+          },
+          "errors": {},
+          "p50_ms": 549,
+          "p95_ms": 1030,
+          "p99_ms": 1145
+        },
+        "routes": {
+          "summary": {
+            "n": 49,
+            "statuses": {
+              "200": 49
+            },
+            "errors": {},
+            "p50_ms": 567,
+            "p95_ms": 1030,
+            "p99_ms": 1145
+          },
+          "public": {
+            "n": 36,
+            "statuses": {
+              "200": 36
+            },
+            "errors": {},
+            "p50_ms": 302,
+            "p95_ms": 1075,
+            "p99_ms": 1272
+          },
+          "write": {
+            "n": 20,
+            "statuses": {
+              "200": 20
+            },
+            "errors": {},
+            "p50_ms": 598,
+            "p95_ms": 749,
+            "p99_ms": 1041
+          }
+        },
+        "pops": [
+          "SJC"
+        ]
+      },
+      {
+        "name": "4x reference",
+        "target_rps": 14,
+        "elapsed_s": 20.43,
+        "achieved_rps": 13.7,
+        "max_inflight": 13,
+        "max_schedule_lag_ms": 38,
+        "overall": {
+          "n": 280,
+          "statuses": {
+            "200": 280
+          },
+          "errors": {},
+          "p50_ms": 544,
+          "p95_ms": 761,
+          "p99_ms": 1300
+        },
+        "routes": {
+          "summary": {
+            "n": 126,
+            "statuses": {
+              "200": 126
+            },
+            "errors": {},
+            "p50_ms": 558,
+            "p95_ms": 691,
+            "p99_ms": 1145
+          },
+          "public": {
+            "n": 98,
+            "statuses": {
+              "200": 98
+            },
+            "errors": {},
+            "p50_ms": 291,
+            "p95_ms": 673,
+            "p99_ms": 1374
+          },
+          "write": {
+            "n": 56,
+            "statuses": {
+              "200": 56
+            },
+            "errors": {},
+            "p50_ms": 581,
+            "p95_ms": 1197,
+            "p99_ms": 1316
+          }
+        },
+        "pops": [
+          "SJC"
+        ]
+      },
+      {
+        "name": "same device burst",
+        "max_inflight": 10,
+        "elapsed_s": 1.16,
+        "achieved_rps": 8.62,
+        "overall": {
+          "n": 10,
+          "statuses": {
+            "200": 10
+          },
+          "errors": {},
+          "p50_ms": 631,
+          "p95_ms": 1159,
+          "p99_ms": 1159
+        }
+      }
+    ],
+    "integrity": {
+      "attempted_unique_buckets": 86,
+      "accepted_unique_buckets": 86,
+      "baseline_tokens": 0,
+      "delta_tokens": 89741,
+      "delta_conversations": 86,
+      "all_accepted_buckets_accounted_for": true,
+      "replay_unchanged": true,
+      "direct_d1_row_values_and_ownership_matched": 86
+    },
+    "unexpected_responses": 0,
+    "finished_at": "2026-11-24T06:18:40.044Z"
+  }
+}

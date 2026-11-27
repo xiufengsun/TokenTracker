@@ -43,6 +43,26 @@ test("session ledger preserves total-only legacy usage before timestamp deduplic
   }finally{await fs.rm(directory,{recursive:true,force:true});}
 });
 
+test("an unreadable Codex archive does not invalidate the cached Codex rows",async()=>{
+  const home=await fs.mkdtemp(path.join(os.tmpdir(),"tt-codex-skipped-archive-"));
+  try{
+    const id="44444444-4444-4444-8444-444444444444";
+    const dir=path.join(home,".codex/sessions/2026/07/02");await fs.mkdir(dir,{recursive:true});
+    await fs.writeFile(path.join(dir,`rollout-2026-07-02T00-00-00-${id}.jsonl`),[{timestamp:"2026-07-02T00:00:00.000Z",type:"session_meta",payload:{id}},record(1,10,10)].map(x=>JSON.stringify(x)+"\n").join(""));
+    await fs.writeFile(path.join(dir,"rollout-2026-07-02T01-00-00-55555555-5555-4555-8555-555555555555.jsonl.zst"),Buffer.from("not a zstd frame"));
+    const first=await buildSessionAnalytics({home});
+    assert.equal(first.find(r=>r.source==="codex").total_tokens,10);assert.equal(first.skippedFiles,1);
+    const queue=path.join(home,".tokentracker/tracker/session.queue.jsonl");
+    const rows=(await fs.readFile(queue,"utf8")).trim().split("\n").map(JSON.parse);
+    for(const row of rows)if(row.source==="codex")row.total_tokens=999;
+    await fs.writeFile(queue,rows.map(r=>JSON.stringify(r)+"\n").join(""));
+    const cached=await buildSessionAnalytics({home});
+    assert.equal(cached.find(r=>r.source==="codex").total_tokens,999);
+    const refreshed=await buildSessionAnalytics({home,recheck:true});
+    assert.equal(refreshed.find(r=>r.source==="codex").total_tokens,999);assert.equal(refreshed.skippedFiles,1);
+  }finally{await fs.rm(home,{recursive:true,force:true});}
+});
+
 test("unversioned Codex cache is rebuilt and survives reload while other sources retain their rows",async()=>{
   const home=await fs.mkdtemp(path.join(os.tmpdir(),"tt-codex-cache-version-"));
   try{

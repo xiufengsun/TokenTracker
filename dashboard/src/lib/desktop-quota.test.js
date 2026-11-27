@@ -30,6 +30,22 @@ describe("desktop quota snapshots", () => {
     expect(selectQuotaRows(rows, ["codex:7d"])).toEqual([]);
     expect(selectQuotaRows(rows, ["codex:5h", "claude:7d"]).map(row => row.id)).toEqual(["codex:5h", "claude:7d"]);
   });
+  it("keeps Antigravity's unpinned default on the Claude weekly window although 5h is listed first", () => {
+    const rows = desktopQuotaRows({
+      antigravity: {
+        configured: true,
+        primary_window: { used_percent: 89 },
+        secondary_window: { used_percent: 0 },
+        tertiary_window: { used_percent: 26 },
+        quaternary_window: { used_percent: 100 },
+      },
+    });
+    expect(rows[0].id).toBe("antigravity:claude-5h");
+    expect(selectQuotaRows(rows, [])).toEqual([expect.objectContaining({ id: "antigravity:claude-weekly", remaining: 11 })]);
+    expect(selectQuotaRows(rows, ["antigravity:claude-5h"]).map(row => row.id)).toEqual(["antigravity:claude-5h"]);
+    const withoutWeekly = rows.filter(row => row.id !== "antigravity:claude-weekly");
+    expect(selectQuotaRows(withoutWeekly, []).map(row => row.id)).toEqual(["antigravity:claude-5h"]);
+  });
 });
 
 it("normalizes provider durations and preserves model labels", () => {

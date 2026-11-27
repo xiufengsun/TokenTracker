@@ -1,3 +1,5 @@
+export const CLOUDFLARE_API_URL: string;
+export function isOfficialBackend(baseUrl: string): boolean;
 export const OFFICIAL_INSFORGE_URL: string;
 export type DeploymentConfiguration = { baseUrl: string; anonKey: string; errorCode: string | null };
 export function isPublicAnonKey(value: unknown): boolean;

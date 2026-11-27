@@ -30,7 +30,7 @@ const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
-const { listClaudeProjectFiles, listRolloutFilesDeep, claudeMessageDedupKey, normalizeClaudeUsage, readZcodeDbMessages, coerceEpochMs, resolveZcodeInstallPaths, normalizeOpencodeModelFields, normalizeOpencodeTokens, deriveOpencodeMessageFingerprint, resolveDshHomes, extractGrokTurnUsageEvents } = require("./rollout");
+const { listClaudeProjectFiles, listRolloutFilesDeep, claudeMessageDedupKey, claudeMessageDedupKeys, claudeMessageAlreadySeen, rememberClaudeMessage, normalizeClaudeUsage, readZcodeDbMessages, coerceEpochMs, resolveZcodeInstallPaths, normalizeOpencodeModelFields, normalizeOpencodeTokens, deriveOpencodeMessageFingerprint, resolveDshHomes, extractGrokTurnUsageEvents } = require("./rollout");
 const { parseCodexRolloutFile } = require("./codex-rollout-parser");
 const { computeRowCost, getModelPricingInfo, getPricingRevision } = require("./pricing");
 const { normalizePerformance, mergePerformance, createClaudePerformanceCollector, createCodexPerformanceCollector, createZcodePerformanceCollector } = require("./session-performance");
@@ -109,6 +109,8 @@ const {
 const SIDECAR_VERSION = 32;
 // Invalidate only Codex token summaries; other sources keep their cached rows.
 const CODEX_USAGE_VERSION = 1;
+// Invalidate Claude session rows after the usage-aware dedup rule change.
+const CLAUDE_DEDUP_VERSION = 1;
 const EDIT_TOOLS = new Set([
   "apply_patch",
   "edit",
@@ -659,9 +661,14 @@ async function scanClaudeSession(filePath, { trackerDir, legacyOffsets = {} } = 
         }
         let obj;
         try { obj = JSON.parse(line); } catch { continue; }
+        const dedupKeys = claudeMessageDedupKeys(obj);
         const timingKey = claudeMessageDedupKey(obj);
-        const countedUsage = obj.type === "assistant" && obj.message && (!timingKey || !seenMessages.has(timingKey))
-          ? normalizeClaudeUsage(obj.message.usage) : null;
+        const usagePreview = obj.type === "assistant" && obj.message
+          ? normalizeClaudeUsage(obj.message.usage)
+          : null;
+        const countedUsage = usagePreview && usagePreview.total_tokens > 0 && !claudeMessageAlreadySeen(seenMessages, dedupKeys)
+          ? usagePreview
+          : null;
         performanceCollector.consume(obj, timingKey, countedUsage, normalizeSessionModel(obj.message?.model) || model);
         updateBounds(bounds, obj.timestamp || obj.message?.timestamp);
         if (typeof obj.sessionId === "string" && obj.sessionId) {
@@ -687,9 +694,11 @@ async function scanClaudeSession(filePath, { trackerDir, legacyOffsets = {} } = 
           continue;
         }
         if (obj.type !== "assistant" || !obj.message) continue;
-        const dedupKey = claudeMessageDedupKey(obj);
-        if (dedupKey && seenMessages.has(dedupKey)) continue;
-        if (dedupKey) seenMessages.add(dedupKey);
+        if (claudeMessageAlreadySeen(seenMessages, dedupKeys)) continue;
+        const usage = usagePreview || normalizeClaudeUsage(obj.message.usage);
+        // Only claim the dedup key once a record carries usage. A zero-usage
+        // sdk-cli/cli copy of the same message.id must not hide the billable one.
+        if (usage.total_tokens > 0) rememberClaudeMessage(seenMessages, dedupKeys);
         // Claude writes internal summary/observer messages with model
         // "<synthetic>". They are not a billable model and can appear after the
         // real assistant messages in the same session. Keep the latest real
@@ -697,7 +706,6 @@ async function scanClaudeSession(filePath, { trackerDir, legacyOffsets = {} } = 
         const candidateModel = normalizeSessionModel(obj.message.model);
         if (candidateModel) model = candidateModel;
         currentTurnModel = model;
-        const usage = normalizeClaudeUsage(obj.message.usage);
         const identity = backend && usage.total_tokens > 0 ? backend(obj, start, end) : null;
         if (identity) usage.backend_usage = [{ ...usage, ...identity }];
         addTotals(tokens, usage);
@@ -2462,7 +2470,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
         // `recheck` deliberately skips the TTL so Refresh always re-walks the
         // directories; the per-file stat reuse below still avoids re-parsing.
         !recheck &&
-        !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && !retryPiScan && previousMeta.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION &&
+        !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && !retryPiScan && previousMeta.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.claude_dedup_version === CLAUDE_DEDUP_VERSION &&
         Number.isFinite(checkedAt) &&
         Date.now() - checkedAt < Math.max(0, Number(cacheTtlMs) || 0)
       ) {
@@ -2511,7 +2519,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   // transcript, so a transient read/parse failure can recover without waiting
   // for the file itself to change.
   const retrySkippedOnRecheck = recheck && Number(previousMeta?.skipped_files) > 0;
-  if (!force && !retrySkippedOnRecheck && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && !retryPiScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.signature === signature) {
+  if (!force && !retrySkippedOnRecheck && !retryZcodeScan && !retryOpencodeScan && !retryKimiScan && !retryOmpScan && !retryDshScan && !retryPiScan && previousMeta?.version === SIDECAR_VERSION && previousMeta.codex_usage_version === CODEX_USAGE_VERSION && previousMeta.claude_dedup_version === CLAUDE_DEDUP_VERSION && previousMeta.signature === signature) {
     const cached = readSidecarWithMeta(sidecarPath, previousMeta);
     // A missing/corrupt sidecar reads as an empty list. The source signature
     // can still match, so only an explicit refresh used to notice the loss;
@@ -2549,7 +2557,6 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   // no signal at all; count them so the API can say so.
   const sourceHealth = Object.fromEntries(Object.keys(discovered).map((source) => [source, { status: "not_observed", discovered_units: 0, failed_units: 0 }]));
   let skippedFiles = 0;
-  let incompleteCodexUsage = false;
   let incompleteZcodeScan = false;
   let incompleteOpencodeScan = false;
   let incompleteKimiScan = false;
@@ -2565,7 +2572,6 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     if (!statKey) {
       health.failed_units += 1;
       skippedFiles += 1;
-      if (entry.source === "codex") incompleteCodexUsage = true;
       if (entry.source === "zcode") incompleteZcodeScan = true;
       if (entry.source === "opencode") incompleteOpencodeScan = true;
       if (entry.source === "kimi") incompleteKimiScan = true;
@@ -2575,7 +2581,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
       continue;
     }
     let rows = null;
-    if (!force && !(entry.source === "codex" && previousMeta?.codex_usage_version !== CODEX_USAGE_VERSION) && !(entry.source === "zcode" && retryZcodeScan) && !(entry.source === "opencode" && retryOpencodeScan) && !(entry.source === "kimi" && retryKimiScan) && !(entry.source === "omp" && retryOmpScan) && !(entry.source === "dsh" && retryDshScan) && !(entry.source === "pi" && retryPiScan) && previousFiles[cacheKey]?.stat_key === statKey) {
+    if (!force && !(entry.source === "codex" && previousMeta?.codex_usage_version !== CODEX_USAGE_VERSION) && !(entry.source === "claude" && previousMeta?.claude_dedup_version !== CLAUDE_DEDUP_VERSION) && !(entry.source === "zcode" && retryZcodeScan) && !(entry.source === "opencode" && retryOpencodeScan) && !(entry.source === "kimi" && retryKimiScan) && !(entry.source === "omp" && retryOmpScan) && !(entry.source === "dsh" && retryDshScan) && !(entry.source === "pi" && retryPiScan) && previousFiles[cacheKey]?.stat_key === statKey) {
       if (entry.source === "zcode" || entry.source === "opencode" || entry.source === "kimi" || entry.source === "omp" || entry.source === "dsh" || entry.source === "pi") {
         // One db scans to many cached rows; recover them all from the previous
         // pass. An empty recovery means the sidecar lost its rows — rescan.
@@ -2612,7 +2618,6 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
         // One active/partial session must not poison the sidecar, but do not
         // pretend it never existed either.
         skippedFiles += 1;
-        if (entry.source === "codex") incompleteCodexUsage = true;
         if (entry.source === "zcode") incompleteZcodeScan = true;
         if (entry.source === "opencode") incompleteOpencodeScan = true;
         if (entry.source === "kimi") incompleteKimiScan = true;
@@ -2685,7 +2690,8 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     const generatedAt = new Date().toISOString();
     await writeAtomic(metaPath, `${JSON.stringify({
       version: SIDECAR_VERSION,
-      codex_usage_version: incompleteCodexUsage ? 0 : CODEX_USAGE_VERSION,
+      codex_usage_version: CODEX_USAGE_VERSION,
+      claude_dedup_version: CLAUDE_DEDUP_VERSION,
       signature,
       generated_at: generatedAt,
       checked_at: generatedAt,

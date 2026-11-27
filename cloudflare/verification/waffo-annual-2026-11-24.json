@@ -1,0 +1,175 @@
+{
+  "order_sha256_prefix": "6e1becba8d658a47",
+  "environment": "sandbox",
+  "sku": "cloud_usd_yearly",
+  "source": "Waffo sandbox GraphQL and delivery logs, Cloudflare authenticated account API",
+  "first": {
+    "at": "2026-11-24T08:35:35.109Z",
+    "period_number": 1,
+    "provider_count": 1,
+    "provider_distinct_paid": 1,
+    "charged_periods": [
+      1
+    ],
+    "current_start": "2026-11-24T08:32:14.000Z",
+    "current_end": "2027-11-24T08:32:14.000Z",
+    "will_renew": true,
+    "provider_state": "active",
+    "worker_payments": [
+      {
+        "currency": "USD",
+        "amount": 3999,
+        "refunded": 0,
+        "start": "2026-11-24T08:32:14.000Z",
+        "end": "2027-11-24T08:32:14.000Z"
+      }
+    ],
+    "membership": {
+      "status": "active",
+      "expires": "2027-11-24T08:32:14.000Z",
+      "source": "payment"
+    },
+    "deliveries": [
+      {
+        "type": "subscription.activated",
+        "http": 200,
+        "attempt": 1,
+        "status": "success"
+      },
+      {
+        "type": "subscription.payment_succeeded",
+        "http": 200,
+        "attempt": 1,
+        "status": "success"
+      }
+    ]
+  },
+  "renewal": {
+    "at": "2026-11-24T08:36:22.056Z",
+    "period_number": 2,
+    "provider_count": 2,
+    "provider_distinct_paid": 2,
+    "charged_periods": [
+      2,
+      1
+    ],
+    "current_start": "2027-11-24T08:32:14.000Z",
+    "current_end": "2027-11-24T08:35:59.000Z",
+    "will_renew": true,
+    "provider_state": "active",
+    "worker_payments": [
+      {
+        "currency": "USD",
+        "amount": 3999,
+        "refunded": 0,
+        "start": "2027-11-24T08:32:14.000Z",
+        "end": "2027-11-24T08:35:59.000Z"
+      },
+      {
+        "currency": "USD",
+        "amount": 3999,
+        "refunded": 0,
+        "start": "2026-11-24T08:32:14.000Z",
+        "end": "2027-11-24T08:32:14.000Z"
+      }
+    ],
+    "membership": {
+      "status": "active",
+      "expires": "2027-11-24T08:35:59.000Z",
+      "source": "payment"
+    },
+    "deliveries": [
+      {
+        "type": "subscription.payment_succeeded",
+        "http": 200,
+        "attempt": 1,
+        "status": "success"
+      },
+      {
+        "type": "subscription.renewed",
+        "http": 200,
+        "attempt": 1,
+        "status": "success"
+      },
+      {
+        "type": "subscription.activated",
+        "http": 200,
+        "attempt": 1,
+        "status": "success"
+      },
+      {
+        "type": "subscription.payment_succeeded",
+        "http": 200,
+        "attempt": 1,
+        "status": "success"
+      }
+    ]
+  },
+  "after_cancel": {
+    "at": "2026-11-24T08:37:29.827Z",
+    "period_number": 2,
+    "provider_count": 2,
+    "provider_distinct_paid": 2,
+    "charged_periods": [
+      2,
+      1
+    ],
+    "current_start": "2027-11-24T08:32:14.000Z",
+    "current_end": "2027-11-24T08:35:59.000Z",
+    "will_renew": false,
+    "provider_state": "canceling",
+    "worker_payments": [
+      {
+        "currency": "USD",
+        "amount": 3999,
+        "refunded": 0,
+        "start": "2027-11-24T08:32:14.000Z",
+        "end": "2027-11-24T08:35:59.000Z"
+      },
+      {
+        "currency": "USD",
+        "amount": 3999,
+        "refunded": 0,
+        "start": "2026-11-24T08:32:14.000Z",
+        "end": "2027-11-24T08:32:14.000Z"
+      }
+    ],
+    "membership": {
+      "status": "active",
+      "expires": "2027-11-24T08:35:59.000Z",
+      "source": "payment"
+    },
+    "deliveries": [
+      {
+        "type": "subscription.canceling",
+        "http": 200,
+        "attempt": 1,
+        "status": "success"
+      },
+      {
+        "type": "subscription.payment_succeeded",
+        "http": 200,
+        "attempt": 1,
+        "status": "success"
+      },
+      {
+        "type": "subscription.renewed",
+        "http": 200,
+        "attempt": 1,
+        "status": "success"
+      },
+      {
+        "type": "subscription.activated",
+        "http": 200,
+        "attempt": 1,
+        "status": "success"
+      },
+      {
+        "type": "subscription.payment_succeeded",
+        "http": 200,
+        "attempt": 1,
+        "status": "success"
+      }
+    ]
+  }
+}

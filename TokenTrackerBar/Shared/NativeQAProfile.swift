@@ -7,6 +7,28 @@ struct NativeQAProfile: Codable {
     static let bundleIdentifier = "com.tokentracker.bar.qa"
     static let urlScheme = "tokentracker-qa"
     static let sandboxRealm = "tokentracker-native-sandbox-v1"
+    static let oauthRealm = "tokentracker-native-oauth-qa-v1"
+    var isOAuthRehearsal: Bool { realm == Self.oauthRealm }
+
+    func permitsOAuthStart(_ url: URL) -> Bool {
+        guard isOAuthRehearsal, let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              parts.scheme == "https", parts.host == "api-qa-tokentracker-migration-staging.sunxiufeng1992.workers.dev",
+              parts.port == nil, parts.user == nil, parts.password == nil, parts.fragment == nil,
+              ["/api/auth/oauth/github", "/api/auth/oauth/google"].contains(parts.path),
+              let query = parts.queryItems, query.count == 1, query[0].name == "start",
+              let start = query[0].value else { return false }
+        return start.range(of: "^[a-zA-Z0-9_-]{43}$", options: .regularExpression) != nil
+    }
+
+    func oauthCallbackCode(_ url: URL) -> String? {
+        guard isOAuthRehearsal, let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              parts.scheme == Self.urlScheme, parts.host == "auth", parts.path == "/callback",
+              parts.port == nil, parts.user == nil, parts.password == nil, parts.fragment == nil,
+              let query = parts.queryItems, query.count == 1, query[0].name == "insforge_code",
+              let code = query[0].value, code.range(of: "^[a-zA-Z0-9_-]{43}$", options: .regularExpression) != nil
+        else { return nil }
+        return code
+    }
 
     let version: Int
     let runID: UUID
@@ -112,8 +134,8 @@ struct NativeQAProfile: Codable {
               components.fragment == nil, components.path.isEmpty,
               origin == "http://127.0.0.1:\(port)",
               serverChallenge.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
-              realm == Self.sandboxRealm,
-              !ownedOrderIDs.isEmpty, ownedOrderIDs.count <= 8,
+              (realm == Self.sandboxRealm && !ownedOrderIDs.isEmpty || isOAuthRehearsal && ownedOrderIDs.isEmpty),
+              ownedOrderIDs.count <= 8,
               Set(ownedOrderIDs).count == ownedOrderIDs.count,
               ownedOrderIDs.allSatisfy({ UUID(uuidString: $0)?.uuidString.lowercased() == $0 }) else {
             throw Failure.invalidProfile

@@ -1,4 +1,4 @@
-const { mergeCostCoverage, eventCostCoverage } = require("./cost-provenance");
+const { COST_TOKEN_FIELDS, mergeCostCoverage, eventCostCoverage } = require("./cost-provenance");
 const { preserveLegacyClaudeGroups, preserveLegacyClaudePrefix, createBackendResolver, mergeBackendUsage, claudeLines } = require("./claude-backend");
 const { claudeUserIdentity, collectClaudeForkAliases } = require("./claude-user-identity");
 const fs = require("node:fs/promises");
@@ -1086,6 +1086,12 @@ async function parseClaudeIncremental({
   // (e.g. subagent file created after main session was already parsed).
   const prevHashes = Array.isArray(cursors.claudeHashes) ? cursors.claudeHashes : [];
   const seenMessageHashes = new Set(prevHashes);
+  // Also index bare message.id values so a persisted `msgId:requestId` matches a
+  // later `sdk-cli` copy that only carries message.id (#1167).
+  for (const hash of prevHashes) {
+    const bare = claudeBareMessageId(hash);
+    if (bare) seenMessageHashes.add(bare);
+  }
   const defaultSource = normalizeSourceInput(source) || "claude";
   preserveLegacyClaudeGroups(files.filter((entry) =>
     (typeof entry === "string" ? defaultSource : normalizeSourceInput(entry?.source) || defaultSource) === "claude"
@@ -1565,11 +1571,22 @@ async function parseOpencodeIncremental({
     const inode = st.ino || 0;
     const size = Number.isFinite(st.size) ? st.size : 0;
     const mtimeMs = Number.isFinite(st.mtimeMs) ? st.mtimeMs : 0;
+    const ctimeMs = Number.isFinite(st.ctimeMs) ? st.ctimeMs : 0;
+    const nlink = Number.isFinite(st.nlink) ? st.nlink : 0;
+    // OpenCode message files are small JSON snapshots. Hash the bytes even
+    // when stat metadata matches because Linux can reuse an inode and preserve
+    // size, mtime, ctime and nlink across a rewrite.
+    const raw = await fs.readFile(filePath).catch(() => null);
+    if (raw === null) continue;
+    const contentHash = crypto.createHash("sha256").update(raw).digest("hex");
     const unchanged =
       prev &&
       prev.inode === inode &&
       prev.size === size &&
       prev.mtimeMs === mtimeMs &&
+      prev.ctimeMs === ctimeMs &&
+      prev.nlink === nlink &&
+      prev.contentHash === contentHash &&
       prev.opencodeForkRepairVersion === 1;
     if (unchanged) {
       filesProcessed += 1;
@@ -1605,6 +1622,7 @@ async function parseOpencodeIncremental({
 
     const result = await parseOpencodeMessageFile({
       filePath,
+      raw,
       messageIndex,
       fingerprintIndex,
       fallbackTotals,
@@ -1622,6 +1640,9 @@ async function parseOpencodeIncremental({
       inode,
       size,
       mtimeMs,
+      ctimeMs,
+      nlink,
+      contentHash,
       lastTotals: result.lastTotals,
       messageKey: result.messageKey || null,
       opencodeForkRepairVersion: 1,
@@ -3207,8 +3228,8 @@ async function parseClaudeFile({
     const usage = obj?.message?.usage || obj?.usage;
     if (!usage || typeof usage !== "object") continue;
 
-    const dedupHash = seenMessageHashes ? claudeMessageDedupKey(obj) : null;
-    if (dedupHash && seenMessageHashes.has(dedupHash)) continue;
+    const dedupKeys = seenMessageHashes ? claudeMessageDedupKeys(obj) : [];
+    if (dedupKeys.some((key) => seenMessageHashes.has(key))) continue;
 
     const model = normalizeModelInput(obj?.message?.model || obj?.model) || DEFAULT_MODEL;
     const tokenTimestamp = typeof obj?.timestamp === "string" ? obj.timestamp : null;
@@ -3217,7 +3238,7 @@ async function parseClaudeFile({
     const delta = normalizeClaudeUsage(usage);
     if (!delta || isAllZeroUsage(delta)) continue;
 
-    if (dedupHash) seenMessageHashes.add(dedupHash);
+    for (const key of dedupKeys) seenMessageHashes.add(key);
     delta.conversation_count = 0;
     const backend = backendResolver?.(obj, lineStart, byteOffset);
     if (backend) delta.backend_usage = [{ ...delta, ...backend }];
@@ -3375,6 +3396,7 @@ async function parseGeminiFile({
 
 async function parseOpencodeMessageFile({
   filePath,
+  raw: rawInput = null,
   messageIndex,
   fingerprintIndex,
   fallbackTotals,
@@ -3398,7 +3420,11 @@ async function parseOpencodeMessageFile({
       ? fallbackEntry.lastTotals
       : legacyTotals;
 
-  const raw = await fs.readFile(filePath, "utf8").catch(() => "");
+  const raw = rawInput === null
+    ? await fs.readFile(filePath, "utf8").catch(() => "")
+    : Buffer.isBuffer(rawInput)
+      ? rawInput.toString("utf8")
+      : String(rawInput);
   if (!raw.trim()) {
     return {
       messageKey: fallbackKey,
@@ -5441,11 +5467,30 @@ function isOmOClaudeSdkMirror(obj) {
   return obj?.entrypoint === "sdk-ts" && obj?.userType === "external";
 }
 
-function claudeMessageDedupKey(obj) {
+function claudeBareMessageId(hash) {
+  if (typeof hash !== "string" || !hash || hash.startsWith("u:")) return null;
+  const colon = hash.indexOf(":");
+  return colon > 0 ? hash.slice(0, colon) : null;
+}
+
+function claudeMessageDedupKeys(obj) {
   const msgId = typeof obj?.message?.id === "string" && obj.message.id ? obj.message.id : null;
-  if (!msgId) return null;
+  if (!msgId) return [];
   const reqId = typeof obj?.requestId === "string" && obj.requestId ? obj.requestId : null;
-  return reqId ? `${msgId}:${reqId}` : msgId;
+  return reqId ? [`${msgId}:${reqId}`, msgId] : [msgId];
+}
+
+function claudeMessageDedupKey(obj) {
+  return claudeMessageDedupKeys(obj)[0] || null;
+}
+
+function claudeMessageAlreadySeen(seen, keys) {
+  return Boolean(seen) && (keys || []).some((key) => seen.has(key));
+}
+
+function rememberClaudeMessage(seen, keys) {
+  if (!seen) return;
+  for (const key of keys || []) seen.add(key);
 }
 
 function normalizeClaudeUsage(u) {
@@ -7879,6 +7924,42 @@ async function resolveProjectContextForDb({
 
 // ── Cursor (API-based) ──
 
+function mergeCursorGrokBotUsage(csv, events) {
+  const { isCursorGrokBot } = require("./cursor-config");
+  const key = r => JSON.stringify([toUtcHalfHourStart(r.date), r.model.toLowerCase()]);
+  const grouped = records => {
+    const groups = new Map();
+    for (const record of records) {
+      if (!isCursorGrokBot(record.model)) continue;
+      const bucket = key(record);
+      if (!groups.has(bucket)) groups.set(bucket, []);
+      groups.get(bucket).push(record);
+    }
+    return groups;
+  };
+  const csvGroups = grouped(csv);
+  const eventGroups = grouped(events);
+  function tokenBasis(rows) {
+    return ["inputTokens", "cacheReadTokens", "cacheWriteTokens", "outputTokens"]
+      .map(field => rows.reduce((sum, row) => sum + (row[field] || 0), 0));
+  }
+  const replacements = new Map();
+  for (const [bucket, eventRows] of eventGroups) {
+    const csvRows = csvGroups.get(bucket);
+    // Keep the CSV inventory if the two feeds disagree. The amount belongs to
+    // the Cursor snapshot that reported it, and may cover only part of a bucket.
+    const eventBasis = tokenBasis(eventRows);
+    if (!csvRows || (csvRows.length === eventRows.length &&
+        tokenBasis(csvRows).every((n, i) => n === eventBasis[i]) &&
+        (eventRows.every(row => row.tokenUsage.totalCents !== undefined) ||
+          !csvRows.some(row => row.cost > 0)))) {
+      replacements.set(bucket, eventRows);
+    }
+  }
+  return csv.filter(row => !isCursorGrokBot(row.model) || !replacements.has(key(row)))
+    .concat([...replacements.values()].flat());
+}
+
 /**
  * Incremental parser for Cursor usage data fetched via API.
  *
@@ -7893,6 +7974,7 @@ async function parseCursorApiIncremental({
   queuePath,
   onProgress,
   source,
+  grokBotRecords = [],
 }) {
   await ensureDir(path.dirname(queuePath));
   const defaultSource = normalizeSourceInput(source) || "cursor";
@@ -7906,9 +7988,13 @@ async function parseCursorApiIncremental({
   let latestTs = lastTs;
   let eventsAggregated = 0;
   const cb = typeof onProgress === "function" ? onProgress : null;
+  const { normalizeCursorUsage, isCursorGrokBot } = require("./cursor-config");
+  const previousBotTotals = new Map();
+  const csvRecords = records;
+  records = mergeCursorGrokBotUsage(csvRecords, grokBotRecords);
   const total = records.length;
 
-  if (records.length > 0) {
+  if (csvRecords.length > 0) {
     // Guard (2026-06 audit): only wipe buckets the fetched export can
     // actually rebuild. The wipe-then-refill design assumes the CSV is a
     // FULL-history export; if Cursor ever windows or truncates the export,
@@ -7917,7 +8003,7 @@ async function parseCursorApiIncremental({
     // record onward is identical for full exports and fail-safe for
     // partial ones.
     let earliestBucketStart = null;
-    for (const record of records) {
+    for (const record of csvRecords) {
       if (!record?.date) continue;
       const b = toUtcHalfHourStart(record.date);
       if (b && (!earliestBucketStart || b < earliestBucketStart)) earliestBucketStart = b;
@@ -7929,7 +8015,7 @@ async function parseCursorApiIncremental({
       for (const [key, bucket] of Object.entries(hourlyState.buckets || {})) {
         const parsed = parseBucketKey(key);
         const sourceKey = normalizeSourceInput(parsed.source) || DEFAULT_SOURCE;
-        if (sourceKey !== defaultSource) continue;
+        if (sourceKey !== defaultSource || isCursorGrokBot(parsed.model)) continue;
         if (!bucket?.totals) continue;
         if (parsed.hourStart && parsed.hourStart < earliestBucketStart) continue;
         bucket.totals = initTotals();
@@ -7943,7 +8029,6 @@ async function parseCursorApiIncremental({
     const recordDate = record.date;
     if (!recordDate) continue;
 
-    const { normalizeCursorUsage } = require("./cursor-config");
     const delta = normalizeCursorUsage(record);
     // isAllZeroUsage reads only the token fields, so a request-only row (0
     // tokens across every column — e.g. bot/automation requests, issue #998)
@@ -7959,8 +8044,13 @@ async function parseCursorApiIncremental({
 
     const model = normalizeModelInput(record.model) || DEFAULT_MODEL;
     const bucket = getHourlyBucket(hourlyState, defaultSource, model, bucketStart);
+    const key = bucketKey(defaultSource, model, bucketStart);
+    if (isCursorGrokBot(model) && !touchedBuckets.has(key)) {
+      previousBotTotals.set(key, bucket.totals);
+      bucket.totals = initTotals();
+    }
     addTotals(bucket.totals, delta);
-    touchedBuckets.add(bucketKey(defaultSource, model, bucketStart));
+    touchedBuckets.add(key);
 
     eventsAggregated += 1;
 
@@ -7979,6 +8069,17 @@ async function parseCursorApiIncremental({
     }
   }
 
+  for (const [key, prior] of previousBotTotals) {
+    const current = hourlyState.buckets[key].totals;
+    const previousCost = prior.cost_coverage;
+    if (previousCost?.origins.includes("cursor_total_cents") &&
+        !current.cost_coverage?.origins.includes("cursor_total_cents") &&
+        prior.conversation_count === current.conversation_count &&
+        COST_TOKEN_FIELDS.every(field => prior[field] === current[field])) {
+      current.cost_coverage = previousCost;
+      current.total_cost_usd = prior.total_cost_usd;
+    }
+  }
   const bucketsQueued = await enqueueTouchedBuckets({ queuePath, hourlyState, touchedBuckets });
   hourlyState.updatedAt = new Date().toISOString();
   cursors.hourly = hourlyState;
@@ -16983,7 +17084,9 @@ function ompEntryTimestampMs(msg, entry) {
 // records are orders of magnitude smaller.
 const OMP_LIKE_MAX_RECORD_BYTES = 64 * 1024 * 1024;
 
-async function scanOmpLikeTranscript(filePath, startOffset, maxRecordBytes, onEntry, { recoverReadErrors = false } = {}) {
+const OMP_USAGE_KEY_BYTES = Buffer.from('"usage"');
+
+async function scanOmpLikeTranscript(filePath, startOffset, maxRecordBytes, onEntry, { mustContain = null, recoverReadErrors = false } = {}) {
   let stream;
   try {
     stream = fssync.createReadStream(filePath, { start: startOffset });
@@ -16996,6 +17099,7 @@ async function scanOmpLikeTranscript(filePath, startOffset, maxRecordBytes, onEn
     for await (const record of physicalJsonlRecords(stream, {
       invalidUtf8: "record",
       maxRecordBytes,
+      mustContain,
     })) {
       scannedEndOffset += record.physicalBytes;
       if (record.terminated) {
@@ -17205,7 +17309,7 @@ async function parseOmpLikeIncremental({
           bucketsQueued: touchedBuckets.size,
         });
       }
-    });
+    }, { mustContain: OMP_USAGE_KEY_BYTES });
 
     fileOffsets[filePath] = {
       size: committedEndOffset,
@@ -17303,7 +17407,7 @@ async function parseOmpLikeIncremental({
           addTotals(projectBucket.totals, delta);
           projectTouchedBuckets.add(projectBucketKey(projectKey, source, bucketStart));
           projectSeenIds.add(entryId);
-        });
+        }, { mustContain: OMP_USAGE_KEY_BYTES });
       }
 
       projectFileOffsets[filePath] = {
@@ -26141,7 +26245,7 @@ async function parseDshIncremental({ sessionFiles, cursors, queuePath, onProgres
 // non-owning duplicate is re-read rather than storing a second full ledger.
 const COMMAND_CODE_SOURCE = "command-code";
 const COMMAND_CODE_STATE_VERSION = 3;
-const COMMAND_CODE_FILE_CACHE_VERSION = 3;
+const COMMAND_CODE_FILE_CACHE_VERSION = 4;
 const COMMAND_CODE_HEADER_MAX_BYTES = 65536;
 const COMMAND_CODE_HOME_DIR = ".commandcode";
 const COMMAND_CODE_PROJECTS_DIR = "projects";
@@ -26432,7 +26536,14 @@ function normalizeCommandCodeState(raw) {
       const size = Number(value.size);
       const mtimeMs = Number(value.mtimeMs);
       if (!Number.isFinite(size) || !Number.isFinite(mtimeMs)) continue;
-      files[key] = { size, mtimeMs };
+      const file = { size, mtimeMs };
+      for (const field of ["ino", "ctimeMs", "nlink"]) {
+        if (Number.isFinite(Number(value[field]))) file[field] = Number(value[field]);
+      }
+      if (typeof value.contentHash === "string" && value.contentHash) {
+        file.contentHash = value.contentHash;
+      }
+      files[key] = file;
     }
   }
   const fileIndex = {};
@@ -26467,54 +26578,110 @@ function normalizeCommandCodeState(raw) {
 // TOCTOU shape CodeQL reports as js/file-system-race). Returns null for a
 // missing or non-file path while preserving durable history. Other observation
 // failures propagate before any queues or cursors are published.
+async function hashCommandCodeFile(handle, size) {
+  // A full digest is deliberate. The Linux QA fixture reproduced collisions
+  // across all available stat fields, so sampling or metadata-only checks
+  // would still be allowed to serve stale token totals.
+  const hash = crypto.createHash("sha256");
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let offset = 0;
+  while (offset < size) {
+    const length = Math.min(buffer.length, size - offset);
+    const { bytesRead } = await handle.read(buffer, 0, length, offset);
+    if (!bytesRead) return null;
+    hash.update(buffer.subarray(0, bytesRead));
+    offset += bytesRead;
+  }
+  return hash.digest("hex");
+}
+
 async function readCommandCodeSessionSnapshot(filePath, previous = null, headerRanges = null) {
   let handle;
   try {
     handle = await fs.open(filePath, "r");
     let stat = await handle.stat();
     if (!stat.isFile()) return null;
-    const metadata = { size: stat.size, mtimeMs: stat.mtimeMs };
+    const metadata = {
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      ino: stat.ino || 0,
+      ctimeMs: stat.ctimeMs,
+      nlink: stat.nlink || 0,
+    };
     if (
       previous &&
       previous.size === metadata.size &&
       previous.mtimeMs === metadata.mtimeMs &&
+      previous.ino === metadata.ino &&
+      previous.ctimeMs === metadata.ctimeMs &&
+      previous.nlink === metadata.nlink &&
       (!headerRanges || headerRanges.reduce((sum, range) => sum + range.length, 0) <= COMMAND_CODE_HEADER_MAX_BYTES)
     ) {
-      if (!headerRanges) return { ...metadata, unchanged: true, text: null };
-      // Store byte ranges, never cwd. Positional reads through this same handle
-      // refresh only header lines, preserving Unicode and leading whitespace
-      // without materializing any of the cached message bodies.
-      const headers = [];
-      let complete = true;
-      for (const { start, length } of headerRanges) {
-        const data = Buffer.alloc(length);
-        let offset = 0;
-        while (offset < length) {
-          const { bytesRead } = await handle.read(data, offset, length - offset, start + offset);
-          if (!bytesRead) { complete = false; break; }
-          offset += bytesRead;
-        }
-        if (!complete) break;
-        headers.push(data.toString("utf8"));
-      }
+      const contentHash = await hashCommandCodeFile(handle, stat.size);
       const finalStat = await handle.stat();
-      if (complete && finalStat.size === stat.size && finalStat.mtimeMs === stat.mtimeMs) {
-        return { ...metadata, unchanged: true, text: headers.join("\n") };
+      if (
+        !previous.contentHash ||
+        previous.contentHash !== contentHash ||
+        !contentHash ||
+        finalStat.size !== stat.size ||
+        finalStat.mtimeMs !== stat.mtimeMs ||
+        finalStat.ino !== stat.ino ||
+        finalStat.ctimeMs !== stat.ctimeMs ||
+        finalStat.nlink !== stat.nlink
+      ) {
+        stat = finalStat;
+      } else {
+        const headers = headerRanges
+          ? []
+          : null;
+        if (headers) {
+          for (const { start, length } of headerRanges) {
+            const data = Buffer.alloc(length);
+            let offset = 0;
+            while (offset < length) {
+              const { bytesRead } = await handle.read(data, offset, length - offset, start + offset);
+              if (!bytesRead) return { ...metadata, contentHash, unchanged: false, text: "" };
+              offset += bytesRead;
+            }
+            headers.push(data.toString("utf8"));
+          }
+        }
+        const afterHeaders = await handle.stat();
+        if (
+          afterHeaders.size === stat.size &&
+          afterHeaders.mtimeMs === stat.mtimeMs &&
+          afterHeaders.ino === stat.ino &&
+          afterHeaders.ctimeMs === stat.ctimeMs &&
+          afterHeaders.nlink === stat.nlink
+        ) {
+          return { ...metadata, contentHash, unchanged: true, text: headers?.join("\n") || null };
+        }
+        stat = afterHeaders;
       }
-      // The file changed during the header read. Rebuild through this handle;
-      // positional reads above did not advance its full-read file position.
-      stat = finalStat;
     }
     const data = await handle.readFile();
     const finalStat = await handle.stat();
-    const finalMetadata = { size: finalStat.size, mtimeMs: finalStat.mtimeMs };
+    const finalMetadata = {
+      size: finalStat.size,
+      mtimeMs: finalStat.mtimeMs,
+      ino: finalStat.ino || 0,
+      ctimeMs: finalStat.ctimeMs,
+      nlink: finalStat.nlink || 0,
+      contentHash: crypto.createHash("sha256").update(data).digest("hex"),
+    };
     // Appends and equal-size rewrites during a full read both need a retry:
     // old bytes must not be acknowledged under the rewritten file's metadata.
     if (
       finalMetadata.size !== data.length ||
       finalMetadata.size !== stat.size ||
-      finalMetadata.mtimeMs !== stat.mtimeMs
-    ) finalMetadata.mtimeMs = -1;
+      finalMetadata.mtimeMs !== stat.mtimeMs ||
+      finalMetadata.ino !== (stat.ino || 0) ||
+      finalMetadata.ctimeMs !== stat.ctimeMs ||
+      finalMetadata.nlink !== (stat.nlink || 0)
+    ) {
+      finalMetadata.mtimeMs = -1;
+      finalMetadata.ctimeMs = -1;
+    }
     return { ...finalMetadata, unchanged: false, text: data.toString("utf8") };
   } catch (error) {
     if (isCommandCodePathMissing(error)) return null;
@@ -26579,7 +26746,14 @@ async function parseCommandCodeIncremental({
       projectEnabled && ownsSnapshot ? index.headerRanges : null,
     );
     if (!snapshot) continue;
-    nextFiles[filePath] = { size: snapshot.size, mtimeMs: snapshot.mtimeMs };
+    nextFiles[filePath] = {
+      size: snapshot.size,
+      mtimeMs: snapshot.mtimeMs,
+      ino: snapshot.ino,
+      ctimeMs: snapshot.ctimeMs,
+      nlink: snapshot.nlink,
+      contentHash: snapshot.contentHash,
+    };
 
     const parsed = extractCommandCodeSessionUsage(snapshot.text);
 
@@ -26968,6 +27142,10 @@ module.exports = {
   toUtcHalfHourStart,
   totalsKey,
   claudeMessageDedupKey,
+  claudeMessageDedupKeys,
+  claudeBareMessageId,
+  claudeMessageAlreadySeen,
+  rememberClaudeMessage,
   normalizeClaudeUsage,
   groupBucketKey,
   // Exposed for regression tests covering nested-group remote URLs.

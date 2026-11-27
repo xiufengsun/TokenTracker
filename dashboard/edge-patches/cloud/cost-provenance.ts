@@ -48,41 +48,78 @@ export function uploadCostCoverage(value: unknown, row: Record<string, unknown>)
 // This side wire is additive: old compact/token RPCs are not repacked or guessed.
 // Its basis must exactly match the recipient inventory before any subtraction.
 export async function attachCloudCostProvenance<T extends object>(
-  client: ReturnType<typeof createClient>, rows: T[], args: Record<string, unknown>,
+  client: ReturnType<typeof createClient>, rows: T[], args: Record<string, unknown>, allowPartial = false,
 ): Promise<(T & { cost_provenance?: CloudCostProvenance })[]> {
   const relevant = rows.filter(r => isCostProvenanceModel(r as CostRow));
   if (!relevant.length) return rows;
   const parameters = { p_user_id: null, p_device_id: null, p_trunc: "all", p_tz: null, p_offset_min: null,
     p_user_from: null, p_user_to: null, p_range_from: null, p_range_to: null, ...args };
-  const { data, error } = await client.database.rpc("usage_cost_provenance_v1", parameters);
-  if (error || !data || data.version !== 1 || !Array.isArray(data.rows)) throw failure();
+  const result = await Promise.resolve(client.database.rpc("usage_cost_provenance_v1", parameters)).catch(() => null);
+  const data = result?.data;
+  if (!result || result.error || !data || data.version !== 1 || !Array.isArray(data.rows)) {
+    if (!allowPartial) throw failure();
+    console.warn("Account cost inventory unavailable");
+    return rows;
+  }
   const includeUser = parameters.p_user_id == null;
   const keyOf = (r: CostRow) => JSON.stringify([includeUser ? r.user_id : "", r.bucket || "", r.source, r.model, r.pricing_tier || "peak"]);
   const inventory = new Map<string, CostRow>();
-  for (const r of relevant) { const key = keyOf(r as CostRow); if (inventory.has(key)) throw failure(); inventory.set(key, r as CostRow); }
+  const duplicateKeys = new Set<string>();
+  for (const r of relevant) {
+    const key = keyOf(r as CostRow);
+    if (inventory.has(key)) duplicateKeys.add(key);
+    inventory.set(key, r as CostRow);
+  }
   const evidence = new Map<string, CloudCostProvenance>();
+  const seen = new Set<string>();
+  function invalid() {
+    if (!allowPartial) throw failure();
+  }
   for (const raw of data.rows) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw failure();
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      invalid();
+      continue;
+    }
     const key = keyOf(raw), row = inventory.get(key);
-    if (!row || evidence.has(key) || (parameters.p_user_id != null && raw.user_id !== parameters.p_user_id)
+    if (seen.has(key)) {
+      invalid();
+      evidence.delete(key);
+      continue;
+    }
+    seen.add(key);
+    if (!row || duplicateKeys.has(key) || (parameters.p_user_id != null && raw.user_id !== parameters.p_user_id)
       || raw.ambiguous !== false || !isAmount(raw.reported_usd) || !raw.basis || !raw.covered_tokens
       || ![raw.has_reported, raw.has_missing, raw.has_allocated].every(v => typeof v === "boolean")
       || (!raw.has_reported && (raw.reported_usd !== 0 || raw.has_allocated))
-      || !Array.isArray(raw.origins) || raw.origins.some(v => !CLOUD_ORIGINS.has(v))) throw failure();
+      || !Array.isArray(raw.origins) || raw.origins.some(v => !CLOUD_ORIGINS.has(v))) {
+      invalid();
+      continue;
+    }
     const covered = {} as Tokens;
-    for (const field of COST_TOKEN_FIELDS) {
+    const matchesBasis = COST_TOKEN_FIELDS.every(field => {
       const total = row[field] ?? 0;
+      const n = raw.covered_tokens[field];
       if ((typeof total === "string" && !total.trim()) || !isCount(Number(total)) || !isCount(raw.basis[field])
-        || Number(total) !== raw.basis[field] || !isCount(raw.covered_tokens[field]) || raw.covered_tokens[field] > Number(total)
-        || (!raw.has_reported && raw.covered_tokens[field] !== 0)
-        || (!raw.has_missing && raw.covered_tokens[field] !== Number(total))) throw failure();
-      covered[field] = raw.covered_tokens[field];
+        || Number(total) !== raw.basis[field] || !isCount(n) || n > Number(total)
+        || (!raw.has_reported && n !== 0) || (!raw.has_missing && n !== Number(total))) return false;
+      covered[field] = n;
+      return true;
+    });
+    if (!matchesBasis) {
+      invalid();
+      continue;
     }
     evidence.set(key, { version: 1, reported_usd: raw.reported_usd, covered_tokens: covered,
       has_reported: raw.has_reported, has_missing: raw.has_missing, has_allocated: raw.has_allocated, origins: [...new Set<string>(raw.origins)] });
   }
-  if (evidence.size !== inventory.size) throw failure();
-  return rows.map(row => isCostProvenanceModel(row as CostRow) ? { ...row, cost_provenance: evidence.get(keyOf(row as CostRow))! } : row);
+  if (evidence.size !== relevant.length || seen.size !== evidence.size) {
+    invalid();
+    console.warn("Account cost inventory differs from token totals");
+  }
+  return rows.map(row => {
+    const cost = evidence.get(keyOf(row as CostRow));
+    return cost ? { ...row, cost_provenance: cost } : row;
+  });
 }
 
 export function coveredRowCost<T extends CostRow>(row: T, estimate: (row: T) => number): number | undefined {

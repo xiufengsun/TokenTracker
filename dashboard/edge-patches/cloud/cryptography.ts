@@ -1,7 +1,7 @@
 import { BillingError } from "./contracts.ts";
 
 const encoder = new TextEncoder();
-export function bytes(value: string): Uint8Array<ArrayBuffer> { return encoder.encode(value); }
+export function bytes(value: string): Uint8Array<ArrayBuffer> { return encoder.encode(value) as Uint8Array<ArrayBuffer>; }
 export function base64Bytes(value: string): Uint8Array<ArrayBuffer> {
   try { return Uint8Array.from(atob(value), c => c.charCodeAt(0)); }
   catch { throw new BillingError("invalid_signature", 401); }

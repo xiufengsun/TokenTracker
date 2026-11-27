@@ -293,3 +293,11 @@ test("create-dmg.sh supports CI headless mode", () => {
     "create-dmg.sh should check CI env var for headless mode"
   );
 });
+
+test("the exact release commit must pass main CI before the draft is published", () => {
+  const content = loadWorkflow();
+  const check = content.indexOf("- name: Require successful CI for the release commit");
+  const publish = content.indexOf("- name: Flip the draft live");
+  assert.ok(check >= 0 && publish > check);
+  assert.match(content, /actions\/workflows\/ci\.yml\/runs\?branch=main&event=push&head_sha=\$GITHUB_SHA/);
+});

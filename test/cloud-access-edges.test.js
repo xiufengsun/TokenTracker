@@ -21,10 +21,10 @@ async function load(name) {
   const module=new Module(filename);module.paths=Module._nodeModulePaths(path.dirname(filename));
   module._compile(out.outputFiles[0].text,filename);return module.exports.default;
 }
-async function environment(t,client) {
+async function environment(t,client,overrides={}) {
   const priorDeno=globalThis.Deno,priorClient=globalThis.__cloudAccessClient;
   globalThis.Deno={env:{get:key=>({JWT_SECRET:secret,INSFORGE_BASE_URL:'https://cloud.invalid',
-    INSFORGE_SERVICE_ROLE_KEY:'isolated-admin',INSFORGE_ANON_KEY:'isolated-anon',TOKENTRACKER_BILLING_ENVIRONMENT:'sandbox'})[key]}};
+    INSFORGE_SERVICE_ROLE_KEY:'isolated-admin',INSFORGE_ANON_KEY:'isolated-anon',TOKENTRACKER_BILLING_ENVIRONMENT:'sandbox',...overrides})[key]}};
   globalThis.__cloudAccessClient=client;
   t.after(()=>{globalThis.Deno=priorDeno;globalThis.__cloudAccessClient=priorClient;});
 }
@@ -70,17 +70,27 @@ test('hourly requests outside the ninety-day window cannot reach aggregation',as
 
 test('ingest preserves within-batch MAX and reports the authoritative cooldown without writing outside its transaction',async t=>{
   let captured;
+  let committed = false;
+  const flags = {};
   await environment(t,{database:{from(table){
     assert.equal(table,'tokentracker_device_tokens');const query={select(){return query},eq(){return query},is(){return query},
       async maybeSingle(){return {data:{user_id:userId,device_id:deviceId},error:null};}};return query;
   },rpc:async(name,args)=>{assert.equal(name,'cloud_ingest_usage');captured=args;
+    if (committed) return {data:{ok:true,inserted:1},error:null};
     return {data:{ok:false,code:'cloud_sync_throttled',status:429,retry_after_seconds:86400,next_allowed_at:'2026-10-05T00:00:00Z'},error:null};
-  }}});
+  }}}, flags);
   const handler=await load('tokentracker-ingest');const uploadId=randomUUID();
-  const response=await handler(new Request('https://cloud.invalid/ingest',{method:'POST',headers:{Authorization:'Bearer device-test-token'},
+  const request=()=>new Request('https://cloud.invalid/ingest',{method:'POST',headers:{Authorization:'Bearer device-test-token'},
     body:JSON.stringify({upload_id:uploadId,hourly:[{hour_start:'2026-10-04T00:00:00Z',source:'codex',model:'gpt-6',total_tokens:10},
-      {hour_start:'2026-10-04T00:00:00Z',source:'codex',model:'gpt-6',total_tokens:50}]})}));
+      {hour_start:'2026-10-04T00:00:00Z',source:'codex',model:'gpt-6',total_tokens:50}]})});
+  flags.TOKENTRACKER_CLOUDFLARE_DUAL_WRITE = '1';
+  const response=await handler(request());
+  assert.equal((await response.json()).cloudflare_mirror_ready,undefined);
   assert.equal(response.status,429);assert.equal(response.headers.get('Retry-After'),'86400');
   assert.equal(captured.p_rows.length,1);assert.equal(captured.p_rows[0].total_tokens,50);
   assert.equal(captured.p_upload_id,uploadId);assert.equal(captured.p_environment,'sandbox');
+  committed = true;
+  assert.deepEqual(await (await handler(request())).json(), {ok:true,inserted:1,cloudflare_mirror_ready:true});
+  flags.TOKENTRACKER_CLOUDFLARE_DUAL_WRITE = '0';
+  assert.deepEqual(await (await handler(request())).json(), {ok:true,inserted:1});
 });

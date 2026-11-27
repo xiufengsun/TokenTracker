@@ -266,6 +266,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
         if let profile = NativeQAProfile.current {
             for url in urls {
+                if profile.isOAuthRehearsal {
+                    guard let code = profile.oauthCallbackCode(url) else { continue }
+                    DashboardWindowController.shared.handleAuthCallback(code: code)
+                    continue
+                }
                 guard let order = try? profile.billingReturnOrder(url) else {
                     fatalError("Native QA billing return rejected")
                 }

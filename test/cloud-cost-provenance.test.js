@@ -188,3 +188,28 @@ test("cost contract installs on the production hot-only baseline without enablin
     await f.db.exec("ROLLBACK");
   } finally { await f.db.close(); }
 });
+
+test("legacy and versioned ingest preserve precise amounts only for the same Cursor usage snapshot", async () => {
+  const f = await fixture({ archive: false });
+  try {
+    await f.db.exec("ALTER TABLE tokentracker_hourly ALTER COLUMN total_cost_usd TYPE numeric(12,4)");
+    const patch = migration("20261126060000_compatible-reported-cost-ingest.sql");
+    await f.db.exec(patch);
+    await f.db.exec(patch);
+    const bot = { ...row(0.081732), source: "cursor", model: "grok-bot-default" };
+    bot.cost_coverage = eventCostCoverage(bot, 0.081732, "cursor_total_cents");
+    const read = async () => (await f.db.query("SELECT total_cost_usd,cost_coverage,input_tokens FROM tokentracker_hourly")).rows[0];
+    assert.equal((await f.ingest([bot])).cost_coverage_version, 1);
+    assert.equal(Number((await read()).total_cost_usd), 0.0817);
+    const legacy = { ...bot, total_cost_usd: 0 };
+    delete legacy.cost_coverage;
+    assert.equal((await f.ingest([legacy], "cloud_ingest_usage")).ok, true);
+    assert.equal((await read()).cost_coverage.reported_usd, 0.081732);
+    const csv = { ...bot, total_cost_usd: 0, cost_coverage: eventCostCoverage(bot, 0, "cursor_csv_cost") };
+    assert.equal((await f.ingest([csv], "cloud_ingest_usage")).ok, true);
+    assert.equal((await read()).cost_coverage.reported_usd, 0.081732);
+    const changed = { ...legacy, input_tokens: 90, total_tokens: 90, billable_total_tokens: 90 };
+    assert.equal((await f.ingest([changed], "cloud_ingest_usage")).ok, true);
+    assert.deepEqual(await read(), { total_cost_usd: "0.0000", cost_coverage: null, input_tokens: 90 });
+  } finally { await f.db.close(); }
+});

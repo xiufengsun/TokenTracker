@@ -16,7 +16,8 @@ import { getInsforgeRemoteUrl, getInsforgeAnonKey } from "./insforge-config";
 import { isValidJwtShape, resolveAuthAccessToken, type AuthTokenProvider } from "./auth-token";
 import { getLocalApiAuthHeaders } from "./local-api-auth";
 import { expandHeatmapCompact } from "./heatmap-compact";
-import { functionUrlFor, fetchFunctionResponse } from "./function-url";
+import { dataBaseUrlFor, functionUrlFor, fetchFunctionResponse } from "./function-url";
+import { CLOUDFLARE_API_URL, OFFICIAL_INSFORGE_URL } from "./insforge-deployment-config.mjs";
 import { clearCloudPromptFailure, recordCloudPromptFailure } from "./cloud-prompt-policy.js";
 
 type AnyRecord = Record<string, any>;
@@ -180,6 +181,19 @@ export function isLocalhostHost() {
   );
 }
 
+function fetchCloudflareRead(url: URL, headers: Record<string, string>, cache?: RequestCache) {
+  return fetch(url, {
+    headers: { Accept: headers.Accept, ...(headers.Authorization ? { Authorization: headers.Authorization } : {}) },
+    cache, credentials: "omit", redirect: "error",
+  });
+}
+
+function fetchAccountResponse(url: URL, headers: Record<string, string>) {
+  return url.origin === CLOUDFLARE_API_URL
+    ? fetchCloudflareRead(url, headers, "no-store")
+    : fetchFunctionResponse(url.toString(), { method: "GET", headers, cache: "no-store" });
+}
+
 async function fetchLocalJson(slug: string, params?: AnyRecord, options?: AnyRecord) {
   const accessToken = options?.accessToken as string | undefined;
   const accountSlug = USAGE_TO_ACCOUNT_SLUG[slug];
@@ -191,7 +205,7 @@ async function fetchLocalJson(slug: string, params?: AnyRecord, options?: AnyRec
   // (localhost) keeps the original same-origin usage-* path.
   if (!isLocalhostHost() && accessToken && accountSlug) {
     const base = getInsforgeRemoteUrl().replace(/\/$/, "");
-    const url = new URL(functionUrlFor(base, accountSlug));
+    const url = new URL(functionUrlFor(dataBaseUrlFor(base), accountSlug));
     if (params) {
       for (const [key, value] of Object.entries(params)) {
         if (value != null && value !== "") url.searchParams.set(key, String(value));
@@ -203,7 +217,7 @@ async function fetchLocalJson(slug: string, params?: AnyRecord, options?: AnyRec
     if (anonKey) headers.apikey = anonKey;
     if (isValidJwtShape(accessToken)) headers.Authorization = `Bearer ${accessToken}`;
     return cachedAccountJsonGet(url, accessToken, async () => {
-      const response = await fetchFunctionResponse(url.toString(), { headers, cache: "no-store" });
+      const response = await fetchAccountResponse(url, headers);
       if (!response.ok) {
         const err: any = new Error(`Request failed with HTTP ${response.status}`);
         err.status = response.status;
@@ -343,7 +357,17 @@ async function fetchInsforgeFunction(slug: string, options: {
   const baseUrl = getInsforgeRemoteUrl();
   if (!baseUrl) throw new Error("InsForge base URL not configured");
   const root = baseUrl.replace(/\/$/, "");
-  const url = new URL(functionUrlFor(root, slug));
+  const method = options.method || "GET";
+  const publishedRead = method === "GET" && [
+    "tokentracker-leaderboard", "tokentracker-leaderboard-profile", "tokentracker-community-models",
+  ].includes(slug);
+  const readCommunityFromCloudflare = slug === "tokentracker-community-models" &&
+    import.meta.env.VITE_TOKENTRACKER_CLOUDFLARE_COMMUNITY_READS === "1" &&
+    root === OFFICIAL_INSFORGE_URL && typeof window !== "undefined" && !isLocalhostHost();
+  const destination = readCommunityFromCloudflare
+    ? CLOUDFLARE_API_URL
+    : publishedRead ? dataBaseUrlFor(root) : root;
+  const url = new URL(functionUrlFor(destination, slug));
   if (options.params) {
     for (const [key, value] of Object.entries(options.params)) {
       if (value != null && value !== "") url.searchParams.set(key, String(value));
@@ -364,12 +388,14 @@ async function fetchInsforgeFunction(slug: string, options: {
     headers.Authorization = `Bearer ${options.accessToken}`;
   }
 
-  const res = await fetchFunctionResponse(url.toString(), {
-    method: options.method || "GET",
-    headers,
-    cache: options.cache,
-    ...(options.body != null ? { body: JSON.stringify(options.body) } : {}),
-  });
+  const res = publishedRead && destination === CLOUDFLARE_API_URL
+    ? await fetchCloudflareRead(url, headers, options.cache)
+    : await fetchFunctionResponse(url.toString(), {
+      method,
+      headers,
+      cache: options.cache,
+      ...(options.body != null ? { body: JSON.stringify(options.body) } : {}),
+    });
   assertBackendInstance(baseUrl, anonKey);
   if (!res.ok) {
     const err: any = new Error(`Request failed with HTTP ${res.status}`);
@@ -937,7 +963,7 @@ async function fetchAccountFunction(
     throw err;
   }
   const root = baseUrl.replace(/\/$/, "");
-  const url = new URL(functionUrlFor(root, slug));
+  const url = new URL(functionUrlFor(dataBaseUrlFor(root), slug));
   if (params) {
     for (const [key, value] of Object.entries(params)) {
       if (value != null && value !== "") url.searchParams.set(key, String(value));
@@ -951,11 +977,7 @@ async function fetchAccountFunction(
   if (anonKey) headers.apikey = anonKey;
   const result = await cachedAccountJsonGet(url, accessToken, async () => {
     assertInstance();
-    const response = await fetchFunctionResponse(url.toString(), {
-      method: "GET",
-      headers,
-      cache: "no-store",
-    });
+    const response = await fetchAccountResponse(url, headers);
     assertInstance();
     if (!response.ok) {
       const err: any = new Error(`Request failed with HTTP ${response.status}`);

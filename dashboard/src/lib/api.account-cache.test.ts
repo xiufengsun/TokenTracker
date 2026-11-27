@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  fetchCloudUsageSummary, fetchCloudUsageDaily, fetchCloudUsageHeatmap,
+  fetchCloudUsageSummary, fetchCloudUsageDaily, fetchCloudUsageHeatmap, getCommunityModels,
   getUsageHeatmap, getUsageLimits, getUserStatus, getUsageSummary, invalidateAccountResponseCache,
 } from "./api";
 import { expandHeatmapCompact } from "./heatmap-compact";
@@ -30,6 +30,38 @@ afterEach(() => {
   invalidateAccountResponseCache();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
+it("reads the hosted community overview directly from Cloudflare without an InsForge fallback", async () => {
+  vi.stubEnv("VITE_TOKENTRACKER_CLOUDFLARE_COMMUNITY_READS", "1");
+  vi.stubGlobal("window", { location: { hostname: "www.tokentracker.cc" } });
+  const fetch = vi.fn().mockResolvedValueOnce(json({ top_models: [] })).mockResolvedValueOnce(json({}, 503));
+  vi.stubGlobal("fetch", fetch);
+  expect(await getCommunityModels()).toEqual({ top_models: [] });
+  await expect(getCommunityModels()).rejects.toMatchObject({ status: 503 });
+  expect(fetch).toHaveBeenCalledTimes(2);
+  for (const [url, options] of fetch.mock.calls) {
+    expect(new URL(url).href).toBe("https://api.tokentracker.cc/functions/tokentracker-community-models");
+    expect(options.headers).toEqual({ Accept: "application/json" });
+  }
+});
+
+describe("Cloudflare account reads", () => {
+  it("keeps the original bearer and surfaces a Cloudflare failure without an InsForge request", async () => {
+    vi.stubEnv("VITE_TOKENTRACKER_CLOUDFLARE_READS", "1");
+    const accessToken = jwt();
+    const fetch = vi.fn().mockResolvedValueOnce(json({}, 401));
+    vi.stubGlobal("fetch", fetch);
+    await expect(fetchCloudUsageSummary({ accessToken })).rejects.toMatchObject({ status: 401 });
+    expect(fetch.mock.calls.map(([url]) => new URL(url).hostname)).toEqual([
+      "api.tokentracker.cc",
+    ]);
+    expect(fetch.mock.calls[0][1]).toMatchObject({
+      credentials: "omit", redirect: "error", headers: { Authorization: "Bearer " + accessToken },
+    });
+    expect(fetch.mock.calls[0][1].headers).not.toHaveProperty("apikey");
+  });
 });
 
 describe("account response cache", () => {

@@ -161,6 +161,8 @@ const {
   toUtcHalfHourStart,
   totalsKey,
   claudeMessageDedupKey,
+  claudeMessageDedupKeys,
+  rememberClaudeMessage,
   coerceEpochMs,
   hasZcodeCursorState,
   resolveZcodeInstallPaths,
@@ -186,8 +188,9 @@ const UPLOAD_BUDGET_MS = 90_000;
 const { maybeSendHeartbeat } = require("../lib/telemetry");
 const {
   isCursorInstalled,
-  extractCursorSessionToken,
+  extractCursorAuth,
   fetchCursorUsageCsv,
+  fetchCursorGrokBotUsage,
   parseCursorCsv,
 } = require("../lib/cursor-config");
 const { purgeProjectUsage } = require("../lib/project-usage-purge");
@@ -211,7 +214,7 @@ const {
   resolveScanRoots,
   scanRootDirState,
 } = require("../lib/scan-roots");
-const { resolveRuntimeConfig, isLegacyInsforgeBaseUrl } = require("../lib/runtime-config");
+const { resolveRuntimeConfig, dataBaseUrlFor, isLegacyInsforgeBaseUrl, DEFAULT_BASE_URL, CLOUDFLARE_API_URL } = require("../lib/runtime-config");
 const { resolveDeviceTokenPresence } = require("../lib/cloud-device-token");
 
 function formatSyncUploadSummaryLine({ runtimeDeviceToken, uploadResult, tokenPresentOnDisk }) {
@@ -2240,7 +2243,7 @@ async function cmdSync(argv, context = {}) {
 
     let cursorResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0 };
     const cursorInstalled = cursorSyncDeps.isInstalled || isCursorInstalled;
-    const cursorAuthExtractor = cursorSyncDeps.extractAuth || extractCursorSessionToken;
+    const cursorAuthExtractor = cursorSyncDeps.extractAuth || extractCursorAuth;
     const cursorUsageFetcher = cursorSyncDeps.fetchUsageCsv || fetchCursorUsageCsv;
     if (sourceAllowed("cursor") && cursorInstalled({ home, trackerDir })) {
       const cursorAuth = cursorAuthExtractor({ home, trackerDir });
@@ -2249,9 +2252,19 @@ async function cmdSync(argv, context = {}) {
           if (progress?.enabled) {
             progress.start(`Fetching Cursor usage...`);
           }
-          const csvText = await cursorUsageFetcher({ cookie: cursorAuth.cookie });
-          const records = parseCursorCsv(csvText);
-          if (records.length > 0) {
+          const untilMs = Date.now();
+          const hourMs = 60 * 60 * 1000;
+          const oldest = untilMs - 7 * 24 * hourMs;
+          const priorFetch = cursors.cursorApi?.grokBotSyncedThrough || 0;
+          const sinceMs = Math.floor(Math.max(oldest, priorFetch - 2 * hourMs) / hourMs) * hourMs;
+          const grokBotFetcher = cursorSyncDeps.fetchGrokBotUsage || fetchCursorGrokBotUsage;
+          const [csv, bots] = await Promise.allSettled([
+            cursorUsageFetcher({ cookie: cursorAuth.cookie }),
+            cursorAuth.accessToken ? grokBotFetcher({ accessToken: cursorAuth.accessToken, sinceMs, untilMs }) : null,
+          ]);
+          const records = csv.status === "fulfilled" ? parseCursorCsv(csv.value) : [];
+          const grokBotRecords = bots.status === "fulfilled" ? bots.value || [] : [];
+          if (records.length || grokBotRecords.length) {
             if (progress?.enabled) {
               progress.start(
                 `Parsing Cursor ${renderBar(0)} 0/${formatNumber(records.length)} records | buckets 0`,
@@ -2259,6 +2272,7 @@ async function cmdSync(argv, context = {}) {
             }
             cursorResult = await parseCursorApiIncremental({
               records,
+              grokBotRecords,
               cursors,
               queuePath,
               onProgress: (p) => {
@@ -2273,6 +2287,11 @@ async function cmdSync(argv, context = {}) {
               source: "cursor",
             });
           }
+          if (bots.status === "fulfilled" && bots.value) {
+            if (!cursors.cursorApi) cursors.cursorApi = {};
+            cursors.cursorApi.grokBotSyncedThrough = untilMs;
+          }
+          if (csv.status === "rejected" && !grokBotRecords.length) throw csv.reason;
         } catch (err) {
           if (!opts.auto) {
             process.stderr.write(`Cursor sync: ${err.message}\n`);
@@ -3719,16 +3738,22 @@ async function cmdSync(argv, context = {}) {
       }
       try {
         let successfulDeviceToken = runtime.deviceToken;
+        const uploadOrigin = dataBaseUrlFor(runtime.baseUrl);
+        const configuredMirror = runtimeConfig.cloudflareDualWrite;
+        let mirrorUsageToCloudflare = typeof configuredMirror === "boolean" ? configuredMirror : undefined;
+        if (process.env.TOKENTRACKER_CLOUDFLARE_DUAL_WRITE === "1") mirrorUsageToCloudflare = true;
+        if (process.env.TOKENTRACKER_CLOUDFLARE_DUAL_WRITE === "0") mirrorUsageToCloudflare = false;
         const drainWithToken = (deviceToken) =>
           drainQueueToCloud({
-            baseUrl: runtime.baseUrl,
-            anonKey: runtime.anonKey,
+            baseUrl: uploadOrigin,
+            anonKey: uploadOrigin === CLOUDFLARE_API_URL ? undefined : runtime.anonKey,
             deviceToken,
             queuePath,
             queueStatePath,
             maxBatches: opts.drain ? 100 : (autoUploadDecision?.maxBatches || 5),
             batchSize: autoUploadDecision?.batchSize || 200,
             maxDurationMs: UPLOAD_BUDGET_MS,
+            mirrorUsageToCloudflare,
             canUpload,
           });
         try {
@@ -4490,7 +4515,7 @@ const AUTO_RETRY_MAX_DELAY_MS = 2 * 60 * 60 * 1000;
 const INGEST_SLUG = "tokentracker-ingest";
 const MAX_INGEST_BUCKETS = 500;
 
-async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, queueStatePath, maxBatches = 5, batchSize = 200, maxDurationMs = UPLOAD_BUDGET_MS, canUpload = () => true }) {
+async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, queueStatePath, maxBatches = 5, batchSize = 200, maxDurationMs = UPLOAD_BUDGET_MS, mirrorUsageToCloudflare, canUpload = () => true }) {
   const state = (await readJson(queueStatePath)) || { offset: 0 };
   let offset = Number(state.offset || 0);
   let inserted = 0;
@@ -4498,6 +4523,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
   let batches = 0;
   let cloudAccess = null;
   let coverageSupported = false;
+  let cloudflareMirrorReady = false;
   const uploadId = crypto.randomUUID();
   const deadline = Date.now() + maxDurationMs;
   let batchBudget = Math.min(maxBatches, 100);
@@ -4558,6 +4584,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
       }
 
       const root = baseUrl.replace(/\/$/, "");
+      const redirect = root === CLOUDFLARE_API_URL ? "error" : undefined;
       const headers = {
         "Content-Type": "application/json",
         Accept: "application/json",
@@ -4572,7 +4599,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
         if (probeBudget <= 0) break;
         requestSignal = AbortSignal.timeout(Math.max(1, Math.ceil(probeBudget)));
         const probe = await fetchFunctionResponse(functionUrlFor(root, INGEST_SLUG), {
-          method: "POST", headers, signal: requestSignal, body: JSON.stringify({ kind: "cost_capabilities" }),
+          method: "POST", headers, redirect, signal: requestSignal, body: JSON.stringify({ kind: "cost_capabilities" }),
         });
         let capabilities = {};
         try { capabilities = JSON.parse(await probe.text()); } catch { /* unsupported legacy server */ }
@@ -4593,6 +4620,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
       const res = await fetchFunctionResponse(functionUrlFor(root, INGEST_SLUG), {
         method: "POST",
         headers,
+        redirect,
         signal: requestSignal,
         body: JSON.stringify({
           upload_id: uploadId,
@@ -4626,6 +4654,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
         throw error;
       }
       cloudAccess = data;
+      cloudflareMirrorReady = !res.redirected && data?.cloudflare_mirror_ready === true;
       if (data.upload_scope === "community") batchBudget = Math.min(batchBudget, 10);
       inserted += Number(data?.inserted || 0);
       skipped += Number(data?.skipped || 0);
@@ -4651,6 +4680,23 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
     if (!requestTimedOut || batches === 0) {
       error.uploadResult = resultSoFar();
       throw error;
+    }
+  } finally {
+    // The source transaction retained accepted rows for the scheduled
+    // replicator. This second client request accelerates their D1 write.
+    // A failure here must never undo the acknowledged InsForge offset.
+    if ((mirrorUsageToCloudflare ?? cloudflareMirrorReady) && baseUrl === DEFAULT_BASE_URL && batches > 0 && canUpload()) {
+      try {
+        const response = await fetch(CLOUDFLARE_API_URL + "/functions/tokentracker-mirror-usage", {
+          method: "POST",
+          headers: { Authorization: "Bearer " + deviceToken },
+          redirect: "error",
+          signal: AbortSignal.timeout(2500),
+        });
+        await response.body?.cancel();
+      } catch {
+        // Cloudflare's next scheduled drain will retry the unacknowledged revisions.
+      }
     }
   }
   return resultSoFar();
@@ -8010,8 +8056,7 @@ async function collectClaudeMessageHashes(filePaths) {
       } catch (_e) {
         continue;
       }
-      const hash = claudeMessageDedupKey(obj);
-      if (hash) hashes.add(hash);
+      rememberClaudeMessage(hashes, claudeMessageDedupKeys(obj));
     }
     rl.close();
     stream.close?.();

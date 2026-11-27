@@ -652,6 +652,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     steps:
       - name: Verify every platform asset landed
         env:
@@ -729,6 +730,18 @@ jobs:
             echo '```'
           } >> "$notes"
           gh release edit "$tag" --notes-file "$notes" --repo "$GITHUB_REPOSITORY"
+
+      - name: Require successful CI for the release commit
+        if: ${{ inputs.publish == true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$GITHUB_SHA&per_page=10")"
+          if ! jq -e --arg sha "$GITHUB_SHA" '.workflow_runs | any(.head_sha == $sha and .conclusion == "success")' <<< "$runs" >/dev/null; then
+            echo '::error::The exact release commit must pass CI on main before publication.'
+            exit 1
+          fi
 
       - name: Flip the draft live
         if: ${{ inputs.publish == true }}
