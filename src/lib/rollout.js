@@ -354,7 +354,7 @@ async function parseRolloutIncremental({
   const projectFreshnessNowMs = Date.now();
   const touchedBuckets = new Set();
   const defaultSource = normalizeSourceInput(source) || DEFAULT_SOURCE;
-  preserveCodexModelBuckets(hourlyState, touchedBuckets);
+  await preserveCodexModelBuckets(hourlyState, touchedBuckets, queuePath);
   const syncDiagnostics = diagnostics && typeof diagnostics === "object" ? diagnostics : null;
 
   if (!cursors.files || typeof cursors.files !== "object") {
@@ -3548,6 +3548,30 @@ async function parseOpencodeMessageFile({
   };
 }
 
+// Recover the latest per-model rows for legacy groups that were already split
+// in the queue. A cursor can still contain an older, partial split (#1130).
+async function readLegacyCodexRows(queuePath, legacyGroups) {
+  const groups = new Map();
+  if (!legacyGroups.size) return groups;
+  const stream = fssync.createReadStream(queuePath);
+  try {
+    for await (const { line, terminated } of physicalJsonlRecords(stream)) {
+      if (!line || !terminated) continue;
+      let row;
+      try { row = JSON.parse(line); } catch { continue; }
+      if (row?.kind || row?.source !== DEFAULT_SOURCE || !row.hour_start) continue;
+      const hour = toUtcHalfHourStart(row.hour_start);
+      const group = groupBucketKey(DEFAULT_SOURCE, hour);
+      if (!legacyGroups.has(group) || !Number.isFinite(row.total_tokens)) continue;
+      if (!groups.has(group)) groups.set(group, new Map());
+      groups.get(group).set(normalizeModelInput(row.model) || DEFAULT_MODEL, row);
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  return groups;
+}
+
 // Codex models are observed per rollout/turn. A busier sibling agent in the
 // same half-hour is not evidence for the model of an unnamed request (#927).
 // Re-emit stored buckets once on upgrade, including idle historical groups:
@@ -3559,7 +3583,7 @@ async function parseOpencodeMessageFile({
 // rows (#1052). Re-emitting that flattened unknown invents an `unknown`
 // sibling (and can zero a stale alignedModel) beside the named rows. Skip
 // re-emit for those flattened legacy groups; clear the marker only.
-function preserveCodexModelBuckets(hourlyState, touchedBuckets) {
+async function preserveCodexModelBuckets(hourlyState, touchedBuckets, queuePath) {
   const upgrading = hourlyState.modelAttributionPolicy?.codex !== "observed";
   const groupQueued =
     hourlyState.groupQueued && typeof hourlyState.groupQueued === "object"
@@ -3594,11 +3618,23 @@ function preserveCodexModelBuckets(hourlyState, touchedBuckets) {
     if (!entry || !entry.named) flattenedLegacyGroups.add(groupKey);
   }
 
+  const queued = await readLegacyCodexRows(queuePath, legacyGroups);
+  const restored = new Set();
+  for (const [group, rows] of queued) {
+    if (Array.from(rows).some(([model, row]) => model !== DEFAULT_MODEL && row.total_tokens > 0)) {
+      restored.add(group);
+    }
+  }
+
   for (const [key, bucket] of Object.entries(hourlyState.buckets || {})) {
     const parsed = parseBucketKey(key);
     if (parsed.source !== DEFAULT_SOURCE || !bucket?.totals) continue;
     const groupKey = groupBucketKey(parsed.source, parsed.hourStart);
     const legacy = legacyGroups.has(groupKey);
+    if (restored.has(groupKey)) {
+      delete hourlyState.buckets[key];
+      continue;
+    }
     if (flattenedLegacyGroups.has(groupKey)) continue;
     if (!upgrading && !legacy) continue;
     bucket.queuedKey = null;
@@ -3606,6 +3642,18 @@ function preserveCodexModelBuckets(hourlyState, touchedBuckets) {
     touchedBuckets.add(key);
   }
   for (const groupKey of legacyGroups) {
+    if (restored.has(groupKey)) {
+      const hour = groupKey.slice(DEFAULT_SOURCE.length + BUCKET_SEPARATOR.length);
+      for (const [model, row] of queued.get(groupKey)) {
+        const bucket = getHourlyBucket(hourlyState, DEFAULT_SOURCE, model, hour);
+        bucket.totals = cloneTotals(row);
+        const key = totalsKey(bucket.totals);
+        if (row.usage_precision) bucket.usage_precision = row.usage_precision;
+        bucket.queuedKey = row.usage_precision ? `${key}|${row.usage_precision}` : key;
+      }
+      delete groupQueued[groupKey];
+      continue;
+    }
     if (flattenedLegacyGroups.has(groupKey)) {
       delete groupQueued[groupKey];
       continue;
