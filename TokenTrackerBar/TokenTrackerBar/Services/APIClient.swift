@@ -10,6 +10,11 @@ struct UsageSummaryFetchResult {
     var source: UsageSummaryViewSource { accountSource.summaryViewSource }
 }
 
+struct IslandUsageSnapshot {
+    let today: UsageSummaryResponse
+    let total: TokenTotals
+}
+
 actor APIClient {
     static let shared = APIClient()
     private static let usageLimitsRequestTimeout: TimeInterval = 25
@@ -39,6 +44,21 @@ actor APIClient {
     }
 
     // MARK: - Public API
+
+    func fetchLocalIslandUsage() async throws -> IslandUsageSnapshot {
+        let range = DateHelpers.rangeForPeriod(.total)
+        // Both requests use the same local day. The daily response also carries the rolling windows.
+        async let today = fetchLocalSummary(from: range.to, to: range.to)
+        async let total = fetchLocalSummary(from: range.from, to: range.to)
+        return try await IslandUsageSnapshot(today: today, total: total.totals)
+    }
+
+    private func fetchLocalSummary(from: String, to: String) async throws -> UsageSummaryResponse {
+        try await fetch("/functions/tokentracker-usage-summary", queryItems: withTimeZoneQueryItems([
+            URLQueryItem(name: "from", value: from),
+            URLQueryItem(name: "to", value: to)
+        ]))
+    }
 
 	func fetchSummary(from: String, to: String) async throws -> UsageSummaryResponse {
         try await fetchSummaryWithSource(from: from, to: to).summary

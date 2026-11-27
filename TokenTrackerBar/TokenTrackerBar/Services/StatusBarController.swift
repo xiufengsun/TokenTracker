@@ -294,6 +294,7 @@ final class StatusBarController: NSObject {
         // dashboard + widget refresh. QueueActivityMonitor coalesces bursts.
         queueActivityMonitor.onSettledActivity = { [weak self] in
             guard let self else { return }
+            self.dynamicIslandController.refreshLocalUsage()
             let summaries = self.selectedMenuBarSummaries()
             Task { @MainActor [weak self] in
                 await self?.viewModel.refreshAfterQueueChange(menuBarSummaries: summaries)

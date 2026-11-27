@@ -4,10 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountViewProvider, useAccountView } from "./AccountViewContext.jsx";
 
 vi.mock("./InsforgeAuthContext.jsx", () => ({
-  useInsforgeAuth: () => ({ enabled: true, signedIn: true, loading: false }),
+  useInsforgeAuth: () => ({ enabled: true, signedIn: !prefState.loading, loading: prefState.loading }),
 }));
 
-const prefState = vi.hoisted(() => ({ ready: false, localHost: true }));
+const prefState = vi.hoisted(() => ({ ready: false, localHost: true, nativeMac: false, loading: false }));
+vi.mock("../lib/native-bridge", () => ({ isNativeEmbed: () => prefState.nativeMac }));
 
 vi.mock("../lib/cloud-sync-prefs", () => ({
   CLOUD_USAGE_SYNCED_EVENT: "tt.cloudUsageSynced",
@@ -21,6 +22,40 @@ describe("AccountViewProvider", () => {
   beforeEach(() => {
     prefState.ready = false;
     prefState.localHost = true;
+    prefState.nativeMac = false;
+    prefState.loading = false;
+    localStorage.clear();
+  });
+
+  it("opens the Mac dashboard on local usage without waiting for sign-in or an upload", () => {
+    Object.assign(prefState, { nativeMac: true, ready: true, loading: true });
+    const wrapper = ({ children }) => <AccountViewProvider>{children}</AccountViewProvider>;
+    const { result, rerender } = renderHook(() => useAccountView(), { wrapper });
+    expect(result.current).toMatchObject({ accountView: false, resolving: false });
+    prefState.loading = false;
+    rerender();
+    act(() => window.dispatchEvent(new Event("tt.cloudUsageSynced")));
+    expect(result.current).toMatchObject({ accountView: false, scopeSwitchable: true });
+  });
+
+  it("restores both explicit Mac scope choices after reopening", () => {
+    Object.assign(prefState, { nativeMac: true, ready: true });
+    const wrapper = ({ children }) => <AccountViewProvider>{children}</AccountViewProvider>;
+    const open = () => renderHook(() => useAccountView(), { wrapper });
+    let page = open();
+    expect(page.result.current.accountView).toBe(false);
+    act(() => page.result.current.setScopeOverride(null));
+    page.unmount();
+    prefState.loading = true;
+    page = open();
+    expect(page.result.current.resolving).toBe(true);
+    prefState.loading = false;
+    page.rerender();
+    expect(page.result.current.accountView).toBe(true);
+    act(() => page.result.current.setScopeOverride("local"));
+    page.unmount();
+    page = open();
+    expect(page.result.current.accountView).toBe(false);
   });
 
   it("keeps the local view until the first cloud upload completes", () => {
