@@ -80,6 +80,24 @@ final class WeeklyLimitResetDetectorTests: XCTestCase {
         XCTAssertTrue(events.isEmpty, "advancing reset_at without a usage drop must not celebrate")
     }
 
+    func testAntigravitySlidingDeadlineOnlyCelebratesAfterOriginalReset() {
+        let key = "antigravity.primary"
+        func poll(_ pct: Double, now: Double, reset: Double, snapshot: WeeklyLimitResetDetector.Snapshot)
+            -> (events: [LimitResetEvent], snapshot: WeeklyLimitResetDetector.Snapshot) {
+            detector.evaluate(readings: [("antigravity", key, "Claude 7d", pct, reset)],
+                              snapshot: snapshot, now: now)
+        }
+        let first = poll(40, now: 1000, reset: 5000, snapshot: .init())
+        let early = poll(10, now: 1120, reset: 5120, snapshot: first.snapshot)
+        XCTAssertTrue(early.events.isEmpty)
+        XCTAssertEqual(early.snapshot.lastPercent[key], 10)
+        let before = poll(45, now: 4999, reset: 8999, snapshot: early.snapshot)
+        XCTAssertTrue(before.events.isEmpty)
+        let due = poll(1, now: 5000, reset: 9000, snapshot: before.snapshot)
+        XCTAssertEqual(due.events.map { $0.previousPercent }, [45])
+        XCTAssertEqual(due.snapshot.lastResetAt[key], 9000)
+    }
+
     func testCooldownSuppressesRepeat() {
         let (_, baseline) = detector.evaluate(readings: reading(90, resetAt: 5000), snapshot: .init(), now: 1000)
         let (firstEvents, afterFirst) = detector.evaluate(readings: reading(2, resetAt: 9000), snapshot: baseline, now: 2000)

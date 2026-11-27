@@ -111,6 +111,13 @@ struct WeeklyLimitResetDetector {
             // Need a full prior baseline (percent + reset time). First observation only
             // records a baseline — never celebrates.
             guard let prevPercent, let prevReset else { continue }
+            // Antigravity can report "now + 7d" on every poll. Keep the
+            // earliest promised deadline until it arrives, while continuing
+            // to track usage drops against the latest percentage (#1178).
+            if reading.provider == "antigravity", now < prevReset {
+                updated.lastResetAt[key] = min(prevReset, curReset)
+                continue
+            }
             // The window must have actually rolled over: its reset_at advanced to a
             // new period, not merely a percentage that dipped.
             guard curReset > prevReset + resetAdvanceTolerance else { continue }
