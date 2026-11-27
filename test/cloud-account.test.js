@@ -18,23 +18,22 @@ const {
   __resetCloudAccountCacheForTests,
 } = require("../src/lib/cloud-account");
 
-test("parallel account reads try the official Cloudflare host and keep legacy auth on fallback", async () => {
+test("official Cloudflare account reads preserve the old bearer without falling back to InsForge", async () => {
   const calls = [];
-  const data = await fetchAccountFunction({
+  await assert.rejects(fetchAccountFunction({
     slug: "tokentracker-account-summary",
     anonKey: "public-anon",
     accessToken: "legacy-access",
     preferCloudflare: true,
     fetchImpl: async (url, options) => {
-      calls.push([new URL(url).hostname, options.headers]);
-      return calls.length === 1 ? jsonResponse({}, false, 503) : jsonResponse({ ok: true });
+      calls.push([new URL(url).hostname, options]);
+      return jsonResponse({}, false, 503);
     },
-  });
-  assert.deepEqual(data, { ok: true });
-  assert.deepEqual(calls.map(([host]) => host), ["api.tokentracker.cc", "srctyff5.function2.insforge.app"]);
-  assert.equal(calls[0][1].apikey, undefined);
-  assert.equal(calls[1][1].apikey, "public-anon");
-  assert.equal(calls[0][1].Authorization, calls[1][1].Authorization);
+  }), { status: 503 });
+  assert.deepEqual(calls.map(([host]) => host), ["api.tokentracker.cc"]);
+  assert.equal(calls[0][1].headers.apikey, undefined);
+  assert.equal(calls[0][1].headers.Authorization, "Bearer legacy-access");
+  assert.equal(calls[0][1].redirect, "error");
 });
 
 function b64url(obj) {

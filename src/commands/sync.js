@@ -214,7 +214,7 @@ const {
   resolveScanRoots,
   scanRootDirState,
 } = require("../lib/scan-roots");
-const { resolveRuntimeConfig, isLegacyInsforgeBaseUrl, DEFAULT_BASE_URL, CLOUDFLARE_API_URL } = require("../lib/runtime-config");
+const { resolveRuntimeConfig, dataBaseUrlFor, isLegacyInsforgeBaseUrl, DEFAULT_BASE_URL, CLOUDFLARE_API_URL } = require("../lib/runtime-config");
 const { resolveDeviceTokenPresence } = require("../lib/cloud-device-token");
 
 function formatSyncUploadSummaryLine({ runtimeDeviceToken, uploadResult, tokenPresentOnDisk }) {
@@ -3738,14 +3738,15 @@ async function cmdSync(argv, context = {}) {
       }
       try {
         let successfulDeviceToken = runtime.deviceToken;
+        const uploadOrigin = dataBaseUrlFor(runtime.baseUrl);
         const configuredMirror = runtimeConfig.cloudflareDualWrite;
         let mirrorUsageToCloudflare = typeof configuredMirror === "boolean" ? configuredMirror : undefined;
         if (process.env.TOKENTRACKER_CLOUDFLARE_DUAL_WRITE === "1") mirrorUsageToCloudflare = true;
         if (process.env.TOKENTRACKER_CLOUDFLARE_DUAL_WRITE === "0") mirrorUsageToCloudflare = false;
         const drainWithToken = (deviceToken) =>
           drainQueueToCloud({
-            baseUrl: runtime.baseUrl,
-            anonKey: runtime.anonKey,
+            baseUrl: uploadOrigin,
+            anonKey: uploadOrigin === CLOUDFLARE_API_URL ? undefined : runtime.anonKey,
             deviceToken,
             queuePath,
             queueStatePath,
@@ -4553,6 +4554,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
       }
 
       const root = baseUrl.replace(/\/$/, "");
+      const redirect = root === CLOUDFLARE_API_URL ? "error" : undefined;
       const headers = {
         "Content-Type": "application/json",
         Accept: "application/json",
@@ -4567,7 +4569,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
         if (probeBudget <= 0) break;
         requestSignal = AbortSignal.timeout(Math.max(1, Math.ceil(probeBudget)));
         const probe = await fetchFunctionResponse(functionUrlFor(root, INGEST_SLUG), {
-          method: "POST", headers, signal: requestSignal, body: JSON.stringify({ kind: "cost_capabilities" }),
+          method: "POST", headers, redirect, signal: requestSignal, body: JSON.stringify({ kind: "cost_capabilities" }),
         });
         let capabilities = {};
         try { capabilities = JSON.parse(await probe.text()); } catch { /* unsupported legacy server */ }
@@ -4586,6 +4588,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
       const res = await fetchFunctionResponse(functionUrlFor(root, INGEST_SLUG), {
         method: "POST",
         headers,
+        redirect,
         signal: requestSignal,
         body: JSON.stringify({
           upload_id: uploadId,

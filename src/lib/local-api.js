@@ -9,7 +9,7 @@ const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const { setImmediate: yieldToRequests } = require("node:timers/promises");
 const { createAsyncQueueReader } = require("./async-queue-reader");
-const { DEFAULT_BASE_URL, resolveRuntimeConfig, assertInsforgeRuntime, normalizeInstanceBaseUrl, clearDeviceIdentity, resetInstanceState } = require("./runtime-config");
+const { DEFAULT_BASE_URL, CLOUDFLARE_API_URL, dataBaseUrlFor, resolveRuntimeConfig, assertInsforgeRuntime, normalizeInstanceBaseUrl, clearDeviceIdentity, resetInstanceState } = require("./runtime-config");
 const {
   filterRowsByUsageScope,
   getSourceScope,
@@ -1251,7 +1251,11 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
     if (runtime.configurationError || (!fs.existsSync(runtimeConfigPath) && !fs.existsSync(qp))) return runtime;
     const fingerprint = fingerprintFor(runtime);
     if (fingerprint !== instanceFingerprint) {
-      if (instanceFingerprint || runtime.baseUrl !== DEFAULT_BASE_URL) {
+      const officialCutover = runtime.sessionMigrationFrom === DEFAULT_BASE_URL &&
+        (!instanceFingerprint || instanceFingerprint === fingerprintFor({
+          baseUrl: runtime.sessionMigrationFrom, anonKey: runtime.anonKey,
+        }));
+      if (!officialCutover && (instanceFingerprint || runtime.baseUrl !== DEFAULT_BASE_URL)) {
         clearRelayCookies("backend instance changed");
         _nativeAuthPending = false; _nativeAuthExpiry = 0;
         resetInstanceState(path.dirname(qp));
@@ -1717,7 +1721,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           baseUrl: runtime.baseUrl || DEFAULT_BASE_URL,
           anonKey: runtime.anonKey,
           refreshToken,
-          preferCloudflare: process.env.TOKENTRACKER_CLOUDFLARE_READS === "1",
+          preferCloudflare: true,
           timeoutMs: requestTimeoutMs,
           onSessionRefreshed: (session) => {
             getRuntime();
@@ -1950,7 +1954,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         anonKey: selectedRuntime.configurationError ? null : selectedRuntime.anonKey,
         dashboardUrl: normalizeInstanceBaseUrl(selectedRuntime.dashboardUrl) || "", configurationError: selectedRuntime.configurationError,
         sessionMigration: process.env.TOKENTRACKER_SESSION_MIGRATION === "1",
-        cloudflareReads: process.env.TOKENTRACKER_CLOUDFLARE_READS === "1" };
+        cloudflareReads: dataBaseUrlFor(selectedRuntime.baseUrl) === CLOUDFLARE_API_URL };
       const value = JSON.stringify(descriptor).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
       res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
       res.end(`window.__TOKENTRACKER_RUNTIME_CONFIG__=${value};`);

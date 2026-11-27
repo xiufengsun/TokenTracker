@@ -10,7 +10,7 @@
 // functions. Those functions mirror the local `tokentracker-usage-*` response
 // schema exactly, so the popover renders the cloud payload unchanged.
 
-const { DEFAULT_BASE_URL, DEFAULT_ANON_KEY, CLOUDFLARE_API_URL } = require("./runtime-config");
+const { DEFAULT_BASE_URL, DEFAULT_ANON_KEY, CLOUDFLARE_API_URL, dataBaseUrlFor } = require("./runtime-config");
 const { expandHeatmapCompact } = require("./heatmap-compact");
 const { functionUrlFor, fetchFunctionResponse } = require("./function-url");
 
@@ -390,10 +390,11 @@ async function fetchAccountFunction({
   timeoutMs,
 } = {}) {
   const root = String(baseUrl || DEFAULT_BASE_URL).replace(/\/$/, "");
-  const url = new URL(functionUrlFor(root, slug));
+  const readRoot = preferCloudflare ? dataBaseUrlFor(root) : root;
+  const url = new URL(functionUrlFor(readRoot, slug));
   url.search = accountFunctionParams(slug, searchParams).toString();
   const headers = { Accept: "application/json", Authorization: `Bearer ${accessToken}` };
-  if (anonKey) headers.apikey = anonKey;
+  if (anonKey && readRoot !== CLOUDFLARE_API_URL) headers.apikey = anonKey;
 
   let timeoutId;
   const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
@@ -406,25 +407,8 @@ async function fetchAccountFunction({
   }
 
   try {
-    if (preferCloudflare && root === DEFAULT_BASE_URL && Object.values(USAGE_TO_ACCOUNT_SLUG).includes(slug)) {
-      const secondary = new URL(functionUrlFor(CLOUDFLARE_API_URL, slug));
-      secondary.search = url.search;
-      const readDeadline = AbortSignal.timeout(1800);
-      try {
-        const response = await fetchImpl(secondary.toString(), {
-          method: "GET", redirect: "error", headers: { Accept: headers.Accept, Authorization: headers.Authorization },
-          signal: signal ? AbortSignal.any([signal, readDeadline]) : readDeadline,
-        });
-        if (response.ok) {
-          const data = await response.json();
-          return slug === HEATMAP_ACCOUNT_SLUG ? expandHeatmapCompact(data) : data;
-        }
-        await response.body?.cancel();
-      } catch {
-        // The primary backend can still serve the same InsForge session.
-      }
-    }
-    const res = await fetchFunctionResponse(url.toString(), { method: "GET", headers, signal }, fetchImpl);
+    const redirect = readRoot === CLOUDFLARE_API_URL ? "error" : undefined;
+    const res = await fetchFunctionResponse(url.toString(), { method: "GET", headers, redirect, signal }, fetchImpl);
     if (!res || !res.ok) {
       const err = new Error(`Account fetch failed with HTTP ${res ? res.status : "?"}`);
       err.status = res ? res.status : 0;
@@ -506,7 +490,7 @@ async function fetchAccountUsage({
   // revoked session fails here rather than being served from cache.
   const sub = decodeJwtSub(minted.accessToken);
   const root = String(baseUrl || DEFAULT_BASE_URL).replace(/\/$/, "");
-  const readRoot = preferCloudflare && root === DEFAULT_BASE_URL ? CLOUDFLARE_API_URL : root;
+  const readRoot = preferCloudflare ? dataBaseUrlFor(root) : root;
   const cacheKey = sub
     ? payloadCacheKey({ root: readRoot, sub, slug, searchParams })
     : null;

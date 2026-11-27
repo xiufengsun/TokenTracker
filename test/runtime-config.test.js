@@ -3,6 +3,24 @@ const { test } = require("node:test");
 
 const { resolveRuntimeConfig } = require("../src/lib/runtime-config");
 
+test("the official session cutover keeps a legacy-bound device token and leaves self-hosted servers unchanged", () => {
+  const env = { TOKENTRACKER_SESSION_MIGRATION: "1" };
+  const legacy = "https://srctyff5.us-east.insforge.app";
+  const runtime = resolveRuntimeConfig({
+    config: { baseUrl: legacy, deviceTokenBaseUrl: legacy, deviceToken: "existing-device" }, env,
+  });
+  assert.equal(runtime.baseUrl, "https://api.tokentracker.cc");
+  assert.equal(runtime.sessionMigrationFrom, legacy);
+  assert.equal(runtime.deviceToken, "existing-device");
+  const selfHosted = resolveRuntimeConfig({
+    config: { baseUrl: "https://private.example", anonKey: "anon_" + "a".repeat(40),
+      deviceTokenBaseUrl: "https://private.example", deviceToken: "private-device" }, env,
+  });
+  assert.equal(selfHosted.baseUrl, "https://private.example");
+  assert.equal(selfHosted.deviceToken, "private-device");
+  assert.equal(selfHosted.sessionMigrationFrom, undefined);
+});
+
 test("resolveRuntimeConfig prefers CLI flags over config and env", () => {
   const config = { baseUrl: "https://config.example", deviceToken: "cfg" };
   const result = resolveRuntimeConfig({
