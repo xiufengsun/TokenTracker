@@ -2001,9 +2001,6 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       Boolean(uploadAtStart?.baselineKnown || uploadAtStart?.uploading);
     if (overlayApplies && (key !== (uploadAtStart?.key ?? "") || uploading)) return ACCOUNT_FALLBACK_UPLOAD_IN_PROGRESS;
     if (!delta) return cloud;
-    // A device-scoped read covers another device's uploads; this device's
-    // queue says nothing about it.
-    if (url.searchParams.get("device_id")) return cloud;
     const plan = overlayBuildPlan(usageSlug, url, cloud);
     if (!plan) return cloud;
     const [plus, minus] = await Promise.all([plan.build(delta.after, plan.url), plan.build(delta.before, plan.url)]);
@@ -2059,7 +2056,8 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
     invalidateAfterAccountUpload();
     // Taken before the cloud read starts; compared after it to detect an
     // upload that overlapped the read (see overlayPendingUpload).
-    const uploadAtStart = readUploadStateSync(qp);
+    const includeLocalPending = !url.searchParams.get("device_id");
+    const uploadAtStart = includeLocalPending ? readUploadStateSync(qp) : null;
     const runtime = getRuntime();
     if (runtime.configurationError) return ACCOUNT_FALLBACK_SIGNED_OUT;
     const failureKey = `${runtime.baseUrl}\0${refreshToken}`;
@@ -2150,7 +2148,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       }
       let body = out.data;
       try {
-        body = await overlayPendingUpload(usageSlug, url, out.data, uploadAtStart);
+        if (includeLocalPending) body = await overlayPendingUpload(usageSlug, url, out.data, uploadAtStart);
       } catch (error) {
         // The cloud aggregate is still correct, just behind: serve it as is.
         if (getRuntime().debug) console.warn("[LocalAPI] pending-upload overlay failed:", error?.message || error);

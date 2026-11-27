@@ -4638,6 +4638,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
       if (!res.ok) {
         const err = new Error(`HTTP ${res.status}: ${rawText.substring(0, 500)}`);
         err.status = res.status;
+        err.ingestRejected = res.status >= 400 && res.status < 500;
         err.code = res.status === 401 ? "CLOUD_DEVICE_TOKEN_REJECTED"
           : typeof data?.code === "string" ? data.code
             : res.status === 403 ? "CLOUD_UPLOAD_FORBIDDEN" : "CLOUD_UPLOAD_FAILED";
@@ -4667,7 +4668,7 @@ async function drainQueueToCloud({ baseUrl, anonKey, deviceToken, queuePath, que
       delete state.uploadingSince;
       // A rejection (4xx) stored nothing. Without a response, or after a 5xx,
       // the batch may be in the cloud while the cursor sits before it.
-      if (!(error?.status >= 400 && error.status < 500)) {
+      if (!error?.ingestRejected) {
         baselineKnown = false;
         delete state.cloudBaselineOffset;
       }

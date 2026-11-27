@@ -969,7 +969,10 @@ test("account view adds nothing while the cloud baseline of the upload cursor is
 });
 
 test("a device-scoped account read gets no overlay from this device's queue", async () => {
-  assert.deepEqual(await readDailyWithPendingRow({ query: "&device_id=2faf0823-a6df-4eed-9387-735a29b879db" }), {
+  assert.deepEqual(await readDailyWithPendingRow({
+    query: "&device_id=2faf0823-a6df-4eed-9387-735a29b879db",
+    state: { uploadingSince: new Date().toISOString() },
+  }), {
     fallback: undefined,
     days: { "2026-11-17": 120 },
   });
