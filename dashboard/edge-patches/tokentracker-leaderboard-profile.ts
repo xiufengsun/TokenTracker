@@ -201,6 +201,8 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   // Official GPT-6.2 Standard short-context USD/MTok, verified 2026-11-18:
   // https://developers.openai.com/api/docs/pricing (cloud has no request tier/retention).
   "gpt-6.2-astra-law": { input: 8, output: 40, cache_read: 0.4, cache_write: 10 },
+  "gpt-6.2-astra-healthcare": { input: 8, output: 40, cache_read: 0.4, cache_write: 10 },
+  "gpt-6.2-sol-healthcare": { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
   "gpt-6.2-astra": { input: 8, output: 40, cache_read: 0.4, cache_write: 10 },
   "gpt-6.2-sol": { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
   "gpt-6-astra": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
@@ -319,6 +321,7 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   // grok-4.7-build-fast). Explicit keys so they do not ride on the
   // "grok-4.7" / "grok-4.7"+fast fuzzy matchers below.
   "grok-4.7": { input: 2, output: 6, cache_read: 0.5, cache_write: 0 },
+  "grok-4.7-latest": { input: 2, output: 6, cache_read: 0.5, cache_write: 0 },
   "grok-4.7-build-fast": { input: 4, output: 12, cache_read: 1, cache_write: 0 },
   "grok-4-0709": { input: 3.00, output: 15.00, cache_read: 0.75 },
   "grok-4": { input: 3.00, output: 15.00, cache_read: 0.75 },
@@ -345,9 +348,12 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cache_read:
   "qwen3.8-max-2026-09-02": { input: 2, output: 6, cache_read: 0.17, cache_write: 2.5 },
   // Singapore International pay-as-you-go for official API id qwen4-max,
   // verified 2026-11-18. cache_write is the 5-minute cache-creation rate;
-  // 1-hour creation ($3) cannot fit this field. qwen4-max-preview is Token
-  // Plan only and must not inherit this rate (strict lookup below).
+  // 1-hour creation ($3) cannot fit this field. Official docs retrieved
+  // 2026-11-25 17:11 Asia/Singapore: qwen4-max-preview retired at 10:00 on
+  // November 25, 2026 (UTC+8) and is billed at this same standard rate.
+  // Dated preview snapshots stay unpriced (strict lookup below).
   "qwen4-max": { input: 1.5, output: 4.5, cache_read: 0.075, cache_write: 1.875 },
+  "qwen4-max-preview": { input: 1.5, output: 4.5, cache_read: 0.075, cache_write: 1.875 },
   "hy4-preview": { input: 0.833, output: 2.5, cache_read: 0.042, cache_write: 0.833 },
   "hy4-preview-agent": { input: 0.833, output: 2.5, cache_read: 0.042, cache_write: 0.833 },
   // ── Misc / Free ──
@@ -502,7 +508,7 @@ function getModelPricing(model: string, source = "") {
   // Do not guess prices for unannounced GPT-6.2 SKUs or dated snapshots.
   const gpt62 = lower.trim().match(/gpt-6[.-]2(?:-(.*))?$/);
   if (gpt62) {
-    const known = /^(astra-law|astra|sol)(?:-?(?:low|medium|high|xhigh|max)(?:-fast)?|-fast)?$/.exec(gpt62[1] || "");
+    const known = /^(astra-law|astra-healthcare|sol-healthcare|astra|sol)(?:-?(?:low|medium|high|xhigh|max)(?:-fast)?|-fast)?$/.exec(gpt62[1] || "");
     return known ? MODEL_PRICING[`gpt-6.2-${known[1]}`] : ZERO_PRICING;
   }
   // Fable 5.2 before the broad fable matcher, or claude-fable-5-2 bills at the
@@ -537,9 +543,9 @@ function getModelPricing(model: string, source = "") {
   if (/haiku-5[.-]5(?:$|[^0-9.])/.test(lower)) return MODEL_PRICING["claude-haiku-5-5"];
   if (lower.includes("haiku")) return MODEL_PRICING["claude-haiku-4-5-20251001"];
   if (lower.includes("sonnet")) return MODEL_PRICING["claude-sonnet-4-6"];
-  if (lower.includes("gpt-6-astra")) return MODEL_PRICING["gpt-6-astra"];
-  if (lower.includes("gpt-6-sol")) return MODEL_PRICING["gpt-6-sol"];
-  if (lower.includes("gpt-6.1-sol")) return MODEL_PRICING["gpt-6.1-sol"];
+  if (lower.includes("gpt-6-astra") && !lower.includes("healthcare")) return MODEL_PRICING["gpt-6-astra"];
+  if (lower.includes("gpt-6-sol") && !lower.includes("healthcare")) return MODEL_PRICING["gpt-6-sol"];
+  if (lower.includes("gpt-6.1-sol") && !lower.includes("healthcare")) return MODEL_PRICING["gpt-6.1-sol"];
   if (lower.includes("gpt-6.1-terra")) return MODEL_PRICING["gpt-6.1-terra"];
   // gpt-5.6 tiers: sol/terra/luna carry reasoning-effort suffixes (solhigh,
   // etc.), so match by substring. Specific tiers precede the generic gpt-5.6
@@ -660,6 +666,7 @@ function getModelPricing(model: string, source = "") {
   if (lower.includes("hy3")) return MODEL_PRICING["hy3-preview-agent"];
   if (/(?:^|\/)qwen3[.-]8-flash(?:-\d{4}-\d{2}-\d{2})?$/.test(lower.trim())) return MODEL_PRICING["qwen3.8-flash"];
   if (/(?:^|\/)qwen3[.-]8-max(?:-0902|-\d{4}-\d{2}-\d{2})?$/.test(lower.trim())) return MODEL_PRICING["qwen3.8-max"];
+  if (/(?:^|\/)qwen4-max-preview$/.test(lower.trim())) return MODEL_PRICING["qwen4-max-preview"];
   if (/(?:^|\/)qwen4-max(?:-\d{4}-\d{2}-\d{2})?$/.test(lower.trim())) return MODEL_PRICING["qwen4-max"];
   if (lower.includes("hy4")) return MODEL_PRICING["hy4-preview"];
   if (lower.includes("composer-2.5") && lower.includes("fast")) return MODEL_PRICING["composer-2.5-fast"];

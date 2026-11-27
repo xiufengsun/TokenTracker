@@ -110,3 +110,62 @@ test("Specialist GPT6.2 Astra Law uses confirmed Standard/context rates, never g
   }
   for(const slug of slugs){const source=fs.readFileSync(path.join(__dirname,"../dashboard/edge-patches",`${slug}.ts`),"utf8");const block=source.match(/const MODEL_PRICING[\s\S]*?\nfunction getModelPricing\(model: string(?:, source = "")?\) \{[\s\S]*?\n\}/)[0];const c=vm.createContext({});vm.runInContext(transformSync(block,{loader:"ts",format:"cjs"}).code,c);for(const model of ["gpt-6.2-astra-law","openai/gpt-6.2-astra-law","gpt-6-2-astra-law"])assert.equal(c.getModelPricing(model).input,8);}
 });
+
+test("Specialist GPT6.2 Healthcare uses official Standard/context rates and published Fast 2x, never Ultrafast promotions", () => {
+  const cases = {
+    "gpt-6.2-astra-healthcare": { input: 8, output: 40, cache_read: 0.4, cache_write: 10, longInputCost: 4.8 },
+    "gpt-6.2-sol-healthcare": { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5, longInputCost: 1.2 },
+  };
+  for (const [model, rates] of Object.entries(cases)) {
+    for (const name of [model, `openai/${model}`, model.replace("6.2", "6-2"), `${model}-high`]) {
+      const actual = pricing.getModelPricing(name);
+      assert.equal(actual.input, rates.input, name);
+      assert.equal(actual.output, rates.output, name);
+      assert.equal(actual.cache_read, rates.cache_read, name);
+      assert.equal(actual.cache_write, rates.cache_write, name);
+      assert.equal(actual.priority_multiplier, 2, name);
+      assert.equal(actual.ultrafast_multiplier, undefined, name);
+      assert.equal(pricing.getModelPricingInfo(name).status, "priced", name);
+    }
+    close(pricing.computeRowCost({ source: "codex", model, input_tokens: 300000, long_context_input_tokens: 300000 }), rates.longInputCost);
+    const short = { source: "codex", model, input_tokens: 100000, cached_input_tokens: 50000, output_tokens: 10000 };
+    const base = 0.1 * rates.input + 0.05 * rates.cache_read + 0.01 * rates.output;
+    close(pricing.computeRowCost(short), base);
+    close(pricing.computeRowCost({ ...short, priority_input_tokens: 100000, priority_cached_input_tokens: 50000, priority_output_tokens: 10000 }), base * 2);
+    close(pricing.computeRowCost({ ...short, ultrafast_input_tokens: 100000, ultrafast_cached_input_tokens: 50000, ultrafast_output_tokens: 10000 }), base, "no inherited ultrafast");
+  }
+  for (const model of ["gpt-6-astra-healthcare", "gpt-6.1-sol-healthcare", "gpt-6-astra-healthcare-high"]) {
+    assert.equal(pricing.getModelPricingInfo(model).status, "unpriced", model);
+    assert.equal(pricing.getModelPricing(model).input, 0, model);
+  }
+  for (const slug of slugs) {
+    const source = fs.readFileSync(path.join(__dirname, "../dashboard/edge-patches", `${slug}.ts`), "utf8");
+    const block = source.match(/const MODEL_PRICING[\s\S]*?\nfunction getModelPricing\(model: string(?:, source = "")?\) \{[\s\S]*?\n\}/)[0];
+    const c = vm.createContext({});
+    vm.runInContext(transformSync(block, { loader: "ts", format: "cjs" }).code, c);
+    assert.equal(c.getModelPricing("gpt-6.2-astra-healthcare").input, 8, slug);
+    assert.equal(c.getModelPricing("gpt-6.2-sol-healthcare").input, 2, slug);
+    assert.equal(c.getModelPricing("openai/gpt-6-2-astra-healthcare").cache_write, 10, slug);
+    assert.equal(c.getModelPricing("gpt-6-astra-healthcare").input, 0, slug);
+    assert.equal(c.getModelPricing("gpt-6.1-sol-healthcare").input, 0, slug);
+  }
+});
+
+test("LiteLLM fuzzy general models do not price unpublished Healthcare IDs", () => {
+  const litellm = {
+    "gpt-6-astra": { input: 8, output: 40, cache_read: 0.4, cache_write: 12.5 },
+    "gpt-6.1-sol": { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
+  };
+  for (const model of ["gpt-6-astra-healthcare", "gpt-6.1-sol-healthcare", "gpt-6-astra-healthcare-high"]) {
+    const got = lookupPricing(model, { curated, litellm });
+    assert.equal(got.hit, false, model);
+    assert.notEqual(got.source, "litellm:fuzzy", model);
+    assert.equal(pricing.getModelPricingInfo(model).status, "unpriced", model);
+    assert.equal(pricing.getModelPricing(model).input, 0, model);
+    assert.equal(pricing.getModelPricing(model).cache_write || 0, 0, model);
+  }
+  const priced = lookupPricing("gpt-6.2-astra-healthcare", { curated, litellm });
+  assert.equal(priced.hit, true);
+  assert.equal(priced.source, "curated:exact");
+  assert.equal(priced.value.cache_write, 10);
+});

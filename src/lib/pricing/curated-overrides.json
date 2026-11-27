@@ -257,6 +257,22 @@
       "cache_write": 10,
       "note": "Official specialist Legal model configuration Standard USD/MTok, verified 2026-11-18 at https://developers.openai.com/api/docs/pricing#legal-model-configurations. Short 8/0.4/10/40 input/cache-read/30m-write/output; long 16/0.8/20/60. 12h write20 short/40 long is not distinguishable in current rows. No Fast/Ultrafast price is published for this specialist ID; do not inherit general Astra promotion multipliers."
     },
+    "gpt-6.2-astra-healthcare": {
+      "input": 8,
+      "output": 40,
+      "cache_read": 0.4,
+      "cache_write": 10,
+      "priority_multiplier": 2,
+      "note": "Official specialist Healthcare model configuration Standard USD/MTok, verified 2026-11-25 09:00 Asia/Singapore at https://developers.openai.com/api/docs/pricing#healthcare-model-configurations (OpenAI changelog Nov 24, 2026). Short 8/0.4/10/40 input/cache-read/30m-write/output; long 16/0.8/20/60. 12h write 20 short / 40 long is not distinguishable in current rows. Official Fast table is exactly 2x Standard (priority_multiplier 2). No Ultrafast price is published for this specialist ID; do not inherit general Astra Ultrafast promotion multipliers. Official promotional Standard pricing is available at least through December 31, 2026; the catalog stores the current official Standard rates. Cloud aggregates remain Standard short-context estimates."
+    },
+    "gpt-6.2-sol-healthcare": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 2.5,
+      "priority_multiplier": 2,
+      "note": "Official specialist Healthcare model configuration Standard USD/MTok, verified 2026-11-25 09:00 Asia/Singapore at https://developers.openai.com/api/docs/pricing#healthcare-model-configurations (OpenAI changelog Nov 24, 2026). Short 2/0.1/2.5/10 input/cache-read/30m-write/output; long 4/0.2/5/15. 12h write 5 short / 10 long is not distinguishable in current rows. Official Fast table is exactly 2x Standard (priority_multiplier 2). No Ultrafast price is published for this specialist ID; do not inherit general Sol Ultrafast promotion multipliers. Official promotional Standard pricing is available at least through December 31, 2026; the catalog stores the current official Standard rates. Cloud aggregates remain Standard short-context estimates."
+    },
     "gpt-6.2-astra": {
       "input": 8,
       "output": 40,
@@ -436,7 +452,14 @@
       "output": 4.5,
       "cache_read": 0.075,
       "cache_write": 1.875,
-      "note": "Alibaba Model Studio Singapore (International) pay-as-you-go rates for official API id qwen4-max, verified 2026-11-18: https://www.alibabacloud.com/help/en/model-studio/qwen4-max and https://www.alibabacloud.com/help/en/model-studio/model-pricing (both last updated 2026-11-18). GA announced 2026-11-16: https://www.alibabacloud.com/en/press-room/alibaba-unveils-qwen4-max . Input $1.5 / output $4.5 per MTok. cache_read is the published explicit/implicit cache-hit rate ($0.075). cache_write is the published 5-minute cache-creation rate ($1.875); the 1-hour cache-creation rate is $3 and cannot fit this single field. Beijing and other-region list prices differ ($1.413/$4.24 and region-specific cache tables) and must not be mixed into this Singapore International reference estimate. qwen4-max-preview is Token Plan / subscription-only (pay-as-you-go not supported) and must not inherit this API rate. No official API prices were found for unreleased Qwen4-Plus/Flash; unknown qwen4-* SKUs stay unpriced."
+      "note": "Alibaba Model Studio Singapore (International) pay-as-you-go rates for official API id qwen4-max, verified 2026-11-18: https://www.alibabacloud.com/help/en/model-studio/qwen4-max and https://www.alibabacloud.com/help/en/model-studio/model-pricing (both last updated 2026-11-18). GA announced 2026-11-16: https://www.alibabacloud.com/en/press-room/alibaba-unveils-qwen4-max . Input $1.5 / output $4.5 per MTok. cache_read is the published explicit/implicit cache-hit rate ($0.075). cache_write is the published 5-minute cache-creation rate ($1.875); the 1-hour cache-creation rate is $3 and cannot fit this single field. Beijing and other-region list prices differ ($1.413/$4.24 and region-specific cache tables) and must not be mixed into this Singapore International reference estimate. Official docs retrieved 2026-11-25 17:11 Asia/Singapore state that qwen4-max-preview retired at 10:00 on November 25, 2026 (UTC+8); the original model ID remains callable, is automatically routed to qwen4-max, and is billed at the standard qwen4-max rate (https://www.alibabacloud.com/help/en/model-studio/qwen4-max and https://www.alibabacloud.com/help/en/model-studio/token-plan-product-updates). See the qwen4-max-preview exact entry. Dated preview snapshots are not documented and stay unpriced. No official API prices were found for unreleased Qwen4-Plus/Flash; unknown qwen4-* SKUs stay unpriced."
+    },
+    "qwen4-max-preview": {
+      "input": 1.5,
+      "output": 4.5,
+      "cache_read": 0.075,
+      "cache_write": 1.875,
+      "note": "Official retirement of qwen4-max-preview at 10:00 on November 25, 2026 (UTC+8), verified 2026-11-25 17:11 Asia/Singapore: https://www.alibabacloud.com/help/en/model-studio/qwen4-max and https://www.alibabacloud.com/help/en/model-studio/token-plan-product-updates. The original model ID remains callable, is automatically routed to qwen4-max, and is billed at the official Singapore International qwen4-max pay-as-you-go rates ($1.5/$4.5, cache hit $0.075, 5-minute cache creation $1.875). This is not a Token Plan / subscription price. Dated preview snapshots such as qwen4-max-preview-2026-11-11 are not documented as routed and stay unpriced. Qwen4-Plus/Flash remain unpriced."
     },
     "hy4-preview": {
       "input": 0.833,
@@ -951,6 +974,13 @@
       "cache_read": 0.5,
       "cache_write": 0,
       "note": "xAI grok-4.7 short-context rates (docs.x.ai/developers/pricing, verified 2026-11-03): $2 / $0.50 / $6 per MTok input/cached/output below 200k prompt tokens. Same numbers as cursor-grok-4.7, kept as its own key so the bare API id resolves outside the Cursor normalizer. No cache-write rate is published, so cache_write stays 0 like the other Grok entries. Requests whose prompt reaches 200k tokens are billed entirely at the long-context rates ($4 / $1 / $12); the single flat rate here cannot express that tier."
+    },
+    "grok-4.7-latest": {
+      "input": 2.0,
+      "output": 6.0,
+      "cache_read": 0.5,
+      "cache_write": 0,
+      "note": "Official xAI alias of grok-4.7, documented on https://docs.x.ai/developers/models/grok-4.7 (Aliases: grok-4.7-latest), retrieved 2026-11-25 17:11 Asia/Singapore. Same short-context rates as grok-4.7 ($2 / $0.50 / $6 per MTok input/cached/output below 200k prompt tokens; https://docs.x.ai/developers/pricing is unchanged this run). No cache-write rate is published, so cache_write stays 0. The official two-tier long-context rates ($4 / $1 / $12) still cannot be expressed in these single-rate fields."
     },
     "grok-4.7-build-fast": {
       "input": 4.0,

@@ -15,8 +15,8 @@ const curated = require("../src/lib/pricing/curated-overrides.json");
 const STANDARD = { input: 2, output: 6, cache_read: 0.5, cache_write: 0 };
 const FAST = { input: 4, output: 12, cache_read: 1, cache_write: 0 };
 
-test("grok-4.7 and grok-4.7-build-fast resolve to the xAI short-context rates", () => {
-  for (const [model, rates] of [["grok-4.7", STANDARD], ["grok-4.7-build-fast", FAST]]) {
+test("grok-4.7, official grok-4.7-latest alias, and grok-4.7-build-fast resolve to the xAI short-context rates", () => {
+  for (const [model, rates] of [["grok-4.7", STANDARD], ["grok-4.7-latest", STANDARD], ["grok-4.7-build-fast", FAST]]) {
     const actual = pricing.getModelPricing(model, { source: "zcode" });
     for (const [key, value] of Object.entries(rates)) {
       assert.equal(actual[key], value, `${model}: ${key}`);
@@ -31,6 +31,14 @@ test("grok-4.7 and grok-4.7-build-fast resolve to the xAI short-context rates", 
   });
   assert.equal(fast.source, "curated:exact");
   assert.equal(fast.value.input, FAST.input);
+
+  const latest = lookupPricing("grok-4.7-latest", {
+    curated,
+    litellm: { "grok-4.7-latest": { input: 0, output: 0 } },
+  });
+  assert.equal(latest.source, "curated:exact");
+  assert.equal(latest.value.input, STANDARD.input);
+  assert.equal(latest.value.output, STANDARD.output);
 });
 
 test("grok-4.7-build-fast bills input, output, and cache reads, but not cache writes", () => {

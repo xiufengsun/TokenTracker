@@ -68,23 +68,23 @@ test("curated qwen4-max rates keep official Singapore International precision", 
   assert.equal(String(curated.exact["qwen4-max"].cache_read), "0.075");
 });
 
-test("qwen4-max official API ids use Singapore International rates; preview and unknown qwen4 SKUs stay unpriced", () => {
+test("qwen4-max official API ids use Singapore International rates; retired preview id shares that rate; unknown qwen4 SKUs stay unpriced", () => {
   const priced = [
     "qwen4-max",
     "dashscope/qwen4-max",
     "openrouter/qwen/qwen4-max",
     "qwen/qwen4-max",
     "qwen4-max-2026-11-16",
+    "qwen4-max-preview",
+    "dashscope/qwen4-max-preview",
+    "openrouter/qwen/qwen4-max-preview",
   ];
   for (const id of priced) {
     assertRates(pricing.getModelPricing(id), QWEN4_MAX, id);
     assert.equal(pricing.getModelPricingInfo(id).status, "priced", id);
   }
   const unpriced = [
-    "qwen4-max-preview",
     "qwen4-max-preview-2026-11-11",
-    "dashscope/qwen4-max-preview",
-    "openrouter/qwen/qwen4-max-preview",
     "qwen4-plus",
     "qwen4-flash",
     "qwen4-max-plus",
@@ -110,6 +110,114 @@ test("qwen4-max official API ids use Singapore International rates; preview and 
     }),
     1.5 + 4.5 + 0.075 + 1.875,
   );
+});
+
+test("dated qwen4-max-preview snapshots stay unpriced after Cursor and Antigravity slash-to-hyphen normalization", () => {
+  const priced = [
+    ["cursor", "qwen4-max-preview"],
+    ["cursor", "dashscope/qwen4-max-preview"],
+    ["antigravity", "qwen4-max-preview"],
+    ["antigravity", "dashscope/qwen4-max-preview"],
+  ];
+  for (const [source, id] of priced) {
+    assertRates(pricing.getModelPricing(id, { source }), QWEN4_MAX, `${source} ${id}`);
+    assert.equal(pricing.getModelPricingInfo(id, { source }).status, "priced", `${source} ${id}`);
+  }
+  const unpriced = [
+    ["cursor", "qwen4-max-preview-2026-11-11"],
+    ["cursor", "dashscope/qwen4-max-preview-2026-11-11"],
+    ["cursor", "openrouter/qwen/qwen4-max-preview-2026-11-11"],
+    ["cursor", "dashscope-qwen4-max-preview-2026-11-11"],
+    ["antigravity", "qwen4-max-preview-2026-11-11"],
+    ["antigravity", "dashscope/qwen4-max-preview-2026-11-11"],
+    ["antigravity", "openrouter/qwen/qwen4-max-preview-2026-11-11"],
+    ["antigravity", "dashscope-qwen4-max-preview-2026-11-11"],
+    [undefined, "dashscope/qwen4-max-preview-2026-11-11"],
+    ["openrouter", "dashscope/qwen4-max-preview-2026-11-11"],
+  ];
+  for (const [source, id] of unpriced) {
+    const opts = source ? { source } : {};
+    const label = `${source || "unsourced"} ${id}`;
+    assert.equal(pricing.getModelPricingInfo(id, opts).status, "unpriced", label);
+    const got = pricing.getModelPricing(id, opts);
+    assert.equal(got.input, 0, `${label} input`);
+    assert.equal(got.output, 0, `${label} output`);
+    close(
+      pricing.computeRowCost({
+        source: source || "openrouter",
+        model: id,
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cached_input_tokens: 1_000_000,
+        cache_creation_input_tokens: 1_000_000,
+      }),
+      0,
+    );
+  }
+});
+
+test("Unsloth local and unpriced qwen4-max-preview namespaces stay unpriced after the raw-id preview match", () => {
+  const unpriced = [
+    "local/qwen4-max-preview",
+    "unpriced/custom/qwen4-max-preview",
+    "local/qwen4-max-preview-2026-11-11",
+    "unpriced/custom/qwen4-max-preview-2026-11-11",
+  ];
+  for (const id of unpriced) {
+    assert.equal(pricing.getModelPricingInfo(id, { source: "unsloth" }).status, "unpriced", id);
+    const got = pricing.getModelPricing(id, { source: "unsloth" });
+    assert.equal(got.input, 0, `${id} input`);
+    assert.equal(got.output, 0, `${id} output`);
+    close(
+      pricing.computeRowCost({
+        source: "unsloth",
+        model: id,
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cached_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      }),
+      0,
+    );
+  }
+  // A metered Unsloth route that is not in the local/unpriced namespace still prices.
+  assertRates(
+    pricing.getModelPricing("qwen4-max-preview", { source: "unsloth" }),
+    QWEN4_MAX,
+    "unsloth bare preview",
+  );
+});
+
+test("Cline gateway and Batch/Flex qwen4-max-preview ids stay unpriced or zero-cost", () => {
+  for (const id of ["cline-free/qwen4-max-preview", "cline-pass/qwen4-max-preview"]) {
+    const got = pricing.getModelPricing(id, { source: "cline" });
+    assert.equal(got.input, 0, `${id} input`);
+    assert.equal(got.output, 0, `${id} output`);
+    close(
+      pricing.computeRowCost({
+        source: "cline",
+        model: id,
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cached_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      }),
+      0,
+    );
+  }
+  for (const [source, id] of [
+    [undefined, "batch/qwen4-max-preview"],
+    ["cursor", "batch/qwen4-max-preview"],
+    ["unsloth", "unpriced/custom/batch/qwen4-max-preview"],
+    ["unsloth", "local/batch/qwen4-max-preview"],
+  ]) {
+    const opts = source ? { source } : {};
+    const label = `${source || "unsourced"} ${id}`;
+    assert.equal(pricing.getModelPricingInfo(id, opts).status, "unpriced", label);
+    const got = pricing.getModelPricing(id, opts);
+    assert.equal(got.input, 0, `${label} input`);
+    assert.equal(got.output, 0, `${label} output`);
+  }
 });
 
 test("Claude Mythos 5.2 standard ids price at $8/$40 and never fall through to Mythos 5", () => {
@@ -230,6 +338,9 @@ test("edge MODEL_PRICING and getModelPricing match official qwen4-max and Mythos
     ["qwen4-max", QWEN4_MAX],
     ["dashscope/qwen4-max", QWEN4_MAX],
     ["openrouter/qwen/qwen4-max", QWEN4_MAX],
+    ["qwen4-max-preview", QWEN4_MAX],
+    ["dashscope/qwen4-max-preview", QWEN4_MAX],
+    ["openrouter/qwen/qwen4-max-preview", QWEN4_MAX],
     ["claude-mythos-5-2", MYTHOS_52],
     ["claude-mythos-5.2", MYTHOS_52],
     ["anthropic/claude-mythos-5.2", MYTHOS_52],
@@ -249,7 +360,7 @@ test("edge MODEL_PRICING and getModelPricing match official qwen4-max and Mythos
   }
 
   const unpriced = [
-    "qwen4-max-preview",
+    "qwen4-max-preview-2026-11-11",
     "qwen4-plus",
     "qwen4-flash",
     "claude-mythos-latest",
