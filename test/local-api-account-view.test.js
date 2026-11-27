@@ -913,6 +913,84 @@ test("a successful account read carries no fallback header", async () => {
   }
 });
 
+// The free-tier upload ran once this morning, before the `pending` row existed.
+async function readDailyWithPendingRow({ state = {}, query = "", onCloudRead } = {}) {
+  const queuePath = path.join(tmpHome, "queue.jsonl");
+  const uploaded = { ...SAMPLE_ROW, hour_start: "2026-11-17T10:00:00.000Z" };
+  const pending = { ...SAMPLE_ROW, hour_start: "2026-11-18T08:00:00.000Z", input_tokens: 500, output_tokens: 0, total_tokens: 500 };
+  writeQueue(queuePath, [uploaded, pending]);
+  const offset = Buffer.byteLength(JSON.stringify(uploaded) + "\n");
+  const statePath = path.join(path.dirname(queuePath), "queue.state.json");
+  fs.writeFileSync(statePath, JSON.stringify({ offset, cloudBaselineOffset: offset, updatedAt: "2026-11-18T00:05:00.000Z", ...state }));
+  seedSignedInTracker();
+
+  const accessJwt = freshAccessJwt();
+  const cloud = { from: "2026-11-17", to: "2026-11-18", data: [
+    { day: "2026-11-17", total_tokens: 120, billable_total_tokens: 120, total_cost_usd: 0, conversation_count: 1, models: { "claude-sonnet-4-6": 120 } },
+  ] };
+  const realFetch = global.fetch;
+  global.fetch = async (urlStr) => {
+    if (String(urlStr).includes("/api/auth/refresh")) {
+      return { ok: true, status: 200, json: async () => ({ accessToken: accessJwt }) };
+    }
+    if (String(urlStr).includes("/tokentracker-account-daily")) {
+      onCloudRead?.({ statePath, queuePath });
+      return { ok: true, status: 200, json: async () => cloud };
+    }
+    throw new Error(`unexpected fetch ${urlStr}`);
+  };
+  try {
+    const handler = freshHandler(queuePath);
+    const res = await call(handler, {
+      endpoint: `/functions/tokentracker-usage-daily?from=2026-11-17&to=2026-11-18&tz=UTC&account=1${query}`,
+    });
+    const fallback = res._headers["x-tokentracker-account-fallback"];
+    if (res._headers["x-tokentracker-account-view"] !== "1") return { fallback };
+    return { fallback, days: Object.fromEntries(res.json().data.map((d) => [d.day, d.total_tokens])) };
+  } finally {
+    global.fetch = realFetch;
+  }
+}
+
+test("account view adds usage the daily upload window has not sent yet (#1132)", async () => {
+  assert.deepEqual(await readDailyWithPendingRow(), {
+    fallback: undefined,
+    days: { "2026-11-17": 120, "2026-11-18": 500 },
+  });
+});
+
+test("account view adds nothing while the cloud baseline of the upload cursor is unknown", async () => {
+  // A cursor a repair reset (or one written before the baseline existed) may
+  // sit behind rows the cloud already holds; adding them would double them.
+  assert.deepEqual(await readDailyWithPendingRow({ state: { cloudBaselineOffset: undefined } }), {
+    fallback: undefined,
+    days: { "2026-11-17": 120 },
+  });
+});
+
+test("a device-scoped account read gets no overlay from this device's queue", async () => {
+  assert.deepEqual(await readDailyWithPendingRow({
+    query: "&device_id=2faf0823-a6df-4eed-9387-735a29b879db",
+    state: { uploadingSince: new Date().toISOString() },
+  }), {
+    fallback: undefined,
+    days: { "2026-11-17": 120 },
+  });
+});
+
+test("an upload in flight, or one that lands during the cloud read, is not summed with the cloud", async () => {
+  const inFlight = await readDailyWithPendingRow({ state: { uploadingSince: new Date().toISOString() } });
+  assert.deepEqual(inFlight, { fallback: "transient-upload-in-progress" });
+
+  const landed = await readDailyWithPendingRow({
+    onCloudRead: ({ statePath, queuePath }) => {
+      const offset = fs.statSync(queuePath).size;
+      fs.writeFileSync(statePath, JSON.stringify({ offset, cloudBaselineOffset: offset, updatedAt: new Date().toISOString() }));
+    },
+  });
+  assert.deepEqual(landed, { fallback: "transient-upload-in-progress" });
+});
+
 for (const marker of ["valid", "unreadable"]) {
   test(`a pending cloud usage rebuild serves local data authoritatively (${marker} marker)`, async () => {
     // A rebuild wipes this device's cloud rows and replays the queue, one free
