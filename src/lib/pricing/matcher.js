@@ -287,7 +287,7 @@ function lookupContainedExactCaseInsensitive(table, model) {
     // bare `claude-mythos-5.2-fast` exact key because it is longer, and
     // `anthropic/claude-mythos-5-2-fast` is billed at the standard rate.
     // Plain dated (-0902 / -YYYY-MM-DD) and provider-qualified suffixes still match.
-    if (/(?:^|-)(?:preview|next|exp|experimental|beta|alpha|fast)(?:-|$)/.test(suffix)) continue;
+    if (/(?:^|-)(?:preview|next|exp|experimental|beta|alpha|fast|healthcare)(?:-|$)/.test(suffix)) continue;
     return table[key];
   }
   return null;
@@ -375,11 +375,53 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
   if (/(?:^|\/)qwen3[.-]8-max(?:-0902|-\d{4}-\d{2}-\d{2})?$/.test(lower.trim()) && curated.exact?.["qwen3.8-max"]) {
     return { hit: true, source: "curated:exact", value: curated.exact["qwen3.8-max"] };
   }
-  // Official API id qwen4-max only. The optional dated suffix is for
-  // provider-qualified snapshots of that exact SKU; -preview, -plus,
-  // -flash and any other qwen4-* suffix must not inherit the Max API rate.
+  // Official API id qwen4-max, plus provider-qualified / dated snapshots of
+  // that exact SKU. -plus, -flash and any other qwen4-* suffix must not
+  // inherit the Max API rate. After official retirement at 10:00 on
+  // 2026-11-25 (UTC+8), the exact id qwen4-max-preview remains callable and
+  // is billed at the standard qwen4-max rate; dated preview snapshots are
+  // not documented and stay unpriced.
   if (/(?:^|\/)qwen4-max(?:-\d{4}-\d{2}-\d{2})?$/.test(lower.trim()) && curated.exact?.["qwen4-max"]) {
     return { hit: true, source: "curated:exact", value: curated.exact["qwen4-max"] };
+  }
+  const rawLower = String(model).toLowerCase();
+  // Unsloth marks local/custom routes as unpriced via a sentinel lookupModel.
+  // Delivery-preserving remaps can replace that sentinel, so also honor the
+  // raw namespace. A raw-id preview match must not undo Cline gateway zeros
+  // or Batch/Flex delivery exclusions that run later in this function.
+  const unpricedByNormalizer =
+    lookupModel === "__tokentracker_unpriced_unsloth_model__" ||
+    (sourceKey === "unsloth" && (rawLower.startsWith("local/") || rawLower.startsWith("unpriced/")));
+  const clineGateway =
+    sourceKey === "cline" &&
+    (/(?:^|\/)cline-(?:free|pass)\//.test(rawLower) ||
+      /(?:^|[^a-z0-9])cline-(?:free|pass)[-/]/.test(lower) ||
+      /(?:^|[^a-z0-9])cline-(?:free|pass)[-/]/.test(rawLower));
+  const deliverySku =
+    rawHasDelivery ||
+    /(?:^|[-/:_])(?:batch|flex)(?:$|[-/:_])/.test(lower) ||
+    /(?:^|[-/:_])(?:batch|flex)(?:$|[-/:_])/.test(rawLower);
+  if (
+    curated.exact?.["qwen4-max-preview"] &&
+    !unpricedByNormalizer &&
+    !clineGateway &&
+    !deliverySku &&
+    (/(?:^|[\/._-])qwen4-max-preview$/.test(lower.trim()) ||
+      /(?:^|[\/._-])qwen4-max-preview$/.test(rawLower.trim()))
+  ) {
+    return { hit: true, source: "curated:exact", value: curated.exact["qwen4-max-preview"] };
+  }
+  // The official retirement statement covers the callable id qwen4-max-preview
+  // only. A later contained exact match would otherwise treat dated snapshots
+  // such as qwen4-max-preview-2026-11-11 as provider/date suffixes of that key.
+  // Cursor and Antigravity flatten provider slashes to hyphens, so also treat
+  // hyphen/dot/underscore as a provider boundary and check the raw id before
+  // normalization.
+  if (
+    /(?:^|[\/._-])qwen4-max-preview-/.test(lower) ||
+    /(?:^|[\/._-])qwen4-max-preview-/.test(rawLower)
+  ) {
+    return { hit: false, source: "unverified-preview-snapshot", value: null };
   }
 
   // 2. LiteLLM exact (preserve a fully-qualified exact rate before normalization).
@@ -474,7 +516,7 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
       return { hit: true, source: "curated:gemini-4-neon", value: curated.exact["gemini-4-neon"] };
     }
   }
-  // General Astra/Sol and the specialist Astra Law have confirmed rates. Do not let
+  // General Astra/Sol and the specialist Astra Law / Healthcare configs have confirmed rates. Do not let
   // unknown SKUs/snapshots inherit their rates via contained/fuzzy matching.
   // Explicit curated/LiteLLM exact prices above remain authoritative.
   const gpt62 = (dotForm || lower).trim().match(/gpt-6\.2(?:-(.*))?$/);
@@ -482,7 +524,7 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
     if (lower.includes("cline-free/") || lower.includes("cline-pass/")) {
       return { hit: true, source: "curated:cline-gateway", value: curated.exact["cline-gateway-models"] };
     }
-    const known = /^(astra-law|astra|sol)(?:-?(?:low|medium|high|xhigh|max)(?:-fast)?|-fast)?$/.exec(gpt62[1] || "");
+    const known = /^(astra-law|astra-healthcare|sol-healthcare|astra|sol)(?:-?(?:low|medium|high|xhigh|max)(?:-fast)?|-fast)?$/.exec(gpt62[1] || "");
     const value = known && curated.exact?.[`gpt-6.2-${known[1]}`];
     return value ? { hit: true, source: "curated:gpt-6.2", value }
       : { hit: false, source: "miss", value: null };
@@ -524,7 +566,16 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
       const bounded = /^fable-5[.-]2(?:-fast)?$/.test(needle) || /^mythos-5(?:[.-][12](?:-fast)?)?$/.test(needle)
         ? new RegExp(`${needle.replaceAll(".", "\\.")}${needle === "mythos-5" ? "(?:$|[^0-9.-])" : "(?:$|[^0-9])"}`)
         : null;
-      const matches = (value) => (bounded ? bounded.test(value) : value.includes(needle));
+      const matches = (value) => {
+        if (!(bounded ? bounded.test(value) : value.includes(needle))) return false;
+        // Official Healthcare configurations are separate SKUs (cache write
+        // unpublished; no Ultrafast). Do not let general Astra/Sol fuzzy
+        // needles inherit into *-healthcare ids.
+        if (/(?:^|[-/])healthcare(?:-|$)/.test(value) && !/healthcare/.test(needle) && !/healthcare/.test(ref)) {
+          return false;
+        }
+        return true;
+      };
       if (matches(lower)) {
         return { hit: true, source: "curated:fuzzy", value: curated.exact[ref] };
       }
@@ -581,6 +632,16 @@ function lookupPricing(model, { curated, litellm, source } = {}) {
       const provider = explicitModelProvider(model) || ({ grok: "xai", codex: "openai", claude: "anthropic" })[sourceKey];
       const keyProvider = explicitModelProvider(key) || canonicalModelProvider(keyLower);
       if (provider && keyProvider && keyProvider !== provider) continue;
+      // Official Healthcare configurations are separate SKUs (cache write
+      // unpublished; no Ultrafast). Do not let general LiteLLM keys inherit
+      // into *-healthcare ids, matching the curated fuzzy exclusion above.
+      if (
+        (/(?:^|[-/])healthcare(?:-|$)/.test(lower) ||
+          (dotForm && /(?:^|[-/])healthcare(?:-|$)/.test(dotForm))) &&
+        !/healthcare/.test(keyLower)
+      ) {
+        continue;
+      }
       // Only accept if model is a superset of key (model contains key), to
       // avoid e.g. "gpt-5" matching "gpt-5-pro" in the wrong direction.
       if (lower.includes(keyLower) || (dotForm && dotForm.includes(keyLower))) {
