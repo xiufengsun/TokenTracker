@@ -28,7 +28,7 @@ const {
   buildExecStatsEntry,
   allocateByLargestRemainder,
 } = require("./categorizer-utils");
-const { claudeMessageDedupKey } = require("./rollout");
+const { claudeMessageDedupKeys, claudeMessageAlreadySeen, rememberClaudeMessage } = require("./rollout");
 
 const CATEGORY_KEYS = [
   "system_prefix",
@@ -519,8 +519,8 @@ async function categorizeSessionFile(filePath, { fromIso, toIso, seenHashes }, b
     if (fromIso && ts < fromIso) continue;
     if (toIso && ts > toIso) continue;
 
-    const hash = claudeMessageDedupKey(obj);
-    if (hash && seenHashes.has(hash)) continue;
+    const keys = claudeMessageDedupKeys(obj);
+    if (claudeMessageAlreadySeen(seenHashes, keys)) continue;
 
     // Defer the hash-add until we've confirmed this entry carries non-zero
     // usage. Mirrors the same fix in rollout.js parseClaudeFile. Without it,
@@ -532,7 +532,7 @@ async function categorizeSessionFile(filePath, { fromIso, toIso, seenHashes }, b
     const usage = obj?.message?.usage;
     if (!hasNonZeroClaudeUsage(usage)) continue;
 
-    if (hash) seenHashes.add(hash);
+    rememberClaudeMessage(seenHashes, keys);
 
     classifyOneMessage(obj, sessionState, breakdown, toolLedger, skillLedger, execLedger);
     counted += 1;
@@ -1268,11 +1268,9 @@ async function computeClaudeGroundTruthBuckets({ rootDir = null, rootDirs = null
       const totals = readClaudeUsageTotals(usage);
       if (!totals || !hasNonZeroClaudeUsage(usage)) continue;
 
-      const hash = claudeMessageDedupKey(obj);
-      if (hash) {
-        if (seenHashes.has(hash)) continue;
-        seenHashes.add(hash);
-      }
+      const keys = claudeMessageDedupKeys(obj);
+      if (claudeMessageAlreadySeen(seenHashes, keys)) continue;
+      rememberClaudeMessage(seenHashes, keys);
 
       const model = (obj?.message?.model || obj?.model || "unknown").trim() || "unknown";
       const ts = typeof obj?.timestamp === "string" ? obj.timestamp : null;

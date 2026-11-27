@@ -30,7 +30,7 @@ const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
-const { listClaudeProjectFiles, listRolloutFilesDeep, claudeMessageDedupKey, normalizeClaudeUsage, readZcodeDbMessages, coerceEpochMs, resolveZcodeInstallPaths, normalizeOpencodeModelFields, normalizeOpencodeTokens, deriveOpencodeMessageFingerprint, resolveDshHomes, extractGrokTurnUsageEvents } = require("./rollout");
+const { listClaudeProjectFiles, listRolloutFilesDeep, claudeMessageDedupKey, claudeMessageDedupKeys, claudeMessageAlreadySeen, rememberClaudeMessage, normalizeClaudeUsage, readZcodeDbMessages, coerceEpochMs, resolveZcodeInstallPaths, normalizeOpencodeModelFields, normalizeOpencodeTokens, deriveOpencodeMessageFingerprint, resolveDshHomes, extractGrokTurnUsageEvents } = require("./rollout");
 const { parseCodexRolloutFile } = require("./codex-rollout-parser");
 const { computeRowCost, getModelPricingInfo, getPricingRevision } = require("./pricing");
 const { normalizePerformance, mergePerformance, createClaudePerformanceCollector, createCodexPerformanceCollector, createZcodePerformanceCollector } = require("./session-performance");
@@ -659,8 +659,9 @@ async function scanClaudeSession(filePath, { trackerDir, legacyOffsets = {} } = 
         }
         let obj;
         try { obj = JSON.parse(line); } catch { continue; }
+        const dedupKeys = claudeMessageDedupKeys(obj);
         const timingKey = claudeMessageDedupKey(obj);
-        const countedUsage = obj.type === "assistant" && obj.message && (!timingKey || !seenMessages.has(timingKey))
+        const countedUsage = obj.type === "assistant" && obj.message && !claudeMessageAlreadySeen(seenMessages, dedupKeys)
           ? normalizeClaudeUsage(obj.message.usage) : null;
         performanceCollector.consume(obj, timingKey, countedUsage, normalizeSessionModel(obj.message?.model) || model);
         updateBounds(bounds, obj.timestamp || obj.message?.timestamp);
@@ -687,9 +688,8 @@ async function scanClaudeSession(filePath, { trackerDir, legacyOffsets = {} } = 
           continue;
         }
         if (obj.type !== "assistant" || !obj.message) continue;
-        const dedupKey = claudeMessageDedupKey(obj);
-        if (dedupKey && seenMessages.has(dedupKey)) continue;
-        if (dedupKey) seenMessages.add(dedupKey);
+        if (claudeMessageAlreadySeen(seenMessages, dedupKeys)) continue;
+        rememberClaudeMessage(seenMessages, dedupKeys);
         // Claude writes internal summary/observer messages with model
         // "<synthetic>". They are not a billable model and can appear after the
         // real assistant messages in the same session. Keep the latest real
