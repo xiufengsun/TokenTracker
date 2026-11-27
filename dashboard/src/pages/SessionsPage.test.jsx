@@ -204,6 +204,17 @@ describe("SessionsPage", () => {
     expect(document.body.textContent).not.toContain("{time}");
   });
 
+  it("shows confirmed scan gaps without implying that model prices are unavailable", async () => {
+    getSessions.mockResolvedValue({
+      ...response,
+      data_health: { status: "partial", skipped_units: 2, sources: [{ source: "grok", status: "partial", failed_units: 2 }] },
+    });
+    render(<SessionsPage />);
+    fireEvent.click(await screen.findByText(copy("sessions.coverage.partial")));
+    expect(screen.getByText(copy("usage.evidence.coverage", { skipped: 2 }))).toBeVisible();
+    expect(screen.getByText(/2 scan units could not be read/)).toBeVisible();
+  });
+
   it("shows unknown-only Claude session cost as Unpriced instead of free", async () => {
     getSessions.mockResolvedValue({ ...response, session_count: 1, returned_count: 1,
       sessions: [{ ...response.sessions[0], cost_usd: 0, cost_is_partial: true }] });

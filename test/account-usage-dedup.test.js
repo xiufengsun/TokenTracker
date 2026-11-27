@@ -407,6 +407,35 @@ test("cursor-style rows (no session identity) keep the legacy whole-row MAX dedu
   assert.equal(deduped.length, 2);
 });
 
+test("mirrored, corrected, unreadable and independent usage retain their own accounting rules", async () => {
+  const states = new Map();
+  await deviceSync(states, OLD, {
+    sessions: [traeSession("shared", T10)],
+    verifiedAtMs: VERIFIED_OLD,
+  });
+  await deviceSync(states, FRESH, {
+    sessions: [traeSession("shared", T1030, { model_name: "model-b", input_token: 50 })],
+    verifiedAtMs: VERIFIED_FRESH,
+  });
+  await assert.rejects(deviceSync(states, FRESH, {
+    sessions: [traeSession("shared", T10, { input_token: -1 })],
+    verifiedAtMs: VERIFIED_FRESH + 60_000,
+  }), /snapshot is not authoritative/);
+
+  const cursor = { source: "cursor", model: "model-a", hour_start: H10, total_tokens: 80 };
+  const local = { ...cursor, source: "codex", total_tokens: 40 };
+  const copies = [OLD, FRESH].flatMap((device_id) => [{ ...cursor, device_id }, { ...local, device_id }]);
+  const rows = [
+    ...dedupeAccountLevelRows(copies.filter((row) => row.source === "cursor")),
+    ...copies.filter((row) => row.source === "codex"),
+  ];
+  assert.equal(sumTotalTokens(rows.filter((row) => row.source === "cursor")), 80);
+  assert.equal(sumTotalTokens(rows.filter((row) => row.source === "codex")), 80);
+  assert.deepEqual(aggregateSessionStates(states).map((row) => [row.hour_start, row.model, row.total_tokens]), [
+    [H1030, "model-b", 60],
+  ]);
+});
+
 test("sumTotalTokens tolerates junk input", () => {
   assert.equal(sumTotalTokens(null), 0);
   assert.equal(sumTotalTokens([null, { total_tokens: "x" }, { total_tokens: 5 }]), 5);

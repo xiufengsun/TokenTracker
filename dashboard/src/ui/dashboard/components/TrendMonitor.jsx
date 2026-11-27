@@ -13,6 +13,8 @@ import {
   granularityFromPeriod,
 } from "../../../lib/trend-stats";
 import { TrendMonitorZoomModal } from "./TrendMonitorZoomModal";
+import { Link } from "react-router-dom";
+import { trendSessionsPath } from "../../../lib/sessions-insights";
 
 function interpolateQuantile(sortedValues, ratio) {
   if (!Array.isArray(sortedValues) || sortedValues.length === 0) return 0;
@@ -467,6 +469,7 @@ export function TrendMonitor({
   // drill-down without mutating the dashboard's state. Only used (and only
   // present) on the standalone card; null disables the maximize button.
   zoomConfig = null,
+  onSessionDrilldown = null,
 }) {
   const series = React.useMemo(
     () => (Array.isArray(rows) && rows.length ? rows : []),
@@ -508,6 +511,15 @@ export function TrendMonitor({
   const anchorBarRef = React.useRef(null);
   const sweepSideRef = React.useRef(null);
   const selectedBarRef = React.useRef(null);
+  const focusSessionLink = React.useRef(false);
+  const sessionLinkRef = React.useRef(null);
+  const sessionDay = onSessionDrilldown && pinned && granularity === "daily" &&
+    hoveredBar?.kind === "real" && hoveredBar.row?.day;
+
+  React.useLayoutEffect(() => {
+    if (sessionDay && focusSessionLink.current) sessionLinkRef.current?.focus({ preventScroll: true });
+    focusSessionLink.current = false;
+  }, [sessionDay]);
   const [isZoomOpen, setIsZoomOpen] = React.useState(false);
   const containerRef = React.useRef(null);
   const showBar = React.useCallback((e, row, value, segments, kind, displayValue) => {
@@ -568,6 +580,7 @@ export function TrendMonitor({
       return;
     }
     selectedBarRef.current = e.currentTarget;
+    focusSessionLink.current = e.type === "keydown";
     showBar(e, ...args);
     setPinned(true);
   }, [pinned, showBar]);
@@ -597,6 +610,9 @@ export function TrendMonitor({
     const dismiss = (event) => {
       if (event.type === "keydown" ? event.key !== "Escape" :
         tooltipRef.current?.contains(event.target) || selectedBarRef.current?.contains(event.target)) return;
+      if (event.type === "keydown" && tooltipRef.current?.contains(document.activeElement)) {
+        selectedBarRef.current?.focus({ preventScroll: true });
+      }
       setPinned(false);
       setHoveredBar(null);
     };
@@ -616,6 +632,7 @@ export function TrendMonitor({
   return (
     <div
       ref={containerRef}
+      data-trend-chart={onSessionDrilldown ? "" : undefined}
       className={cn(
         "relative",
         !embedded &&
@@ -822,6 +839,13 @@ export function TrendMonitor({
                   </div>
                 )}
 
+              {sessionDay && (
+                <Link ref={sessionLinkRef} to={trendSessionsPath(sessionDay)} onClick={onSessionDrilldown}
+                  className="rounded-sm text-xs font-medium text-oai-brand focus-visible:outline focus-visible:outline-2">
+                  {copy("trend.monitor.sessions")}
+                </Link>
+              )}
+
               {hoveredBar.segments && hoveredBar.segments.length > 0 ? (
                 <div className="mt-1.5 border-t border-oai-gray-100 dark:border-oai-gray-800/60 pt-2 flex flex-col gap-1.5">
                   <div className="text-[10px] font-semibold text-oai-gray-400 dark:text-oai-gray-500 uppercase tracking-wider">
@@ -842,7 +866,11 @@ export function TrendMonitor({
                               className="font-medium text-oai-gray-750 dark:text-oai-gray-200 truncate max-w-[130px]"
                               title={name}
                             >
-                              {name}
+                              {sessionDay && type === "model" ? (
+                                <Link to={trendSessionsPath(sessionDay, name)} onClick={onSessionDrilldown}
+                                  aria-label={copy("trend.monitor.model_sessions", { model: name })}
+                                  className="underline decoration-oai-gray-300 underline-offset-2 hover:text-oai-brand">{name}</Link>
+                              ) : name}
                             </span>
                             <div className="flex items-center gap-1.5 shrink-0">
                               <span

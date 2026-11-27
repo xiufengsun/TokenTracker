@@ -19,6 +19,7 @@ import { isMockEnabled } from "../lib/mock-data";
 import { groupSessions, overlapsSessionDates, parseSessionFilters, scopeSessionsToRange, sessionDayKey, sessionModels, sortSessions, summarizeSessions } from "../lib/sessions-insights";
 import { SessionDetailModal } from "../ui/dashboard/components/SessionDetailModal.jsx";
 import { SessionPerformance } from "../ui/dashboard/components/SessionPerformance.jsx";
+import { UsageDataDetails } from "../ui/dashboard/components/UsageDataDetails.jsx";
 import "./sessions-layout.css";
 
 const IS_LOCAL_HOST = isLocalDashboardHost();
@@ -445,7 +446,7 @@ export function SessionsPage() {
   const [customTo, setCustomTo] = useState(initialFilters.to);
   const [projectFilter, setProjectFilter] = useState("all");
   const [groupMode, setGroupMode] = useState("time");
-  const [sortMode, setSortMode] = useState("recent");
+  const [sortMode, setSortMode] = useState(initialFilters.sort ?? "recent");
   const [detailSession, setDetailSession] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -607,13 +608,14 @@ export function SessionsPage() {
   }, [scopedSessions, sourceFilter, projectFilter, modelFilter, rangeFilter, customFrom, customTo, deferredQuery]);
 
   const summary = useMemo(() => summarizeSessions(filtered), [filtered]);
+  const partialUsage = filtered.some((session) => session.usage_is_incomplete);
 
   const grouped = useMemo(() => {
     const visibleHashes = new Set(filtered.map((row) => row.session_hash));
     const childrenByRoot = new Map();
     const roots = [];
 
-    for (const row of sortSessions(filtered, sortMode)) {
+    for (const row of sortSessions(filtered, sortMode, modelFilter)) {
       const rootHash = row.root_session_hash || row.parent_session_hash;
       if (row.parent_session_hash && rootHash && visibleHashes.has(rootHash)) {
         const children = childrenByRoot.get(rootHash) || [];
@@ -631,7 +633,7 @@ export function SessionsPage() {
       childrenByRoot,
       foldedCount: filtered.length - roots.length,
     };
-  }, [filtered, sortMode]);
+  }, [filtered, sortMode, modelFilter]);
 
   const anyFilter = sourceFilter !== "all" || modelFilter !== "all" || rangeFilter !== "all" || projectFilter !== "all" || searchQuery.trim() !== "";
 
@@ -802,7 +804,13 @@ export function SessionsPage() {
             <section className="mb-6 flex items-start gap-3 rounded-lg border border-oai-gray-200 px-4 py-3 dark:border-oai-gray-800">
               <dl className="sessions-kpis grid min-w-0 flex-1 grid-cols-2 gap-y-3 sm:grid-cols-4">
                 <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.summary.count")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{formatCompactNumber(summary.count)}</dd></div>
-                <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.col.tokens")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{formatCompactNumber(summary.tokens)}</dd></div>
+                <div>
+                  <dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.col.tokens")}</dt>
+                  <dd className="mt-1 text-lg font-medium tabular-nums">{formatCompactNumber(summary.tokens)}</dd>
+                  {partialUsage && (
+                    <dd className="text-xs text-amber-700 dark:text-amber-300">{copy("sessions.badge.partial_usage")}</dd>
+                  )}
+                </div>
                 <div><dt className="text-xs text-oai-gray-500 dark:text-oai-gray-400">{copy("sessions.col.cost")}</dt><dd className="mt-1 text-lg font-medium tabular-nums">{summary.costIsPartial && summary.cost === 0 ? copy("dashboard.cost_breakdown.unpriced_label") : <>{summary.costIsPartial ? "≥" : ""}{formatUsdCurrency(summary.cost, { currency, rate })}</>}</dd></div>
                 <div>
                   <dt className="flex items-center gap-1.5 text-xs text-oai-gray-500 dark:text-oai-gray-400">
@@ -831,6 +839,7 @@ export function SessionsPage() {
             </div>
           ) : null}
 
+          {!isLoading && <UsageDataDetails health={data?.data_health} />}
           {!isLoading && truncated ? (
             <p className="mb-4 text-xs text-oai-gray-500 dark:text-oai-gray-400">
               {copy("sessions.truncated", { shown: data.returned_count, total: data.session_count })}

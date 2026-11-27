@@ -148,9 +148,15 @@ export function sessionDateMs(session) {
   return Number.isFinite(date) ? date : 0;
 }
 
-export function sortSessions(sessions, sort) {
+export function sortSessions(sessions, sort, model = "all") {
+  const metric = sort === "cost" ? "cost_usd" : "total_tokens";
+  const values = sort === "recent" || model === "all" ? null : new Map(sessions.map((row) => [
+    row,
+    sessionModels(row).filter((usage) => usage.model === model)
+      .reduce((total, usage) => total + finiteValue(usage[metric]), 0),
+  ]));
   return [...sessions].sort((a, b) => {
-    const difference = sort === "cost"
+    const difference = values ? values.get(b) - values.get(a) : sort === "cost"
       ? sessionOwnCost(b) - sessionOwnCost(a)
       : sort === "tokens"
         ? sessionOwnTokens(b) - sessionOwnTokens(a)
@@ -188,12 +194,20 @@ export function parseSessionFilters(search) {
   };
   const from = dateValue("from");
   const to = dateValue("to");
+  const sort = params.get("sort");
   return {
     source: ["claude", "codex", "grok", "zcode", "opencode", "kimi", "omp", "dsh", "pi"].includes(source) ? source : "all",
     model: params.get("model") || "all",
     from,
     to,
+    ...(["cost", "tokens"].includes(sort) ? { sort } : {}),
   };
+}
+
+export function trendSessionsPath(day, model) {
+  const params = new URLSearchParams({ from: day, to: day, sort: "tokens" });
+  if (model) params.set("model", model);
+  return `/sessions?${params}`;
 }
 
 export function overlapsSessionDates(session, from, to) {

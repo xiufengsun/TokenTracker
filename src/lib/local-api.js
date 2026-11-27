@@ -23,6 +23,7 @@ const { getOrCreateMachineId, computeStableMachineId } = require("./machine-id")
 const { functionUrlFor, fetchFunctionResponse } = require("./function-url");
 const { createCloudDeviceTokenStore } = require("./cloud-device-token");
 const { parseBearerToken } = require("./bearer-token");
+const { t3QuotaSourceConfig, isT3QuotaAuthorized, buildT3QuotaResponse } = require("./t3-quota-source");
 const { writeJsonAtomicSync } = require("./atomic-json");
 const { negotiateEncoding } = require("./accept-encoding");
 const { createLocalUsageTransfer, MAX_BYTES: LOCAL_USAGE_MAX_BYTES } = require("./local-usage-transfer");
@@ -1440,6 +1441,7 @@ function buildProxyHeaders(headers) {
 // ---------------------------------------------------------------------------
 
 function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir: isolatedTrackerDataDir = null, syncContext = null }) {
+  const t3QuotaSource = t3QuotaSourceConfig(process.env);
   const qp = queuePath || resolveQueuePath();
   const localUsage = createLocalUsageTransfer({ queuePath: qp, normalizeRow: normalizeQueueRow,
     identity: () => ({ id: getOrCreateMachineId(qp), name: getSystemDeviceName(), platform: process.platform }) });
@@ -3281,12 +3283,9 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         const afterBuildCacheKey = sessionsResponseCacheKey(cacheParams);
         const body = JSON.stringify({ from, to, ...result });
         const afterSerializeCacheKey = sessionsResponseCacheKey(cacheParams);
-        const incomplete = Boolean(sessions.sidecarReadFailed) ||
-          (Array.isArray(sessions.incompleteDirs) && sessions.incompleteDirs.length > 0) ||
-          result.skipped_files !== 0;
         const cacheable = Boolean(afterBuildCacheKey) &&
           afterBuildCacheKey === afterSerializeCacheKey &&
-          !incomplete;
+          result.data_health.status !== "partial";
         const entry = rememberSessionsResponse(cacheable ? afterBuildCacheKey : null, Buffer.from(body));
         await sendSessionsResponse(req, res, entry);
       } catch (error) {
@@ -4227,6 +4226,35 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         generated_at: new Date().toISOString(),
         achievements: computeLocalAchievements(queueRows, projectRows, { timeZoneContext }),
       });
+      return true;
+    }
+
+    if (p === "/functions/tokentracker-t3-quota") {
+      if (!t3QuotaSource) {
+        json(res, { error: "Quota source is disabled" }, 404);
+      } else if (req.method !== "GET") {
+        res.setHeader("Allow", "GET");
+        json(res, { error: "Method Not Allowed" }, 405);
+      } else if (!isT3QuotaAuthorized(req.headers?.authorization, t3QuotaSource)) {
+        json(res, { error: "Unauthorized" }, 401);
+      } else {
+        try {
+          const { getUsageLimits, USAGE_LIMITS_PROVIDER_IDS } = require("./usage-limits");
+          const snapshot = await getUsageLimits({
+            home: os.homedir(),
+            trackerDir: trackerDataDir,
+            env: process.env,
+            platform: process.platform,
+            hiddenProviders: USAGE_LIMITS_PROVIDER_IDS.filter((id) => id !== "kimi"),
+            providerTimeoutMs: 6500,
+          });
+          const report = buildT3QuotaResponse(snapshot.kimi, t3QuotaSource.providerInstanceId);
+          if (report) json(res, report);
+          else json(res, { error: "Fresh Kimi quota unavailable" }, 503);
+        } catch {
+          json(res, { error: "Fresh Kimi quota unavailable" }, 503);
+        }
+      }
       return true;
     }
 
