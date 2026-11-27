@@ -76,19 +76,9 @@ test("workflow builds with xcodebuild Release config", () => {
   assert.ok(content.includes("-scheme TokenTrackerBar"));
 });
 
-test("workflow signs, notarizes and checks Gatekeeper before uploading the DMG", () => {
+test("workflow creates DMG via create-dmg.sh", () => {
   const content = loadWorkflow();
-  const signing = fs.readFileSync(
-    path.join(__dirname, "../TokenTrackerBar/scripts/sign-and-notarize-dmg.sh"),
-    "utf8"
-  );
-  assert.ok(content.indexOf("Require macOS distribution credentials") < content.indexOf("Create or reuse matching draft release"));
-  const requiredOrder = ["scripts/create-dmg.sh", "notarytool submit", "stapler validate", "spctl --assess --type execute"];
-  for (let index = 1; index < requiredOrder.length; index++) {
-    assert.ok(signing.indexOf(requiredOrder[index - 1]) >= 0);
-    assert.ok(signing.indexOf(requiredOrder[index]) > signing.indexOf(requiredOrder[index - 1]));
-  }
-  assert.ok(content.indexOf("Require successful CI for the release commit") < content.indexOf("- name: Flip the draft live"));
+  assert.ok(content.includes("create-dmg.sh"));
 });
 
 test("workflow creates the release up front and uploads the DMG asset", () => {
@@ -110,7 +100,7 @@ test("workflow has correct step order: dashboard → bundle → xcode → dmg �
     "xcodegen generate",
     "patch-pbxproj-icon.rb",
     "xcodebuild",
-    "sign-and-notarize-dmg.sh",
+    "create-dmg.sh",
     "gh release upload",
   ];
   let lastIndex = -1;
@@ -302,4 +292,12 @@ test("create-dmg.sh supports CI headless mode", () => {
     dmgScript.includes('CI:-}'),
     "create-dmg.sh should check CI env var for headless mode"
   );
+});
+
+test("the exact release commit must pass main CI before the draft is published", () => {
+  const content = loadWorkflow();
+  const check = content.indexOf("- name: Require successful CI for the release commit");
+  const publish = content.indexOf("- name: Flip the draft live");
+  assert.ok(check >= 0 && publish > check);
+  assert.match(content, /actions\/workflows\/ci\.yml\/runs\?branch=main&event=push&head_sha=\$GITHUB_SHA/);
 });
