@@ -47,21 +47,20 @@ it("reads the hosted community overview directly from Cloudflare without an InsF
   }
 });
 
-describe("parallel account reads", () => {
-  it("keeps the original bearer and falls back after a secondary authentication error", async () => {
+describe("Cloudflare account reads", () => {
+  it("keeps the original bearer and surfaces a Cloudflare failure without an InsForge request", async () => {
     vi.stubEnv("VITE_TOKENTRACKER_CLOUDFLARE_READS", "1");
     const accessToken = jwt();
-    const fetch = vi.fn().mockResolvedValueOnce(json({}, 401)).mockResolvedValueOnce(json({ from: "primary" }));
+    const fetch = vi.fn().mockResolvedValueOnce(json({}, 401));
     vi.stubGlobal("fetch", fetch);
-    expect(await fetchCloudUsageSummary({ accessToken })).toEqual({ from: "primary" });
+    await expect(fetchCloudUsageSummary({ accessToken })).rejects.toMatchObject({ status: 401 });
     expect(fetch.mock.calls.map(([url]) => new URL(url).hostname)).toEqual([
-      "api.tokentracker.cc", "srctyff5.function2.insforge.app",
+      "api.tokentracker.cc",
     ]);
     expect(fetch.mock.calls[0][1]).toMatchObject({
       credentials: "omit", redirect: "error", headers: { Authorization: "Bearer " + accessToken },
     });
     expect(fetch.mock.calls[0][1].headers).not.toHaveProperty("apikey");
-    expect(fetch.mock.calls[1][1].headers).toMatchObject({ apikey: "anon-key", Authorization: "Bearer " + accessToken });
   });
 });
 
