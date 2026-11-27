@@ -828,6 +828,98 @@ struct AntigravityLimits: Codable, Equatable {
     }
 }
 
+extension AntigravityLimits {
+    /// Flattens Antigravity's per-family quota windows (`Claude 5h/7d` and
+    /// `Gemini 5h/7d`) for the desktop Usage Limits widget.
+    ///
+    /// Antigravity always exposes both the 3P/Claude pool (`secondary` = 5h,
+    /// `primary` = 7d) and the Gemini pool (`quaternary` = 5h, `tertiary` = 7d)
+    /// even when a user only uses one model family. In a compact 4-row widget,
+    /// emitting an idle 0% family would crowd out other providers or push the
+    /// active family past the row cap. Therefore:
+    /// - If only one family has usage (`usedPercent > 0`), emit only that family.
+    /// - If both families have usage, emit both with the hotter family first
+    ///   (ties keep Claude before Gemini, matching the Limits panel order).
+    /// - If both families are at 0%, prefer the family with an active future
+    ///   reset timer; if neither or both have one, emit all available windows
+    ///   in canonical order (`Claude 5h`, `Claude 7d`, `Gemini 5h`, `Gemini 7d`).
+    func widgetLimitProviders(
+        now: Date = Date(),
+        parseReset: (String?) -> Date?
+    ) -> [LimitProvider] {
+        guard configured else { return [] }
+
+        func makeRows(
+            fiveHour: GenericLimitWindow?,
+            fiveHourLabel: String,
+            weekly: GenericLimitWindow?,
+            weeklyLabel: String
+        ) -> [LimitProvider] {
+            var rows: [LimitProvider] = []
+            if let w = fiveHour {
+                rows.append(LimitProvider(
+                    source: "antigravity",
+                    label: fiveHourLabel,
+                    fraction: w.usedPercent / 100.0,
+                    resetsAt: parseReset(w.resetAt)
+                ))
+            }
+            if let w = weekly {
+                rows.append(LimitProvider(
+                    source: "antigravity",
+                    label: weeklyLabel,
+                    fraction: w.usedPercent / 100.0,
+                    resetsAt: parseReset(w.resetAt)
+                ))
+            }
+            return rows
+        }
+
+        // Slot mapping from src/lib/usage-limits.js:
+        // primary = 3p-weekly (Claude 7d), secondary = 3p-5h (Claude 5h),
+        // tertiary = gemini-weekly (Gemini 7d), quaternary = gemini-5h (Gemini 5h).
+        // List 5h above 7d within each family, matching Claude/Codex and PR #1162.
+        let claudeRows = makeRows(
+            fiveHour: secondaryWindow,
+            fiveHourLabel: "Antigravity · Claude 5h",
+            weekly: primaryWindow,
+            weeklyLabel: "Antigravity · Claude 7d"
+        )
+        let geminiRows = makeRows(
+            fiveHour: quaternaryWindow,
+            fiveHourLabel: "Antigravity · Gemini 5h",
+            weekly: tertiaryWindow,
+            weeklyLabel: "Antigravity · Gemini 7d"
+        )
+
+        if claudeRows.isEmpty { return geminiRows }
+        if geminiRows.isEmpty { return claudeRows }
+
+        let claudeMax = claudeRows.map(\.fraction).max() ?? 0
+        let geminiMax = geminiRows.map(\.fraction).max() ?? 0
+        let claudeUsed = claudeMax > 0
+        let geminiUsed = geminiMax > 0
+
+        if claudeUsed != geminiUsed {
+            return claudeUsed ? claudeRows : geminiRows
+        }
+        if claudeUsed && geminiUsed {
+            return geminiMax > claudeMax
+                ? geminiRows + claudeRows
+                : claudeRows + geminiRows
+        }
+
+        // Both families are at 0% — prefer whichever has an active future reset timer.
+        let claudeHasActiveReset = claudeRows.contains { $0.resetsAt.map { $0 > now } ?? false }
+        let geminiHasActiveReset = geminiRows.contains { $0.resetsAt.map { $0 > now } ?? false }
+        if claudeHasActiveReset != geminiHasActiveReset {
+            return claudeHasActiveReset ? claudeRows : geminiRows
+        }
+
+        return claudeRows + geminiRows
+    }
+}
+
 /// Helper to decide whether a response from the limits API contains at least one
 /// usable (configured + no error) provider record. Used by the ViewModel to
 /// protect the "last good record" on partial failures (do not overwrite a

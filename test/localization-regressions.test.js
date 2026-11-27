@@ -265,3 +265,32 @@ test("token number display setting is localized in every translated locale", () 
     }
   }
 });
+
+test("Antigravity per-family 5h and 7d widget labels are wired and localized", () => {
+  const model = read("TokenTrackerBar/TokenTrackerBar/Models/UsageLimits.swift");
+  const widgetSnapshotWriter = read("TokenTrackerBar/TokenTrackerBar/Services/WidgetSnapshotWriter.swift");
+  const widgetStrings = read("TokenTrackerBar/TokenTrackerWidget/Views/WidgetStrings.swift");
+
+  assert.ok(widgetSnapshotWriter.includes("limits.antigravity.widgetLimitProviders(parseReset: parseISO)"));
+  for (const label of [
+    "Antigravity · Claude 5h",
+    "Antigravity · Claude 7d",
+    "Antigravity · Gemini 5h",
+    "Antigravity · Gemini 7d",
+  ]) {
+    assert.ok(model.includes(`"${label}"`), `UsageLimits.swift missing ${label}`);
+  }
+  for (const localized of [
+    String.raw`\(source) · Claude 5小时`,
+    String.raw`\(source) · Claude 7天`,
+    String.raw`\(source) · Gemini 5小时`,
+    String.raw`\(source) · Gemini 7天`,
+    String.raw`\(source) · Gemini 5小時`,
+    String.raw`\(source) · Gemini 5時間`,
+    String.raw`\(source) · Gemini 7日`,
+    String.raw`\(source) · Gemini 5시간`,
+    String.raw`\(source) · Gemini 7일`,
+  ]) {
+    assert.ok(widgetStrings.includes(localized), `WidgetStrings.swift missing ${localized}`);
+  }
+});

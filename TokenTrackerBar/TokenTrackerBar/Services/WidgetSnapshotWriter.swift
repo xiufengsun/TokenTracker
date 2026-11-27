@@ -412,14 +412,9 @@ enum WidgetSnapshotWriter {
             }
         }
 
-        // Antigravity
-        if limits.antigravity.configured {
-            if let w = limits.antigravity.primaryWindow {
-                out.append(LimitProvider(source: "antigravity", label: "Antigravity",
-                                         fraction: w.usedPercent / 100.0,
-                                         resetsAt: parseISO(w.resetAt)))
-            }
-        }
+        // Antigravity — emit 5h + 7d rows per active model family (Claude / Gemini)
+        // instead of only primaryWindow (Claude 7d) under a bare "Antigravity" label.
+        out.append(contentsOf: limits.antigravity.widgetLimitProviders(parseReset: parseISO))
 
         // OpenCode Go
         if let opencodeGo = limits.opencodeGo, opencodeGo.configured {
