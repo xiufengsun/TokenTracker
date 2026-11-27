@@ -189,6 +189,16 @@ test("CLI init persists its own public configuration and resets cloud identity w
   await assert.rejects(run(["--base-url", b, "--anon-key", "ik_private-unsafe"]), /public anon key/);
   assert.equal(await fs.readFile(configPath, "utf8"), before);
   assert.equal(await fs.readFile(path.join(tracker, "queue.jsonl"), "utf8"), history);
+
+  const signedIn = { ...official, deviceToken: "official-device-token", deviceId: "official-device-id", user_id: "official-owner" };
+  const relayPath = path.join(tracker, "relay-cookies.json");
+  await fs.writeFile(configPath, JSON.stringify(signedIn));
+  await fs.writeFile(relayPath, "{}");
+  await fs.writeFile(path.join(tracker, "queue.state.json"), '{"offset":123}');
+  await run([]);
+  assert.deepEqual(JSON.parse(await fs.readFile(configPath, "utf8")), signedIn);
+  assert.equal(await fs.readFile(relayPath, "utf8"), "{}");
+  assert.equal(JSON.parse(await fs.readFile(path.join(tracker, "queue.state.json"), "utf8")).offset, 123);
 });
 
 test("device login rejects another dashboard before publishing any credentials", async t => {

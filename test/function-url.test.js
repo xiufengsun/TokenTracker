@@ -1,8 +1,8 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { buildSync } = require("esbuild");
 const { functionUrlFor, fetchFunctionResponse } = require("../src/lib/function-url");
 const { fetchAccountFunction } = require("../src/lib/cloud-account");
 
@@ -22,11 +22,13 @@ test("only the verified production API sends functions to the direct deployment"
 });
 
 test("browser and CLI route derivation agree for production and custom backends", () => {
-  const source = fs.readFileSync(path.join(__dirname, "../dashboard/src/lib/function-url.ts"), "utf8");
-  const code = source.slice(0, source.indexOf("export async function fetchFunctionResponse"))
-    .replace("export function", "function").replace("baseUrl: string, slug: string", "baseUrl, slug");
-  const browserUrlFor = vm.runInNewContext(`${code}\nfunctionUrlFor;`);
-  for (const base of [api, `${api}/`, "http://localhost:7130", "https://custom.example/api", "https://other123.us-east.insforge.app", `${api}/other`, `${api}.evil.example`, "https://user@srctyff5.us-east.insforge.app"]) {
+  const browserPath = path.join(__dirname, "../dashboard/src/lib/function-url.ts");
+  const { outputFiles } = buildSync({ entryPoints: [browserPath], bundle: true, write: false, format: "cjs",
+    define: { "import.meta.env": "{}" } });
+  const browserModule = { exports: {} };
+  vm.runInNewContext(outputFiles[0].text, { module: browserModule });
+  const { functionUrlFor: browserUrlFor } = browserModule.exports;
+  for (const base of [api, `${api}/`, "https://api.tokentracker.cc", "http://localhost:7130", "https://custom.example/api", "https://other123.us-east.insforge.app", `${api}/other`, `${api}.evil.example`, "https://user@srctyff5.us-east.insforge.app"]) {
     assert.equal(browserUrlFor(base, "tokentracker-ingest"), functionUrlFor(base, "tokentracker-ingest"));
   }
 });

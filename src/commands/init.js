@@ -384,7 +384,8 @@ async function runSetup({
       ? existingConfig
       : {};
   const previousRuntime = resolveRuntimeConfig({ config: existingPlainConfig, env: {} });
-  const changedInstance = normalizeInstanceBaseUrl(previousRuntime.baseUrl) !== runtime.baseUrl ||
+  const configuredBase = runtime.sessionMigrationFrom || runtime.baseUrl;
+  const changedInstance = normalizeInstanceBaseUrl(previousRuntime.baseUrl) !== configuredBase ||
     previousRuntime.anonKey !== runtime.anonKey;
   if (changedInstance) {
     resetInstanceState(trackerDir);
@@ -402,8 +403,8 @@ async function runSetup({
     config.dashboardUrl = runtime.dashboardUrl;
   }
   if (changedInstance || opts.anonKey || runtime.sources.anonKey === "env") config.anonKey = runtime.anonKey;
-  if (runtime.baseUrl !== DEFAULT_BASE_URL) {
-    config.baseUrl = runtime.baseUrl;
+  if (configuredBase !== DEFAULT_BASE_URL) {
+    config.baseUrl = configuredBase;
     config.dashboardUrl = runtime.dashboardUrl;
   }
 
