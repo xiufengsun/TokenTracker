@@ -39,6 +39,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Require macOS distribution credentials
+        env:
+          MACOS_DISTRIBUTION_READY: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 != '' && secrets.MACOS_DEVELOPER_ID_P12_PASSWORD != '' && secrets.APPLE_NOTARY_KEY_P8_BASE64 != '' && secrets.APPLE_NOTARY_KEY_ID != '' && secrets.APPLE_NOTARY_ISSUER_ID != '' }}
+        run: |
+          if [[ "$MACOS_DISTRIBUTION_READY" != true ]]; then
+            echo '::error::Configure the macOS Developer ID and Apple notarization secrets before creating the release draft.'
+            exit 1
+          fi
+
       - name: Verify release source and versions
         env:
           VERSION: ${{ inputs.version }}
@@ -265,81 +274,21 @@ jobs:
           fi
           echo "✓ Universal binary confirmed (arm64 + x86_64)"
 
-      # 4b. Ad-hoc sign — without this, Gatekeeper rejects the downloaded .app
-      # as "damaged" because CODE_SIGNING_ALLOWED=NO above produced an entirely
-      # unsigned bundle. Ad-hoc signing ("-" identity) makes the error message
-      # downgrade to "unidentified developer" which the user can right-click → Open.
-      # For a fully trusted install you still need Developer ID + notarization.
-      #
-      # CRITICAL ORDERING — sign inner-to-outer, NOT with --deep:
-      #   1. Inner Mach-O binaries (node, dylibs)
-      #   2. The widget extension appex with its OWN entitlements
-      #      (must include com.apple.security.app-sandbox or pkd will refuse
-      #      to load it with "plug-ins must be sandboxed", and the widget
-      #      gallery will silently never list TokenTracker)
-      #   3. The outer .app bundle with the host's entitlements, WITHOUT
-      #      --deep (otherwise the host entitlements get recursively
-      #      re-applied to the appex, stripping its app-sandbox key — the
-      #      host is intentionally not sandboxed because it forks Node)
-      - name: Ad-hoc sign app
-        working-directory: TokenTrackerBar
-        run: |
-          APP_PATH="$(find build/DerivedData/Build/Products/Release -name 'TokenTracker.app' -maxdepth 1)"
-          APPEX_PATH="$APP_PATH/Contents/PlugIns/TokenTrackerWidget.appex"
-          echo "Signing: $APP_PATH"
-
-          # 1. Sign nested Mach-O binaries (inner-to-outer)
-          find "$APP_PATH/Contents/Resources/EmbeddedServer" -type f \
-            \( -name 'node' -o -name '*.dylib' -o -name '*.so' -o -name '*.node' \) \
-            -exec codesign --force --timestamp=none --sign - {} \;
-
-          # 2. Sign the widget extension appex with the WIDGET entitlements
-          #    (app-sandbox + app-group). Must happen BEFORE signing the host
-          #    so the appex's seal references its own entitlements file.
-          if [ -d "$APPEX_PATH" ]; then
-            echo "Signing widget extension: $APPEX_PATH"
-            codesign --force --timestamp=none \
-              --entitlements TokenTrackerWidget/TokenTrackerWidget.entitlements \
-              --sign - "$APPEX_PATH"
-          else
-            echo "::warning::Widget extension not found at $APPEX_PATH"
-          fi
-
-          # 3. Sign the outer .app bundle with the host entitlements.
-          #    NO --deep here — that would recursively re-sign the appex
-          #    with the host's entitlements (which lack app-sandbox) and
-          #    pkd would reject the widget at runtime.
-          codesign --force --timestamp=none \
-            --entitlements TokenTrackerBar/TokenTrackerBar.entitlements \
-            --sign - "$APP_PATH"
-
-          # Verify
-          codesign --verify --verbose=2 "$APP_PATH"
-          codesign -dv --verbose=2 "$APP_PATH" 2>&1 | head -8
-
-          # Sanity-check that the widget extension still has app-sandbox
-          # after the outer signing pass — this is the exact failure mode
-          # that silently breaks widget discovery, so fail loudly here.
-          if [ -d "$APPEX_PATH" ]; then
-            echo "Verifying widget extension entitlements:"
-            codesign -d --entitlements - "$APPEX_PATH" 2>&1 | tee /tmp/appex-ents.txt
-            if ! grep -q "com.apple.security.app-sandbox" /tmp/appex-ents.txt; then
-              echo "::error::Widget extension is missing com.apple.security.app-sandbox after signing — pkd will refuse to load it and the widget gallery will not list TokenTracker"
-              exit 1
-            fi
-            echo "✓ Widget extension still has app-sandbox entitlement"
-          fi
-
-      # 5. Create DMG (uses Homebrew `create-dmg` for headless background + layout)
       - name: Install create-dmg
         run: brew install create-dmg
 
-      - name: Create DMG
+      - name: Sign, notarize and verify the macOS installer
         working-directory: TokenTrackerBar
+        env:
+          VERSION: ${{ inputs.version }}
+          MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
         run: |
-          APP_PATH="$(find build/DerivedData/Build/Products/Release -name 'TokenTracker.app' -maxdepth 1)"
-          echo "App path: $APP_PATH"
-          bash scripts/create-dmg.sh "$APP_PATH"
+          bash scripts/sign-and-notarize-dmg.sh \
+            build/DerivedData/Build/Products/Release/TokenTracker.app
 
       # 6. Attach the DMG to the draft release that create-release made.
       # --clobber so re-runs replace the asset; the Windows job uploads its own
@@ -652,6 +601,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     steps:
       - name: Verify every platform asset landed
         env:
@@ -729,6 +679,18 @@ jobs:
             echo '```'
           } >> "$notes"
           gh release edit "$tag" --notes-file "$notes" --repo "$GITHUB_REPOSITORY"
+
+      - name: Require successful CI for the release commit
+        if: ${{ inputs.publish == true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$GITHUB_SHA&per_page=10")"
+          if ! jq -e --arg sha "$GITHUB_SHA" '.workflow_runs | any(.head_sha == $sha and .conclusion == "success")' <<< "$runs" >/dev/null; then
+            echo '::error::The exact release commit must pass CI on main before publication.'
+            exit 1
+          fi
 
       - name: Flip the draft live
         if: ${{ inputs.publish == true }}

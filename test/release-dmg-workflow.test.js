@@ -76,9 +76,19 @@ test("workflow builds with xcodebuild Release config", () => {
   assert.ok(content.includes("-scheme TokenTrackerBar"));
 });
 
-test("workflow creates DMG via create-dmg.sh", () => {
+test("workflow signs, notarizes and checks Gatekeeper before uploading the DMG", () => {
   const content = loadWorkflow();
-  assert.ok(content.includes("create-dmg.sh"));
+  const signing = fs.readFileSync(
+    path.join(__dirname, "../TokenTrackerBar/scripts/sign-and-notarize-dmg.sh"),
+    "utf8"
+  );
+  assert.ok(content.indexOf("Require macOS distribution credentials") < content.indexOf("Create or reuse matching draft release"));
+  const requiredOrder = ["scripts/create-dmg.sh", "notarytool submit", "stapler validate", "spctl --assess --type execute"];
+  for (let index = 1; index < requiredOrder.length; index++) {
+    assert.ok(signing.indexOf(requiredOrder[index - 1]) >= 0);
+    assert.ok(signing.indexOf(requiredOrder[index]) > signing.indexOf(requiredOrder[index - 1]));
+  }
+  assert.ok(content.indexOf("Require successful CI for the release commit") < content.indexOf("- name: Flip the draft live"));
 });
 
 test("workflow creates the release up front and uploads the DMG asset", () => {
@@ -100,7 +110,7 @@ test("workflow has correct step order: dashboard → bundle → xcode → dmg �
     "xcodegen generate",
     "patch-pbxproj-icon.rb",
     "xcodebuild",
-    "create-dmg.sh",
+    "sign-and-notarize-dmg.sh",
     "gh release upload",
   ];
   let lastIndex = -1;

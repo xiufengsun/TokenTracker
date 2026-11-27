@@ -122,6 +122,12 @@ When the user says "release" or "发 release", that is explicit approval for the
    For pre-publication acceptance, add `-f publish=false`: the same six-asset and downloaded-byte `SHA256SUMS` verification runs, but the release stays a draft and Homebrew is not notified. This reserves the version tag at the workflow commit; only that exact commit can resume the draft. After acceptance, publish that verified draft under the user's release authorization; never silently move its tag or reuse the version for different code.
 4. Homebrew tap `xiufengsun/homebrew-tokentracker` self-updates via dispatch (~40s if `HOMEBREW_DISPATCH_TOKEN` set) or hourly cron (≤1h fallback). **Never edit the tap repo manually for routine releases.**
 
+### macOS distribution checks
+
+The combined release workflow requires a Developer ID Application certificate and Apple notarization for each macOS installer. Configure `MACOS_DEVELOPER_ID_P12_BASE64`, `MACOS_DEVELOPER_ID_P12_PASSWORD`, `APPLE_NOTARY_KEY_P8_BASE64`, `APPLE_NOTARY_KEY_ID`, and `APPLE_NOTARY_ISSUER_ID` as GitHub Actions secrets. The macOS job signs the embedded Node runtime, widget, app and DMG, attaches the Apple notarization ticket, and checks Gatekeeper on the DMG and its mounted app before uploading the asset.
+
+When promoting an accepted draft, require a successful canonical `CI` run for the exact tag commit on `main`. The combined workflow checks that result when `publish=true`. Use the same check before manually making a draft public.
+
 Release notes: one English line, no markdown sections (`Fix token stats inflation caused by duplicate queue entries`).
 
 ### Local DMG build (testing only — CI is authoritative)

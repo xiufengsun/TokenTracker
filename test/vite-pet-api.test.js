@@ -46,7 +46,7 @@ test("Vite dev server handles the current repo pet API instead of an installed C
   try {
     const configUrl = `${pathToFileURL(path.join(repoRoot, "dashboard/vite.config.js")).href}?pet-api-test=${Date.now()}`;
     const { default: createConfig } = await import(configUrl);
-    const config = createConfig({ mode: "development" });
+    const config = createConfig({ mode: "development", command: "serve" });
     const plugin = config.plugins.find((item) => item?.name === "tokentracker-local-data-api");
     let middleware;
     plugin.configureServer({ middlewares: { use(value) { middleware = value; } } });
@@ -85,7 +85,7 @@ test("Vite dev server handles current repo session analytics instead of an insta
   try {
     const configUrl = `${pathToFileURL(path.join(repoRoot, "dashboard/vite.config.js")).href}?session-api-test=${Date.now()}`;
     const { default: createConfig } = await import(configUrl);
-    const config = createConfig({ mode: "development" });
+    const config = createConfig({ mode: "development", command: "serve" });
     const plugin = config.plugins.find((item) => item?.name === "tokentracker-local-data-api");
     let middleware;
     plugin.configureServer({ middlewares: { use(value) { middleware = value; } } });
