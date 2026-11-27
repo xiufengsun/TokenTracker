@@ -2549,7 +2549,6 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
   // no signal at all; count them so the API can say so.
   const sourceHealth = Object.fromEntries(Object.keys(discovered).map((source) => [source, { status: "not_observed", discovered_units: 0, failed_units: 0 }]));
   let skippedFiles = 0;
-  let incompleteCodexUsage = false;
   let incompleteZcodeScan = false;
   let incompleteOpencodeScan = false;
   let incompleteKimiScan = false;
@@ -2565,7 +2564,6 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     if (!statKey) {
       health.failed_units += 1;
       skippedFiles += 1;
-      if (entry.source === "codex") incompleteCodexUsage = true;
       if (entry.source === "zcode") incompleteZcodeScan = true;
       if (entry.source === "opencode") incompleteOpencodeScan = true;
       if (entry.source === "kimi") incompleteKimiScan = true;
@@ -2612,7 +2610,6 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
         // One active/partial session must not poison the sidecar, but do not
         // pretend it never existed either.
         skippedFiles += 1;
-        if (entry.source === "codex") incompleteCodexUsage = true;
         if (entry.source === "zcode") incompleteZcodeScan = true;
         if (entry.source === "opencode") incompleteOpencodeScan = true;
         if (entry.source === "kimi") incompleteKimiScan = true;
@@ -2685,7 +2682,7 @@ async function buildSessionAnalyticsInternal({ home = os.homedir(), force = fals
     const generatedAt = new Date().toISOString();
     await writeAtomic(metaPath, `${JSON.stringify({
       version: SIDECAR_VERSION,
-      codex_usage_version: incompleteCodexUsage ? 0 : CODEX_USAGE_VERSION,
+      codex_usage_version: CODEX_USAGE_VERSION,
       signature,
       generated_at: generatedAt,
       checked_at: generatedAt,
