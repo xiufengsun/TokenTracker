@@ -48,9 +48,10 @@ actor APIClient {
     func fetchLocalIslandUsage() async throws -> IslandUsageSnapshot {
         let range = DateHelpers.rangeForPeriod(.total)
         // Both requests use the same local day. The daily response also carries the rolling windows.
-        async let today = fetchLocalSummary(from: range.to, to: range.to)
-        async let total = fetchLocalSummary(from: range.from, to: range.to)
-        return try await IslandUsageSnapshot(today: today, total: total.totals)
+        let today = try await fetchLocalSummary(from: range.to, to: range.to)
+        try Task.checkCancellation()
+        let total = try await fetchLocalSummary(from: range.from, to: range.to)
+        return IslandUsageSnapshot(today: today, total: total.totals)
     }
 
     private func fetchLocalSummary(from: String, to: String) async throws -> UsageSummaryResponse {
