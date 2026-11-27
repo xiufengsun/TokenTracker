@@ -181,15 +181,20 @@ function hookShell(command) {
 function normalizeEntriesForCommand(entries, hookCommand, event) {
   const shell = hookShell(hookCommand);
   const repair = (hook) => {
-    const next = { ...hook, type: "command", command: hookCommand, ...shell };
-    if (shell.shell) delete next.args;
+    const next = { ...hook, type: "command", command: hookCommand };
+    if (shell.shell) {
+      next.shell = shell.shell;
+      delete next.args;
+    } else {
+      delete next.shell;
+    }
     return next;
   };
   let changed = false;
   const nextEntries = entries.map((entry) => {
     if (!entry || typeof entry !== "object") return entry;
     if (entry.command && commandsEqual(entry.command, hookCommand)) {
-      if (entry.type !== "command" || entry.command !== hookCommand || (shell.shell && (entry.shell !== shell.shell || Object.hasOwn(entry, "args")))) {
+      if (entry.type !== "command" || entry.command !== hookCommand || (shell.shell ? (entry.shell !== shell.shell || Object.hasOwn(entry, "args")) : Object.hasOwn(entry, "shell"))) {
         changed = true;
         return repair(entry);
       }
@@ -199,7 +204,7 @@ function normalizeEntriesForCommand(entries, hookCommand, event) {
     let hooksChanged = false;
     const nextHooks = entry.hooks.map((hook) => {
       if (hook && commandsEqual(hook.command, hookCommand)) {
-        if (hook.type !== "command" || hook.command !== hookCommand || (shell.shell && (hook.shell !== shell.shell || Object.hasOwn(hook, "args")))) {
+        if (hook.type !== "command" || hook.command !== hookCommand || (shell.shell ? (hook.shell !== shell.shell || Object.hasOwn(hook, "args")) : Object.hasOwn(hook, "shell"))) {
           hooksChanged = true;
           return repair(hook);
         }

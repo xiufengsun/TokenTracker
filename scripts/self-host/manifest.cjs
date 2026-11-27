@@ -2,6 +2,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const root = path.resolve(__dirname,"../..");
 const read = name => fs.readFileSync(path.join(root,name),"utf8");
+function stripTransaction(sql) {
+  return sql.replace(/^[ \t]*BEGIN;[ \t]*\n/im, "").replace(/\n[ \t]*COMMIT;[ \t]*\n?$/i, "\n");
+}
 function functionSql(source,name) {
   const matchName = source.match(new RegExp(`CREATE(?: OR REPLACE)? FUNCTION public\\.${name}\\(`));
   const start = matchName?.index ?? -1;
@@ -52,6 +55,22 @@ CREATE TRIGGER self_host_sessions_delete_cache AFTER DELETE ON public.tokentrack
     {id:"11-token-environment-validation",sql:read("migrations/20261008120001_validate-cloud-token-environment.sql")},
     {id:"12-pro-gifts",sql:read("migrations/20261009120000_cloud-gifts.sql")},
     {id:"13-machine-alias-cascade",sql:read("migrations/20261012120000_cloud-machine-alias-cascade.sql")},
+    {id:"14-usage-cost-provenance",sql:[
+      // usage_cost_provenance_v1 calls this peak/off-peak calendar; the hosted
+      // leaderboard migrations that create it are not part of the self-host set.
+      `CREATE OR REPLACE FUNCTION public.leaderboard_pricing_tier(p_model text,p_hour_start timestamptz)
+  RETURNS text LANGUAGE sql IMMUTABLE AS $f$ SELECT CASE
+    WHEN lower(p_model) LIKE '%deepseek-v4-flash%' OR lower(p_model) LIKE '%deepseek-v4.1-flash%'
+      OR lower(p_model) LIKE '%deepseek-flash%' OR lower(p_model) LIKE '%deepseek-v4-pro%' THEN CASE
+      WHEN p_hour_start >= timestamptz '2026-08-22T16:00:00Z'
+        AND extract(dow FROM ((p_hour_start AT TIME ZONE 'UTC')+interval '8 hours')) IN (0,6) THEN 'off_peak'
+      WHEN extract(hour FROM p_hour_start AT TIME ZONE 'UTC')>=1 AND extract(hour FROM p_hour_start AT TIME ZONE 'UTC')<4
+        OR extract(hour FROM p_hour_start AT TIME ZONE 'UTC')>=6 AND extract(hour FROM p_hour_start AT TIME ZONE 'UTC')<10
+      THEN 'peak' ELSE 'off_peak' END ELSE 'peak' END $f$;
+REVOKE ALL ON FUNCTION public.leaderboard_pricing_tier(text,timestamptz) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.leaderboard_pricing_tier(text,timestamptz) TO project_admin;`,
+      stripTransaction(read("migrations/20261124022850_usage-cost-provenance.sql")),
+    ].join("\n")},
   ];
 }
 module.exports={root,read,functionSql,privateFunctions,steps};

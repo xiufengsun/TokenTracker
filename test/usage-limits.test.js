@@ -4240,6 +4240,12 @@ lang      123 me    23u  IPv4 0x124                0t0  TCP 127.0.0.1:51235 (LIS
       const calls = [];
       const requestFn = async ({ path: requestPath, csrfToken, scheme, port }) => {
         calls.push({ endpoint: requestPath.split("/").pop(), csrfToken, scheme, port });
+        // The process-discovered port is HTTP-only. An HTTPS probe must fail
+        // like a TLS handshake, not with an HTTP status, or the HTTP fallback
+        // would be skipped as a "TLS response".
+        if (port === 35345 && scheme === "https") {
+          throw new Error("fetch failed");
+        }
         if (port !== 35345 || csrfToken) {
           throw new Error(`HTTP 401: unauthorized`);
         }
