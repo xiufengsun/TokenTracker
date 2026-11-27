@@ -3,13 +3,15 @@ import { Info, Languages, Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "../../hooks/useTheme.js";
 import { useLocale } from "../../hooks/useLocale.js";
 import { useCurrency } from "../../hooks/useCurrency.js";
+import { useOverviewPeriodPref } from "../../hooks/use-overview-period-pref.js";
 import { useTokenFormat } from "../../hooks/useTokenFormat.js";
 import { DE_LOCALE, EN_LOCALE, JA_LOCALE, KO_LOCALE, SYSTEM_LOCALE, ZH_CN_LOCALE, ZH_TW_LOCALE } from "../../lib/locale";
 import { CURRENCY_USD, getSupportedCurrencies } from "../../lib/currency";
 import { copy } from "../../lib/copy";
+import { OVERVIEW_PERIODS } from "../../lib/overview-period-pref.js";
+import { TOKEN_FORMAT_MODES, TOKEN_GROUPINGS, TOKEN_UNIT_SYSTEMS } from "../../lib/token-format.js";
 import { Select } from "../../ui/components";
 import { SectionCard, SegmentedControl, SettingsRow } from "./Controls.jsx";
-import { TOKEN_FORMAT_MODES, TOKEN_GROUPINGS, TOKEN_UNIT_SYSTEMS } from "../../lib/token-format.js";
 
 function buildThemeOptions() {
   return [
@@ -118,6 +120,7 @@ export function AppearanceSection() {
     grouping: tokenGrouping,
     setGrouping: setTokenGrouping,
   } = useTokenFormat();
+  const { period: overviewPeriod, setOverviewPeriod } = useOverviewPeriodPref();
 
   return (
     <SectionCard title={copy("settings.section.appearance")}>
@@ -125,6 +128,20 @@ export function AppearanceSection() {
         label={copy("settings.appearance.theme.label")}
         hint={copy("settings.appearance.theme.hint")}
         control={<SegmentedControl options={buildThemeOptions()} value={theme} onChange={setTheme} />}
+      />
+      <SettingsRow
+        label={copy("settings.appearance.overview_period.label")}
+        hint={copy("settings.appearance.overview_period.hint")}
+        control={
+          <SegmentedControl
+            options={OVERVIEW_PERIODS.map((period) => ({
+              value: period,
+              label: copy(`usage.period.${period}`),
+            }))}
+            value={overviewPeriod}
+            onChange={setOverviewPeriod}
+          />
+        }
       />
       <SettingsRow
         label={copy("settings.appearance.language.label")}

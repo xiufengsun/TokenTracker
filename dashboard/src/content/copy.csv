@@ -526,6 +526,8 @@ settings.appearance.theme.hint,ui,SettingsPage,SettingsPage,theme_hint,"Choose h
 settings.appearance.theme.light,ui,SettingsPage,SettingsPage,theme_light,"Light",,active
 settings.appearance.theme.dark,ui,SettingsPage,SettingsPage,theme_dark,"Dark",,active
 settings.appearance.theme.system,ui,SettingsPage,SettingsPage,theme_system,"System",,active
+settings.appearance.overview_period.label,ui,SettingsPage,SettingsPage,overview_period_label,"Opening range",,active
+settings.appearance.overview_period.hint,ui,SettingsPage,SettingsPage,overview_period_hint,"Shown when the dashboard opens. Day, week, and month are calendar ranges. Total is the last 24 months.",,active
 settings.appearance.currency.label,ui,SettingsPage,SettingsPage,currency_label,"Currency",,active
 settings.appearance.currency.hint,ui,SettingsPage,SettingsPage,currency_hint,"Select the display currency for usage costs.",,active
 settings.appearance.token_format.label,ui,SettingsPage,SettingsPage,token_format_label,"Token numbers",,active

@@ -485,6 +485,8 @@
   "settings.appearance.language.german": "독일어",
   "settings.appearance.currency.label": "통화",
   "settings.appearance.currency.hint": "사용량 비용에 표시할 통화를 선택하세요.",
+  "settings.appearance.overview_period.label": "열 때 표시 범위",
+  "settings.appearance.overview_period.hint": "개요를 열 때 표시합니다. 일, 주, 월은 달력 기준이고 전체는 최근 24개월입니다.",
   "settings.appearance.token_format.label": "Token 숫자 표시",
   "settings.appearance.token_format.hint": "간단히 또는 전체 숫자를 모든 화면에 적용합니다. 간단히 표시된 값은 마우스를 올리면 정확한 숫자를 볼 수 있습니다.",
   "settings.appearance.token_format.compact": "간단히",

@@ -485,6 +485,8 @@
   "settings.appearance.language.german": "ドイツ語",
   "settings.appearance.currency.label": "通貨",
   "settings.appearance.currency.hint": "使用コストの表示通貨を選択します。",
+  "settings.appearance.overview_period.label": "起動時の範囲",
+  "settings.appearance.overview_period.hint": "概要を開いたときに表示します。日・週・月は暦の範囲、合計は直近24か月です。",
   "settings.appearance.token_format.label": "Token 数値表示",
   "settings.appearance.token_format.hint": "短縮または完全な数値を全体に適用します。短縮表示ではホバーで正確な値を確認できます。",
   "settings.appearance.token_format.compact": "短縮",

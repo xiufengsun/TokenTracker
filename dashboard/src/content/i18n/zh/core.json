@@ -605,6 +605,8 @@
   "settings.appearance.language.german": "德语",
   "settings.appearance.currency.label": "货币",
   "settings.appearance.currency.hint": "选择用量成本的显示币种。",
+  "settings.appearance.overview_period.label": "打开时的范围",
+  "settings.appearance.overview_period.hint": "打开仪表盘时显示。日、周、月按日历计算，总计为最近 24 个月。",
   "settings.appearance.token_format.label": "Token 数字显示",
   "settings.appearance.token_format.hint": "全局使用紧凑或完整数字；紧凑模式下悬停可查看精确数值。",
   "settings.appearance.token_format.compact": "紧凑",
