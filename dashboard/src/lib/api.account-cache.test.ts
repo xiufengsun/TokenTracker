@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchCloudUsageSummary, fetchCloudUsageDaily, fetchCloudUsageHeatmap,
+  getCommunityModels, getLeaderboard, getLeaderboardProfile,
   getUsageHeatmap, getUsageLimits, getUserStatus, getUsageSummary, invalidateAccountResponseCache,
 } from "./api";
 import { expandHeatmapCompact } from "./heatmap-compact";
@@ -48,6 +49,41 @@ describe("parallel account reads", () => {
     });
     expect(fetch.mock.calls[0][1].headers).not.toHaveProperty("apikey");
     expect(fetch.mock.calls[1][1].headers).toMatchObject({ apikey: "anon-key", Authorization: "Bearer " + accessToken });
+  });
+});
+
+describe("hosted Cloudflare reads", () => {
+  beforeEach(() => {
+    vi.stubEnv("VITE_TOKENTRACKER_CLOUDFLARE_READS", "1");
+    vi.stubGlobal("window", { location: { hostname: "www.tokentracker.cc" } });
+  });
+
+  it("sends account reads to Cloudflare and surfaces an error there without querying InsForge", async () => {
+    const accessToken = jwt();
+    const fetch = vi.fn().mockResolvedValueOnce(json({}, 503));
+    vi.stubGlobal("fetch", fetch);
+    await expect(fetchCloudUsageSummary({ accessToken, from: "2026-11-20" })).rejects.toMatchObject({ status: 503 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [url, options] = fetch.mock.calls[0];
+    expect(new URL(url).href).toBe("https://api.tokentracker.cc/functions/tokentracker-account-summary?from=2026-11-20");
+    expect(options.headers).toEqual({ Accept: "application/json", Authorization: "Bearer " + accessToken });
+  });
+
+  it("uses Cloudflare for the public reports and preserves the leaderboard query", async () => {
+    const fetch = vi.fn().mockImplementation(async () => json({ ok: true }));
+    vi.stubGlobal("fetch", fetch);
+    await getLeaderboard({ period: "week", limit: 20 });
+    await getLeaderboardProfile({ userId: "public-profile", period: "week" });
+    await getCommunityModels();
+    expect(fetch.mock.calls.map(([url]) => {
+      const { origin, pathname, search } = new URL(url);
+      return origin + pathname + search;
+    })).toEqual([
+      "https://api.tokentracker.cc/functions/tokentracker-leaderboard?period=week&limit=20",
+      "https://api.tokentracker.cc/functions/tokentracker-leaderboard-profile?user_id=public-profile&period=week",
+      "https://api.tokentracker.cc/functions/tokentracker-community-models",
+    ]);
+    expect(fetch.mock.calls[0][1].headers).toEqual({ Accept: "application/json" });
   });
 });
 

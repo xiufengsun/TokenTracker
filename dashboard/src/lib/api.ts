@@ -181,7 +181,7 @@ export function isLocalhostHost() {
   );
 }
 
-function cloudflareAccountReads(baseUrl: string) {
+function cloudflareReadsEnabled(baseUrl: string) {
   if (baseUrl !== OFFICIAL_INSFORGE_URL) return false;
   const runtime = typeof window === "undefined" ? undefined : window.__TOKENTRACKER_RUNTIME_CONFIG__;
   return runtime !== undefined
@@ -189,19 +189,42 @@ function cloudflareAccountReads(baseUrl: string) {
     : import.meta.env.VITE_TOKENTRACKER_CLOUDFLARE_READS === "1";
 }
 
+function isHostedDashboard() {
+  return typeof window !== "undefined" && !isLocalhostHost();
+}
+
+function fetchCloudflareRead(
+  url: URL,
+  slug: string,
+  headers: Record<string, string>,
+  options: Pick<RequestInit, "cache" | "signal">,
+) {
+  const endpoint = new URL(functionUrlFor(CLOUDFLARE_API_URL, slug));
+  endpoint.search = url.search;
+  return fetch(endpoint, {
+    ...options,
+    headers: {
+      Accept: headers.Accept,
+      ...(headers.Authorization ? { Authorization: headers.Authorization } : {}),
+    },
+    credentials: "omit",
+    redirect: "error",
+  });
+}
+
 async function fetchAccountResponse(url: URL, slug: string, headers: Record<string, string>, preferCloudflare: boolean) {
+  if (preferCloudflare && isHostedDashboard()) {
+    return fetchCloudflareRead(url, slug, headers, { cache: "no-store" });
+  }
   if (preferCloudflare && headers.Authorization) {
-    const secondary = new URL(functionUrlFor(CLOUDFLARE_API_URL, slug));
-    secondary.search = url.search;
     try {
-      const response = await fetch(secondary, {
-        headers: { Accept: headers.Accept, Authorization: headers.Authorization },
-        cache: "no-store", credentials: "omit", redirect: "error", signal: AbortSignal.timeout(1800),
+      const response = await fetchCloudflareRead(url, slug, headers, {
+        cache: "no-store", signal: AbortSignal.timeout(1800),
       });
       if (response.ok) return response;
       await response.body?.cancel();
     } catch {
-      // Account auth and the primary report endpoint still belong to InsForge.
+      // The desktop dashboard still supports the original account endpoint.
     }
   }
   return fetchFunctionResponse(url.toString(), { method: "GET", headers, cache: "no-store" });
@@ -230,7 +253,7 @@ async function fetchLocalJson(slug: string, params?: AnyRecord, options?: AnyRec
     if (anonKey) headers.apikey = anonKey;
     if (isValidJwtShape(accessToken)) headers.Authorization = `Bearer ${accessToken}`;
     return cachedAccountJsonGet(url, accessToken, async () => {
-      const response = await fetchAccountResponse(url, accountSlug, headers, cloudflareAccountReads(base));
+      const response = await fetchAccountResponse(url, accountSlug, headers, cloudflareReadsEnabled(base));
       if (!response.ok) {
         const err: any = new Error(`Request failed with HTTP ${response.status}`);
         err.status = response.status;
@@ -391,12 +414,19 @@ async function fetchInsforgeFunction(slug: string, options: {
     headers.Authorization = `Bearer ${options.accessToken}`;
   }
 
-  const res = await fetchFunctionResponse(url.toString(), {
-    method: options.method || "GET",
-    headers,
-    cache: options.cache,
-    ...(options.body != null ? { body: JSON.stringify(options.body) } : {}),
-  });
+  const method = options.method || "GET";
+  const publicReport = slug === "tokentracker-leaderboard" ||
+    slug === "tokentracker-leaderboard-profile" ||
+    slug === "tokentracker-community-models";
+  const useCloudflare = publicReport && method === "GET" && isHostedDashboard() && cloudflareReadsEnabled(root);
+  const res = useCloudflare
+    ? await fetchCloudflareRead(url, slug, headers, { cache: options.cache })
+    : await fetchFunctionResponse(url.toString(), {
+      method,
+      headers,
+      cache: options.cache,
+      ...(options.body != null ? { body: JSON.stringify(options.body) } : {}),
+    });
   assertBackendInstance(baseUrl, anonKey);
   if (!res.ok) {
     const err: any = new Error(`Request failed with HTTP ${res.status}`);
@@ -978,7 +1008,7 @@ async function fetchAccountFunction(
   if (anonKey) headers.apikey = anonKey;
   const result = await cachedAccountJsonGet(url, accessToken, async () => {
     assertInstance();
-    const response = await fetchAccountResponse(url, slug, headers, cloudflareAccountReads(root));
+    const response = await fetchAccountResponse(url, slug, headers, cloudflareReadsEnabled(root));
     assertInstance();
     if (!response.ok) {
       const err: any = new Error(`Request failed with HTTP ${response.status}`);
