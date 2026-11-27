@@ -370,7 +370,10 @@ async function fetchInsforgeFunction(slug: string, options: {
   const baseUrl = getInsforgeRemoteUrl();
   if (!baseUrl) throw new Error("InsForge base URL not configured");
   const root = baseUrl.replace(/\/$/, "");
-  const url = new URL(functionUrlFor(root, slug));
+  const readCommunityFromCloudflare = slug === "tokentracker-community-models" &&
+    import.meta.env.VITE_TOKENTRACKER_CLOUDFLARE_COMMUNITY_READS === "1" &&
+    root === OFFICIAL_INSFORGE_URL && typeof window !== "undefined" && !isLocalhostHost();
+  const url = new URL(functionUrlFor(readCommunityFromCloudflare ? CLOUDFLARE_API_URL : root, slug));
   if (options.params) {
     for (const [key, value] of Object.entries(options.params)) {
       if (value != null && value !== "") url.searchParams.set(key, String(value));
@@ -391,12 +394,14 @@ async function fetchInsforgeFunction(slug: string, options: {
     headers.Authorization = `Bearer ${options.accessToken}`;
   }
 
-  const res = await fetchFunctionResponse(url.toString(), {
-    method: options.method || "GET",
-    headers,
-    cache: options.cache,
-    ...(options.body != null ? { body: JSON.stringify(options.body) } : {}),
-  });
+  const res = readCommunityFromCloudflare
+    ? await fetch(url, { headers: { Accept: "application/json" }, credentials: "omit", redirect: "error" })
+    : await fetchFunctionResponse(url.toString(), {
+      method: options.method || "GET",
+      headers,
+      cache: options.cache,
+      ...(options.body != null ? { body: JSON.stringify(options.body) } : {}),
+    });
   assertBackendInstance(baseUrl, anonKey);
   if (!res.ok) {
     const err: any = new Error(`Request failed with HTTP ${res.status}`);
