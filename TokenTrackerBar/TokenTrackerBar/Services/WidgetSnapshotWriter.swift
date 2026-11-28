@@ -83,17 +83,23 @@ enum WidgetSnapshotWriter {
         // each period comes from one response and one calendar window.
         let last7dRange = DateHelpers.dayRange(daysBack: 6, endingAt: inputs.capturedAt)
         let last30dRange = DateHelpers.dayRange(daysBack: 29, endingAt: inputs.capturedAt)
-        async let last7dSummary = fetchRangeSummary(last7dRange)
-        async let last30dSummary = fetchRangeSummary(last30dRange)
-        let (summary7d, summary30d) = await (last7dSummary, last30dSummary)
+        // Finish both reads before allocating the continuation for the snapshot write.
+        let summaries = await withTaskGroup(of: (String, UsageSummaryResponse?).self) { group in
+            for range in [last7dRange, last30dRange] {
+                group.addTask { (range.from, await fetchRangeSummary(range)) }
+            }
+            var results: [String: UsageSummaryResponse] = [:]
+            for await (startDay, summary) in group { results[startDay] = summary }
+            return results
+        }
 
         // Superseded while awaiting the range fetches — drop this stale write.
         guard ticket == updateGeneration else { return }
 
         let snapshot = buildSnapshot(
             from: inputs,
-            last7dSummary: summary7d,
-            last30dSummary: summary30d,
+            last7dSummary: summaries[last7dRange.from],
+            last30dSummary: summaries[last30dRange.from],
             last7dRange: last7dRange,
             last30dRange: last30dRange
         )

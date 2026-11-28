@@ -5,7 +5,7 @@ import SwiftUI
 /// Collapsed: a notch-hugging black bar — today's tokens on the left wing,
 /// today's cost on the right wing, the center occluded by the hardware notch.
 /// Hover: expands into a spend summary (today / 7d / 30d / total) plus the
-/// usage-limits bars, all fed by the shared `DashboardViewModel`.
+/// provider limits. The spend summary follows the local usage queue.
 ///
 /// The panel window is always the expanded size; only this black shape
 /// animates. Growing from a top-aligned outer frame (instead of resizing the
@@ -30,6 +30,8 @@ struct DynamicIslandView: View {
     @State private var menuBarIconAspect: CGFloat = 1
     @State private var wingMetrics = WingSelection.default
     @State private var compactModeEnabled = false
+    @State private var localUsage: IslandUsageSnapshot?
+    @State private var localUsageReadFailed = false
 
     var body: some View {
         // Referenced so currency/locale changes force a re-render.
@@ -67,6 +69,18 @@ struct DynamicIslandView: View {
         .onChange(of: state.settingsTick) { _ in
             self.wingMetrics = resolveWingMetrics()
             self.compactModeEnabled = DynamicIslandCompactPolicy.isEnabled()
+        }
+        .task(id: state.isPanelVisible ? state.localUsageRevision : nil) {
+            guard state.isPanelVisible else { return }
+            if localUsage?.today.to != DateHelpers.todayString() { localUsage = nil }
+            do {
+                let snapshot = try await APIClient.shared.fetchLocalIslandUsage()
+                try Task.checkCancellation()
+                localUsage = snapshot
+                localUsageReadFailed = false
+            } catch {
+                if !Task.isCancelled { localUsageReadFailed = true }
+            }
         }
     }
 
@@ -344,21 +358,19 @@ struct DynamicIslandView: View {
     private func wingContent(for metric: MenuBarDisplayMetric) -> (icon: String?, label: String?, value: String) {
         switch metric {
         case .todayTokens:
-            // Same "has data" gate as the menu bar (todaySummary != nil): the
-            // value stays put during re-syncs instead of blinking empty.
-            let val = viewModel.todaySummary == nil ? "" : TokenFormatter.formatCompact(viewModel.todayTokens)
+            let val = localUsage.map { TokenFormatter.formatCompact($0.today.totals.totalTokens) } ?? "—"
             return ("bolt.fill", nil, val)
         case .todayCost:
-            let val = viewModel.todaySummary == nil ? "" : viewModel.todayCost
+            let val = localUsage.map { TokenFormatter.formatCostFromString($0.today.totals.totalCostUsd) } ?? "—"
             return (nil, nil, val)
         case .last7dTokens:
-            let val = viewModel.rollingSummary == nil ? "--" : TokenFormatter.formatCompact(viewModel.last7dTokens)
+            let val = localUsage.map { TokenFormatter.formatCompact($0.today.rolling.last7d.totals.billableTotalTokens) } ?? "—"
             return ("clock.fill", "7d", val)
         case .totalTokens:
-            let val = viewModel.totalSummary == nil ? "--" : TokenFormatter.formatCompact(viewModel.totalTokens)
+            let val = localUsage.map { TokenFormatter.formatCompact($0.total.totalTokens) } ?? "—"
             return ("chart.bar.fill", "Tot", val)
         case .totalCost:
-            let val = viewModel.totalSummary == nil ? "--" : viewModel.totalCost
+            let val = localUsage.map { TokenFormatter.formatCostFromString($0.total.totalCostUsd) } ?? "—"
             return (nil, "All", val)
         case .claude5h, .codex5h, .codexSpark5h, .kimi5h, .antigravityClaude5h, .antigravityGemini5h:
             return (nil, "5h", limitPercentText(for: metric) ?? "--")
@@ -445,6 +457,11 @@ struct DynamicIslandView: View {
             .accessibilityLabel(Strings.openTokenTrackerWebsite)
             .help(Strings.openTokenTrackerWebsite)
 
+            Text(localUsageReadFailed ? Strings.localUsageUnavailable : Strings.localUsage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 8)
+
             Spacer()
 
             Button(action: {
@@ -519,16 +536,23 @@ struct DynamicIslandView: View {
     /// whole island within `maxExpandedHeight` and the panel's bounds.
     private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SummaryCardsView(
-                todayTokens: viewModel.todayTokens,
-                todayCost: viewModel.todayCost,
-                last7dTokens: viewModel.last7dTokens,
-                last7dActiveDays: viewModel.last7dActiveDays,
-                last30dTokens: viewModel.last30dTokens,
-                last30dAvgPerDay: viewModel.last30dAvgPerDay,
-                totalTokens: viewModel.totalTokens,
-                totalCost: viewModel.totalCost
-            )
+            if let localUsage {
+                let rolling = localUsage.today.rolling
+                SummaryCardsView(
+                    todayTokens: localUsage.today.totals.totalTokens,
+                    todayCost: TokenFormatter.formatCostFromString(localUsage.today.totals.totalCostUsd),
+                    last7dTokens: rolling.last7d.totals.billableTotalTokens,
+                    last7dActiveDays: rolling.last7d.activeDays,
+                    last30dTokens: rolling.last30d.totals.billableTotalTokens,
+                    last30dAvgPerDay: rolling.last30d.avgPerActiveDay ?? 0,
+                    totalTokens: localUsage.total.totalTokens,
+                    totalCost: TokenFormatter.formatCostFromString(localUsage.total.totalCostUsd)
+                )
+            } else {
+                Text(localUsageReadFailed ? "—" : Strings.loadingData)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             // Self-sizing up to the cap (outer `.fixedSize` makes the scroll
             // view hug its content), scrollable beyond it — many configured

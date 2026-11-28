@@ -268,6 +268,9 @@ export function DashboardPage({
   // 本地模式判断
   const isLocalMode = typeof window !== "undefined" &&
     (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+  // The loopback usage endpoints read the local queue. A pending cloud session
+  // refresh must not delay these cards. Shared and simulated views keep their tokens.
+  const usageAccessToken = isLocalMode && !accountView && !publicMode && !mockEnabled ? null : accessToken;
 
   useEffect(() => {
     // 本地模式：跳过登录检查，直接获取 userStatus
@@ -522,7 +525,7 @@ export function DashboardPage({
     refresh: refreshUsage,
   } = useUsageData({
     baseUrl,
-    accessToken,
+    accessToken: usageAccessToken,
     guestAllowed,
     from,
     to,
@@ -543,7 +546,7 @@ export function DashboardPage({
     refresh: refreshDailyBreakdown,
   } = useUsageData({
     baseUrl,
-    accessToken,
+    accessToken: usageAccessToken,
     guestAllowed,
     from: dailyBreakdownRange.from,
     to: dailyBreakdownRange.to,
@@ -571,7 +574,7 @@ export function DashboardPage({
     refresh: refreshModelBreakdown,
   } = useUsageModelBreakdown({
     baseUrl,
-    accessToken,
+    accessToken: usageAccessToken,
     guestAllowed,
     from,
     to,
@@ -592,7 +595,7 @@ export function DashboardPage({
     refresh: refreshProjectUsage,
   } = useProjectUsageSummary({
     baseUrl,
-    accessToken,
+    accessToken: usageAccessToken,
     from,
     to,
     timeZone,
@@ -616,7 +619,7 @@ export function DashboardPage({
     refresh: refreshTrend,
   } = useTrendData({
     baseUrl,
-    accessToken,
+    accessToken: usageAccessToken,
     guestAllowed,
     period,
     from,
@@ -670,7 +673,7 @@ export function DashboardPage({
     refresh: refreshHeatmap,
   } = useActivityHeatmap({
     baseUrl,
-    accessToken,
+    accessToken: usageAccessToken,
     guestAllowed,
     weeks: 52,
     cacheKey,

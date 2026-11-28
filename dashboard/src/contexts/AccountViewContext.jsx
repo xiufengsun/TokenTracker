@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useInsforgeAuth } from "./InsforgeAuthContext.jsx";
 import { invalidateAccountResponseCache } from "../lib/api";
+import { isNativeEmbed } from "../lib/native-bridge";
 import {
   CLOUD_USAGE_SYNCED_EVENT,
   getCloudSyncEnabled,
@@ -16,7 +17,8 @@ import {
  *
  * Two host modes:
  *   - localhost dashboard: signed-in user can opt in via Settings →
- *     Account → Cloud sync toggle. When on, reads switch to cloud.
+ *     Account → Cloud sync toggle. The Mac app opens on local usage unless
+ *     the user last selected the account view.
  *   - non-localhost (e.g. www.tokentracker.cc): the local CLI endpoints
  *     are unreachable, so signed-in users are pinned to cloud reads. A
  *     signed-out visitor on the public host has nothing to render — the
@@ -27,6 +29,7 @@ import {
  * other scope while the new fetch is in flight.
  */
 const AccountViewContext = createContext(null);
+const MAC_USAGE_SCOPE_KEY = "tokentracker.macos.usage-scope";
 
 export const CLOUD_SYNC_CHANGE_EVENT = "tt.cloudSyncChanged";
 export function emitCloudSyncChange() {
@@ -44,11 +47,15 @@ export function AccountViewProvider({ children }) {
   const [cloudSyncOn, setCloudSyncOn] = useState(() => getCloudSyncEnabled());
   const [cloudUsageReady, setCloudUsageReady] = useState(() => getCloudUsageReady());
   const [revision, setRevision] = useState(0);
-  // View-only scope override (issue 979 part 3): flips the rendered data scope
-  // without touching the persisted cloud-sync preference — uploads keep
-  // following the preference, only what the page shows changes. Session-scoped
-  // on purpose: a reload falls back to whatever the preference resolves to.
-  const [scopeOverride, setScopeOverride] = useState(null);
+  const macDashboard = localHost && isNativeEmbed();
+  const [scopeOverride, setScopeOverride] = useState(() => {
+    if (!macDashboard) return null;
+    try {
+      return localStorage.getItem(MAC_USAGE_SCOPE_KEY) === "account" ? null : "local";
+    } catch {
+      return "local";
+    }
+  });
   const cloudUsageReadyRef = React.useRef(cloudUsageReady);
 
   useEffect(() => {
@@ -128,12 +135,17 @@ export function AccountViewProvider({ children }) {
   // instead of committing the soon-to-be-discarded local fetch. We only gate
   // when cloud is the *likely* resolved scope; a local-only user (no cloud
   // sync, signed out) must still get instant local data.
-  const expectCloud = authEnabled && (!localHost || (cloudSyncOn && cloudUsageReady));
+  const expectCloud = authEnabled && (!localHost || (cloudSyncOn && cloudUsageReady && scopeOverride !== "local"));
   const resolving = authLoading && expectCloud;
 
   const updateScopeOverride = React.useCallback((next) => {
-    setScopeOverride((prev) => (prev === next ? prev : next));
-  }, []);
+    setScopeOverride(next);
+    if (macDashboard) {
+      try {
+        localStorage.setItem(MAC_USAGE_SCOPE_KEY, next === "local" ? "local" : "account");
+      } catch { /* the choice still applies to this window */ }
+    }
+  }, [macDashboard]);
 
   const value = useMemo(
     () => ({

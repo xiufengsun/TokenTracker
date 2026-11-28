@@ -19,6 +19,22 @@ function read(relPath) {
   return fs.readFileSync(path.join(repoRoot, relPath), "utf8");
 }
 
+test("Dynamic Island usage follows local queue writes independently of menu bar metrics", () => {
+  const root = "TokenTrackerBar/TokenTrackerBar/";
+  const api = read(root + "Services/APIClient.swift");
+  const view = read(root + "Views/DynamicIslandView.swift");
+  const status = read(root + "Services/StatusBarController.swift");
+  const localReader = api.slice(api.indexOf("func fetchLocalIslandUsage("), api.indexOf("func fetchSummary("));
+  assert.match(localReader, /fetchLocalSummary\(from: range\.to, to: range\.to\)/);
+  assert.match(localReader, /fetchLocalSummary\(from: range\.from, to: range\.to\)/);
+  assert.match(localReader, /fetch\("\/functions\/tokentracker-usage-summary", queryItems: withTimeZoneQueryItems/);
+  assert.doesNotMatch(localReader, /withAccountQueryItems|fetchSummaryWithSource/);
+  assert.match(view, /APIClient\.shared\.fetchLocalIslandUsage\(\)/);
+  assert.doesNotMatch(view, /viewModel\.(?:today|rolling|last7d|last30d|total)/);
+  assert.match(view, /UsageLimitsView\(limits: viewModel\.usageLimits/);
+  assert.match(status, /queueActivityMonitor\.onSettledActivity[\s\S]*?dynamicIslandController\.refreshLocalUsage\(\)\s*let summaries = self\.selectedMenuBarSummaries/);
+});
+
 test("account fallback reasons are classified, and transient ones are recognised by prefix", () => {
   const source = read("TokenTrackerBar/TokenTrackerBar/Models/AccountViewSource.swift");
 

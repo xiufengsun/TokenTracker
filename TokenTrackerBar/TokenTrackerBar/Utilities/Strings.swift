@@ -31,6 +31,8 @@ enum Strings {
     static var serverStarting: String { t("Starting TokenTracker", "正在启动 TokenTracker", "正在啟動 TokenTracker", "TokenTracker を起動中", "TokenTracker 시작 중") }
     static var serverPreparing: String { t("This usually takes a few seconds.", "通常只需要几秒钟。", "通常只需要幾秒鐘。", "通常は数秒で完了します。", "보통 몇 초 정도 걸립니다.") }
     static var loadingData: String { t("Loading data…", "正在加载数据…", "正在載入資料…", "データを読み込み中…", "데이터 불러오는 중…") }
+    static var localUsage: String { t("Local usage", "本机用量", "本機用量", "このMacの使用量", "이 Mac 사용량") }
+    static var localUsageUnavailable: String { t("Local usage unavailable", "暂时无法读取本机用量", "暫時無法讀取本機用量", "このMacの使用量を取得できません", "이 Mac 사용량을 불러올 수 없음") }
     static var noData: String { t("No data", "暂无数据", "暫無資料", "データなし", "데이터 없음") }
     static var retryButton: String { t("Retry", "重试", "重試", "再試行", "다시 시도") }
     static var openDashboard: String { t("Open Dashboard", "打开仪表盘", "開啟儀表盤", "ダッシュボードを開く", "대시보드 열기") }

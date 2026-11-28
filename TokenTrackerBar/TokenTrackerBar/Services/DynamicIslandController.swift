@@ -100,6 +100,7 @@ final class DynamicIslandState: ObservableObject {
     /// Whether the island panel is currently on screen. Lets the view skip
     /// work (icon-frame notifications) while the feature is toggled off.
     @Published var isPanelVisible = false
+    @Published var localUsageRevision = 0
     /// Mirrors the panel's current content size. Fixed at the generous maximum
     /// so the panel never needs to resize.
     @Published var panelSize: CGSize = {
@@ -116,7 +117,7 @@ final class DynamicIslandState: ObservableObject {
 /// always-on-top, non-activating panel pinned to the top-center of the screen.
 /// Collapsed it shows today's tokens (left wing) and today's cost (right wing)
 /// around the hardware notch; hovering expands it into a spend + limits detail
-/// card. Shares the app's single `DashboardViewModel` — no independent polling.
+/// card. Queue changes refresh local usage, and the dashboard supplies provider limits.
 @MainActor
 final class DynamicIslandController: NSObject {
     static let enabledDefaultsKey = "DynamicIslandEnabled"
@@ -162,6 +163,12 @@ final class DynamicIslandController: NSObject {
     init(viewModel: DashboardViewModel) {
         self.viewModel = viewModel
         super.init()
+
+        for name in [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) {
+                [weak self] _ in Task { @MainActor in self?.refreshLocalUsage() }
+            })
+        }
 
         observers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -419,8 +426,13 @@ final class DynamicIslandController: NSObject {
         return hitRectInPanel().contains(local)
     }
 
+    func refreshLocalUsage() {
+        if state.isPanelVisible { state.localUsageRevision &+= 1 }
+    }
+
     private func expand() {
         guard !state.isExpanded else { return }
+        refreshLocalUsage()
         // Panel frame stays put — only the black shape springs open from the
         // top. Resizing the window mid-animation was what opened the seam.
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {

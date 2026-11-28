@@ -191,6 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let serverHealthy = await APIClient.shared.checkServerHealth()
             let isOnline = serverManager.isServerRunning || serverHealthy
             if isOnline {
+                dynamicIslandController.refreshLocalUsage()
                 await viewModel.syncThenLoad()
             }
             viewModel.startAutoRefresh()
@@ -259,6 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task { @MainActor in
             await serverManager.ensureServerRunning()
+            dynamicIslandController.refreshLocalUsage()
             await viewModel.catchUpAfterWakeOrSessionActive(now: now)
         }
     }
