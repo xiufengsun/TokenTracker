@@ -2,7 +2,7 @@
 
 # Token Tracker
 
-[English](./README.md) · [简体中文](./README.zh-CN.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · **Deutsch**
+[English](./README.md) · [简体中文](./README.zh-CN.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · **Deutsch** · [Türkçe](./README.tr.md)
 
 ### Sieh genau, was du für KI ausgibst – über jedes CLI hinweg
 
