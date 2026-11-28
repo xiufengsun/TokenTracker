@@ -25,7 +25,7 @@ async function readJsonAsync(p) {
 }
 
 function isFresh(stat, ttlMs) {
-  if (!stat) return false;
+  if (!stat || ttlMs <= 0) return false;
   return Date.now() - stat.mtimeMs < ttlMs;
 }
 
