@@ -2,17 +2,19 @@ import React from "react";
 import { copy, getCopyLocale } from "../../../lib/copy";
 
 /** Keep calendar gaps visible when a gateway only reports some of the days. */
-export function CustomCreditHistory({ entries, limit }) {
-  if (!entries?.length) return null;
+export function CustomCreditHistory({ entries, limit, endDate }) {
+  if (!Array.isArray(entries)) return null;
   const days = new Map(entries.map((entry) => [entry.date, entry]));
-  const keys = [...days.keys()].sort();
-  const end = Date.parse(keys.at(-1) + "T00:00:00Z");
-  const start = Math.max(Date.parse(keys[0] + "T00:00:00Z"), end - 30 * 86400000);
+  const dayMs = 86_400_000;
+  const end = endDate ? Date.parse(endDate + "T00:00:00Z")
+    : Math.floor((Date.now() + 8 * 3_600_000) / dayMs) * dayMs;
+  if (!Number.isFinite(end)) return null;
+  const start = end - 30 * dayMs;
   const hasLimit = Number.isFinite(limit) && limit > 0;
   const max = Math.max(1, limit || 0, ...entries.map((entry) => entry.used_credits));
   const formatter = new Intl.NumberFormat(getCopyLocale(), { maximumFractionDigits: 2 });
   const columns = [];
-  for (let time = start; time <= end; time += 86400000) {
+  for (let time = start; time <= end; time += dayMs) {
     const date = new Date(time).toISOString().slice(0, 10);
     const day = days.get(date);
     const amount = day ? formatter.format(day.used_credits) : "";
@@ -35,7 +37,7 @@ export function CustomCreditHistory({ entries, limit }) {
           style={{ bottom: `${limit / max * 100}%` }} />}
       </div>
       <div className="flex justify-between text-[10px] tabular-nums text-oai-gray-500">
-        <span>{new Date(start).toISOString().slice(5, 10)}</span><span>{keys.at(-1).slice(5)}</span>
+        <span>{new Date(start).toISOString().slice(5, 10)}</span><span>{new Date(end).toISOString().slice(5, 10)}</span>
       </div>
       <p className="text-[11px] text-oai-gray-500">{copy("limits.customCredits.legend")}{hasLimit && " " + copy("limits.customCredits.reference", { amount: formatter.format(limit) })}</p>
     </figure>

@@ -202,7 +202,7 @@ export function SettingsPage() {
               }
             />
           </SectionCard>
-          {isLocalDashboardHost() && <CustomCreditSettings />}
+          {isLocalDashboardHost() && <CustomCreditSettings active={activeSection === SETTINGS_SECTION_IDS.LIMITS} />}
           <SectionCard title={copy("settings.limits.providers")}>
             <LimitsSettingsPanel prefs={limitsPrefs} />
           </SectionCard>

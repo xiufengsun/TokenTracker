@@ -14,6 +14,7 @@ import {
 } from "./mock-data";
 import { getInsforgeRemoteUrl, getInsforgeAnonKey } from "./insforge-config";
 import { isValidJwtShape, resolveAuthAccessToken, type AuthTokenProvider } from "./auth-token";
+import { customCreditRequestRevision } from "./custom-credit-config";
 import { getLocalApiAuthHeaders } from "./local-api-auth";
 import { expandHeatmapCompact } from "./heatmap-compact";
 import { dataBaseUrlFor, functionUrlFor, fetchFunctionResponse } from "./function-url";
@@ -241,7 +242,8 @@ async function fetchLocalJson(slug: string, params?: AnyRecord, options?: AnyRec
     }
   }
   const { accessToken: _omit, ...fetchOptions } = options || {};
-  return coalesceJsonGet(url.toString(), async () => {
+  const requestKey = slug === PATHS.usageLimits ? url.toString() + "\0" + customCreditRequestRevision() : url.toString();
+  return coalesceJsonGet(requestKey, async () => {
     const response = await fetch(url.toString(), {
       headers: { Accept: "application/json" },
       cache: "no-store",

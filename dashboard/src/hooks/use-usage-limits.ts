@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getUsageLimits, isLocalhostHost } from "../lib/api";
-import { CUSTOM_CREDIT_CONFIG_CHANGED, publishUsageLimitsPreloadState } from "../lib/dashboard-preload.js";
+import { subscribeCustomCreditChanges } from "../lib/custom-credit-config";
+import { publishUsageLimitsPreloadState } from "../lib/dashboard-preload.js";
 import { LIMIT_ALERTS_PREF_KEY } from "./use-limit-alert-prefs";
 import { sendPredictiveLimitAlerts } from "../lib/limit-alerts.js";
 import { useLatestRequestGuard } from "./use-latest-request-guard";
@@ -149,6 +150,8 @@ interface UsageLimitsData {
     primary_window?: CodexCreditWindow | null;
     secondary_window?: (CodexCreditWindow & { derived_limit?: boolean }) | null;
     tertiary_window?: (CodexCreditWindow & { derived_limit?: boolean }) | null;
+    partial?: boolean;
+    daily_history_end?: string;
     daily_history?: ReadonlyArray<{ date: string; used_credits: number; source: "reported" | "estimated"; partial?: boolean }>;
   };
   // Pay-as-you-go balance card (issue 960): no quota windows, one row per currency.
@@ -331,20 +334,10 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
 
   useEffect(() => {
     if (!localEnabled || typeof window === "undefined") return;
-    const onChange = () => {
+    return subscribeCustomCreditChanges(() => {
       setData((current) => withoutHiddenProviders(current, ["customCredits"]));
-      // Starting a fresh read also invalidates any request using the old key.
       void refreshFromServerCache();
-    };
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === CUSTOM_CREDIT_CONFIG_CHANGED) onChange();
-    };
-    window.addEventListener(CUSTOM_CREDIT_CONFIG_CHANGED, onChange);
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.removeEventListener(CUSTOM_CREDIT_CONFIG_CHANGED, onChange);
-      window.removeEventListener("storage", onStorage);
-    };
+    });
   }, [localEnabled, refreshFromServerCache]);
 
   // Auto-refresh when the dashboard regains focus / becomes visible again —

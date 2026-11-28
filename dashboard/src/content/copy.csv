@@ -2258,4 +2258,4 @@ limits.customCredits.estimated,ui,*,CustomCredits,estimated,{{amount}} credits �
 limits.customCredits.legend,ui,*,CustomCredits,legend,Dark bars show credits billed by the gateway. Light bars allocate each model’s billed credits by daily token use. Gaps have no data.,,active
 limits.customCredits.reference,ui,*,CustomCredits,reference,Dashed line: current daily limit of {{amount}} credits.,,active
 limits.customCredits.partialDay,ui,*,CustomCredits,partialDay,{{amount}} credits · some models unpriced,,active
-limits.customCredits.positive,ui,*,CustomCredits,positive,Credit limits must be greater than zero.,,active
+limits.customCredits.positive,ui,*,CustomCredits,positive,Enter at least one credit limit. Each limit must be greater than zero.,,active

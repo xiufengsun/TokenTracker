@@ -1176,5 +1176,5 @@
   "limits.customCredits.legend": "深色為閘道已計價值，淺色為依各模型每日 Token 用量分攤的估算值，空白表示無資料。",
   "limits.customCredits.reference": "虛線為目前每日限額 {{amount}} Credit。",
   "limits.customCredits.partialDay": "{{amount}} Credit · 部分模型未計價",
-  "limits.customCredits.positive": "Credit 限額必須大於零。"
+  "limits.customCredits.positive": "請至少填寫一個 Credit 限額，每個已填限額都必須大於零。"
 }

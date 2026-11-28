@@ -683,5 +683,5 @@
   "limits.customCredits.legend": "진한 막대는 집계값, 연한 막대는 모델별 청구량을 일별 토큰으로 배분한 추정값입니다. 빈 구간은 데이터가 없습니다.",
   "limits.customCredits.reference": "점선은 현재 일일 한도 {{amount}} 크레딧입니다.",
   "limits.customCredits.partialDay": "{{amount}} 크레딧 · 일부 모델 가격 미정",
-  "limits.customCredits.positive": "크레딧 한도는 0보다 커야 합니다."
+  "limits.customCredits.positive": "크레딧 한도를 하나 이상 입력하세요. 각 한도는 0보다 커야 합니다."
 }

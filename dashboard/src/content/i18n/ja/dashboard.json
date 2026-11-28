@@ -683,5 +683,5 @@
   "limits.customCredits.legend": "濃色は実測値、淡色は各モデルの請求額を日別トークン数で按分した推計値です。空白はデータなしです。",
   "limits.customCredits.reference": "破線は現在の日次上限 {{amount}} クレジットです。",
   "limits.customCredits.partialDay": "{{amount}} クレジット · 一部モデルの料金が未設定",
-  "limits.customCredits.positive": "クレジット上限はゼロより大きい値にしてください。"
+  "limits.customCredits.positive": "クレジット上限を少なくとも1つ入力してください。各上限にはゼロより大きい値を指定してください。"
 }

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { customCreditConfig } from "../../lib/api";
 import { copy } from "../../lib/copy";
-import { invalidateCustomCreditUsage } from "../../lib/dashboard-preload.js";
+import { invalidateCustomCreditUsage, subscribeCustomCreditChanges } from "../../lib/custom-credit-config";
 import { Button } from "../../ui/components/Button.jsx";
 import { SectionCard, SETTINGS_INPUT_CLASS } from "./Controls.jsx";
 
@@ -9,33 +9,79 @@ function editableConfig(config) {
   return {
     displayName: config.displayName ?? "",
     gatewayBaseUrl: config.gatewayBaseUrl ?? "",
-    apiKey: "",
     dailyCreditLimit: config.dailyCreditLimit ?? (config.hasApiKey ? "" : "150"),
     weeklyCreditLimit: config.weeklyCreditLimit ?? "",
     monthlyCreditLimit: config.monthlyCreditLimit ?? "",
   };
 }
 
-export function CustomCreditSettings() {
+// Match the server's accepted spellings of a saved canonical gateway.
+function isSavedGateway(value, savedBase) {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password || url.search || url.hash) return false;
+    const base = url.origin + url.pathname.replace(/\/+$/, "");
+    return base === savedBase || base.replace(/\/v1$/, "").replace(/\/+$/, "") === savedBase;
+  } catch { return false; }
+}
+
+const creditLimits = ["dailyCreditLimit", "weeklyCreditLimit", "monthlyCreditLimit"];
+function validLimits(form) {
+  const filled = creditLimits.map((key) => form[key]).filter((value) => value !== "");
+  return filled.length > 0 && filled.every((value) => {
+    const amount = Number(value);
+    return Number.isFinite(amount) && amount <= Number.MAX_SAFE_INTEGER && amount > 0;
+  });
+}
+
+export function CustomCreditSettings({ active = true }) {
   const [saved, setSaved] = useState(null);
-  const [form, setForm] = useState(null);
-  const [status, setStatus] = useState("loading");
+  const [edits, setEdits] = useState({});
+  const [keyDraft, setKeyDraft] = useState(null);
+  const [status, setStatus] = useState("idle");
+  const [loadState, setLoadState] = useState("loading");
   const [loadVersion, setLoadVersion] = useState(0);
 
   useEffect(() => {
-    let active = true;
-    customCreditConfig().then((config) => {
-      if (!active) return;
-      setSaved(config);
-      setForm(editableConfig(config));
-      setStatus("idle");
-    }).catch(() => { if (active) setStatus("load-error"); });
-    return () => { active = false; };
-  }, [loadVersion]);
+    if (!active) return;
+    let generation = 0;
+    async function load() {
+      const request = ++generation;
+      setLoadState("loading");
+      try {
+        const config = await customCreditConfig();
+        if (request !== generation) return;
+        setSaved(config);
+        setLoadState("ready");
+      } catch {
+        if (request === generation) setLoadState("error");
+      }
+    }
+    void load();
+    const unsubscribe = subscribeCustomCreditChanges(load);
+    return () => { generation++; unsubscribe(); };
+  }, [active, loadVersion]);
+
+  const form = saved && { ...editableConfig(saved), ...edits };
+  if (form) form.apiKey = keyDraft?.gateway === form.gatewayBaseUrl ? keyDraft.value : "";
+  const retainsKey = saved?.hasApiKey && isSavedGateway(form.gatewayBaseUrl, saved.gatewayBaseUrl);
+
+  function edit(key, value) {
+    setStatus("idle");
+    if (key === "apiKey") {
+      setKeyDraft({ gateway: form.gatewayBaseUrl, value });
+      return;
+    }
+    if (key === "gatewayBaseUrl") setKeyDraft(null);
+    setEdits((previous) => {
+      const next = { ...previous, [key]: value };
+      if (value === String(editableConfig(saved)[key])) delete next[key];
+      return next;
+    });
+  }
 
   async function persist(method) {
-    if (method === "PUT" && [form.dailyCreditLimit, form.weeklyCreditLimit, form.monthlyCreditLimit]
-      .some((value) => value !== "" && !(Number(value) > 0))) {
+    if (method === "PUT" && !validLimits(form)) {
       setStatus("invalid-limit");
       return;
     }
@@ -50,10 +96,11 @@ export function CustomCreditSettings() {
         monthlyCreditLimit: amount(form.monthlyCreditLimit),
       } : undefined;
       const config = await customCreditConfig(method, payload);
-      invalidateCustomCreditUsage();
       setSaved(config);
-      setForm(editableConfig(config));
+      setEdits({});
+      setKeyDraft(null);
       setStatus("saved");
+      invalidateCustomCreditUsage();
     } catch {
       setStatus("error");
     }
@@ -64,26 +111,26 @@ export function CustomCreditSettings() {
       <label className="block min-w-0 space-y-1 text-xs text-oai-gray-600 dark:text-oai-gray-300">
         <span>{text}</span>
         <input {...props} className={SETTINGS_INPUT_CLASS} value={form[key]}
-          onChange={(e) => { setForm({ ...form, [key]: e.target.value }); setStatus("idle"); }} />
+          onChange={(e) => edit(key, e.target.value)} />
       </label>
     );
   }
   return (
     <SectionCard title={copy("limits.provider.customCredits")} subtitle={copy("limits.customCredits.setup")}>
-      {status === "load-error" ? <Button size="sm" variant="secondary" onClick={() => {
-        setStatus("loading"); setLoadVersion((v) => v + 1);
+      {loadState === "error" ? <Button size="sm" variant="secondary" onClick={() => {
+        setLoadVersion((v) => v + 1);
       }}>{copy("sessions.error.retry")}</Button> : null}
       {form ? <form onSubmit={(e) => { e.preventDefault(); void persist("PUT"); }}>
-        <fieldset disabled={status === "busy"} className="space-y-3 pb-3">
+        <fieldset disabled={status === "busy" || loadState !== "ready"} className="space-y-3 pb-3">
           <div className="grid gap-3 sm:grid-cols-2">
             {field("displayName", copy("limits.customCredits.name"), { type: "text", maxLength: 80 })}
             {field("gatewayBaseUrl", copy("limits.customCredits.gateway"), { type: "url", required: true, autoComplete: "off", spellCheck: false })}
           </div>
           {field("apiKey", copy("limits.customCredits.key"), { type: "password", autoComplete: "new-password",
-            required: !saved?.hasApiKey || form.gatewayBaseUrl.trim() !== saved.gatewayBaseUrl,
-            placeholder: saved?.hasApiKey ? copy("limits.customCredits.keepKey") : undefined })}
+            required: !retainsKey,
+            placeholder: retainsKey ? copy("limits.customCredits.keepKey") : undefined })}
           <div className="grid grid-cols-3 gap-2">
-            {field("dailyCreditLimit", copy("limits.label.devin_daily"), { type: "number", min: "0", step: "any", required: true })}
+            {field("dailyCreditLimit", copy("limits.label.devin_daily"), { type: "number", min: "0", step: "any" })}
             {field("weeklyCreditLimit", copy("limits.label.devin_weekly"), { type: "number", min: "0", step: "any" })}
             {field("monthlyCreditLimit", copy("limits.label.opencode_go_monthly"), { type: "number", min: "0", step: "any" })}
           </div>

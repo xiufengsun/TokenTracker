@@ -699,5 +699,5 @@
   "limits.customCredits.legend": "Dunkel: gemeldete Credits. Hell: nach täglichem Tokenverbrauch je Modell aufgeteilt. Lücken: keine Daten.",
   "limits.customCredits.reference": "Gestrichelt: aktuelles Tageslimit von {{amount}} Credits.",
   "limits.customCredits.partialDay": "{{amount}} Credits · einige Modelle ohne Preis",
-  "limits.customCredits.positive": "Kreditlimits müssen größer als null sein."
+  "limits.customCredits.positive": "Gib mindestens ein Kreditlimit ein. Jedes Limit muss größer als null sein."
 }

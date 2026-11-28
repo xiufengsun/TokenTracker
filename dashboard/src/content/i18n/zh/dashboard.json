@@ -1117,5 +1117,5 @@
   "limits.customCredits.legend": "深色为网关已计价值，浅色为按各模型逐日 Token 用量分摊的估算值，空缺表示无数据。",
   "limits.customCredits.reference": "虚线为当前日限额 {{amount}} Credit。",
   "limits.customCredits.partialDay": "{{amount}} Credit · 部分模型未计价",
-  "limits.customCredits.positive": "Credit 限额必须大于零。"
+  "limits.customCredits.positive": "请至少填写一个 Credit 限额，每个已填限额都必须大于零。"
 }

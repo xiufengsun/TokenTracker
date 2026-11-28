@@ -101,8 +101,6 @@ export function readReusablePageState<TData = unknown>(
   targetKey: DashboardPreloadTarget,
   contextKey?: string,
 ): DashboardPreloadCacheEntry<TData> | null;
-export const CUSTOM_CREDIT_CONFIG_CHANGED: string;
-export function invalidateCustomCreditUsage(): void;
 export function publishUsageLimitsPreloadState<TData = unknown>(
   data: TData | null,
   options?: DashboardPreloadStateOptions,

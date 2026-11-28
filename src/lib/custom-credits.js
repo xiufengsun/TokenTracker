@@ -14,7 +14,7 @@ const PERIODS = [
 
 class ConfigError extends Error {}
 
-function gatewayUrl(value) {
+function gatewayUrl(value, { stored, previous } = {}) {
   let url;
   try { url = new URL(value); } catch { throw new ConfigError("Invalid gateway URL."); }
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
@@ -22,11 +22,15 @@ function gatewayUrl(value) {
       url.username || url.password || url.search || url.hash) {
     throw new ConfigError("Use an HTTPS gateway URL (or loopback HTTP) without credentials, a query, or a fragment.");
   }
-  return url.origin + url.pathname.replace(/\/+$/, "").replace(/\/v1$/, "");
+  const base = url.origin + url.pathname.replace(/\/+$/, "");
+  // Persisted bases can legitimately end in /v1 behind a versioned proxy.
+  // Strip the optional API suffix only from newly entered endpoints.
+  if (stored || base === previous?.gatewayBaseUrl) return base;
+  return base.replace(/\/v1$/, "").replace(/\/+$/, "");
 }
 
-function validateConfig(input, previous = null) {
-  const gatewayBaseUrl = gatewayUrl(input?.gatewayBaseUrl);
+function validateConfig(input, { previous, stored = false } = {}) {
+  const gatewayBaseUrl = gatewayUrl(input?.gatewayBaseUrl, { previous, stored });
   const supplied = input.apiKey != null && input.apiKey !== "";
   const retainedKey = previous?.gatewayBaseUrl === gatewayBaseUrl ? previous.apiKey : "";
   const apiKey = normalizeApiKey(supplied ? input.apiKey : retainedKey);
@@ -59,7 +63,7 @@ function configPath(options) {
 
 function readConfig(options) {
   try {
-    return validateConfig(JSON.parse(fs.readFileSync(configPath(options), "utf8")));
+    return validateConfig(JSON.parse(fs.readFileSync(configPath(options), "utf8")), { stored: true });
   } catch (error) {
     if (error.code === "ENOENT") return null;
     throw error;
@@ -80,7 +84,13 @@ function publicConfig(config) {
 function saveConfig(options, input) {
   // Only retain an existing key when editing the same normalized endpoint.
   // A supplied replacement also lets users recover an unreadable old config.
-  const config = validateConfig(input, input?.apiKey ? null : readConfig(options));
+  let previous;
+  try {
+    previous = readConfig(options);
+  } catch (error) {
+    if (!input?.apiKey || !(error instanceof ConfigError || error instanceof SyntaxError)) throw error;
+  }
+  const config = validateConfig(input, { previous });
   writeJsonAtomicSync(configPath(options), config);
   return publicConfig(config);
 }
@@ -282,10 +292,22 @@ function readCreditLimitsConfig(options) {
 }
 
 async function fetchCustomCreditLimits({
-  home, trackerDir, fetchImpl = fetch, nowMs = Date.now(), config = readCreditLimitsConfig({ home, trackerDir }),
+  home, trackerDir, fetchImpl = fetch, nowMs, config = readCreditLimitsConfig({ home, trackerDir }),
 } = {}) {
   if (!config) return { configured: false };
   if (config.error) return { configured: true, error: config.error };
+  // The gateway chooses periods when it receives the request. If the four
+  // reads straddle billing midnight, take a fresh, consistent sample.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const startedAt = nowMs ?? Date.now();
+    const limits = await fetchCreditPeriods(config, fetchImpl, startedAt);
+    const endedAt = nowMs ?? Date.now();
+    if (Math.floor((startedAt + OFFSET_MS) / DAY_MS) === Math.floor((endedAt + OFFSET_MS) / DAY_MS)) return limits;
+  }
+  return { configured: true, error: "Gateway billing period changed during the request." };
+}
+
+async function fetchCreditPeriods(config, fetchImpl, nowMs) {
   const [results, billedDays] = await Promise.all([
     Promise.allSettled(PERIODS.map((period) => fetchWindow(config, period, fetchImpl, nowMs))),
     fetchBilledDays(config, fetchImpl, nowMs).catch(() => null),
@@ -321,6 +343,8 @@ async function fetchCustomCreditLimits({
       ...(partialDates.has(date) ? { partial: true } : {}),
     });
   }
+  limits.daily_history_end = day.today;
+  limits.partial = PERIODS.some(({ cap, slot }) => (config[cap] ?? config.dailyCreditLimit) && !limits[slot]);
   limits.daily_history = [...history.values()].sort((a, b) => a.date.localeCompare(b.date));
   if (!PERIODS.some(({ slot }) => limits[slot])) {
     limits.error = "Gateway credit usage is unavailable. Check the connection, key, and model credit data.";

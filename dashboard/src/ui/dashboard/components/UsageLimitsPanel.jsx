@@ -1016,7 +1016,7 @@ function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, bad
     .filter((s) => s.window)
     .map((s) => ({ spec: s, mode, pace: paceForSpec(s, mode, now) }));
   const extra = renderProviderExtra(spec.extra, data);
-  const incompleteCreditWindows = id === "customCredits" && [1, 2].includes(rows.length);
+  const incompleteCreditWindows = id === "customCredits" && data.partial === true && rows.length !== 0;
   return (
     <ToolGroup
       key={id}
@@ -1039,7 +1039,7 @@ function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, bad
         <StatusLine>{copy("limits.customCredits.partial")}</StatusLine>
       ) : null}
       {expanded ? <LimitDetail rows={rows} mode={mode} now={now} /> : null}
-      {expanded && id === "customCredits" ? <CustomCreditHistory entries={data.daily_history} limit={data.primary_window?.limit_credits} /> : null}
+      {expanded && id === "customCredits" ? <CustomCreditHistory endDate={data.daily_history_end} entries={data.daily_history} limit={data.primary_window?.limit_credits} /> : null}
       {expanded && subscription ? (
         <SubscriptionDetail subscription={subscription} now={now} />
       ) : null}
@@ -1135,7 +1135,7 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
       id,
       <>
         <StatusLine tone="error">{id === "cursor" && data.auth_action_required === "reauth" ? copy("limits.cursor.connection.expired") : data.error}</StatusLine>
-        {id === "customCredits" ? <CustomCreditHistory entries={data.daily_history} /> : null}
+        {id === "customCredits" ? <CustomCreditHistory endDate={data.daily_history_end} entries={data.daily_history} /> : null}
         {id === "kiro"
           ? renderProviderExtra(PROVIDER_LIMIT_SPECS.kiro.extra, data)
           : null}

@@ -258,3 +258,88 @@ test("local-auth settings hide the key, bind retained secrets to the full base U
   assert.equal(fs.existsSync(file), false);
   assert.deepEqual(await fetchCustomCreditLimits({ trackerDir, fetchImpl: assert.fail }), { configured: false });
 });
+
+test("a canonical base ending in /v1 survives reads, budget edits and key rotation", async (t) => {
+  const options = { trackerDir: tempDir(t) };
+  const input = { ...config, gatewayBaseUrl: "https://gateway.example/api/v1/v1/" };
+  const saved = saveConfig(options, input);
+  assert.equal(saved.gatewayBaseUrl, "https://gateway.example/api/v1");
+  assert.equal(readCreditLimitsConfig(options).gatewayBaseUrl, saved.gatewayBaseUrl);
+  assert.deepEqual(saveConfig(options, { ...saved, weeklyCreditLimit: 1050 }), { ...saved, weeklyCreditLimit: 1050 });
+  assert.equal(readCreditLimitsConfig(options).apiKey, input.apiKey);
+  const rotated = saveConfig(options, { ...saved, apiKey: "rotated-test-key" });
+  assert.equal(rotated.gatewayBaseUrl, saved.gatewayBaseUrl);
+  assert.equal(readCreditLimitsConfig(options).apiKey, "rotated-test-key");
+  assert.throws(() => saveConfig(options, { ...saved, gatewayBaseUrl: "https://gateway.example/other" }), /key is required/);
+  const paths = [];
+  await fetchCustomCreditLimits({ ...options, nowMs, fetchImpl: async (url) => {
+    paths.push(new URL(url).pathname);
+    const window = new URL(url).searchParams.get("window");
+    return Response.json({ window, data: [] });
+  } });
+  assert.deepEqual(new Set(paths), new Set(["/api/v1/v1/usage/by-model", "/api/v1/v1/usage/daily-credit"]));
+});
+
+test("retries a UTC+8 month rollover in flight and uses the new day for history, resets and budgets", async (t) => {
+  const trackerDir = tempDir(t);
+  saveConfig({ trackerDir }, config);
+  let clock = Date.parse("2024-02-29T15:59:59.999Z");
+  t.mock.method(Date, "now", () => clock);
+  let batches = 0;
+  const fetchImpl = async (url) => {
+    const window = new URL(url).searchParams.get("window");
+    if (window === "today") batches++;
+    if (!window) {
+      clock = Date.parse("2024-02-29T16:00:00.001Z");
+      return Response.json({ data: [] });
+    }
+    return Response.json({ window, data: [{ credit: batches === 1 ? 29 : 3 }] });
+  };
+  const result = await fetchCustomCreditLimits({ trackerDir, fetchImpl });
+  assert.equal(batches, 2);
+  assert.equal(result.tertiary_window.limit_credits, 150 * 31);
+  assert.equal(result.primary_window.reset_at, "2024-03-01T16:00:00.000Z");
+  assert.equal(result.tertiary_window.reset_at, "2024-03-31T16:00:00.000Z");
+  assert.equal(result.daily_history_end, "2024-03-01");
+  assert.deepEqual(result.daily_history, [{ date: "2024-03-01", used_credits: 3, source: "reported" }]);
+});
+
+test("a weekly-only plan requests only its configured window and reports complete coverage", async (t) => {
+  const trackerDir = tempDir(t);
+  saveConfig({ trackerDir }, { ...config, dailyCreditLimit: null, weeklyCreditLimit: 800 });
+  const windows = [];
+  const result = await fetchCustomCreditLimits({ trackerDir, nowMs, fetchImpl: async (url) => {
+    const window = new URL(url).searchParams.get("window");
+    if (window) windows.push(window);
+    return Response.json({ window, data: [] });
+  } });
+  assert.deepEqual(windows, ["week"]);
+  assert.equal(result.secondary_window.limit_credits, 800);
+  assert.equal(result.partial, false);
+  assert.equal(result.daily_history_end, "2024-02-29");
+});
+
+test("samples the gateway date after the aggregate's asynchronous credential phase", async (t) => {
+  const trackerDir = tempDir(t);
+  saveConfig({ trackerDir }, config);
+  resetUsageLimitsCache();
+  t.after(() => resetUsageLimitsCache());
+  let clock = Date.parse("2024-02-29T15:59:59.999Z");
+  t.mock.method(Date, "now", () => clock);
+  const windows = [];
+  const pending = getUsageLimits({
+    trackerDir, home: trackerDir,
+    hiddenProviders: USAGE_LIMITS_PROVIDER_IDS.filter((id) => id !== "customCredits"),
+    fetchImpl: async (url) => {
+      const window = new URL(url).searchParams.get("window");
+      if (window) windows.push(window);
+      return Response.json({ window, data: [] });
+    },
+  });
+  assert.deepEqual(windows, []);
+  clock = Date.parse("2024-02-29T16:00:00.001Z");
+  const { customCredits } = await pending;
+  assert.deepEqual(windows.sort(), ["month", "today", "week"]);
+  assert.equal(customCredits.daily_history_end, "2024-03-01");
+  assert.equal(customCredits.tertiary_window.limit_credits, 150 * 31);
+});

@@ -1,7 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getUsageLimits } from "../lib/api";
-import { CUSTOM_CREDIT_CONFIG_CHANGED, invalidateCustomCreditUsage, publishUsageLimitsPreloadState } from "../lib/dashboard-preload.js";
+import { CUSTOM_CREDIT_CONFIG_CHANGED, invalidateCustomCreditUsage } from "../lib/custom-credit-config";
+import { publishUsageLimitsPreloadState } from "../lib/dashboard-preload.js";
 import { useUsageLimits } from "./use-usage-limits";
 import { LIMITS_PREFS_CHANGED_EVENT } from "./use-limits-display-prefs.js";
 

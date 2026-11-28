@@ -5030,7 +5030,7 @@ async function fetchUsageLimitsUncached({
       providerTimeoutMs,
     ).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
     hiddenSet.has("customCredits") ? hiddenSentinel : fetchCustomCreditLimits({
-      config: customCreditsConfig, fetchImpl: providerFetch, nowMs,
+      config: customCreditsConfig, fetchImpl: providerFetch, nowMs: injectedNowMs,
     }),
     // Public status-page probe (fail-soft, own 5-min cache in provider-status.js).
     // Only probed for configured accounts — without a token the Claude section

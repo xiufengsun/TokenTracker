@@ -292,17 +292,6 @@ export function readReusablePageState(targetKey, contextKey) {
   return session.cache.read(targetKey, contextKey);
 }
 
-export const CUSTOM_CREDIT_CONFIG_CHANGED = "tokentracker:custom-credit-config-changed";
-
-export function invalidateCustomCreditUsage() {
-  if (typeof window === "undefined") return;
-  window.dispatchEvent(new Event(CUSTOM_CREDIT_CONFIG_CHANGED));
-  try {
-    // Signal other dashboard tabs without storing a gateway name, key, or usage.
-    window.localStorage.setItem(CUSTOM_CREDIT_CONFIG_CHANGED, crypto.randomUUID());
-  } catch { /* a restricted WebView can still refresh via the same-window event */ }
-}
-
 export function publishUsageLimitsPreloadState(data, options = {}) {
   // The active gateway account can change in another CLI or desktop process.
   // Reuse other rows immediately; the local limits read refreshes this row.
