@@ -4,10 +4,11 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { once } = require("node:events");
 const { createWorkbuddyBroker } = require("./helpers/workbuddy-ipc");
 const { readWorkbuddyIpcDiscovery, openWorkbuddyIpc } = require("../src/lib/workbuddy-ipc");
 const { fetchWorkbuddyLimits, fetchWorkbuddyAiLimits } = require("../src/lib/workbuddy-limits");
-const { getUsageLimits, resetUsageLimitsCache } = require("./helpers/usage-limits");
+const { getUsageLimits, resetUsageLimitsCache, USAGE_LIMITS_PROVIDER_IDS } = require("./helpers/usage-limits");
 
 const PLAN = "TCACA_code_008_cfWoLwvjU4";
 const REWARD = "TCACA_code_007_nzdH5h4Nl0";
@@ -80,7 +81,8 @@ test("the limits aggregation retains Free and cancels IPC when the provider budg
   // fallback asserted below must never depend on the wall clock (#951 class).
   const options = {
     home: broker.root, env: { HOME: broker.root, WORKBUDDY_HOME: broker.home },
-    trackerDir: path.join(broker.root, "tracker"), providerTimeoutMs: 1000,
+    trackerDir: path.join(broker.root, "tracker"),
+    hiddenProviders: USAGE_LIMITS_PROVIDER_IDS.filter((id) => id !== "workbuddy" && id !== "workbuddyAi"),
     nowMs: Date.parse("2026-07-08T00:00:00Z"),
     securityRunner: () => ({ status: 1, stdout: "" }),
     commandRunner: () => ({ status: 1, stdout: "" }),
@@ -101,7 +103,7 @@ test("the limits aggregation retains Free and cancels IPC when the provider budg
   const stalled = await createWorkbuddyBroker(t, { stallRequest: true });
   resetUsageLimitsCache();
   const timeout = await getUsageLimits({ ...options,
-    env: { HOME: broker.root, WORKBUDDY_HOME: stalled.home }, providerTimeoutMs: 60,
+    env: { HOME: broker.root, WORKBUDDY_HOME: stalled.home }, providerTimeoutMs: 500,
   });
   // The budget aborts the stalled IPC inside its grace, so the edition's own
   // disk-cache fallback — the snapshot the live read above just wrote — lands
@@ -111,7 +113,9 @@ test("the limits aggregation retains Free and cancels IPC when the provider budg
   assert.equal(timeout.workbuddy.stale, true);
   assert.equal(timeout.workbuddy.plan_label, "Free");
   assert.equal(timeout.workbuddy.primary_window.limit_credits, 500);
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(stalled.requests.length, 1, "the stalled billing call must reach the broker");
+  const closeDeadline = AbortSignal.timeout(2_000);
+  await Promise.all([...stalled.sockets].map((socket) => once(socket, "close", { signal: closeDeadline })));
   assert.equal(stalled.sockets.size, 0);
 });
 
