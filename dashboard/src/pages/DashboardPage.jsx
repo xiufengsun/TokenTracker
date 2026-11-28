@@ -33,6 +33,7 @@ import { startLocalUsageAutoRefresh } from "../lib/local-usage-auto-refresh";
 import { buildDailyBreakdownRange, selectDailyBreakdownRows } from "../lib/daily-breakdown";
 import { buildFleetData, buildTopModels, resolveDisplayTokens } from "../lib/model-breakdown";
 import { safeWriteClipboard } from "../lib/safe-browser";
+import { isProductionHost } from "../lib/host-mode";
 import { isScreenshotModeEnabled } from "../lib/screenshot-mode";
 import {
   formatTimeZoneLabel,
@@ -116,11 +117,6 @@ function getBillableTotal(row) {
 function getHeatmapValue(cell) {
   if (!cell) return null;
   return cell?.billable_total_tokens ?? cell?.value ?? cell?.total_tokens;
-}
-
-function isProductionHost(hostname) {
-  if (!hostname) return false;
-  return hostname === "www.tokentracker.cc" || hostname === "tokentracker.cc";
 }
 
 function isForceInstallEnabled() {

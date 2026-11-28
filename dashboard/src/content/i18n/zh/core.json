@@ -1,4 +1,13 @@
 {
+  "cli_upgrade.global_command": "npm install -g tokentracker-cli@latest",
+  "cli_upgrade.npx_command": "npx --yes tokentracker-cli@latest",
+  "cli_upgrade.summary": "CLI v1.5.30 及更早版本：请尽快升级以继续云同步",
+  "cli_upgrade.restart": "旧版上传依赖即将停服的 InsForge。如果本地面板正在运行，请先在启动它的终端按 Ctrl+C。",
+  "cli_upgrade.global": "通过 npm 全局安装：执行升级命令，然后重新运行 tokentracker。",
+  "cli_upgrade.npx": "通过 npx 使用：直接启动最新版。",
+  "cli_upgrade.copy": "复制命令",
+  "cli_upgrade.copied": "已复制",
+  "cli_upgrade.manual_copy": "请选中命令并手动复制。",
   "limits.label.qoder_cn_addon_credits": "资源包",
   "cloud.rebuild.action": "重建本设备云端数据",
   "cloud.rebuild.title": "重建云端数据？",

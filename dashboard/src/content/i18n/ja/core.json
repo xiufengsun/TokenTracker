@@ -1,4 +1,11 @@
 {
+  "cli_upgrade.summary": "CLI v1.5.30 以前をお使いの方は、クラウド同期のために更新してください",
+  "cli_upgrade.restart": "旧版はサービス終了予定の InsForge 経由でアップロードします。ローカルダッシュボードが動作中の場合は、起動した端末で先に Ctrl+C を押してください。",
+  "cli_upgrade.global": "npm でグローバルにインストールした場合は、更新後に tokentracker を再実行してください。",
+  "cli_upgrade.npx": "npx をお使いの場合は、最新版を直接起動してください。",
+  "cli_upgrade.copy": "コマンドをコピー",
+  "cli_upgrade.copied": "コピーしました",
+  "cli_upgrade.manual_copy": "コマンドを選択して手動でコピーしてください。",
   "header.auth.sign_in_aria": "ログイン",
   "login.back_home": "ホームに戻る",
   "login.cloud_only": "クラウドログインが設定されていません。localhost のローカルダッシュボードをご利用ください。",

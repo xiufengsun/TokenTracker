@@ -1,4 +1,11 @@
 {
+  "cli_upgrade.summary": "CLI v1.5.30 이하를 사용한다면 클라우드 동기화를 위해 업데이트하세요",
+  "cli_upgrade.restart": "이전 버전은 서비스 종료 예정인 InsForge를 통해 업로드합니다. 로컬 대시보드가 실행 중이면 먼저 해당 터미널에서 Ctrl+C를 누르세요.",
+  "cli_upgrade.global": "npm으로 전역 설치했다면 다음 명령으로 업데이트한 뒤 tokentracker를 다시 실행하세요.",
+  "cli_upgrade.npx": "npx를 사용한다면 최신 버전을 바로 실행하세요.",
+  "cli_upgrade.copy": "명령 복사",
+  "cli_upgrade.copied": "복사됨",
+  "cli_upgrade.manual_copy": "명령을 선택해 직접 복사하세요.",
   "header.auth.sign_in_aria": "로그인",
   "login.back_home": "홈으로 돌아가기",
   "login.cloud_only": "클라우드 로그인이 설정되지 않았습니다. localhost의 로컬 대시보드를 사용하세요.",

@@ -1,4 +1,13 @@
 key,module,page,component,slot,text,notes,status
+cli_upgrade.summary,shared,*,CliUpgradeNotice,summary,"Using CLI v1.5.30 or earlier? Update for cloud sync",,active
+cli_upgrade.restart,shared,*,CliUpgradeNotice,restart,"Older versions send uploads through the retiring InsForge service. If your local dashboard is running, stop its CLI with Ctrl+C before restarting.",,active
+cli_upgrade.global,shared,*,CliUpgradeNotice,global,"Installed globally with npm? Update it, then run tokentracker again.",,active
+cli_upgrade.npx,shared,*,CliUpgradeNotice,npx,"Using npx? Start the latest CLI directly.",,active
+cli_upgrade.copy,shared,*,CliUpgradeNotice,copy,"Copy command",,active
+cli_upgrade.copied,shared,*,CliUpgradeNotice,copied,"Copied",,active
+cli_upgrade.manual_copy,shared,*,CliUpgradeNotice,manual_copy,"Select the command and copy it manually.",,active
+cli_upgrade.global_command,shared,*,CliUpgradeNotice,global_command,"npm install -g tokentracker-cli@latest",,active
+cli_upgrade.npx_command,shared,*,CliUpgradeNotice,npx_command,"npx --yes tokentracker-cli@latest",,active
 header.auth.sign_in_aria,shared,*,InsforgeUserHeaderControls,sign_in_aria,"Sign in",,active
 login.back_home,shared,LoginPage,LoginPage,back_home,"Back to home",,active
 login.cloud_only,shared,LoginPage,LoginPage,cloud_only,"Cloud sign-in is not configured. Use the local dashboard on localhost.",,active

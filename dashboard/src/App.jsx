@@ -1,6 +1,7 @@
 import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
+import { CliUpgradeNotice } from "./components/CliUpgradeNotice.jsx";
 import { useLocale } from "./hooks/useLocale.js";
 import { copy } from "./lib/copy";
 import { ThemeProvider } from "./ui/foundation/ThemeProvider.jsx";
@@ -362,6 +363,9 @@ export default function App() {
     hasLandingFooter = true;
   } else {
     const pageNode = (<>
+      {isDashboardDefaultPath && cloudAuthSignedIn && !publicMode && !mockEnabled && !screenshotMode && (
+        <CliUpgradeNotice className="mx-auto w-full max-w-7xl px-4 pt-4 text-oai-gray-700 dark:text-oai-gray-300 sm:px-6" />
+      )}
       {insforge.configurationError ? (
         <p role="alert" className="mx-auto w-full max-w-7xl px-4 py-4 text-sm leading-6 text-oai-gray-700 dark:text-oai-gray-300 sm:px-6">
           {copy("instance.configuration.invalid")}

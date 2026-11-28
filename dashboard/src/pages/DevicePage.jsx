@@ -3,6 +3,7 @@ import { useInsforgeAuth } from "../contexts/InsforgeAuthContext";
 import { copy } from "../lib/copy";
 import { getInsforgeInstanceFingerprint, getInsforgeRemoteUrl } from "../lib/insforge-config";
 import { functionUrlFor } from "../lib/function-url";
+import { CliUpgradeNotice } from "../components/CliUpgradeNotice.jsx";
 
 /**
  * /device — OAuth-style device flow approval page.
@@ -151,6 +152,7 @@ export default function DevicePage() {
             <p className="text-sm text-red-700 dark:text-red-300">{status.message}</p>
           </div>
         )}
+        <CliUpgradeNotice className="mt-6 text-oai-gray-700 dark:text-oai-gray-300" />
       </div>
     </div>
   );

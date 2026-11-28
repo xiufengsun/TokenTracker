@@ -1,4 +1,11 @@
 {
+  "cli_upgrade.summary": "CLI v1.5.30 oder älter? Für die Cloud-Synchronisierung bitte aktualisieren",
+  "cli_upgrade.restart": "Ältere Versionen laden Daten über InsForge hoch. Dieser Dienst wird eingestellt. Wenn das lokale Dashboard läuft, beende die CLI zuerst mit Strg+C im zugehörigen Terminal.",
+  "cli_upgrade.global": "Global mit npm installiert? Aktualisiere die CLI und starte tokentracker erneut.",
+  "cli_upgrade.npx": "Du nutzt npx? Starte direkt die aktuelle Version.",
+  "cli_upgrade.copy": "Befehl kopieren",
+  "cli_upgrade.copied": "Kopiert",
+  "cli_upgrade.manual_copy": "Markiere den Befehl und kopiere ihn manuell.",
   "header.auth.sign_in_aria": "Anmelden",
   "login.back_home": "Zurück zur Startseite",
   "login.cloud_only": "Kein Cloud-Login konfiguriert. Nutze das lokale Dashboard unter localhost.",

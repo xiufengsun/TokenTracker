@@ -2,6 +2,7 @@ import React, { useLayoutEffect, useRef } from "react";
 import { gsap } from "./gsap.js";
 import { InstallCommand } from "./InstallCommand.jsx";
 import { DownloadButtons } from "./DownloadButtons.jsx";
+import { CliUpgradeNotice } from "../../../components/CliUpgradeNotice.jsx";
 
 // Deterministic sparse starfield (CSS-only echo of the hero galaxy — no
 // second WebGL context for a closing section).
@@ -143,6 +144,7 @@ export function DownloadSection({ copy, animate, installCommand, installCopied, 
           />
         </div>
         <div className="mt-6 w-full">
+          <CliUpgradeNotice className="mb-6 text-oai-gray-200" />
           <DownloadButtons copy={copy} githubLabel={githubLabel} />
         </div>
       </div>

@@ -16,6 +16,7 @@ const REQUIRED_COLUMNS = ["key", "module", "page", "component", "slot", "text"];
 // this key-based so a newly added English sentence cannot silently pass.
 const SOURCE_IDENTICAL_KEY_ALLOWLIST = [
   /^landing[.]install[.]command$/,
+  /^cli_upgrade[.](global|npx)_command$/,
   /^(landing|share)[.]meta[.]/,
   /^landing[.]cta[.]secondary$/,
   /^landing[.]v2[.]hero[.]title_line2$/,
