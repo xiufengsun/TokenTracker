@@ -1085,7 +1085,7 @@ html.native-windows-app .tt-native-glass-shell aside[data-native-sidebar] {
   line-height: 1.6;
 }
 
-.tt-cloud-settings [data-settings-panel="cloud"] {
+.tt-cloud-settings[data-settings-panel="cloud"] {
   container: cloud-settings / inline-size;
 }
 
