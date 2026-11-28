@@ -49,3 +49,54 @@ test("the Windows installer force-closes a crashed host during upgrade", () => {
   assert.doesNotMatch(iss, /^\s*ForceCloseApplications\s*=/m);
   assert.match(iss, /^\s*RestartApplications=no\s*$/m);
 });
+
+test("every Windows tray and settings update entry point requires user confirmation", () => {
+  const tray = read("TokenTrackerWin", "TrayApplicationContext.cs").replace(/\r\n/g, "\n");
+
+  const onCheckStart = tray.indexOf("private void OnCheckUpdatesClicked()");
+  const promptStart = tray.indexOf("private void PromptAndInstallPendingUpdate()");
+  const manualStart = tray.indexOf("private async Task RunManualCheckAsync()");
+  assert.ok(onCheckStart >= 0 && promptStart > onCheckStart && manualStart > promptStart);
+
+  const onCheckBody = tray.slice(onCheckStart, promptStart);
+  assert.match(
+    onCheckBody,
+    /case UpdateChecker\.UpdateState\.UpdateAvailable:\s*PromptAndInstallPendingUpdate\(\);/,
+    "tray 'Update to vX' and Settings 'checkForUpdates' must prompt instead of installing directly",
+  );
+  assert.doesNotMatch(
+    onCheckBody,
+    /DownloadAndInstallAsync/,
+    "OnCheckUpdatesClicked must never bypass confirmation",
+  );
+
+  const manualEnd = tray.indexOf("private void RefreshUpdateMenuItem()");
+  assert.ok(manualEnd > manualStart);
+  const manualBody = tray.slice(manualStart, manualEnd);
+  assert.match(
+    manualBody,
+    /case UpdateChecker\.CheckOutcome\.UpdateAvailable:\s*PromptAndInstallPendingUpdate\(\);/,
+    "manual update check must also confirm via PromptAndInstallPendingUpdate",
+  );
+
+  const promptBody = tray.slice(promptStart, manualStart);
+  assert.match(promptBody, /MessageBox\.Show\(/);
+  assert.match(promptBody, /if \(confirm == DialogResult\.Yes\)\s*_ = RunDashboardUpdateNowAsync\(\);/);
+
+  // Only RunDashboardUpdateNowAsync (invoked after Sidebar ConfirmModal or MessageBox confirmation)
+  // triggers DownloadAndInstallAsync.
+  const runActionStart = tray.indexOf("private void RunDashboardNativeAction(string name)");
+  const runUpdateStart = tray.indexOf("private async Task RunDashboardUpdateNowAsync()");
+  assert.ok(runActionStart >= 0 && runUpdateStart > runActionStart);
+  const runActionBody = tray.slice(runActionStart, runUpdateStart);
+  assert.match(runActionBody, /case "checkForUpdates":\s*OnCheckUpdatesClicked\(\);/);
+  assert.match(runActionBody, /case "updateNow":\s*_ = RunDashboardUpdateNowAsync\(\);/);
+
+  const pushStart = tray.indexOf("private void PushDashboardNativeSettings()");
+  assert.ok(pushStart >= 0);
+  const pushBody = tray.slice(pushStart, tray.indexOf("private void ApplyDashboardNativeSetting", pushStart));
+  assert.match(
+    pushBody,
+    /updateInProgress = _updateChecker\.State is UpdateChecker\.UpdateState\.Downloading\s+or UpdateChecker\.UpdateState\.Installing,/,
+  );
+});
