@@ -321,8 +321,8 @@ test("total leaderboard shards the model-granular response without changing pric
   assert.match(edgeSource, /shardIndex \+= 2/u);
   assert.match(edgeSource, /TOTAL_USER_SHARDS\.slice\(shardIndex, shardIndex \+ 2\)\.map/u);
   assert.match(edgeSource, /"leaderboard_usage_compact_total_shard"/u);
-  assert.match(edgeSource, /attachCloudCostProvenance\(client, decodeCompactLeaderboardUsage\(result\.data as CompactLeaderboardUsage\)/u);
-  assert.match(edgeSource, /totalRows\.push\(\.\.\.\(result\.data as HourlyRow\[\]\)\)/u);
+  assert.match(edgeSource, /totalRows\.push\(\.\.\.decodeCompactLeaderboardUsage\(result\.data as CompactLeaderboardUsage\)\)/u);
+  assert.equal(/attachCloudCostProvenance|attachLeaderboardCostProvenance|usage_cost_provenance_v1/.test(edgeSource), false);
   assert.match(
     edgeSource,
     /for \(const row of grouped\)[\s\S]*agg\.estimated_cost_usd \+= computeRowCost\(row\)/u,

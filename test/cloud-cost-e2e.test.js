@@ -107,15 +107,21 @@ test("real queue -> ingest handler -> SQL -> account APIs/profile/leaderboard ca
       const response = await endpoint.default(new Request("https://fixture.invalid/" + params, { headers: { Authorization: authorization(f.user) } }));
       const body = await response.json(); assert.equal(response.status, 200, JSON.stringify(body)); payloads.push(body);
     }
-    const profile = edge("tokentracker-leaderboard-profile", client, "\nexport { fetchDailyGroupedRows, computeRowCost };"), refresh = edge("tokentracker-leaderboard-refresh", client, "\nexport { computeRowCost, attachCloudCostProvenance };");
+    const profile = edge("tokentracker-leaderboard-profile", client, "\nexport { fetchDailyGroupedRows, computeRowCost };"), refresh = edge("tokentracker-leaderboard-refresh", client, "\nexport { computeRowCost };");
     const profileRows = await profile.fetchDailyGroupedRows(client, f.user, "2026-01-01T16:00:00Z", "2026-01-02T16:00:00Z", "Asia/Singapore", 480);
-    const priced = await refresh.attachCloudCostProvenance(client, evidence.rows.map(r => ({ ...r, ...r.basis })), {
-      p_user_id: null, p_device_id: null, p_from: "2026-01-01T16:00:00Z", p_to: "2026-01-02T16:00:00Z", p_tz: "Asia/Singapore", p_offset_min: 480,
-    });
-    const profileCost = profileRows.reduce((n, r) => n + profile.computeRowCost(r), 0), boardCost = priced.reduce((n, r) => n + refresh.computeRowCost(r), 0);
+    // Leaderboard refresh no longer attaches usage_cost_provenance_v1; account/profile
+    // keep the recorded-cost path. Refresh prices compact rows via total_cost_usd /
+    // local tariffs and keeps unknown Grok Bot rows unpriced without fail-closed.
+    const profileCost = profileRows.reduce((n, r) => n + profile.computeRowCost(r), 0);
     const cost = Number(payloads[0].totals.total_cost_usd);
     assert.equal(cost, 7.55, "only uncovered normalized input/output/cache vectors estimated; reported zero/free and local-day cutoff preserved");
-    assert.ok(Math.abs(profileCost - cost) < 1e-8, JSON.stringify({cost,profileCost,boardCost})); assert.ok(Math.abs(boardCost - cost) < 1e-8);
+    assert.ok(Math.abs(profileCost - cost) < 1e-8, JSON.stringify({cost,profileCost}));
+    assert.equal(refresh.computeRowCost({ source: "grok", model: "grok-4.7", input_tokens: 100, output_tokens: 0,
+      cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_cost_usd: 1.25 }), 1.25,
+      "refresh still honors authoritative total_cost_usd on compact Grok rows");
+    assert.equal(refresh.computeRowCost({ source: "cursor", model: "grok-bot-unreleased", input_tokens: 100, output_tokens: 0,
+      cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, total_cost_usd: 9 }), 0,
+      "refresh keeps unknown Grok Bot unpriced without calling cost inventory");
     const dailyCost = payloads[1].data.reduce((n, d) => n + Number(d.total_cost_usd), 0);
     assert.ok(Math.abs(dailyCost - cost) < 1e-8);
     const allModels = payloads[2].sources.flatMap(s => s.models);
@@ -129,7 +135,7 @@ test("real queue -> ingest handler -> SQL -> account APIs/profile/leaderboard ca
 });
 test("cost side-wire fails closed on stale basis, ambiguity, missing/extra rows and invalid fields", async () => {
   const client = { database: { rpc: async () => ({ data: { version: 1, rows: [] }, error: null }) } };
-  const module = edge("tokentracker-leaderboard-refresh", client, "\nexport { attachCloudCostProvenance };");
+  const module = edge("tokentracker-leaderboard-profile", client, "\nexport { attachCloudCostProvenance };");
   const r = { source: "grok", model: "grok-4.7", input_tokens: 10, cached_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
   const v = { ...r, user_id: "owner", bucket: "", pricing_tier: "peak", basis: { ...r }, covered_tokens: { ...r }, reported_usd: 0, has_reported: true, has_missing: false, has_allocated: false, ambiguous: false, origins: ["grok_usd"] };
   const attach = data => module.attachCloudCostProvenance({ database: { rpc: async () => ({ data: { version: 1, rows: data }, error: null }) } }, [r], { p_user_id: "owner" });
@@ -138,8 +144,8 @@ test("cost side-wire fails closed on stale basis, ambiguity, missing/extra rows 
   assert.equal((await module.attachCloudCostProvenance(client, [{ source: "codex", model: "gpt-6" }], {})).length, 1, "old non-Grok clients/rows do not need the new RPC");
 });
 
-test("all five cloud consumers preserve reported USD but never estimate unknown Batch/Flex at standard rates", () => {
-  const names = ["tokentracker-account-summary", "tokentracker-account-daily", "tokentracker-account-model-breakdown", "tokentracker-leaderboard-profile", "tokentracker-leaderboard-refresh"];
+test("account/profile keep recorded-cost provenance; leaderboard refresh no longer gates on it", () => {
+  const names = ["tokentracker-account-summary", "tokentracker-account-daily", "tokentracker-account-model-breakdown", "tokentracker-leaderboard-profile"];
   for (const name of names) {
     const module = edge(name, {}, "\nexport { computeRowCost, getModelPricing };"), tokens = { input_tokens: 1000000, cached_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
     assert.equal(module.getModelPricing("grok-4.7", "grok").input, 2);
@@ -150,4 +156,11 @@ test("all five cloud consumers preserve reported USD but never estimate unknown 
       assert.equal(module.computeRowCost(row), 0.2, `${name}: real reported USD survives, uncovered tokens stay unpriced`);
     }
   }
+  const refresh = edge("tokentracker-leaderboard-refresh", {}, "\nexport { computeRowCost };");
+  const tokens = { input_tokens: 1000000, cached_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
+  const row = { source: "grok", model: "grok-4.7-batch", ...tokens, cost_provenance: { version: 1, reported_usd: 0.2, covered_tokens: { ...tokens, input_tokens: 0 }, has_reported: true, has_missing: true, has_allocated: false, origins: ["grok_usd"] } };
+  assert.equal(refresh.computeRowCost(row), 0, "refresh ignores cost_provenance and keeps unknown Batch/Flex unpriced");
+  assert.equal(refresh.computeRowCost({ source: "grok", model: "grok-4.7", ...tokens, total_cost_usd: 0.37 }), 0.37);
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "../dashboard/edge-patches/tokentracker-leaderboard-refresh.ts"), "utf8");
+  assert.equal(/usage_cost_provenance_v1|attachCloudCostProvenance|attachLeaderboardCostProvenance/.test(source), false);
 });
