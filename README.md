@@ -2,7 +2,7 @@
 
 # Token Tracker
 
-**English** · [简体中文](./README.zh-CN.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Deutsch](./README.de.md)
+**English** · [简体中文](./README.zh-CN.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Deutsch](./README.de.md) · [Türkçe](./README.tr.md)
 
 ### Track every AI token — then bring your usage to life
 
