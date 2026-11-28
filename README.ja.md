@@ -6,7 +6,7 @@
 
 ### AI に使ったコストを正確に把握 — すべての CLI を横断して
 
-**48 種類の AI コーディングツール**からトークン数を自動収集し、ローカルで集計、美しいダッシュボードで本当のコスト推移を可視化します。クラウドアカウント不要、API キー不要、セットアップ不要 — コマンド 1 つで完了です。
+**49 種類の AI コーディングツール**からトークン数を自動収集し、ローカルで集計、美しいダッシュボードで本当のコスト推移を可視化します。クラウドアカウント不要、API キー不要、セットアップ不要 — コマンド 1 つで完了です。
 
 [![npm version](https://img.shields.io/npm/v/tokentracker-cli.svg?color=blue)](https://www.npmjs.com/package/tokentracker-cli)
 [![npm downloads](https://img.shields.io/npm/dm/tokentracker-cli.svg?color=brightgreen)](https://www.npmjs.com/package/tokentracker-cli)
@@ -88,7 +88,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ## ✨ 機能
 
-- 🔌 **48 種類の AI ツールを標準対応** — Claude Code、Codex CLI、AStudio、Cursor、Gemini CLI、Antigravity、Kiro、OpenCode、OpenSquilla、OpenClaw、Every Code、Hermes Agent、GitHub Copilot、Kimi Code、CodeBuddy、WorkBuddy、Grok Build、oh-my-pi、OmO、pi、Dots、Prime Agent、Craft Agents、Reasonix、Muse Code、Kilo CLI、Kilo Code、Roo Code、Zed Agent、Goose、Droid、Mimo Code、DuMate、ZCode、Qoder、AnythingLLM Desktop、Claude Science、DeepSeek Harness、TRAE Work CN、LM Studio、Unsloth Studio、Devin CLI、Cline、MiniMax Code、Command Code、DeepAI Code、TRAE
+- 🔌 **49 種類の AI ツールを標準対応** — Claude Code、Codex CLI、AStudio、Cursor、Gemini CLI、Antigravity、Kiro、OpenCode、OpenSquilla、OpenClaw、Every Code、Hermes Agent、GitHub Copilot、Kimi Code、CodeBuddy、WorkBuddy、Grok Build、oh-my-pi、OmO、pi、free-pi、Dots、Prime Agent、Craft Agents、Reasonix、Muse Code、Kilo CLI、Kilo Code、Roo Code、Zed Agent、Goose、Droid、Mimo Code、DuMate、ZCode、Qoder、AnythingLLM Desktop、Claude Science、DeepSeek Harness、TRAE Work CN、LM Studio、Unsloth Studio、Devin CLI、Cline、MiniMax Code、Command Code、DeepAI Code、TRAE
 - 🏠 **ローカルファースト** — すべてマシン上で動作。アカウントや API キーなしでログをローカル解析します。
 - 🚀 **ゼロコンフィグ** — Hook は初回実行で自動インストール。0 からダッシュボードまで 30 秒。
 - 📊 **美しいダッシュボード** — 使用トレンド、モデル別コスト内訳、GitHub スタイルのアクティビティヒートマップ、プロジェクト別の帰属表示
@@ -187,6 +187,7 @@ brew install xiufengsun/tokentracker/tokentracker
 | **Kilo Code** (VS Code 拡張) | ✅ 自動 | パッシブな `ui_messages.json` リーダー (Cursor/Code/CodeBuddy/Windsurf の globalStorage) |
 | **Antigravity** | ✅ 自動 | パッシブなトランスクリプトリーダー (`~/.gemini/{antigravity,antigravity-ide,antigravity-insiders,antigravity-cli}/brain/**/transcript.jsonl`、および T3 Code プロファイル `~/.t3/userdata/providers/antigravity/*/antigravity-acp/`) |
 | **pi** (`@mariozechner/pi-coding-agent`) | ✅ 自動 | パッシブリーダー (`~/.pi/agent/sessions/**/*.jsonl`) |
+| **free-pi** (`npx free-pi-cli`) | ✅ 自動 | pi 形式のセッション (`~/.free-pi/agent/sessions/**/*.jsonl`) のパッシブリーダー |
 | **Dots** | ✅ 自動 | pi のプロバイダー分割経由 (`pi-dots` source、同じパッシブリーダーを再利用) — 追加フックなし |
 | **Prime Agent** | ✅ 自動 | メタデータのみのパッシブ使用量リーダー (`~/.prime/agent/sessions/*.jsonl`) |
 | **Craft Agents** | ✅ 自動 | パッシブなセッションリーダー (`~/.craft-agent` + workspace session logs) |
@@ -234,7 +235,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 | 機能 | **[TokenTracker](https://github.com/xiufengsun/TokenTracker)** | **[ccusage](https://github.com/ccusage/ccusage)** | **[Tokscale](https://github.com/junhoyeo/tokscale)** |
 |---|:---:|:---:|:---:|
-| **対応 AI ツール数** | **48** | マルチエージェント | マルチエージェント |
+| **対応 AI ツール数** | **49** | マルチエージェント | マルチエージェント |
 | **主なインターフェース** | ネイティブデスクトップアプリ & Web ダッシュボード | ターミナル CLI | ターミナル TUI & CLI |
 | **ローカルファースト解析** | ✅ | ✅ | ✅ |
 | **ネイティブデスクトップアプリ** | ✅ macOS, Windows, Linux | ❌ | ❌ |
@@ -250,7 +251,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ```mermaid
 flowchart LR
-    A["AI coding tools<br/>Claude Code · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · DuMate · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE · TRAE Work CN · LM Studio · Unsloth Studio · Devin CLI · MiniMax Code · Cline · Command Code · DeepAI Code"]
+    A["AI coding tools<br/>Claude Code · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · free-pi · Craft · Droid · Mimo · DuMate · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE · TRAE Work CN · LM Studio · Unsloth Studio · Devin CLI · MiniMax Code · Cline · Command Code · DeepAI Code"]
     A -->|hooks trigger| B[Token Tracker]
     B -->|parse logs<br/>30-min UTC buckets| C[(Local SQLite)]
     C --> D[Web Dashboard]

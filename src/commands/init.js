@@ -73,6 +73,8 @@ const {
   resolveOmpAgentDir,
   resolvePiAgentDir,
   piAgentDirCollidesWithOmp,
+  resolveFreePiAgentDir,
+  freePiAgentDirCollision,
   resolvePrimeAgentDir,
   resolveDeepaiCodeSessionsDir,
   resolveMinimaxCodeSessionsDir,
@@ -142,6 +144,7 @@ const SUPPORTED_PROVIDERS = [
   "oh-my-pi",
   "OmO",
   "pi",
+  "free-pi",
   "Dots",
   "Prime Agent",
   "Craft Agents",
@@ -844,6 +847,23 @@ async function applyIntegrationSetup({
     const piAgentDir = resolvePiAgentDir(process.env);
     if (piAgentDir && fssync.existsSync(path.join(piAgentDir, "sessions"))) {
       summary.push({ label: "pi", status: "detected", detail: "Passive reader (no hook needed)" });
+    }
+  }
+
+  // free-pi (npx free-pi-cli): passive reader — no hook installation needed.
+  // It runs the pi coding agent against its own ~/.free-pi/agent root, so it
+  // stands down when pi/oh-my-pi/OmO resolve to that same dir.
+  {
+    const freePiAgentDir = resolveFreePiAgentDir(process.env);
+    const freePiCollision = freePiAgentDirCollision(process.env);
+    if (freePiCollision) {
+      summary.push({
+        label: "free-pi",
+        status: "skipped",
+        detail: `Agent dir is also ${freePiCollision}'s (those sessions are counted once there)`,
+      });
+    } else if (freePiAgentDir && fssync.existsSync(path.join(freePiAgentDir, "sessions"))) {
+      summary.push({ label: "free-pi", status: "detected", detail: "Passive reader (no hook needed)" });
     }
   }
 

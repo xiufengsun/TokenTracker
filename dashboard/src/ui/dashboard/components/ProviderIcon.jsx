@@ -411,6 +411,8 @@ const PROVIDER_ICON_MAP = {
   "PI-ANTHROPIC": PiIcon,
   "PI-GITHUB-COPILOT": PiIcon,
   "PI-COPILOT": PiIcon,
+  // free-pi-cli runs the same pi agent harness under its own source label.
+  "FREE-PI": PiIcon,
   ROOCODE: RoocodeIcon,
   "TRAE-CN": TraeCnIcon,
   ZED: ZedIcon,

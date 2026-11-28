@@ -82,4 +82,9 @@ export const AGENT_LOGOS = [
     nameKey: "provider.display.deepai",
     provider: "deepai",
   },
+  {
+    id: 49,
+    nameKey: "provider.display.free_pi",
+    provider: "free-pi",
+  },
 ];

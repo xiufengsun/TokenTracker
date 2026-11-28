@@ -6,7 +6,7 @@
 
 ### 跨所有 CLI，看清你到底在 AI 上花了多少钱
 
-自动采集 **48 款 AI 编码工具** 的 token 用量，全程本地聚合，用一套漂亮的 Dashboard 看真实成本与趋势。不需要云账号、不需要 API Key、不需要任何配置 —— 一条命令搞定。
+自动采集 **49 款 AI 编码工具** 的 token 用量，全程本地聚合，用一套漂亮的 Dashboard 看真实成本与趋势。不需要云账号、不需要 API Key、不需要任何配置 —— 一条命令搞定。
 
 [![npm version](https://img.shields.io/npm/v/tokentracker-cli.svg?color=blue)](https://www.npmjs.com/package/tokentracker-cli)
 [![npm downloads](https://img.shields.io/npm/dm/tokentracker-cli.svg?color=brightgreen)](https://www.npmjs.com/package/tokentracker-cli)
@@ -90,7 +90,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ## ✨ 特性
 
-- 🔌 **开箱即用支持 48 款 AI 工具** —— Claude Code、Codex CLI、AStudio、Cursor、Gemini CLI、Kiro、OpenCode、OpenSquilla、OpenClaw、Every Code、Hermes Agent、GitHub Copilot、Kimi Code、CodeBuddy、WorkBuddy、Grok Build、oh-my-pi、OmO、pi、Dots、Prime Agent、Craft Agents、Reasonix、Muse Code、Kilo CLI、Kilo Code、Roo Code、Antigravity、Zed Agent、Goose、Droid、Mimo Code、DuMate、ZCode、Qoder、AnythingLLM Desktop、Claude Science、DeepSeek Harness、TRAE Work CN、LM Studio、Unsloth Studio、Devin CLI、Cline、MiniMax Code、Command Code、DeepAI Code、TRAE
+- 🔌 **开箱即用支持 49 款 AI 工具** —— Claude Code、Codex CLI、AStudio、Cursor、Gemini CLI、Kiro、OpenCode、OpenSquilla、OpenClaw、Every Code、Hermes Agent、GitHub Copilot、Kimi Code、CodeBuddy、WorkBuddy、Grok Build、oh-my-pi、OmO、pi、free-pi、Dots、Prime Agent、Craft Agents、Reasonix、Muse Code、Kilo CLI、Kilo Code、Roo Code、Antigravity、Zed Agent、Goose、Droid、Mimo Code、DuMate、ZCode、Qoder、AnythingLLM Desktop、Claude Science、DeepSeek Harness、TRAE Work CN、LM Studio、Unsloth Studio、Devin CLI、Cline、MiniMax Code、Command Code、DeepAI Code、TRAE
 - 🏠 **本地优先** —— 跑在本地。直接在本地机器解析日志，无需账号或 API Key。
 - 🚀 **零配置** —— 首次运行自动安装所有 hook。30 秒从零到 Dashboard
 - 📊 **漂亮的 Dashboard** —— 用量趋势、按模型的成本分解、GitHub 风格活跃度热力图、按项目归因
@@ -189,6 +189,7 @@ brew install xiufengsun/tokentracker/tokentracker
 | **Kilo CLI** (kilo.ai) | ✅ 自动 | 被动读取 SQLite（`~/.local/share/kilo/kilo.db`，OpenCode-fork schema） |
 | **Kilo Code** (VS Code 插件) | ✅ 自动 | 被动读取 `ui_messages.json`（Cursor / VS Code / CodeBuddy / Windsurf 的 globalStorage） |
 | **pi** (`@mariozechner/pi-coding-agent`) | ✅ 自动 | 被动读取（`~/.pi/agent/sessions/**/*.jsonl`） |
+| **free-pi** (`npx free-pi-cli`) | ✅ 自动 | 被动读取 pi 格式会话（`~/.free-pi/agent/sessions/**/*.jsonl`） |
 | **Dots** | ✅ 自动 | 通过 pi 的 provider 拆分路由（`pi-dots` source，复用同一被动读取器）—— 无需额外 hook |
 | **Prime Agent** | ✅ 自动 | 仅元数据的被动用量读取（`~/.prime/agent/sessions/*.jsonl`，不读取提示词或回复） |
 | **Craft Agents** | ✅ 自动 | 被动读取 session（`~/.craft-agent` + workspace session logs） |
@@ -237,7 +238,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 | 功能维度 | **[TokenTracker](https://github.com/xiufengsun/TokenTracker)** | **[ccusage](https://github.com/ccusage/ccusage)** | **[Tokscale](https://github.com/junhoyeo/tokscale)** |
 |---|:---:|:---:|:---:|
-| **支持的 AI 工具数** | **48** | 多 Agent / 工具支持 | 多 Agent / 工具支持 |
+| **支持的 AI 工具数** | **49** | 多 Agent / 工具支持 | 多 Agent / 工具支持 |
 | **主要交互方式** | 原生桌面 App 与 Web Dashboard | 终端命令行（CLI） | 终端 TUI 与 CLI |
 | **本地优先分析** | ✅ | ✅ | ✅ |
 | **原生桌面 App** | ✅ macOS、Windows、Linux | ❌ | ❌ |
@@ -253,7 +254,7 @@ brew install xiufengsun/tokentracker/tokentracker
 
 ```mermaid
 flowchart LR
-    A["AI 编码工具<br/>Claude Code · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · DuMate · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE · TRAE Work CN · LM Studio · Unsloth Studio · Devin CLI · MiniMax Code · Cline · Command Code · DeepAI Code"]
+    A["AI 编码工具<br/>Claude Code · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · free-pi · Craft · Droid · Mimo · DuMate · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE · TRAE Work CN · LM Studio · Unsloth Studio · Devin CLI · MiniMax Code · Cline · Command Code · DeepAI Code"]
     A -->|hook 触发| B[Token Tracker]
     B -->|解析日志<br/>30 分钟 UTC 桶| C[(本地 SQLite)]
     C --> D[Web Dashboard]
