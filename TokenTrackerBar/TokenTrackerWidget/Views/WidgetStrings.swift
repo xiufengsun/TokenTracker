@@ -65,6 +65,10 @@ enum WidgetStrings {
             switch kind {
             case "Spark 5h": return "\(source) · Spark 5小时"
             case "Spark 7d": return "\(source) · Spark 7天"
+            case "Claude 5h": return "\(source) · Claude 5小时"
+            case "Claude 7d": return "\(source) · Claude 7天"
+            case "Gemini 5h": return "\(source) · Gemini 5小时"
+            case "Gemini 7d": return "\(source) · Gemini 7天"
             case "5h": return "\(source) · 5小时"
             case "7d Opus": return "\(source) · 7天 Opus"
             case "7d", "weekly": return "\(source) · 7天"
@@ -75,6 +79,10 @@ enum WidgetStrings {
             switch kind {
             case "Spark 5h": return "\(source) · Spark 5小時"
             case "Spark 7d": return "\(source) · Spark 7天"
+            case "Claude 5h": return "\(source) · Claude 5小時"
+            case "Claude 7d": return "\(source) · Claude 7天"
+            case "Gemini 5h": return "\(source) · Gemini 5小時"
+            case "Gemini 7d": return "\(source) · Gemini 7天"
             case "5h": return "\(source) · 5小時"
             case "7d Opus": return "\(source) · 7天 Opus"
             case "7d", "weekly": return "\(source) · 7天"
@@ -85,6 +93,10 @@ enum WidgetStrings {
             switch kind {
             case "Spark 5h": return "\(source) · Spark 5時間"
             case "Spark 7d": return "\(source) · Spark 7日"
+            case "Claude 5h": return "\(source) · Claude 5時間"
+            case "Claude 7d": return "\(source) · Claude 7日"
+            case "Gemini 5h": return "\(source) · Gemini 5時間"
+            case "Gemini 7d": return "\(source) · Gemini 7日"
             case "5h": return "\(source) · 5時間"
             case "7d Opus": return "\(source) · 7日 Opus"
             case "7d", "weekly": return "\(source) · 7日"
@@ -95,6 +107,10 @@ enum WidgetStrings {
             switch kind {
             case "Spark 5h": return "\(source) · Spark 5시간"
             case "Spark 7d": return "\(source) · Spark 7일"
+            case "Claude 5h": return "\(source) · Claude 5시간"
+            case "Claude 7d": return "\(source) · Claude 7일"
+            case "Gemini 5h": return "\(source) · Gemini 5시간"
+            case "Gemini 7d": return "\(source) · Gemini 7일"
             case "5h": return "\(source) · 5시간"
             case "7d Opus": return "\(source) · 7일 Opus"
             case "7d", "weekly": return "\(source) · 7일"
