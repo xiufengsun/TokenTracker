@@ -1,6 +1,6 @@
 import React from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { ArrowRight, Maximize2 } from "lucide-react";
+import { ChevronRight, Maximize2 } from "lucide-react";
 import { copy, getCopyLocale } from "../../../lib/copy";
 import { cn } from "../../../lib/cn";
 import { useCurrency } from "../../../hooks/useCurrency.js";
@@ -797,7 +797,7 @@ export function TrendMonitor({
                   className="-my-1 inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm py-1 text-[10px] leading-4 text-oai-gray-500 hover:text-oai-gray-800 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 dark:text-oai-gray-400 dark:hover:text-oai-gray-200"
                 >
                   {copy("nav.sessions")}
-                  <ArrowRight aria-hidden="true" className="size-3 rtl:rotate-180" />
+                  <ChevronRight aria-hidden="true" className="size-3 rtl:rotate-180" />
                 </Link>
               )}
               {hoveredBar.kind === "predicted" && (
