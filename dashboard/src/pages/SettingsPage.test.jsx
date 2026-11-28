@@ -43,6 +43,7 @@ const LABELS = {
   "settings.section.labs.description": "Experimental insights",
   "settings.section.network": "Network",
   "settings.section.network.description": "Proxy configuration",
+  "limits.provider.customCredits": "Custom credit service",
   "settings.limits.providers": "Providers",
   "limits.settings.display_mode_label": "Usage Display",
   "settings.menubar.toastOnReset": "Toast on limits reset",
@@ -325,12 +326,13 @@ describe("SettingsPage category navigation", () => {
   it("groups display mode and reset feedback above the provider list", () => {
     renderSettings("/settings?section=limits");
 
-    const [settingsCard, providersCard] = screen.getAllByTestId("section-card");
+    const [settingsCard, customCard, providersCard] = screen.getAllByTestId("section-card");
     expect(settingsCard.dataset.sectionCardTitle).toBe("Usage & Limits");
     expect(within(settingsCard).getByTestId("limits-mode")).toBeInTheDocument();
     expect(within(settingsCard).getByRole("switch", { name: "Toast on limits reset" })).toBeInTheDocument();
     expect(within(settingsCard).getByRole("switch", { name: "Confetti on limits reset" })).toBeInTheDocument();
 
+    expect(customCard.dataset.sectionCardTitle).toBe("Custom credit service");
     expect(providersCard.dataset.sectionCardTitle).toBe("Providers");
     expect(within(providersCard).getByTestId("limits-content")).toBeInTheDocument();
   });

@@ -253,6 +253,9 @@ extension UsageLimitsResponse {
                 : [("primary", "GLM-5.2", zcode.primaryWindow), ("secondary", "GLM-5-Turbo", zcode.secondaryWindow), ("tertiary", "Tools", zcode.tertiaryWindow)]
             addGeneric("zcode", zcode.configured, zcode.error, labels)
         }
+        for (key, label, window) in customCreditWindows {
+            out.append(("customCredits", "customCredits.\(key)", label, window.usedPercent, parseResetSeconds(iso: window.resetAt)))
+        }
         if let opencodeGo {
             addGeneric("opencodeGo", opencodeGo.configured, opencodeGo.error, [
                 ("primary", "5h", opencodeGo.primaryWindow),

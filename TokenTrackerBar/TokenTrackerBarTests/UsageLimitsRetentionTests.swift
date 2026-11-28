@@ -88,6 +88,66 @@ final class UsageLimitsRetentionTests: XCTestCase {
         XCTAssertFalse(response.hasAnyProviderWithoutError)
     }
 
+    func testCustomCreditCalendarRowsSurvivePublicationWithTheirBudgetSources() throws {
+        let response = try decodeResponse(overrides: [
+            "devin": ["configured": true],
+            "customCredits": [
+                "configured": true, "plan_label": "Team credits",
+                "primary_window": ["used_percent": 50, "used_credits": 75, "limit_credits": 150, "remaining_credits": 75],
+                "secondary_window": ["used_percent": 20, "derived_limit": true, "used_credits": 210, "limit_credits": 1050, "remaining_credits": 840],
+                "tertiary_window": ["used_percent": 10, "reset_at": "2026-07-01T00:00:00Z"],
+            ],
+        ]).applyingDevinSelection(false)
+
+        XCTAssertTrue(response.hasAnyProviderWithoutError)
+        XCTAssertEqual(response.customCredits?.planLabel, "Team credits")
+        let rows = response.customCreditWindows
+        XCTAssertEqual(rows.map(\.key), ["daily", "weekly", "monthly"])
+        XCTAssertEqual(rows.map { $0.window.usedPercent }, [50, 20, 10])
+        XCTAssertEqual(rows.map(\.label), [Strings.periodDayLabel, Strings.derivedCreditPeriod(Strings.periodWeekLabel), Strings.periodMonthLabel])
+        XCTAssertTrue(rows[1].window.creditsDetail?.contains(Strings.dailyCreditBudgetExplanation) == true)
+        let readings = response.limitWindowReadings().filter { $0.provider == "customCredits" }
+        XCTAssertEqual(readings.map(\.windowKey), ["customCredits.daily", "customCredits.weekly", "customCredits.monthly"])
+        XCTAssertNotNil(readings.last?.resetAt)
+    }
+
+    func testDisconnectRemovesTheLastCustomCreditReadingFromDisplayAndCache() throws {
+        let suite = "CustomCreditRetentionTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let current = try decodeResponse(overrides: [
+            "customCredits": ["configured": true, "primary_window": ["used_percent": 50]],
+        ])
+        UsageLimitsCache.save(current, defaults: defaults)
+        let disconnected = try decodeResponse(overrides: ["customCredits": ["configured": false]])
+        let displayed = UsageLimitsResponse.displayRecord(current: current, incoming: disconnected)
+        XCTAssertTrue(displayed.customCreditWindows.isEmpty)
+        UsageLimitsCache.save(displayed, defaults: defaults, devinSelected: true)
+        XCTAssertNil(UsageLimitsCache.load(defaults: defaults))
+    }
+
+    func testGatewayErrorKeepsOtherRetainedProvidersWithoutReusingOldAccountCredits() throws {
+        let current = try decodeResponse(overrides: [
+            "claude": ["configured": true],
+            "customCredits": ["configured": true, "primary_window": ["used_percent": 70]],
+        ])
+        let failed = try decodeResponse(overrides: [
+            "customCredits": ["configured": true, "error": "Unavailable"],
+        ])
+        let displayed = UsageLimitsResponse.displayRecord(current: current, incoming: failed)
+        XCTAssertTrue(displayed.claude.configured)
+        XCTAssertEqual(displayed.customCredits?.error, "Unavailable")
+        XCTAssertTrue(displayed.customCreditWindows.isEmpty)
+    }
+
+    func testMissingCustomCreditWindowsStayAbsent() throws {
+        let dayOnly = try decodeResponse(overrides: [
+            "customCredits": ["configured": true, "primary_window": ["used_percent": 0], "secondary_window": NSNull()],
+        ])
+        XCTAssertEqual(dayOnly.customCreditWindows.map(\.key), ["daily"])
+        XCTAssertTrue(try decodeResponse().customCreditWindows.isEmpty)
+    }
+
     func testSingleConfiguredErrorFreeProviderIsUsable() throws {
         let response = try decodeResponse(overrides: [
             "claude": ["configured": true],

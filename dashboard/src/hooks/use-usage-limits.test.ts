@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getUsageLimits } from "../lib/api";
-import { publishUsageLimitsPreloadState } from "../lib/dashboard-preload.js";
+import { CUSTOM_CREDIT_CONFIG_CHANGED, invalidateCustomCreditUsage, publishUsageLimitsPreloadState } from "../lib/dashboard-preload.js";
 import { useUsageLimits } from "./use-usage-limits";
 import { LIMITS_PREFS_CHANGED_EVENT } from "./use-limits-display-prefs.js";
 
@@ -20,7 +20,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   getUsageLimits: vi.fn(),
 }));
 
-vi.mock("../lib/dashboard-preload.js", () => ({
+vi.mock("../lib/dashboard-preload.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/dashboard-preload.js")>()),
   publishUsageLimitsPreloadState: vi.fn(),
 }));
 
@@ -120,6 +121,27 @@ describe("useUsageLimits", () => {
     expect(publishUsageLimitsPreloadState).toHaveBeenCalledWith(freshLimits, {
       source: "page-load",
     });
+  });
+
+  it.each(["same window", "another tab"])("drops private history and rejects old responses after a gateway change in %s", async (context) => {
+    const point = { date: "2026-05-30", source: "reported" as const };
+    const old = { ...existingLimits, customCredits: { configured: true, daily_history: [{ ...point, used_credits: 90 }] } };
+    const next = { ...freshLimits, customCredits: { configured: true, daily_history: [{ ...point, used_credits: 1 }] } };
+    let finishOld: (value: unknown) => void;
+    let finishNew: (value: unknown) => void;
+    vi.mocked(getUsageLimits)
+      .mockReturnValueOnce(new Promise((resolve) => { finishOld = resolve; }))
+      .mockReturnValueOnce(new Promise((resolve) => { finishNew = resolve; }));
+    const { result } = renderHook(() => useUsageLimits({ initialState: { data: old }, initialRefresh: true }));
+    act(() => {
+      if (context === "same window") invalidateCustomCreditUsage();
+      else window.dispatchEvent(new StorageEvent("storage", { key: CUSTOM_CREDIT_CONFIG_CHANGED, newValue: "revision" }));
+    });
+    expect(result.current.data?.customCredits).toEqual({ configured: false });
+    await act(async () => { finishOld(old); });
+    expect(result.current.data?.customCredits).toEqual({ configured: false });
+    await act(async () => { finishNew(next); });
+    expect(result.current.data?.customCredits).toEqual(next.customCredits);
   });
 
   it("keeps the initialRefresh fallback when no reusable initial data exists", async () => {

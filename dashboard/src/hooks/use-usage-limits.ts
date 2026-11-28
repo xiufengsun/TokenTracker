@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getUsageLimits, isLocalhostHost } from "../lib/api";
-import { publishUsageLimitsPreloadState } from "../lib/dashboard-preload.js";
+import { CUSTOM_CREDIT_CONFIG_CHANGED, publishUsageLimitsPreloadState } from "../lib/dashboard-preload.js";
 import { LIMIT_ALERTS_PREF_KEY } from "./use-limit-alert-prefs";
 import { sendPredictiveLimitAlerts } from "../lib/limit-alerts.js";
 import { useLatestRequestGuard } from "./use-latest-request-guard";
@@ -141,6 +141,15 @@ interface UsageLimitsData {
     secondary_window?: { used_percent: number; reset_at?: string | null; limit_window_seconds?: number | null } | null;
     stale?: boolean;
     cached_at?: string | null;
+  };
+  customCredits?: {
+    configured: boolean;
+    error?: string | null;
+    plan_label?: string;
+    primary_window?: CodexCreditWindow | null;
+    secondary_window?: (CodexCreditWindow & { derived_limit?: boolean }) | null;
+    tertiary_window?: (CodexCreditWindow & { derived_limit?: boolean }) | null;
+    daily_history?: ReadonlyArray<{ date: string; used_credits: number; source: "reported" | "estimated"; partial?: boolean }>;
   };
   // Pay-as-you-go balance card (issue 960): no quota windows, one row per currency.
   deepseek?: {
@@ -319,6 +328,24 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
       setIsLoading(false);
     }
   }, [applyHidden, beginRequest, currentHidden, localEnabled, publishSuccessfulState]);
+
+  useEffect(() => {
+    if (!localEnabled || typeof window === "undefined") return;
+    const onChange = () => {
+      setData((current) => withoutHiddenProviders(current, ["customCredits"]));
+      // Starting a fresh read also invalidates any request using the old key.
+      void refreshFromServerCache();
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === CUSTOM_CREDIT_CONFIG_CHANGED) onChange();
+    };
+    window.addEventListener(CUSTOM_CREDIT_CONFIG_CHANGED, onChange);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(CUSTOM_CREDIT_CONFIG_CHANGED, onChange);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [localEnabled, refreshFromServerCache]);
 
   // Auto-refresh when the dashboard regains focus / becomes visible again —
   // same throttled pattern as use-usage-data.ts, so a left-open Limits page

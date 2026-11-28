@@ -1623,3 +1623,25 @@ describe("UsageLimitsPanel", () => {
     expect(screen.getByText("devin auth login")).toBeInTheDocument();
   });
 });
+
+it("shows the custom gateway's credit budgets, missing dates and billing sources", () => {
+  setCopyLocale(EN_LOCALE);
+  const service = {
+    configured: true, plan_label: "Example",
+    primary_window: { used_percent: 25, used_credits: 37.5, limit_credits: 150 },
+    secondary_window: { used_percent: 10, used_credits: 105, limit_credits: 1050, derived_limit: true },
+    tertiary_window: { used_percent: 50, used_credits: 1000, limit_credits: 2000 },
+    daily_history: [
+      { date: "2026-06-01", used_credits: 42, source: "estimated" },
+      { date: "2026-06-03", used_credits: 37.5, source: "reported" },
+    ],
+  };
+  render(<UsageLimitsPanel customCredits={service} order={["customCredits"]} />);
+  expect(screen.getByText("Daily")).toBeInTheDocument();
+  expect(screen.getByText("Weekly (budget)")).toBeInTheDocument();
+  expect(screen.getByText("Monthly")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /Example/ }));
+  expect(screen.getByRole("img", { name: /06-01 · 42 credits · estimated/ })).toBeInTheDocument();
+  expect(screen.getByRole("img", { name: /06-02/ })).toHaveAccessibleName(/no .*data/i);
+  expect(screen.getByRole("img", { name: /06-03 · 37.5 credits · billed by gateway/ })).toBeInTheDocument();
+});

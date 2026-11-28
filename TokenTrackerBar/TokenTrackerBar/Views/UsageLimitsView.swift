@@ -237,6 +237,17 @@ struct UsageLimitsView: View {
             if let workbuddyAi = limits.workbuddyAi, workbuddyAi.configured, workbuddyAi.error == nil {
                 return toolSection(id: id, title: planTitle("WorkBuddy AI", workbuddyAi.planLabel), assetName: "CodeBuddyLogo", toolName: "WorkBuddy AI", specs: workbuddySpecs(workbuddyAi), updatedAtISO: workbuddyAi.cachedAt, isStale: workbuddyAi.stale ?? false)
             }
+        case "customCredits":
+            if let credits = limits.customCredits, credits.configured, credits.error == nil {
+                let title = credits.planLabel ?? Strings.customCreditsTitle
+                let specs = limits.customCreditWindows.map { row in
+                    let window = row.window
+                    var spec = makeSpec(row.label, window.usedPercent, windowSeconds: window.limitWindowSeconds, iso: window.resetAt)
+                    spec.creditsDetail = window.creditsDetail
+                    return spec
+                }
+                return toolSection(id: id, title: title, assetName: nil, toolName: title, specs: specs, updatedAtISO: credits.cachedAt, isStale: credits.stale ?? false)
+            }
         case "deepseek":
             // Pay-as-you-go balance card: no window bars exist for DeepSeek, so
             // the section renders balance rows via the dedicated extra (#960).

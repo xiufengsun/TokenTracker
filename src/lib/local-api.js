@@ -3638,6 +3638,42 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       return true;
     }
 
+    if (p === "/functions/tokentracker-custom-credits-config") {
+      if (!isAuthorizedLocalMutation(req)) {
+        json(res, { error: "Unauthorized" }, 401);
+        return true;
+      }
+      const config = require("./custom-credits");
+      const options = { trackerDir: trackerDataDir };
+      const method = String(req.method || "GET").toUpperCase();
+      try {
+        if (method === "GET") {
+          json(res, config.publicConfig(config.readConfig(options)));
+          return true;
+        }
+        let result;
+        if (method === "PUT") {
+          let body;
+          try { body = await readJsonBody(req); } catch {
+            json(res, { error: "Invalid JSON body" }, 400);
+            return true;
+          }
+          result = config.saveConfig(options, body);
+        } else if (method === "DELETE") {
+          result = config.clearConfig(options);
+        } else {
+          json(res, { error: "Method Not Allowed" }, 405);
+          return true;
+        }
+        require("./usage-limits").resetUsageLimitsCache({ invalidateInFlight: true });
+        json(res, result);
+      } catch (error) {
+        if (error instanceof config.ConfigError) json(res, { error: error.message }, 400);
+        else json(res, { error: "Could not access custom credit settings." }, 500);
+      }
+      return true;
+    }
+
     // --- provider API keys saved from the Limits panel ---
     // The key lives in a 0600 file next to the queue, never in the launch
     // environment: a global `launchctl setenv` reaches every launchd app on
@@ -4296,6 +4332,9 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           // cooldown) — an explicit user refresh should hit upstream.
           forceRefresh,
           devinEnabled,
+          // Legacy unauthenticated readers can still fetch public provider
+          // rows, but cannot read the custom gateway config or poll its API.
+          allowCustomCredits: localAuthorized,
           hiddenProviders,
         });
         json(res, data);

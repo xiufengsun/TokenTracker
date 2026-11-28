@@ -22,13 +22,14 @@ struct UsageLimitsResponse: Codable, Equatable {
     let workbuddy: WorkbuddyLimits?
     let workbuddyAi: WorkbuddyLimits?
     let deepseek: DeepseekLimits?
+    var customCredits: ThreeWindowLimits?
 
     enum CodingKeys: String, CodingKey {
         case fetchedAt = "fetched_at"
         case claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi
         case opencodeGo = "opencodeGo"
         case commandCode = "commandCode"
-        case deepseek
+        case deepseek, customCredits
     }
 }
 
@@ -151,12 +152,15 @@ enum UsageLimitsCache {
         let adjusted = devinSelected.map { limits.applyingDevinSelection($0) } ?? limits
         // Opting out must remove persisted quota even when it was the only
         // usable provider. Ordinary all-error refreshes still keep their cache.
-        if devinSelected == false && !adjusted.hasAnyProviderWithoutError {
-            defaults.removeObject(forKey: defaultsKey)
+        if !adjusted.hasAnyProviderWithoutError {
+            let clearedGateway = adjusted.customCredits != nil
+                && load(defaults: defaults)?.customCredits?.configured == true
+            if devinSelected == false || clearedGateway {
+                defaults.removeObject(forKey: defaultsKey)
+            }
             return
         }
-        guard adjusted.hasAnyProviderWithoutError,
-              let data = try? JSONEncoder().encode(adjusted) else { return }
+        guard let data = try? JSONEncoder().encode(adjusted) else { return }
         defaults.set(data, forKey: defaultsKey)
     }
 
@@ -366,20 +370,23 @@ struct GenericLimitWindow: Codable, Equatable {
     let limitCredits: Double?
     let usedCredits: Double?
     let remainingCredits: Double?
+    let derivedLimit: Bool?
 
-    init(usedPercent: Double, resetAt: String? = nil, limitWindowSeconds: Double? = nil, limitCredits: Double? = nil, usedCredits: Double? = nil, remainingCredits: Double? = nil) {
+    init(usedPercent: Double, resetAt: String? = nil, limitWindowSeconds: Double? = nil, limitCredits: Double? = nil, usedCredits: Double? = nil, remainingCredits: Double? = nil, derivedLimit: Bool? = nil) {
         self.usedPercent = usedPercent
         self.resetAt = resetAt
         self.limitWindowSeconds = limitWindowSeconds
         self.limitCredits = limitCredits
         self.usedCredits = usedCredits
         self.remainingCredits = remainingCredits
+        self.derivedLimit = derivedLimit
     }
 
     var creditsDetail: String? {
         guard let total = limitCredits, let used = usedCredits, let remaining = remainingCredits,
               total.isFinite, used.isFinite, remaining.isFinite, total > 0, used >= 0, remaining >= 0 else { return nil }
-        return Strings.limitCreditsDetail(used: used, total: total, remaining: remaining)
+        let detail = Strings.limitCreditsDetail(used: used, total: total, remaining: remaining)
+        return derivedLimit == true ? "\(detail) · \(Strings.dailyCreditBudgetExplanation)" : detail
     }
 
     enum CodingKeys: String, CodingKey {
@@ -389,6 +396,7 @@ struct GenericLimitWindow: Codable, Equatable {
         case limitCredits = "limit_credits"
         case usedCredits = "used_credits"
         case remainingCredits = "remaining_credits"
+        case derivedLimit = "derived_limit"
     }
 }
 
@@ -693,7 +701,7 @@ struct QoderLimits: Codable, Equatable {
     }
 }
 
-struct CodingPlanLimits: Codable, Equatable {
+struct ThreeWindowLimits: Codable, Equatable {
     let configured: Bool
     let error: String?
     let planLabel: String?
@@ -713,7 +721,8 @@ struct CodingPlanLimits: Codable, Equatable {
     }
 }
 
-typealias AgentPlanLimits = CodingPlanLimits
+typealias CodingPlanLimits = ThreeWindowLimits
+typealias AgentPlanLimits = ThreeWindowLimits
 
 /// One WorkBuddy edition's credits (China and AI each publish their own row).
 /// The plan window is the subscription's base credits with its cycle reset;
@@ -833,6 +842,20 @@ struct AntigravityLimits: Codable, Equatable {
 /// protect the "last good record" on partial failures (do not overwrite a
 /// previously successful snapshot with an all-error response).
 extension UsageLimitsResponse {
+    /// Calendar budgets use stable keys even when the locale or cap source changes.
+    var customCreditWindows: [(key: String, label: String, window: GenericLimitWindow)] {
+        guard let limits = customCredits, limits.configured, limits.error == nil else { return [] }
+        return [
+            ("daily", Strings.periodDayLabel, limits.primaryWindow),
+            ("weekly", Strings.periodWeekLabel, limits.secondaryWindow),
+            ("monthly", Strings.periodMonthLabel, limits.tertiaryWindow),
+        ].compactMap { key, label, window in
+            guard let window else { return nil }
+            let title = window.derivedLimit == true ? Strings.derivedCreditPeriod(label) : label
+            return (key, title, window)
+        }
+    }
+
     var hasAnyProviderWithoutError: Bool {
         let providers: [(Bool, String?)] = [
             (claude.configured, claude.error),
@@ -855,6 +878,7 @@ extension UsageLimitsResponse {
             (workbuddy?.configured ?? false, workbuddy?.error),
             (workbuddyAi?.configured ?? false, workbuddyAi?.error),
             (deepseek?.configured ?? false, deepseek?.error),
+            (customCredits?.configured ?? false, customCredits?.error),
         ]
         return providers.contains { $0.0 && $0.1 == nil }
     }
@@ -866,7 +890,11 @@ extension UsageLimitsResponse {
         current: UsageLimitsResponse?,
         incoming: UsageLimitsResponse
     ) -> UsageLimitsResponse {
-        guard let current, !incoming.hasAnyProviderWithoutError else { return incoming }
+        guard var current, !incoming.hasAnyProviderWithoutError else { return incoming }
+        // The gateway key or account may have changed since the cached reading.
+        if let gateway = incoming.customCredits {
+            current.customCredits = gateway
+        }
         return current
     }
 
@@ -896,7 +924,8 @@ extension UsageLimitsResponse {
             devin: .unconfigured,
             workbuddy: workbuddy,
             workbuddyAi: workbuddyAi,
-            deepseek: deepseek
+            deepseek: deepseek,
+            customCredits: customCredits
         )
     }
 }

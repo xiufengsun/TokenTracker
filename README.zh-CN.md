@@ -97,6 +97,7 @@ brew install xiufengsun/tokentracker/tokentracker
 - 🖥️ **原生桌面 App** —— macOS 菜单栏（含桌面小组件）与 Windows 系统托盘，各自内嵌服务 + 原生 WebView Dashboard
 - 🎨 **4 种桌面小组件** —— 用量 / 热力图 / 热门模型 / 使用限额 直接钉桌面
 - 📈 **实时限额追踪** —— Claude / Codex / Cursor / Gemini / Kimi / Kiro / Grok / Copilot / Antigravity / ZCode / OpenCode Go / Qoder / Qoder CN / Command Code / Ark Coding Plan / Ark Agent Plan / Devin / WorkBuddy 的配额窗口；本地 provider App 暂时退出时保留 last-good 缓存
+- **自定义额度服务** —— 在本地看板的「设置 → 用量与限额 → 自定义额度服务」中连接支持按模型用量接口的网关。看板和 macOS 灵动岛显示日、周、月 Credit 进度，展开看板卡片可看最近 31 天的已计价用量或分摊估算。
 - 🟢 **服务状态页** —— 直接汇总 8 家 provider 官方状态页的实时运行与事故状态
 - 💰 **成本引擎** —— 内置 70+ 模型定价表，精确到 USD
 - 🌐 **可选排行榜** —— 与全球开发者对比；列可拖拽排序，聚焦你关心的 provider（需登录参与）

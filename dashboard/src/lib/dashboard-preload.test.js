@@ -71,6 +71,16 @@ describe("dashboard preload state", () => {
     expect(readUsageLimitsPreloadState(`${contextKey}|stale`)).toBeNull();
   });
 
+  it("reuses other providers without retaining the private gateway name or history", () => {
+    const data = {
+      codex: { configured: true },
+      customCredits: { configured: true, plan_label: "Private", daily_history: [{ date: "2024-02-01", used_credits: 30 }] },
+    };
+    publishUsageLimitsPreloadState(data);
+    expect(readUsageLimitsPreloadState().data).toEqual({ codex: data.codex, customCredits: { configured: false } });
+    expect(data.customCredits.daily_history).toHaveLength(1);
+  });
+
   it("reads fulfilled usage limits cache repeatedly without consuming it", () => {
     const data = { usage: { daily: 10 } };
 
