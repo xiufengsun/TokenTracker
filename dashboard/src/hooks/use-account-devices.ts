@@ -21,6 +21,8 @@ export function useAccountDevices({
 }: any = {}) {
   const local = localView && !accountView && isLocalDashboardHost();
   const enabled = Boolean(local || (accountView && accountAccessToken));
+  const localScope = local ? JSON.stringify([from, to, timeZone, tzOffsetMinutes]) : null;
+  const [verifiedLocalScope, setVerifiedLocalScope] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [devices, setDevices] = useState<any[]>([]);
   // Account-level sources (e.g. Cursor) have no device attribution; the edge
@@ -42,6 +44,7 @@ export function useAccountDevices({
 
   const refresh = useCallback(async () => {
     const isCurrent = beginRequest();
+    setVerifiedLocalScope(null);
     if (!enabled) {
       setDevices([]);
       setAccountSources([]);
@@ -61,6 +64,7 @@ export function useAccountDevices({
       setDevices(Array.isArray(res?.devices) ? res.devices : []);
       setAccountSources(Array.isArray(res?.account_sources) ? res.account_sources : []);
       setRevision(local ? Number(res?.revision) || 0 : 0);
+      setVerifiedLocalScope(localScope);
     } catch (e: any) {
       if (!isCurrent()) return;
       setError(e?.message || String(e));
@@ -69,7 +73,7 @@ export function useAccountDevices({
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [enabled, local, accountAccessToken, from, to, timeZone, tzOffsetMinutes, accountRevision, beginRequest]);
+  }, [enabled, local, localScope, accountAccessToken, from, to, timeZone, tzOffsetMinutes, accountRevision, beginRequest]);
 
   useEffect(() => {
     if (!local) return;
@@ -87,5 +91,6 @@ export function useAccountDevices({
     refresh();
   }, [enabled, refresh]);
 
-  return { devices, accountSources, loading, error, refresh, revision };
+  const localReady = localScope !== null && localScope === verifiedLocalScope;
+  return { devices, accountSources, loading, error, refresh, revision, localReady };
 }

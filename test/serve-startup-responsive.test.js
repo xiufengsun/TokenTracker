@@ -27,6 +27,11 @@ for (const firstRun of [true, false]) {
     const trackerDir = path.join(home, ".tokentracker", "tracker");
     await fs.mkdir(trackerDir, { recursive: true });
     if (!firstRun) await fs.writeFile(path.join(trackerDir, "cursors.json"), "{}");
+    const hour = "2025-01-01T16:00:00.000Z";
+    await fs.writeFile(path.join(trackerDir, "queue.jsonl"), JSON.stringify({
+      hour_start: hour, source: "codex", model: "gpt-5.4", input_tokens: 200,
+      output_tokens: 100, total_tokens: 300, conversation_count: 1,
+    }) + "\n");
     const probe = net.createServer();
     probe.listen(0, "127.0.0.1");
     await once(probe, "listening");
@@ -64,6 +69,9 @@ for (const firstRun of [true, false]) {
     const page = await get(port, "/");
     assert.equal(page.status, 200);
     assert.match(page.body, /<html/i);
+    const summary = await get(port, "/functions/tokentracker-usage-summary?from=2025-01-01&to=2025-01-01&tz=UTC");
+    assert.equal(summary.status, 200);
+    assert.equal(JSON.parse(summary.body).totals.total_tokens, 300);
     assert.deepEqual(phases, ["install"], "HTTP must work before maintenance is released");
     child.send("continue");
     await waitFor("complete");

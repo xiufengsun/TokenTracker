@@ -135,6 +135,7 @@ export function DashboardView(props) {
     trendFromForDisplay,
     trendToForDisplay,
     trendZoomConfig,
+    onSessionDrilldown,
     usageFrom,
     usageTo,
     period,
@@ -289,6 +290,7 @@ export function DashboardView(props) {
               timeZoneLabel={trendTimeZoneLabel}
               showTimeZoneLabel={false}
               zoomConfig={trendZoomConfig}
+              onSessionDrilldown={onSessionDrilldown}
             />
           </FadeIn>
         );

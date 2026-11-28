@@ -30,6 +30,7 @@ describe("desktop quota snapshots", () => {
     expect(selectQuotaRows(rows, ["codex:7d"])).toEqual([]);
     expect(selectQuotaRows(rows, ["codex:5h", "claude:7d"]).map(row => row.id)).toEqual(["codex:5h", "claude:7d"]);
   });
+
   it("keeps Antigravity's unpinned default on the Claude weekly window although 5h is listed first", () => {
     const rows = desktopQuotaRows({
       antigravity: {
@@ -45,6 +46,19 @@ describe("desktop quota snapshots", () => {
     expect(selectQuotaRows(rows, ["antigravity:claude-5h"]).map(row => row.id)).toEqual(["antigravity:claude-5h"]);
     const withoutWeekly = rows.filter(row => row.id !== "antigravity:claude-weekly");
     expect(selectQuotaRows(withoutWeekly, []).map(row => row.id)).toEqual(["antigravity:claude-5h"]);
+  });
+
+  it("prioritizes fresh projected exhaustion and keeps pinned or stale selections predictable", () => {
+    const now = Date.parse("2026-11-27T09:00:00Z");
+    const resetMs = now + 4 * 60 * 60 * 1000;
+    const rows = [
+      { id: "claude:5h", provider: "claude", remaining: 95, resetMs, periodSeconds: 18000 },
+      { id: "codex:5h", provider: "codex", remaining: 92, resetMs, periodSeconds: 18000 },
+      { id: "kimi:5h", provider: "kimi", remaining: 45, resetMs, periodSeconds: 18000 },
+    ];
+    expect(selectQuotaRows(rows, [], now).map(row => row.id)).toEqual(["claude:5h", "kimi:5h"]);
+    expect(selectQuotaRows(rows, [], now, true).map(row => row.id)).toEqual(["claude:5h", "codex:5h"]);
+    expect(selectQuotaRows(rows, ["codex:5h"], now)).toEqual([rows[1]]);
   });
 });
 
