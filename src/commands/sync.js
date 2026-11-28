@@ -106,6 +106,9 @@ const {
   parsePrimeAgentIncremental,
   resolveDeepaiCodeSessionFiles,
   parseDeepaiCodeIncremental,
+  resolveFreePiSessionFiles,
+  freePiAgentDirCollision,
+  parseFreePiIncremental,
   resolveMinimaxCodeSessionFiles,
   parseMinimaxCodeIncremental,
   resolveCraftSessionFiles,
@@ -375,6 +378,7 @@ const AUTO_SYNC_SOURCES = new Set([
   "dsh",
   "deepai",
   "every-code",
+  "free-pi",
   "gemini",
   "goose",
   "grok",
@@ -2913,6 +2917,41 @@ async function cmdSync(argv, context = {}) {
       }
     }
 
+    // ── free-pi (npx free-pi-cli) — passive ~/.free-pi/agent/sessions/**/*.jsonl reader ──
+    // free-pi runs the pi coding agent in its own agent dir, so the sessions are
+    // pi JSONL under a separate root with a separate cursor namespace.
+    let freePiResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
+    // Skip free-pi when pi/oh-my-pi/OmO resolve to the same agent dir (an explicit
+    // PI_CODING_AGENT_DIR or TOKENTRACKER_*_AGENT_DIR can point them here), so the
+    // same transcripts are never queued twice under two source labels.
+    const freePiCollidesWith = freePiAgentDirCollision(process.env);
+    const freePiFiles = !sourceAllowed("free-pi") || freePiCollidesWith
+      ? []
+      : mergeBothFileSources({ resolveFiles: resolveFreePiSessionFiles, env: process.env });
+    if (freePiFiles.length > 0) {
+      if (progress?.enabled) {
+        progress.start(`Parsing free-pi ${renderBar(0)} | buckets 0`);
+      }
+      try {
+        freePiResult = await parseFreePiIncremental({
+          sessionFiles: freePiFiles,
+          cursors,
+          queuePath,
+          projectQueuePath,
+          env: process.env,
+          onProgress: (p) => {
+            if (!progress?.enabled) return;
+            const pct = p.total > 0 ? p.index / p.total : 1;
+            progress.update(
+              `Parsing free-pi ${renderBar(pct)} ${formatNumber(p.index)}/${formatNumber(p.total)} files | buckets ${formatNumber(p.bucketsQueued)}`,
+            );
+          },
+        });
+      } catch (err) {
+        warnProviderParseFailure("free-pi", err, opts);
+      }
+    }
+
     // ── DeepAI Code — passive reader for the pi-style sessions it embeds
     // (~/.deepai-code/userdata/deepai/pi/*/sessions/**/*.jsonl) ──
     let deepaiResult = { recordsProcessed: 0, eventsAggregated: 0, bucketsQueued: 0, projectBucketsQueued: 0 };
@@ -3519,6 +3558,7 @@ async function cmdSync(argv, context = {}) {
       ompResult.recordsProcessed +
       omoResult.recordsProcessed +
       piResult.recordsProcessed +
+      freePiResult.recordsProcessed +
       primeAgentResult.recordsProcessed +
       deepaiResult.recordsProcessed +
       minimaxCodeResult.recordsProcessed +
@@ -3568,6 +3608,7 @@ async function cmdSync(argv, context = {}) {
       ompResult.bucketsQueued +
       omoResult.bucketsQueued +
       piResult.bucketsQueued +
+      freePiResult.bucketsQueued +
       primeAgentResult.bucketsQueued +
       deepaiResult.bucketsQueued +
       minimaxCodeResult.bucketsQueued +
@@ -3607,6 +3648,7 @@ async function cmdSync(argv, context = {}) {
       !(grokResult.projectBucketsQueued > 0) &&
       !(commandCodeResult.projectBucketsQueued > 0) &&
       !(deepaiResult.projectBucketsQueued > 0) &&
+      !(freePiResult.projectBucketsQueued > 0) &&
       !commandCodeResult.schemaMigrated &&
       !codexColdAuditDue &&
       !codexFallbackRetryRan &&

@@ -77,6 +77,7 @@ test("public discovery surfaces describe every supported tool", () => {
     assert.match(source, /MiniMax Code/, `${file} lists MiniMax Code`);
     assert.match(source, /Command Code/, `${file} lists Command Code`);
     assert.match(source, /DeepAI Code/, `${file} lists DeepAI Code`);
+    assert.match(source, /\bfree-pi\b/, `${file} lists free-pi`);
     assert.match(source, /DuMate/, `${file} lists DuMate`);
     assert.match(source, /TOKENTRACKER_DUMATE_HOME/, `${file} documents the DuMate directory override`);
     assert.match(source, limitCountPattern, `${file} rate-limit row carries the current usage-limits provider count`);
@@ -100,6 +101,11 @@ test("public discovery surfaces describe every supported tool", () => {
 
   const llms = read("dashboard/public/llms.txt");
   assert.match(llms, new RegExp(`Supported AI coding tools \\(${TOOL_COUNT}\\)`));
+  const llmsTools = llms.split(/\r?\n\r?\n/).find((section) => section.startsWith("## Supported AI coding tools"));
+  const inventory = [...llmsTools.matchAll(/^- (.+)$/gm)].map((match) => match[1]);
+  assert.equal(inventory.length, TOOL_COUNT);
+  assert.equal(new Set(inventory).size, TOOL_COUNT, "llms.txt lists each supported tool");
+  assert.ok(inventory.includes("free-pi"));
   assert.match(llms, /TRAE Work CN/);
   assert.match(llms, /AStudio/);
   assert.doesNotMatch(llms, /\bAcode\b/);
@@ -200,6 +206,7 @@ test("dashboard JSON-LD scripts parse as valid JSON", () => {
   assert.ok(tools.itemListElement.some((item) => item.name === "MiniMax Code"));
   assert.ok(tools.itemListElement.some((item) => item.name === "Command Code"));
   assert.ok(tools.itemListElement.some((item) => item.name === "DeepAI Code"));
+  assert.ok(tools.itemListElement.some((item) => item.name === "free-pi"));
   assert.ok(tools.itemListElement.some((item) => item.name === "DuMate"));
   assert.match(supportedClis.acceptedAnswer.text, new RegExp(`${TOOL_COUNT} AI coding tools`));
   assert.match(supportedClis.acceptedAnswer.text, /AStudio/);

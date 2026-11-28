@@ -6,7 +6,7 @@
 
 ### Sieh genau, was du für KI ausgibst – über jedes CLI hinweg
 
-Sammle automatisch Token-Zahlen von **48 KI-Coding-Tools**, aggregiere sie lokal und sieh echte Kostentrends in einem schönen Dashboard. Kein Cloud-Konto, keine API-Keys, kein Setup – nur ein Befehl.
+Sammle automatisch Token-Zahlen von **49 KI-Coding-Tools**, aggregiere sie lokal und sieh echte Kostentrends in einem schönen Dashboard. Kein Cloud-Konto, keine API-Keys, kein Setup – nur ein Befehl.
 
 [![npm version](https://img.shields.io/npm/v/tokentracker-cli.svg?color=blue)](https://www.npmjs.com/package/tokentracker-cli)
 [![npm downloads](https://img.shields.io/npm/dm/tokentracker-cli.svg?color=brightgreen)](https://www.npmjs.com/package/tokentracker-cli)
@@ -92,7 +92,7 @@ Aktualisieren mit `brew upgrade --cask xiufengsun/tokentracker/tokentracker`. De
 
 ## ✨ Features
 
-- 🔌 **48 KI-Tools out of the box** — Claude Code, Codex CLI, AStudio, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenSquilla, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, WorkBuddy AI, Grok Build, oh-my-pi, OmO, pi, Dots, Prime Agent, Craft Agents, Reasonix, Muse Code, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, DuMate, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio, Devin CLI, Cline, MiniMax Code, Command Code, DeepAI Code, TRAE
+- 🔌 **49 KI-Tools out of the box** — Claude Code, Codex CLI, AStudio, Cursor, Gemini CLI, Antigravity, Kiro, OpenCode, OpenSquilla, OpenClaw, Every Code, Hermes Agent, GitHub Copilot, Kimi Code, CodeBuddy, WorkBuddy, WorkBuddy AI, Grok Build, oh-my-pi, OmO, pi, free-pi, Dots, Prime Agent, Craft Agents, Reasonix, Muse Code, Kilo CLI, Kilo Code, Roo Code, Zed Agent, Goose, Droid, Mimo Code, DuMate, ZCode, Qoder, AnythingLLM Desktop, Claude Science, DeepSeek Harness, TRAE Work CN, LM Studio, Unsloth Studio, Devin CLI, Cline, MiniMax Code, Command Code, DeepAI Code, TRAE
 - 🏠 **Local-First** — Läuft auf deinem Rechner. Parst Logs lokal, ohne Konto oder API-Keys.
 - 🚀 **Zero Config** — Hooks installieren sich beim ersten Start automatisch. Von null zum Dashboard in 30 Sekunden.
 - 📊 **Schönes Dashboard** — Nutzungstrends, Kostenaufschlüsselung nach Modell, GitHub-ähnliche Aktivitäts-Heatmap, Projektzuordnung
@@ -190,6 +190,7 @@ Aktualisieren mit `brew upgrade --cask xiufengsun/tokentracker/tokentracker`. De
 | **Kilo Code** (VS Code Extension) | ✅ Auto | Passiver `ui_messages.json`-Reader (Cursor/Code/CodeBuddy/Windsurf globalStorage) |
 | **Antigravity** | ✅ Auto | Passiver Transcript-Reader (`~/.gemini/{antigravity,antigravity-ide,antigravity-insiders,antigravity-cli}/brain/**/transcript.jsonl`, plus T3-Code-Profile unter `~/.t3/userdata/providers/antigravity/*/antigravity-acp/`) |
 | **pi** (`@mariozechner/pi-coding-agent`) | ✅ Auto | Passiver Reader (`~/.pi/agent/sessions/**/*.jsonl`) |
+| **free-pi** (`npx free-pi-cli`) | ✅ Auto | Passiver Reader für pi-Sitzungen (`~/.free-pi/agent/sessions/**/*.jsonl`) |
 | **Dots** | ✅ Auto | Über pis Provider-Split geroutet (`pi-dots` source, derselbe passive Reader) — kein eigener Hook |
 | **Prime Agent** | ✅ Auto | Metadatenbasierter passiver Usage-Reader (`~/.prime/agent/sessions/*.jsonl`) |
 | **Craft Agents** | ✅ Auto | Passiver Session-Reader (`~/.craft-agent` + Workspace-Session-Logs) |
@@ -236,7 +237,7 @@ Fehlt dein Tool? [Erstelle ein Issue](https://github.com/xiufengsun/TokenTracker
 
 | Funktion | **[TokenTracker](https://github.com/xiufengsun/TokenTracker)** | **[ccusage](https://github.com/ccusage/ccusage)** | **[Tokscale](https://github.com/junhoyeo/tokscale)** |
 |---|:---:|:---:|:---:|
-| **Unterstützte KI-Tools** | **48** | Multi-Agent | Multi-Agent |
+| **Unterstützte KI-Tools** | **49** | Multi-Agent | Multi-Agent |
 | **Primäre Benutzeroberfläche** | Native Desktop-Apps & Web-Dashboard | Terminal-CLI | Terminal-TUI & CLI |
 | **Local-First-Analyse** | ✅ | ✅ | ✅ |
 | **Native Desktop-Apps** | ✅ macOS, Windows, Linux | ❌ | ❌ |
@@ -252,7 +253,7 @@ Fehlt dein Tool? [Erstelle ein Issue](https://github.com/xiufengsun/TokenTracker
 
 ```mermaid
 flowchart LR
-    A["KI-Coding-Tools<br/>Claude · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · Craft · Droid · Mimo · DuMate · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE · TRAE Work CN · LM Studio · Unsloth Studio · Devin CLI · MiniMax Code · Cline · Command Code · DeepAI Code"]
+    A["KI-Coding-Tools<br/>Claude · Codex · AStudio · Cursor · Gemini · Kiro<br/>OpenCode · OpenClaw · Every Code · Hermes · Copilot<br/>Kimi · CodeBuddy · WorkBuddy · Grok · Kilo · Roo · Zed · Goose<br/>Antigravity · oh-my-pi · pi · free-pi · Craft · Droid · Mimo · DuMate · ZCode · Qoder · AnythingLLM · Claude Science · DeepSeek Harness · TRAE · TRAE Work CN · LM Studio · Unsloth Studio · Devin CLI · MiniMax Code · Cline · Command Code · DeepAI Code"]
     A -->|Hooks lösen aus| B[Token Tracker]
     B -->|Logs parsen<br/>30-Min-UTC-Buckets| C[(Lokales SQLite)]
     C --> D[Web-Dashboard]

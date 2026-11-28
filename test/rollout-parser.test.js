@@ -53,6 +53,10 @@ const {
   resolvePiSessionFiles,
   resolvePiAgentDir,
   piAgentDirCollidesWithOmp,
+  parseFreePiIncremental,
+  freePiAgentDirCollision,
+  resolveFreePiAgentDir,
+  resolveFreePiSessionFiles,
   parsePrimeAgentIncremental,
   resolvePrimeAgentSessionFiles,
   resolvePrimeAgentDir,
@@ -11106,6 +11110,129 @@ test("parsePiIncremental does not double-count 'dots' provider rows on a second 
     assert.equal(queued[0].total_tokens, 120);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("parseFreePiIncremental queues free-pi-cli sessions under the free-pi source", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tt-free-pi-"));
+  try {
+    const sessionsDir = path.join(tmp, "sessions", "--myproject--");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const filePath = path.join(sessionsDir, "2026-11-17T09-00-00-000Z_abcd.jsonl");
+    const queuePath = path.join(tmp, "queue.jsonl");
+    const cursors = { version: 1, files: {}, updatedAt: null };
+
+    const ts = Date.UTC(2026, 10, 17, 9, 10, 0);
+    const lines = [
+      buildOmpSessionHeader(),
+      buildOmpAssistantLine({ id: "fp-1", provider: "free-pi", model: "deepseek/deepseek-v4-flash", input: 400, output: 60, timestamp: ts, totalTokens: 460 }),
+    ];
+    await fs.writeFile(filePath, lines.join("\n") + "\n", "utf8");
+
+    const res = await parseFreePiIncremental({ sessionFiles: [filePath], cursors, queuePath });
+    assert.equal(res.eventsAggregated, 1);
+
+    const queued = await readJsonLines(queuePath);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].source, "free-pi");
+    assert.equal(queued[0].model, "deepseek/deepseek-v4-flash");
+    assert.equal(queued[0].input_tokens, 400);
+    assert.equal(queued[0].output_tokens, 60);
+    assert.equal(queued[0].total_tokens, 460);
+    assert.ok(cursors.freePi.seenIds.includes("fp-1"));
+    assert.equal(cursors.pi, undefined, "free-pi keeps its own cursor namespace");
+
+    const res2 = await parseFreePiIncremental({ sessionFiles: [filePath], cursors, queuePath });
+    assert.equal(res2.eventsAggregated, 0);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("resolveFreePiSessionFiles reads ~/.free-pi/agent/sessions and honors TOKENTRACKER_FREE_PI_AGENT_DIR", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "tt-free-pi-home-"));
+  try {
+    const cwdDir = path.join(home, ".free-pi", "agent", "sessions", "--myproject--");
+    await fs.mkdir(cwdDir, { recursive: true });
+    const sessionFile = path.join(cwdDir, "2026-11-17T09-00-00-000Z_abcd.jsonl");
+    await fs.writeFile(sessionFile, buildOmpSessionHeader() + "\n", "utf8");
+
+    assert.equal(resolveFreePiAgentDir({ HOME: home }), path.join(home, ".free-pi", "agent"));
+    assert.deepEqual(resolveFreePiSessionFiles({ HOME: home }), [sessionFile]);
+
+    const overrideDir = path.join(home, "custom-agent");
+    const overrideSession = path.join(overrideDir, "sessions", "--other--", "s.jsonl");
+    await fs.mkdir(path.dirname(overrideSession), { recursive: true });
+    await fs.writeFile(overrideSession, buildOmpSessionHeader() + "\n", "utf8");
+    assert.deepEqual(
+      resolveFreePiSessionFiles({ HOME: home, TOKENTRACKER_FREE_PI_AGENT_DIR: overrideDir }),
+      [overrideSession],
+    );
+
+    assert.deepEqual(resolveFreePiSessionFiles({ HOME: path.join(home, "no-free-pi") }), []);
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("freePiAgentDirCollision stands free-pi down when pi/oh-my-pi/OmO resolve to its agent dir", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "tt-free-pi-collide-"));
+  try {
+    const freePiAgentDir = path.join(home, ".free-pi", "agent");
+    await fs.mkdir(path.join(freePiAgentDir, "sessions", "--myproject--"), { recursive: true });
+
+    // Default roots never overlap.
+    assert.equal(freePiAgentDirCollision({ HOME: home }), null);
+
+    // pi installed (~/.pi signal) + PI_CODING_AGENT_DIR pointed at free-pi's dir:
+    // pi would scan these transcripts, so free-pi must yield.
+    await fs.mkdir(path.join(home, ".pi"), { recursive: true });
+    assert.equal(
+      freePiAgentDirCollision({ HOME: home, PI_CODING_AGENT_DIR: freePiAgentDir }),
+      "pi",
+      "pi reading free-pi's agent dir must make free-pi stand down",
+    );
+
+    // Without the ~/.pi install signal the same variable belongs to oh-my-pi.
+    const noPiSignalHome = path.join(home, "no-pi-signal");
+    assert.equal(
+      freePiAgentDirCollision({
+        HOME: noPiSignalHome,
+        TOKENTRACKER_FREE_PI_AGENT_DIR: freePiAgentDir,
+        PI_CODING_AGENT_DIR: freePiAgentDir,
+      }),
+      "oh-my-pi",
+      "with no ~/.pi signal, PI_CODING_AGENT_DIR is oh-my-pi's and free-pi must yield",
+    );
+
+    // Explicit overrides on either side of the pair.
+    assert.equal(
+      freePiAgentDirCollision({ HOME: home, TOKENTRACKER_PI_AGENT_DIR: freePiAgentDir }),
+      "pi",
+    );
+    assert.equal(
+      freePiAgentDirCollision({
+        HOME: home,
+        TOKENTRACKER_FREE_PI_AGENT_DIR: path.join(home, ".pi", "agent"),
+      }),
+      "pi",
+      "free-pi pointed at pi's agent dir must stand down too",
+    );
+    assert.equal(
+      freePiAgentDirCollision({ HOME: home, TOKENTRACKER_OMO_AGENT_DIR: freePiAgentDir }),
+      "OmO",
+    );
+
+    // A relocated free-pi root that nothing else claims is fine.
+    assert.equal(
+      freePiAgentDirCollision({
+        HOME: home,
+        TOKENTRACKER_FREE_PI_AGENT_DIR: path.join(home, "relocated-free-pi", "agent"),
+      }),
+      null,
+    );
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
   }
 });
 

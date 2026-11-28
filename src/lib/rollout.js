@@ -17793,6 +17793,91 @@ async function parseDeepaiCodeIncremental(options = {}) {
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// free-pi (npx free-pi-cli) — passive reader
+//
+// free-pi-cli runs the pi coding agent preconfigured against the free-pi proxy
+// (ads + a daily allowance pay for inference), and launches it with a private
+// agent dir so an existing ~/.pi install is never read or written:
+//   ~/.free-pi/agent/sessions/--<cwd-encoded>--/<timestamp>_<session-id>.jsonl
+// pi-launch.ts points the child process's PI_CODING_AGENT_DIR at that dir, so
+// this is an independent install root rather than pi's own agent dir.
+//
+// Records are plain pi JSONL, so the pi-family parser is reused verbatim: usage
+// carries `input` without cacheRead, `cacheRead`/`cacheWrite` separately, and
+// `reasoning` as a subset of output (never added twice). Every row is stamped
+// source "free-pi" instead of pi's routed `pi-<provider>` sources: free-pi is
+// one distro behind one proxy, and the catalog model id on each message already
+// carries the pricing, so there is no backend split to keep apart.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FREE_PI_SOURCE = "free-pi";
+
+function resolveFreePiHome(env = process.env) {
+  if (env.TOKENTRACKER_FREE_PI_HOME) {
+    return expandHomePath(env.TOKENTRACKER_FREE_PI_HOME.trim(), env);
+  }
+  const home = env.HOME || require("node:os").homedir();
+  if (process.platform === "win32") {
+    return pickWin32ProviderPath({
+      env,
+      nativeValue: path.join(home, ".free-pi"),
+      wslProviderDir: ".free-pi",
+    });
+  }
+  return path.join(home, ".free-pi");
+}
+
+// PI_CODING_AGENT_DIR is deliberately not honored here: free-pi sets it for its
+// own child process only, and reading it would point this reader at a real pi
+// install (whose sessions the pi parser already counts).
+function resolveFreePiAgentDir(env = process.env) {
+  if (env.TOKENTRACKER_FREE_PI_AGENT_DIR) {
+    return expandHomePath(env.TOKENTRACKER_FREE_PI_AGENT_DIR.trim(), env);
+  }
+  const freePiHome = resolveFreePiHome(env);
+  return freePiHome ? path.join(freePiHome, "agent") : null;
+}
+
+function resolveFreePiSessionFiles(env = process.env) {
+  return collectPiStyleSessionFiles(resolveFreePiAgentDir(env));
+}
+
+// Defense in depth for the no-double-count invariant, mirroring
+// piAgentDirCollidesWithOmp: free-pi's agent dir is reachable by the other
+// pi-family readers through their overrides. PI_CODING_AGENT_DIR is owned by pi
+// when ~/.pi exists and by oh-my-pi otherwise, and every reader also has an
+// explicit TOKENTRACKER_*_AGENT_DIR. Two readers resolving to one sessions dir
+// would queue the same transcripts under two source labels, so free-pi stands
+// down and the caller reports which provider owns the dir (pi keeps its dir when
+// it collides with omp, and free-pi is the newest reader, so it yields).
+function freePiAgentDirCollision(env = process.env) {
+  const freePiAgentDir = resolveFreePiAgentDir(env);
+  if (!freePiAgentDir) return null;
+  const target = path.resolve(freePiAgentDir);
+  const otherReaders = [
+    ["pi", resolvePiAgentDir(env)],
+    ["oh-my-pi", resolveOmpAgentDir(env)],
+    ["OmO", resolveOmoAgentDir(env)],
+  ];
+  for (const [label, agentDir] of otherReaders) {
+    if (agentDir && path.resolve(agentDir) === target) return label;
+  }
+  return null;
+}
+
+async function parseFreePiIncremental(options = {}) {
+  return parsePiLikeIncremental({
+    ...options,
+    // Own state key: free-pi must never share pi's seenIds/offsets, or
+    // alternating syncs between the two roots would drop or replay messages.
+    stateKey: "freePi",
+    resolveSessionFiles: resolveFreePiSessionFiles,
+    resolveDefaultModel: () => `${FREE_PI_SOURCE}-unknown`,
+    sourceForProvider: () => FREE_PI_SOURCE,
+  });
+}
+
 // Pi is a router: the same session can send turns to Anthropic, GitHub
 // Copilot, or another backend. Keep provider names in the queue source so
 // those turns cannot collapse into one bucket (or inherit the wrong pricing).
@@ -27161,6 +27246,12 @@ module.exports = {
   resolveDeepaiCodeSessionsDir,
   resolveDeepaiCodeSessionFiles,
   parseDeepaiCodeIncremental,
+  FREE_PI_SOURCE,
+  resolveFreePiHome,
+  resolveFreePiAgentDir,
+  resolveFreePiSessionFiles,
+  freePiAgentDirCollision,
+  parseFreePiIncremental,
   resolveMinimaxCodeHome,
   resolveMinimaxCodeSessionsDir,
   resolveMinimaxCodeSessionFiles,

@@ -192,6 +192,7 @@
   "limits.provider.copilot": "GitHub Copilot",
   "provider.display.omp": "oh-my-pi",
   "provider.display.pi": "Pi",
+  "provider.display.free_pi": "free-pi",
   "provider.display.omo": "OmO",
   "provider.display.minimax_code": "MiniMax Code",
   "provider.display.command_code": "Command Code",

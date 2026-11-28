@@ -73,6 +73,9 @@ const {
   resolvePrimeAgentDir,
   resolveDeepaiCodeSessionsDir,
   resolveDeepaiCodeSessionFiles,
+  resolveFreePiAgentDir,
+  resolveFreePiSessionFiles,
+  freePiAgentDirCollision,
   resolveCraftSessionFiles,
   resolveCraftConfigDir,
   resolveReasonixHome,
@@ -547,6 +550,16 @@ async function cmdStatus(argv = []) {
   const piAgentDir = resolvePiAgentDir(process.env);
   const piInstalled = !piCollides && Boolean(piAgentDir) && fssync.existsSync(path.join(piAgentDir, "sessions"));
   const piFiles = piInstalled ? resolvePiSessionFiles(process.env) : [];
+
+  // free-pi (npx free-pi-cli) — passive scan only (no hooks). Reads the pi
+  // session format from its own agent dir, so it never doubles pi's rows. Skip
+  // when another pi-family reader resolves to that same dir.
+  const freePiCollidesWith = freePiAgentDirCollision(process.env);
+  const freePiAgentDir = resolveFreePiAgentDir(process.env);
+  const freePiSessionsDir = freePiAgentDir ? path.join(freePiAgentDir, "sessions") : null;
+  const freePiInstalled =
+    !freePiCollidesWith && Boolean(freePiSessionsDir) && fssync.existsSync(freePiSessionsDir);
+  const freePiFiles = freePiInstalled ? resolveFreePiSessionFiles(process.env) : [];
 
   // Prime Agent — passive scan only (no hooks).
   const primeAgentDir = resolvePrimeAgentDir(process.env);
@@ -1178,6 +1191,9 @@ async function cmdStatus(argv = []) {
         pi: piInstalled
           ? { installed: true, files: piFiles.length }
           : { installed: false },
+        free_pi: freePiInstalled
+          ? { installed: true, files: freePiFiles.length }
+          : { installed: false, ...(freePiCollidesWith ? { collides_with: freePiCollidesWith } : {}) },
         prime_agent: primeAgentInstalled
           ? { installed: true, files: primeAgentFiles.length }
           : { installed: false },
@@ -1386,6 +1402,11 @@ async function cmdStatus(argv = []) {
       piInstalled
         ? `- pi: passive reader (${piFiles.length} session jsonl file${piFiles.length !== 1 ? "s" : ""} found)`
         : null,
+      freePiCollidesWith
+        ? `- free-pi: skipped (its agent dir also resolves for ${freePiCollidesWith}; those sessions are counted once there)`
+        : freePiInstalled
+          ? `- free-pi: passive reader (${freePiFiles.length} session jsonl file${freePiFiles.length !== 1 ? "s" : ""} found)`
+          : null,
       primeAgentInstalled
         ? `- Prime Agent: passive reader (${primeAgentFiles.length} session jsonl file${primeAgentFiles.length !== 1 ? "s" : ""} found)`
         : null,
