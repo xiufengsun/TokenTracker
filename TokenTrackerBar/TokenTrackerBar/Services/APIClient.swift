@@ -104,13 +104,8 @@ actor APIClient {
 		]))
 	}
 
-    /// `devinEnabled` is the user's Settings provider selection. Only when it is
-    /// true does the request carry `devin=1` plus the local-auth header that
-    /// lets the server read the Devin CLI credentials; omitted means off.
-    /// `hiddenProviders` carries the visibility gate (#956): ids the server
-    /// must skip entirely — no upstream call, no credential read. Like the
-    /// Devin flag, an explicit list requires the local-auth header; omitted
-    /// means "fetch every configured provider" (the legacy behavior).
+    /// Local authentication enables explicitly configured custom credit gateways.
+    /// Devin also requires its selection flag; hidden providers skip upstream reads.
     func fetchUsageLimits(devinEnabled: Bool = false, hiddenProviders: [String] = []) async throws -> UsageLimitsResponse {
         var items: [URLQueryItem] = []
         if devinEnabled {
@@ -123,7 +118,7 @@ actor APIClient {
             "/functions/tokentracker-usage-limits",
             queryItems: items,
             requestTimeout: Self.usageLimitsRequestTimeout,
-            requiresLocalAuth: devinEnabled || !hiddenProviders.isEmpty
+            requiresLocalAuth: true
         )
     }
 

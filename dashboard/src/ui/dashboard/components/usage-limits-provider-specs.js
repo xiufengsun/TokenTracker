@@ -303,6 +303,20 @@ export const PROVIDER_LIMIT_SPECS = {
       return PROVIDER_LIMIT_SPECS.workbuddy.windows(data);
     },
   },
+  customCredits: {
+    windows(data) {
+      const windows = [
+        ["daily", data.primary_window, "limits.label.devin_daily"],
+        ["weekly", data.secondary_window, "limits.label.devin_weekly"],
+        ["monthly", data.tertiary_window, "limits.label.opencode_go_monthly"],
+      ];
+      return windows.map(([key, window, labelKey]) => ({
+        key, window, labelKey,
+        ...(window?.derived_limit ? { label: copy("limits.customCredits.budget", { period: copy(labelKey) }) } : {}),
+        windowSecondsField: "limit_window_seconds", showCreditDetail: true, creditPrecision: 2,
+      }));
+    },
+  },
   // DeepSeek (platform.deepseek.com) is pay-as-you-go and publishes no quota
   // windows: the balance card renders through the deepseek_balance extra, so
   // the window list stays empty and no fake "used 0" bar can appear (issue 960).

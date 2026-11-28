@@ -293,8 +293,11 @@ export function readReusablePageState(targetKey, contextKey) {
 }
 
 export function publishUsageLimitsPreloadState(data, options = {}) {
+  // The active gateway account can change in another CLI or desktop process.
+  // Reuse other rows immediately; the local limits read refreshes this row.
+  const reusable = data?.customCredits ? { ...data, customCredits: { configured: false } } : data;
   return publishReusablePageState("limits", {
-    data,
+    data: reusable,
     source: options.source || "dashboard-existing",
     contextKey: options.contextKey || getUsageLimitsPreloadContextKey(options.context || {}),
     generatedAt: options.generatedAt,

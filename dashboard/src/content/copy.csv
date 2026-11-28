@@ -2241,3 +2241,21 @@ usage.evidence.source,ui,UsageDataDetails,UsageEvidence,source,{source} — {sta
 usage.evidence.discovery,ui,UsageDataDetails,UsageEvidence,coverage,Directory discovery failures: {{failed}}. Paths and errors stay private.,Coverage and cost provenance disclosure,active
 sessions.coverage.partial,ui,SessionsPage,UsageDataDetails,summary,The session scan is incomplete,,active
 sessions.coverage.source,ui,SessionsPage,UsageDataDetails,source,{{source}} · {{failed}} scan units could not be read,,active
+limits.provider.customCredits,ui,*,CustomCredits,customCredits,Custom credit service,,active
+limits.customCredits.setup,ui,*,CustomCredits,setup,Connect a usage gateway that reports credits by model. Its API key stays on this device.,,active
+limits.customCredits.name,ui,*,CustomCredits,name,Service name (optional),,active
+limits.customCredits.gateway,ui,*,CustomCredits,gateway,Gateway URL,,active
+limits.customCredits.key,ui,*,CustomCredits,key,API key,,active
+limits.customCredits.keepKey,ui,*,CustomCredits,keepKey,Leave blank to keep the saved key,,active
+limits.customCredits.budgets,ui,*,CustomCredits,budgets,"Enter limits in credits. An empty weekly or monthly limit uses the daily budget × calendar days (UTC+8, Monday start).",,active
+limits.customCredits.budget,ui,*,CustomCredits,budget,{{period}} (budget),,active
+limits.customCredits.saved,ui,*,CustomCredits,saved,Settings saved,,active
+limits.customCredits.failed,ui,*,CustomCredits,failed,"Could not save the settings. Check the gateway URL, key and limits.",,active
+limits.customCredits.partial,ui,*,CustomCredits,partial,Some periods have no complete credit total.,,active
+limits.customCredits.history,ui,*,CustomCredits,history,Daily credit history,,active
+limits.customCredits.reported,ui,*,CustomCredits,reported,{{amount}} credits · billed by gateway,,active
+limits.customCredits.estimated,ui,*,CustomCredits,estimated,{{amount}} credits · estimated,,active
+limits.customCredits.legend,ui,*,CustomCredits,legend,Dark bars show credits billed by the gateway. Light bars allocate each model’s billed credits by daily token use. Gaps have no data.,,active
+limits.customCredits.reference,ui,*,CustomCredits,reference,Dashed line: current daily limit of {{amount}} credits.,,active
+limits.customCredits.partialDay,ui,*,CustomCredits,partialDay,{{amount}} credits · some models unpriced,,active
+limits.customCredits.positive,ui,*,CustomCredits,positive,Enter at least one credit limit. Each limit must be greater than zero.,,active

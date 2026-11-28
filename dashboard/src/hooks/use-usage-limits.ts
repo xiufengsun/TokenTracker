@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getUsageLimits, isLocalhostHost } from "../lib/api";
+import { subscribeCustomCreditChanges } from "../lib/custom-credit-config";
 import { publishUsageLimitsPreloadState } from "../lib/dashboard-preload.js";
 import { LIMIT_ALERTS_PREF_KEY } from "./use-limit-alert-prefs";
 import { sendPredictiveLimitAlerts } from "../lib/limit-alerts.js";
@@ -141,6 +142,17 @@ interface UsageLimitsData {
     secondary_window?: { used_percent: number; reset_at?: string | null; limit_window_seconds?: number | null } | null;
     stale?: boolean;
     cached_at?: string | null;
+  };
+  customCredits?: {
+    configured: boolean;
+    error?: string | null;
+    plan_label?: string;
+    primary_window?: CodexCreditWindow | null;
+    secondary_window?: (CodexCreditWindow & { derived_limit?: boolean }) | null;
+    tertiary_window?: (CodexCreditWindow & { derived_limit?: boolean }) | null;
+    partial?: boolean;
+    daily_history_end?: string;
+    daily_history?: ReadonlyArray<{ date: string; used_credits: number; source: "reported" | "estimated"; partial?: boolean }>;
   };
   // Pay-as-you-go balance card (issue 960): no quota windows, one row per currency.
   deepseek?: {
@@ -319,6 +331,14 @@ export function useUsageLimits(options?: UseUsageLimitsOptions) {
       setIsLoading(false);
     }
   }, [applyHidden, beginRequest, currentHidden, localEnabled, publishSuccessfulState]);
+
+  useEffect(() => {
+    if (!localEnabled || typeof window === "undefined") return;
+    return subscribeCustomCreditChanges(() => {
+      setData((current) => withoutHiddenProviders(current, ["customCredits"]));
+      void refreshFromServerCache();
+    });
+  }, [localEnabled, refreshFromServerCache]);
 
   // Auto-refresh when the dashboard regains focus / becomes visible again —
   // same throttled pattern as use-usage-data.ts, so a left-open Limits page

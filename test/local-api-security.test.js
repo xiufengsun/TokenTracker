@@ -1633,6 +1633,9 @@ test("usage-limits honors hidden=<csv> only on locally authenticated requests", 
     const plain = await requestLimits({ token: undefined });
     assert.equal(plain.statusCode, 200);
     assert.equal(forwarded.at(-1).hiddenProviders, null, "absent parameter forwards null");
+    assert.equal(forwarded.at(-1).allowCustomCredits, false, "private gateway must never be polled without local auth");
+    await requestLimits({ token: localAuthToken });
+    assert.equal(forwarded.at(-1).allowCustomCredits, true);
   } finally {
     usageLimits.getUsageLimits = originalGet;
     usageLimits.resetUsageLimitsCache = originalReset;

@@ -22,6 +22,7 @@ export const LIMIT_PROVIDER_IDS = [
   "workbuddy",
   "workbuddyAi",
   "deepseek",
+  "customCredits",
 ];
 
 /** Keys for ProviderIcon — mono logos use inline SVG; colored logos use /brand-logos/. */
@@ -105,6 +106,8 @@ export function limitProviderName(id) {
       return copy("limits.provider.workbuddy");
     case "workbuddyAi":
       return copy("limits.provider.workbuddy_ai");
+    case "customCredits":
+      return copy("limits.provider.customCredits");
     case "deepseek":
       return copy("limits.provider.deepseek");
     default:

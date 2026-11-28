@@ -43,6 +43,7 @@ const { fetchQoderLimits, fetchQoderCnLimits } = require("./qoder-limits");
 const { fetchArkCodingPlanLimits } = require("./ark-coding-plan-limits");
 const { fetchArkAgentPlanLimits } = require("./ark-agent-plan-limits");
 const { fetchWorkbuddyLimits, fetchWorkbuddyAiLimits } = require("./workbuddy-limits");
+const { fetchCustomCreditLimits, readCreditLimitsConfig } = require("./custom-credits");
 const { fetchDeepseekLimits } = require("./deepseek-limits");
 const { fetchProviderServiceStatus } = require("./provider-status");
 const { resolveKimiProfile } = require("./kimi-profile");
@@ -79,7 +80,7 @@ const USAGE_LIMITS_PROVIDER_IDS = Object.freeze([
   "claude", "codex", "cursor", "gemini", "kimi", "kiro", "grok",
   "copilot", "antigravity", "zcode", "opencodeGo", "commandCode",
   "qoder", "qoderCn", "codingPlan", "agentPlan", "devin",
-  "workbuddy", "workbuddyAi", "deepseek",
+  "workbuddy", "workbuddyAi", "deepseek", "customCredits",
 ]);
 
 // Normalize a caller-supplied hidden-provider list (array, Set, or
@@ -4716,11 +4717,18 @@ async function getUsageLimits(options = {}) {
   // Resolve current routing before any aggregate cache or in-flight selection.
   // Keep this snapshot for the fetch so a settings change during an await cannot
   // publish one backend's response into another backend's cache partition.
-  const claudeBackend = normalizeHiddenProviders(options.hiddenProviders)?.includes("claude")
+  const hidden = normalizeHiddenProviders(options.hiddenProviders);
+  const claudeBackend = hidden?.includes("claude")
     ? null
     : readCustomBackend({ home: options.home || os.homedir(), env: options.env });
   const customOrigin = claudeBackend?.backend === "custom" ? claudeBackend.backend_origin : null;
-  const selection = usageLimitsSelectionKey(options) + (customOrigin ? `-claude:${customOrigin}` : "");
+  // The CLI and native app can change the same account settings from separate
+  // processes. Bind cached and in-flight responses to the exact settings read.
+  const customCreditsConfig = options.allowCustomCredits === false || hidden?.includes("customCredits")
+    ? null : readCreditLimitsConfig(options);
+  const creditKey = customCreditsConfig?.revision;
+  const selection = usageLimitsSelectionKey(options) + (customOrigin ? `-claude:${customOrigin}` : "")
+    + (creditKey ? `-credits:${creditKey}` : "");
   const cache = cacheBySelection[selection];
   const nowMs = Date.now();
   // Unseen selections (a hidden set never requested before this process's
@@ -4735,6 +4743,7 @@ async function getUsageLimits(options = {}) {
   const promise = fetchUsageLimitsUncached({
     ...options,
     claudeBackend,
+    customCreditsConfig,
     selectionKey: selection,
     cacheGeneration,
   }).finally(() => {
@@ -4768,6 +4777,7 @@ async function fetchUsageLimitsUncached({
   // send the parameter keep getting).
   hiddenProviders = null,
   claudeBackend = null,
+  customCreditsConfig = null,
   // Generation captured by getUsageLimits before the fetch began. A provider
   // key save bumps it, and this fetch must then stop at returning its own
   // result: publishing it would restore pre-save data for every later caller.
@@ -4865,7 +4875,7 @@ async function fetchUsageLimitsUncached({
   // (#956).
   const hiddenSentinel = Promise.resolve({ configured: false });
   const hiddenSettled = Promise.resolve({ status: "fulfilled", value: { configured: false } });
-  const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, devinRaw, workbuddy, workbuddyAi, deepseek, claudeServiceStatus] = await Promise.all([
+  const [claudeResult, codexResult, cursor, kimi, gemini, kiro, antigravity, copilot, grok, zcode, opencodeGoRaw, qoder, qoderCn, codingPlan, agentPlan, commandCodeRaw, devinRaw, workbuddy, workbuddyAi, deepseek, customCredits, claudeServiceStatus] = await Promise.all([
     claudeToken && !freshClaudeCache && !claudeRetryAtMs
       ? withProviderTimeout(fetchClaudeUsageLimits(claudeToken, { fetchImpl: providerFetch, maxAttempts: 1 }), "Claude", providerTimeoutMs).then(
           (value) => ({ status: "fulfilled", value }),
@@ -5019,6 +5029,9 @@ async function fetchUsageLimitsUncached({
       "DeepSeek",
       providerTimeoutMs,
     ).catch((reason) => ({ configured: true, error: reason?.message || "Unknown error" })),
+    hiddenSet.has("customCredits") ? hiddenSentinel : fetchCustomCreditLimits({
+      config: customCreditsConfig, fetchImpl: providerFetch, nowMs: injectedNowMs,
+    }),
     // Public status-page probe (fail-soft, own 5-min cache in provider-status.js).
     // Only probed for configured accounts — without a token the Claude section
     // never renders, so the reading would have nowhere to go.
@@ -5537,6 +5550,7 @@ async function fetchUsageLimitsUncached({
     // stamps cached_at/stale on both its live and last-good paths, so pass it
     // through verbatim like grok.
     deepseek,
+    customCredits,
   };
 
   for (const [providerName, provider] of Object.entries(data)) {

@@ -96,13 +96,17 @@ test("unknown price triggers one async refresh, cooldown, revision invalidation 
     return new Promise((resolve) => { finish = resolve; startedResolve(); });
   };
   try {
-    await pricing.ensurePricingLoaded({ cachePath: path.join(tmp, "prices.json"), fetchImpl });
+    const cachePath = path.join(tmp, "prices.json");
+    await pricing.ensurePricingLoaded({ cachePath, fetchImpl });
+    // A Windows file timestamp can lead Date.now() immediately after a write.
+    const ahead = new Date(Date.now() + 2000);
+    await fs.utimes(cachePath, ahead, ahead);
     const before = pricing.getPricingRevision();
     assert.equal(pricing.getModelPricingInfo("second-novel").status, "unpriced");
     pricing.getModelPricing("third-novel");
     const flight = pricing.refreshPricing();
-    await started;
-    assert.equal(calls, 2);
+    await Promise.race([started, flight]);
+    assert.equal(calls, 2, "a forced refresh must reach upstream regardless of file mtime");
     finish({ ...initial, "second-novel": { input_cost_per_token: 3e-6, output_cost_per_token: 4e-6 } });
     await flight;
     assert.ok(pricing.getPricingRevision() > before);

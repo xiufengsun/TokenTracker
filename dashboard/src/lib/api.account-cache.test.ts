@@ -3,6 +3,7 @@ import {
   fetchCloudUsageSummary, fetchCloudUsageDaily, fetchCloudUsageHeatmap, getCommunityModels,
   getUsageHeatmap, getUsageLimits, getUserStatus, getUsageSummary, invalidateAccountResponseCache,
 } from "./api";
+import { clearLocalApiAuthToken } from "./local-api-auth";
 import { expandHeatmapCompact } from "./heatmap-compact";
 
 vi.mock("./insforge-config", () => ({
@@ -28,6 +29,7 @@ const compact = {
 beforeEach(() => invalidateAccountResponseCache());
 afterEach(() => {
   invalidateAccountResponseCache();
+  clearLocalApiAuthToken();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -188,15 +190,18 @@ describe("local API host boundary", () => {
 
   it.each(["localhost", "127.0.0.1"])("preserves local reads on %s", async (hostname) => {
     vi.stubGlobal("window", { location: { hostname, origin: `http://${hostname}:7680` } });
-    const fetch = vi.fn(async (_url: string) => json({ data: [], totals: { total_tokens: 42 } }));
+    const fetch = vi.fn(async (url: string, _init?: RequestInit) => url === "/api/local-auth"
+      ? json({ token: "local-test" }) : json({ data: [], totals: { total_tokens: 42 } }));
     vi.stubGlobal("fetch", fetch);
     await getUsageLimits();
     await getUserStatus();
     await getUsageSummary({ accessToken: jwt(), from: "2026-10-01", to: "2026-10-02" });
-    expect(fetch).toHaveBeenCalledTimes(3);
-    expect(fetch.mock.calls.map(([input]) => new URL(input).origin)).toEqual(Array(3).fill(`http://${hostname}:7680`));
-    expect(fetch.mock.calls.map(([input]) => new URL(input).pathname)).toEqual([
-      "/functions/tokentracker-usage-limits", "/functions/tokentracker-user-status", "/functions/tokentracker-usage-summary",
+    const origin = `http://${hostname}:7680`;
+    const urls = fetch.mock.calls.map(([input]) => new URL(input, origin));
+    expect(urls.map((url) => url.origin)).toEqual(Array(4).fill(origin));
+    expect(urls.map((url) => url.pathname)).toEqual([
+      "/api/local-auth", "/functions/tokentracker-usage-limits", "/functions/tokentracker-user-status", "/functions/tokentracker-usage-summary",
     ]);
+    expect(fetch.mock.calls[1][1]?.headers).toMatchObject({ "x-tokentracker-local-auth": "local-test" });
   });
 });

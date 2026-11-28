@@ -1,6 +1,7 @@
 import React from "react";
 import { Cloud, FlaskConical, Gauge, Globe, Monitor, Palette, Settings, UserRound } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { CustomCreditSettings } from "../components/settings/CustomCreditSettings.jsx";
 import { LimitsSettingsPanel } from "../components/LimitsSettingsPanel.jsx";
 import { AccountSection } from "../components/settings/AccountSection.jsx";
 import { CloudSection } from "../components/settings/CloudSection.jsx";
@@ -201,6 +202,7 @@ export function SettingsPage() {
               }
             />
           </SectionCard>
+          {isLocalDashboardHost() && <CustomCreditSettings active={activeSection === SETTINGS_SECTION_IDS.LIMITS} />}
           <SectionCard title={copy("settings.limits.providers")}>
             <LimitsSettingsPanel prefs={limitsPrefs} />
           </SectionCard>

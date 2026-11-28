@@ -14,6 +14,7 @@ import { buildResetBankRows } from "./usage-limits-reset-bank.js";
 import { PROVIDER_LIMIT_SPECS } from "./usage-limits-provider-specs.js";
 import { HoverTooltip } from "../../components/HoverTooltip.jsx";
 import { cycleView, countdownText, remainingLabel } from "../../../lib/subscription-display.js";
+import { CustomCreditHistory } from "./CustomCreditHistory.jsx";
 import { CursorConnectionControl } from "./CursorConnectionControl.jsx";
 import { saveProviderApiKey } from "../../../lib/api";
 
@@ -1015,6 +1016,7 @@ function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, bad
     .filter((s) => s.window)
     .map((s) => ({ spec: s, mode, pace: paceForSpec(s, mode, now) }));
   const extra = renderProviderExtra(spec.extra, data);
+  const incompleteCreditWindows = id === "customCredits" && data.partial === true && rows.length !== 0;
   return (
     <ToolGroup
       key={id}
@@ -1033,7 +1035,11 @@ function renderConfiguredProvider(id, data, title, mode, expanded, onToggle, bad
         <EnvCredentialNotice providerId={id} data={data} onSaved={onKeySaved} />
       ) : null}
       {subscription ? <SubscriptionBar subscription={subscription} now={now} mode={mode} /> : null}
+      {incompleteCreditWindows ? (
+        <StatusLine>{copy("limits.customCredits.partial")}</StatusLine>
+      ) : null}
       {expanded ? <LimitDetail rows={rows} mode={mode} now={now} /> : null}
+      {expanded && id === "customCredits" ? <CustomCreditHistory endDate={data.daily_history_end} entries={data.daily_history} limit={data.primary_window?.limit_credits} /> : null}
       {expanded && subscription ? (
         <SubscriptionDetail subscription={subscription} now={now} />
       ) : null}
@@ -1085,6 +1091,7 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
       <StatusLine>{copy("limits.claude.custom_backend")}</StatusLine>,
       expanded, onToggle, subscription, now, mode);
   }
+  if (id === "customCredits" && !data?.configured && !subscription) return null;
   if (!data?.configured) {
     return renderUnlinkedProvider(
       id,
@@ -1128,6 +1135,7 @@ function renderProviderGroup(id, data, mode, expanded, onToggle, subscription = 
       id,
       <>
         <StatusLine tone="error">{id === "cursor" && data.auth_action_required === "reauth" ? copy("limits.cursor.connection.expired") : data.error}</StatusLine>
+        {id === "customCredits" ? <CustomCreditHistory endDate={data.daily_history_end} entries={data.daily_history} /> : null}
         {id === "kiro"
           ? renderProviderExtra(PROVIDER_LIMIT_SPECS.kiro.extra, data)
           : null}
@@ -1674,8 +1682,8 @@ function useWidestLabelWidth(containerRef) {
   return labelWidth;
 }
 
-export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi, deepseek, order, visibility, displayMode, subscriptions = [], showSubscriptions = true, onProviderKeySaved = null }) {
-  const dataById = { claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi, deepseek };
+export function UsageLimitsPanel({ claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi, deepseek, customCredits, order, visibility, displayMode, subscriptions = [], showSubscriptions = true, onProviderKeySaved = null }) {
+  const dataById = { claude, codex, cursor, gemini, kimi, kiro, grok, antigravity, copilot, zcode, opencodeGo, commandCode, qoder, qoderCn, codingPlan, agentPlan, devin, workbuddy, workbuddyAi, deepseek, customCredits };
   const containerRef = useRef(null);
   const labelWidth = useWidestLabelWidth(containerRef);
   const [expandedId, setExpandedId] = useState(null);

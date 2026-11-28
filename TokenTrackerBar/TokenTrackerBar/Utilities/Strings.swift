@@ -68,6 +68,15 @@ enum Strings {
     static var cursorGrokBotLabel: String { t("Grok Bot", "Grok Bot", "Grok Bot", "Grok Bot", "Grok Bot") }
     static var codexCreditsLabel: String { t("Credits", "额度", "額度", "クレジット", "크레딧") }
 
+    static var customCreditsTitle: String { t("Custom credits", "自定义服务额度", "自訂服務額度", "カスタムサービスのクレジット", "사용자 지정 서비스 크레딧") }
+    static func derivedCreditPeriod(_ period: String) -> String {
+        t("\(period) est.", "\(period)·折算", "\(period)·折算", "\(period)・換算", "\(period) 환산")
+    }
+
+    static var dailyCreditBudgetExplanation: String {
+        t("Budget = daily limit × calendar days.", "预算按日限额乘以该周期天数折算。", "預算按日限額乘以該週期天數折算。", "日額上限に期間の日数を掛けた予算です。", "일일 한도에 해당 기간의 일수를 곱한 예산입니다.")
+    }
+
     static func limitCreditsDetail(used: Double, total: Double, remaining: Double) -> String {
         let formatter = NumberFormatter()
         formatter.locale = Locale(identifier: loc)

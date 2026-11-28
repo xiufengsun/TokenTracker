@@ -360,6 +360,7 @@ export function LimitsPage() {
                 workbuddy={usageLimits?.workbuddy}
                 workbuddyAi={usageLimits?.workbuddyAi}
                 deepseek={usageLimits?.deepseek}
+                customCredits={usageLimits?.customCredits}
                 order={prefs.order}
                 visibility={prefs.visibility}
                 displayMode={prefs.displayMode}

@@ -152,6 +152,7 @@ describe("useLimitsDisplayPrefs", () => {
         "copilot",
         "cursor",
         "deepseek",
+        "customCredits",
         "devin",
         "gemini",
         "workbuddy",

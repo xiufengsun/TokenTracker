@@ -14,6 +14,7 @@ import {
 } from "./mock-data";
 import { getInsforgeRemoteUrl, getInsforgeAnonKey } from "./insforge-config";
 import { isValidJwtShape, resolveAuthAccessToken, type AuthTokenProvider } from "./auth-token";
+import { customCreditRequestRevision } from "./custom-credit-config";
 import { getLocalApiAuthHeaders } from "./local-api-auth";
 import { expandHeatmapCompact } from "./heatmap-compact";
 import { dataBaseUrlFor, functionUrlFor, fetchFunctionResponse } from "./function-url";
@@ -241,7 +242,8 @@ async function fetchLocalJson(slug: string, params?: AnyRecord, options?: AnyRec
     }
   }
   const { accessToken: _omit, ...fetchOptions } = options || {};
-  return coalesceJsonGet(url.toString(), async () => {
+  const requestKey = slug === PATHS.usageLimits ? url.toString() + "\0" + customCreditRequestRevision() : url.toString();
+  return coalesceJsonGet(requestKey, async () => {
     const response = await fetch(url.toString(), {
       headers: { Accept: "application/json" },
       cache: "no-store",
@@ -837,13 +839,38 @@ export async function getUsageLimits(
   if (hiddenProviders.length > 0 && isLocalhostHost()) {
     params.hidden = hiddenProviders.join(",");
   }
-  if ((params.devin || params.hidden) && isLocalhostHost()) {
+  // The configured private gateway is only available to authenticated local clients.
+  if (isLocalhostHost()) {
     options.headers = {
       Accept: "application/json",
       ...(await getLocalApiAuthHeaders()),
     };
   }
   return fetchLocalJson(PATHS.usageLimits, params, options);
+}
+
+export type CustomCreditConfig = {
+  gatewayBaseUrl: string;
+  displayName?: string;
+  hasApiKey: boolean;
+  dailyCreditLimit: number | null;
+  weeklyCreditLimit: number | null;
+  monthlyCreditLimit: number | null;
+};
+
+export async function customCreditConfig(
+  method: "GET" | "PUT" | "DELETE" = "GET",
+  config?: Omit<CustomCreditConfig, "hasApiKey"> & { apiKey?: string },
+): Promise<CustomCreditConfig> {
+  if (!isLocalhostHost()) throw new Error("Custom credit settings require the local dashboard");
+  const response = await fetch("/functions/tokentracker-custom-credits-config", {
+    method,
+    headers: { "Content-Type": "application/json", ...(await getLocalApiAuthHeaders()) },
+    ...(config ? { body: JSON.stringify(config) } : {}),
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(`Request failed with HTTP ${response.status}`);
+  return response.json();
 }
 
 export type CursorConnection = {
