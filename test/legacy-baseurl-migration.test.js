@@ -12,10 +12,10 @@ const {
   resolveRuntimeConfig,
   isLegacyInsforgeBaseUrl,
   DEFAULT_BASE_URL,
-  DEFAULT_ANON_KEY,
 } = require("../src/lib/runtime-config");
 
 const LEGACY_BASE_URL = "https://b46ug8xu.us-east.insforge.app";
+const OFFICIAL_INGEST_URL = "https://api.tokentracker.cc/functions/tokentracker-ingest";
 
 async function withTempHome(fn) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "tokentracker-legacy-baseurl-"));
@@ -231,8 +231,8 @@ test("sync preserves the legacy device token and replays the queue to the curren
     assert.equal(queueState.note, "reset_after_legacy_baseurl_migration_2026_07");
 
     assert.equal(ingestCalls.length, 1);
-    assert.equal(ingestCalls[0].url, functionUrlFor(DEFAULT_BASE_URL, "tokentracker-ingest"));
-    assert.equal(ingestCalls[0].options.headers.apikey, DEFAULT_ANON_KEY);
+    assert.equal(ingestCalls[0].url, OFFICIAL_INGEST_URL);
+    assert.equal(ingestCalls[0].options.headers.apikey, undefined);
     assert.equal(ingestCalls[0].options.headers.Authorization, "Bearer legacy-token");
     assert.deepEqual(JSON.parse(ingestCalls[0].options.body).hourly, [JSON.parse(queue)]);
 
@@ -241,7 +241,7 @@ test("sync preserves the legacy device token and replays the queue to the curren
     assert.equal(uploadThrottle.lastError, null);
 
     // Second run must not reset again, and a newly pending row must upload
-    // with the current runtime key after the legacy config key was removed.
+    // without an InsForge key after the legacy config key was removed.
     const pendingRow = {
       ...JSON.parse(queue),
       hour_start: "2026-04-20T00:30:00.000Z",
@@ -272,7 +272,8 @@ test("sync preserves the legacy device token and replays the queue to the curren
     assert.equal(after.offset, Buffer.byteLength(queue) + Buffer.byteLength(pendingLine));
     assert.equal(after.note, "manual");
     assert.equal(ingestCalls.length, 2);
-    assert.equal(ingestCalls[1].options.headers.apikey, DEFAULT_ANON_KEY);
+    assert.equal(ingestCalls[1].url, OFFICIAL_INGEST_URL);
+    assert.equal(ingestCalls[1].options.headers.apikey, undefined);
     assert.equal(ingestCalls[1].options.headers.Authorization, "Bearer legacy-token");
     assert.deepEqual(JSON.parse(ingestCalls[1].options.body).hourly, [pendingRow]);
   });
@@ -408,7 +409,7 @@ test("sync removes an unchanged legacy anon key after a concurrent login updates
     await fs.writeFile(throttlePath, JSON.stringify(deadline), "utf8");
     await cmdSync(["--auto", "--publish-account"]);
     assert.equal(ingestCalls.length, 2);
-    assert.equal(ingestCalls[1].headers.apikey, DEFAULT_ANON_KEY);
+    assert.equal(ingestCalls[1].headers.apikey, undefined);
     assert.equal(ingestCalls[1].headers.Authorization, "Bearer current-login-token");
   });
 });
@@ -899,6 +900,6 @@ test("init leaves the migration marker for sync, which preserves credentials and
     assert.equal(afterSync.deviceId, "legacy-device");
     assert.equal(afterSync.machineId, "machine-1");
     assert.equal(ingestCalls.length, 1);
-    assert.equal(ingestCalls[0].url, functionUrlFor(DEFAULT_BASE_URL, "tokentracker-ingest"));
+    assert.equal(ingestCalls[0].url, OFFICIAL_INGEST_URL);
   });
 });

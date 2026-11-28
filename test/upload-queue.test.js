@@ -168,7 +168,8 @@ test("local checkpoint failure remains an error when the request deadline has ex
   let signal;
   global.fetch = (input, options) => { signal = options.signal; return realFetch(input, options); };
   fs.rename = async (from, to) => {
-    if (to !== x.queueStatePath) return realRename(from, to);
+    // The in-flight marker is written before the request; fail the checkpoint after it.
+    if (to !== x.queueStatePath || !signal) return realRename(from, to);
     if (!signal.aborted) await new Promise(resolve => signal.addEventListener("abort", resolve, { once: true }));
     throw Object.assign(new Error("checkpoint denied"), { code: "EACCES" });
   };
@@ -179,7 +180,11 @@ test("local checkpoint failure remains an error when the request deadline has ex
       assert.equal(error.uploadResult.batches, 1);
       return true;
     });
-    assert.equal(JSON.parse(await fs.readFile(x.queueStatePath, "utf8")).offset, 0);
+    const state = JSON.parse(await fs.readFile(x.queueStatePath, "utf8"));
+    assert.equal(state.offset, 0);
+    // The batch reached the cloud but the cursor did not move: the marker stays
+    // so the account view treats the cloud baseline as unknown.
+    assert.equal(typeof state.uploadingSince, "string");
   } finally { global.fetch = realFetch; fs.rename = realRename; }
 });
 

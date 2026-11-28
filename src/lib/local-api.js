@@ -9,7 +9,7 @@ const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
 const { setImmediate: yieldToRequests } = require("node:timers/promises");
 const { createAsyncQueueReader } = require("./async-queue-reader");
-const { DEFAULT_BASE_URL, resolveRuntimeConfig, assertInsforgeRuntime, normalizeInstanceBaseUrl, clearDeviceIdentity, resetInstanceState } = require("./runtime-config");
+const { DEFAULT_BASE_URL, CLOUDFLARE_API_URL, dataBaseUrlFor, resolveRuntimeConfig, assertInsforgeRuntime, normalizeInstanceBaseUrl, clearDeviceIdentity, resetInstanceState } = require("./runtime-config");
 const {
   filterRowsByUsageScope,
   getSourceScope,
@@ -18,10 +18,12 @@ const {
 } = require("./source-metadata");
 const { accountSlugFor, fetchAccountUsage, mintAccessToken, invalidateCloudAccountPayloadCache, getCloudAccountSessionGeneration } = require("./cloud-account");
 const { resetCloudDeviceUsage, readCloudUsageReset } = require("./cloud-usage-reset");
+const { createPendingUploadReader, mergeAccountPayload, readUploadStateSync } = require("./account-pending-overlay");
 const { getOrCreateMachineId, computeStableMachineId } = require("./machine-id");
 const { functionUrlFor, fetchFunctionResponse } = require("./function-url");
 const { createCloudDeviceTokenStore } = require("./cloud-device-token");
 const { parseBearerToken } = require("./bearer-token");
+const { t3QuotaSourceConfig, isT3QuotaAuthorized, buildT3QuotaResponse } = require("./t3-quota-source");
 const { writeJsonAtomicSync } = require("./atomic-json");
 const { negotiateEncoding } = require("./accept-encoding");
 const { createLocalUsageTransfer, MAX_BYTES: LOCAL_USAGE_MAX_BYTES } = require("./local-usage-transfer");
@@ -783,6 +785,287 @@ async function aggregateHourlyByDay(rows, dayKey, timeZoneContext) {
 }
 
 // ---------------------------------------------------------------------------
+// Usage payload builders
+// ---------------------------------------------------------------------------
+// One function per local usage endpoint, from queue rows to the response body
+// (without scope fields). The account view reuses them to price this device's
+// not-yet-uploaded usage exactly as the local view does.
+
+function withUsageScope(payload, scope, excludedSources) {
+  return { ...payload, scope, excluded_sources: excludedSources };
+}
+
+async function buildUsageSummaryPayload(rows, url) {
+  const from = url.searchParams.get("from") || "";
+  const to = url.searchParams.get("to") || "";
+  const timeZoneContext = getTimeZoneContext(url);
+  const allDaily = await aggregateByDay(rows, timeZoneContext);
+  const daily = allDaily.filter((d) => d.day >= from && d.day <= to);
+  const totals = daily.reduce(
+    (acc, r) => {
+      acc.total_tokens += r.total_tokens;
+      acc.billable_total_tokens += r.billable_total_tokens;
+      acc.total_cost_usd += r.total_cost_usd || 0;
+      acc.input_tokens += r.input_tokens;
+      acc.output_tokens += r.output_tokens;
+      acc.cached_input_tokens += r.cached_input_tokens;
+      acc.cache_creation_input_tokens += r.cache_creation_input_tokens;
+      acc.reasoning_output_tokens += r.reasoning_output_tokens;
+      acc.conversation_count += r.conversation_count;
+      return acc;
+    },
+    { total_tokens: 0, billable_total_tokens: 0, total_cost_usd: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0 },
+  );
+  const totalCost = totals.total_cost_usd;
+
+  const todayParts = getZonedParts(new Date(), timeZoneContext);
+  const todayStr = formatPartsDayKey(todayParts) || new Date().toISOString().slice(0, 10);
+
+  const shiftDay = (dayStr, delta) => {
+    const d = new Date(`${dayStr}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + delta);
+    return d.toISOString().slice(0, 10);
+  };
+  const collectDays = (n) => {
+    const out = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const ds = shiftDay(todayStr, -i);
+      const dd = allDaily.find((x) => x.day === ds);
+      if (dd) out.push(dd);
+    }
+    return out;
+  };
+  const sumDays = (days) =>
+    days.reduce((a, r) => {
+      a.billable_total_tokens += r.billable_total_tokens;
+      a.conversation_count += r.conversation_count;
+      return a;
+    }, { billable_total_tokens: 0, conversation_count: 0 });
+
+  const l7 = collectDays(7);
+  const l30 = collectDays(30);
+  const l7t = sumDays(l7);
+  const l30t = sumDays(l30);
+  const l7fromStr = shiftDay(todayStr, -6);
+  const l30fromStr = shiftDay(todayStr, -29);
+
+  return {
+    from, to, days: daily.length,
+    totals: { ...totals, total_cost_usd: totalCost.toFixed(6) },
+    rolling: {
+      last_7d: { from: l7fromStr, to: todayStr, active_days: l7.length, totals: l7t },
+      last_30d: { from: l30fromStr, to: todayStr, active_days: l30.length, totals: l30t, avg_per_active_day: l30.length > 0 ? Math.round(l30t.billable_total_tokens / l30.length) : 0 },
+    },
+  };
+}
+
+async function buildUsageDailyPayload(rows, url) {
+  const from = url.searchParams.get("from") || "";
+  const to = url.searchParams.get("to") || "";
+  const timeZoneContext = getTimeZoneContext(url);
+  const daily = (await aggregateByDay(rows, timeZoneContext)).filter((d) => d.day >= from && d.day <= to);
+  return { from, to, data: daily };
+}
+
+async function buildUsageHeatmapPayload(rows, url) {
+  const weeks = parseInt(url.searchParams.get("weeks") || "52", 10);
+  const timeZoneContext = getTimeZoneContext(url);
+  const daily = await aggregateByDay(rows, timeZoneContext);
+  const todayParts = getZonedParts(new Date(), timeZoneContext);
+  const todayStr = formatPartsDayKey(todayParts) || new Date().toISOString().slice(0, 10);
+  const end = new Date(`${todayStr}T00:00:00Z`);
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - weeks * 7 + 1);
+  const from = start.toISOString().slice(0, 10);
+  const to = end.toISOString().slice(0, 10);
+  const byDay = new Map(daily.map((d) => [d.day, d]));
+
+  const allValues = daily.map((d) => d.billable_total_tokens).filter((v) => v > 0);
+  const maxValue = allValues.length > 0 ? Math.max(...allValues) : 0;
+  const calcLevel = (v) => {
+    if (v <= 0) return 0;
+    if (maxValue === 0) return 1;
+    const r = v / maxValue;
+    if (r <= 0.25) return 1;
+    if (r <= 0.5) return 2;
+    if (r <= 0.75) return 3;
+    return 4;
+  };
+
+  // Build cells and group into weeks (array of 7-cell arrays) for the dashboard
+  const cells = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const day = cursor.toISOString().slice(0, 10);
+    const data = byDay.get(day);
+    const billable = data?.billable_total_tokens || 0;
+    cells.push({ day, total_tokens: data?.total_tokens || 0, billable_total_tokens: billable, level: calcLevel(billable), models: data?.models || null });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  const weeksArr = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    weeksArr.push(cells.slice(i, i + 7));
+  }
+
+  let totalCostUsd = 0;
+  for (const d of daily) {
+    if (d.day >= from && d.day <= to) {
+      totalCostUsd += d.total_cost_usd || 0;
+    }
+  }
+
+  return {
+    from,
+    to,
+    week_starts_on: "sun",
+    active_days: cells.filter((c) => c.billable_total_tokens > 0).length,
+    streak_days: 0,
+    weeks: weeksArr,
+    total_cost_usd: totalCostUsd
+  };
+}
+
+async function buildUsageModelBreakdownPayload(rows, url) {
+  const from = url.searchParams.get("from") || "";
+  const to = url.searchParams.get("to") || "";
+  const timeZoneContext = getTimeZoneContext(url);
+  const pricingRevision = getPricingRevision();
+  const bySource = new Map();
+  let processed = 0;
+  for (const row of rows) {
+    if (++processed % AGGREGATION_BATCH_ROWS === 0) await yieldToRequests();
+    if (!row.hour_start) continue;
+    const day = rowDayKey(row, timeZoneContext);
+    if (day < from || day > to) continue;
+    const src = row.source || "unknown";
+    const mdl = row.model || "unknown";
+    if (!bySource.has(src))
+      bySource.set(src, { source: src, source_scope: getSourceScope(src), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0, total_cost_usd: "0" }, models: new Map() });
+    const sa = bySource.get(src);
+    sa.totals.total_tokens += row.total_tokens || 0;
+    sa.totals.billable_total_tokens += row.billable_total_tokens ?? row.total_tokens ?? 0;
+    sa.totals.input_tokens += row.input_tokens || 0;
+    sa.totals.output_tokens += row.output_tokens || 0;
+    sa.totals.cached_input_tokens += row.cached_input_tokens || 0;
+    sa.totals.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
+    sa.totals.reasoning_output_tokens += row.reasoning_output_tokens || 0;
+    // Request-only sources (#948: credit-billed transcripts that report no
+    // tokens) carry their activity solely as conversation_count — thread it
+    // through so the dashboard can surface "0 tokens / N requests".
+    sa.totals.conversation_count += row.conversation_count || 0;
+    if (!sa.models.has(mdl))
+      sa.models.set(mdl, { model: mdl, model_id: mdl, pricing: getModelPricingInfo(mdl, { source: src }), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0, total_cost_usd: "0" } });
+    const ma = sa.models.get(mdl);
+    if (hasUnknownBackendCost(row)) ma.pricing = getModelPricingInfo(mdl, row);
+    const coverage = normalizeCostCoverage(row.cost_coverage);
+    const reportedCost = coverage ? coverage.reported_events > 0 : ["grok", "cline"].includes(src) && Number(row.total_cost_usd) > 0;
+    const costSource = reportedCost && coverage?.missing_events > 0 ? "mixed"
+      : coverage?.allocated_events > 0 ? "allocated" : reportedCost ? "provider_reported" : "model_pricing";
+    if (coverage?.allocated_events > 0) ma.has_allocated_cost = true;
+    ma.cost_source = ma.cost_source && ma.cost_source !== costSource ? "mixed" : costSource;
+    ma.totals.total_tokens += row.total_tokens || 0;
+    ma.totals.billable_total_tokens += row.billable_total_tokens ?? row.total_tokens ?? 0;
+    ma.totals.input_tokens += row.input_tokens || 0;
+    ma.totals.output_tokens += row.output_tokens || 0;
+    ma.totals.cached_input_tokens += row.cached_input_tokens || 0;
+    ma.totals.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
+    ma.totals.reasoning_output_tokens += row.reasoning_output_tokens || 0;
+    ma.totals.conversation_count += row.conversation_count || 0;
+    // Price each row, exactly as aggregateByDay does for the hero (#653).
+    // computeRowCost is not linear for models with a Fast tier or
+    // long-context rates: priority_* / long_context_* mark a subset of the
+    // base columns rather than adding volume, so they survive only while the
+    // row is intact. Summing the base columns first and pricing once silently
+    // dropped every premium — same tokens, fewer dollars than the hero.
+    ma.totals.total_cost_usd = Number(ma.totals.total_cost_usd || 0) + computeRowCost(row);
+    // Surface the Fast/Ultrafast split (issue 886): per-tier cost allocation
+    // plus the observed subset token columns. Tier costs and the implicit
+    // standard tier (total minus both) always add up to total_cost_usd.
+    const tierCosts = computeRowTierCosts(row);
+    ma.totals.priority_cost_usd = Number(ma.totals.priority_cost_usd || 0) + tierCosts.priority;
+    ma.totals.ultrafast_cost_usd = Number(ma.totals.ultrafast_cost_usd || 0) + tierCosts.ultrafast;
+    for (const prefix of SPEED_TIER_SUBSET_PREFIXES) {
+      for (const field of SPEED_TIER_SUBSET_TOKEN_FIELDS) {
+        const key = `${prefix}${field}`;
+        ma.totals[key] = (ma.totals[key] || 0) + (Number(row[key]) || 0);
+      }
+    }
+  }
+  if (pricingRevision !== getPricingRevision()) return buildUsageModelBreakdownPayload(rows, url);
+
+  const sources = Array.from(bySource.values()).map((s) => {
+    s.models = Array.from(s.models.values())
+      .map((m) => ({
+        ...m,
+        totals: {
+          ...m.totals,
+          total_cost_usd: Number(m.totals.total_cost_usd || 0).toFixed(6),
+          priority_cost_usd: Number(m.totals.priority_cost_usd || 0).toFixed(6),
+          ultrafast_cost_usd: Number(m.totals.ultrafast_cost_usd || 0).toFixed(6),
+        },
+      }))
+      .sort((a, b) => b.totals.total_tokens - a.totals.total_tokens);
+    const sourceCost = s.models.reduce((sum, m) => sum + Number(m.totals.total_cost_usd), 0);
+    s.totals.total_cost_usd = sourceCost.toFixed(6);
+    return s;
+  });
+
+  return {
+    from, to, days: 0, sources,
+    pricing: { model: "per-model", pricing_mode: "per_token_type", source: "litellm", effective_from: new Date().toISOString().slice(0, 10) },
+  };
+}
+
+async function buildUsageHourlyPayload(rows, url) {
+  const day = url.searchParams.get("day") || new Date().toISOString().slice(0, 10);
+  const timeZoneContext = getTimeZoneContext(url);
+  const data = await aggregateHourlyByDay(rows, day, timeZoneContext);
+  return { day, data };
+}
+
+async function buildUsageMonthlyPayload(rows, url) {
+  const from = url.searchParams.get("from") || "";
+  const to = url.searchParams.get("to") || "";
+  const timeZoneContext = getTimeZoneContext(url);
+  const byMonth = new Map();
+  let processed = 0;
+  for (const row of rows) {
+    if (++processed % AGGREGATION_BATCH_ROWS === 0) await yieldToRequests();
+    if (!row.hour_start) continue;
+    const day = rowDayKey(row, timeZoneContext);
+    if (!day || day < from || day > to) continue;
+    const month = day.slice(0, 7);
+    if (!byMonth.has(month))
+      byMonth.set(month, { month, total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0 });
+    const a = byMonth.get(month);
+    a.total_tokens += row.total_tokens || 0;
+    a.billable_total_tokens += row.billable_total_tokens ?? row.total_tokens ?? 0;
+    a.input_tokens += row.input_tokens || 0;
+    a.output_tokens += row.output_tokens || 0;
+    a.cached_input_tokens += row.cached_input_tokens || 0;
+    a.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
+    a.reasoning_output_tokens += row.reasoning_output_tokens || 0;
+    a.conversation_count += row.conversation_count || 0;
+
+    if (!a.models) {
+      a.models = {};
+    }
+    const model = row.model || "unknown";
+    a.models[model] = (a.models[model] || 0) + (row.total_tokens || 0);
+  }
+  return { from, to, data: Array.from(byMonth.values()).sort((a, b) => a.month.localeCompare(b.month)) };
+}
+
+const USAGE_PAYLOAD_BUILDERS = {
+  "tokentracker-usage-summary": buildUsageSummaryPayload,
+  "tokentracker-usage-daily": buildUsageDailyPayload,
+  "tokentracker-usage-heatmap": buildUsageHeatmapPayload,
+  "tokentracker-usage-model-breakdown": buildUsageModelBreakdownPayload,
+  "tokentracker-usage-hourly": buildUsageHourlyPayload,
+  "tokentracker-usage-monthly": buildUsageMonthlyPayload,
+};
+
+// ---------------------------------------------------------------------------
 // Sync helper
 // ---------------------------------------------------------------------------
 
@@ -1158,6 +1441,7 @@ function buildProxyHeaders(headers) {
 // ---------------------------------------------------------------------------
 
 function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir: isolatedTrackerDataDir = null, syncContext = null }) {
+  const t3QuotaSource = t3QuotaSourceConfig(process.env);
   const qp = queuePath || resolveQueuePath();
   const localUsage = createLocalUsageTransfer({ queuePath: qp, normalizeRow: normalizeQueueRow,
     identity: () => ({ id: getOrCreateMachineId(qp), name: getSystemDeviceName(), platform: process.platform }) });
@@ -1251,7 +1535,11 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
     if (runtime.configurationError || (!fs.existsSync(runtimeConfigPath) && !fs.existsSync(qp))) return runtime;
     const fingerprint = fingerprintFor(runtime);
     if (fingerprint !== instanceFingerprint) {
-      if (instanceFingerprint || runtime.baseUrl !== DEFAULT_BASE_URL) {
+      const officialCutover = runtime.sessionMigrationFrom === DEFAULT_BASE_URL &&
+        (!instanceFingerprint || instanceFingerprint === fingerprintFor({
+          baseUrl: runtime.sessionMigrationFrom, anonKey: runtime.anonKey,
+        }));
+      if (!officialCutover && (instanceFingerprint || runtime.baseUrl !== DEFAULT_BASE_URL)) {
         clearRelayCookies("backend instance changed");
         _nativeAuthPending = false; _nativeAuthExpiry = 0;
         resetInstanceState(path.dirname(qp));
@@ -1655,6 +1943,92 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
     try { return Boolean(readCloudUsageReset(trackerDataDir)); } catch { return true; }
   }
 
+  // Folds this device's not-yet-uploaded usage into the cloud aggregate (see
+  // account-pending-overlay.js). Free-tier uploads run once per UTC day, so
+  // without this the account view's Today stayed at 0 until tomorrow (#1132).
+  const pendingUploadReader = createPendingUploadReader({ normalizeRow: normalizeQueueRow });
+  const ACCOUNT_FALLBACK_UPLOAD_IN_PROGRESS = "transient-upload-in-progress";
+
+  // Local URLs that rebuild the delta over the cloud response's own bounds, so
+  // both sides of the merge cover the same days. null when the cloud payload
+  // lacks the bounds the merge needs.
+  function overlayBuildPlan(usageSlug, url, cloud) {
+    const withParams = (params, { utc = false } = {}) => {
+      const next = new URL(url.href);
+      for (const [key, value] of Object.entries(params)) next.searchParams.set(key, value);
+      if (utc) { next.searchParams.delete("tz"); next.searchParams.delete("tz_offset_minutes"); }
+      return next;
+    };
+    const isDay = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+    const daily = (from, to) => (isDay(from) && isDay(to) && from <= to
+      ? { build: buildUsageDailyPayload, url: withParams({ from, to }) }
+      : null);
+    switch (usageSlug) {
+      case "tokentracker-usage-daily":
+        return daily(cloud.from, cloud.to);
+      case "tokentracker-usage-model-breakdown":
+        return isDay(cloud.from) && isDay(cloud.to)
+          ? { build: buildUsageModelBreakdownPayload, url: withParams({ from: cloud.from, to: cloud.to }) }
+          : null;
+      case "tokentracker-usage-monthly":
+        // The monthly edge buckets by UTC day.
+        return isDay(cloud.from) && isDay(cloud.to)
+          ? { build: buildUsageMonthlyPayload, url: withParams({ from: cloud.from, to: cloud.to }, { utc: true }) }
+          : null;
+      case "tokentracker-usage-hourly":
+        return isDay(cloud.day) ? { build: buildUsageHourlyPayload, url: withParams({ day: cloud.day }) } : null;
+      case "tokentracker-usage-heatmap": {
+        if (!Array.isArray(cloud.weeks)) return null;
+        const days = cloud.weeks.flat().map((cell) => cell?.day).filter(isDay).sort();
+        return days.length ? daily(days[0], days[days.length - 1]) : null;
+      }
+      case "tokentracker-usage-summary": {
+        const bounds = [cloud.from, cloud.to, cloud.rolling?.last_7d?.from, cloud.rolling?.last_7d?.to,
+          cloud.rolling?.last_30d?.from, cloud.rolling?.last_30d?.to].filter(isDay).sort();
+        return bounds.length ? daily(bounds[0], bounds[bounds.length - 1]) : null;
+      }
+      default:
+        return null;
+    }
+  }
+
+  // Returns the payload to serve, or ACCOUNT_FALLBACK_UPLOAD_IN_PROGRESS when
+  // an upload ran or is running alongside the cloud read: the cloud may or may
+  // not hold that batch yet, so no sum is safe and the client keeps its last
+  // snapshot for one poll instead. Cursors without a known baseline never get
+  // an overlay, so their cloud payload is served as before.
+  async function overlayPendingUpload(usageSlug, url, cloud, uploadAtStart) {
+    const { key, baselineKnown, uploading, delta } = await pendingUploadReader.read(qp);
+    const overlayApplies = baselineKnown || uploading ||
+      Boolean(uploadAtStart?.baselineKnown || uploadAtStart?.uploading);
+    if (overlayApplies && (key !== (uploadAtStart?.key ?? "") || uploading)) return ACCOUNT_FALLBACK_UPLOAD_IN_PROGRESS;
+    if (!delta) return cloud;
+    const plan = overlayBuildPlan(usageSlug, url, cloud);
+    if (!plan) return cloud;
+    const [plus, minus] = await Promise.all([plan.build(delta.after, plan.url), plan.build(delta.before, plan.url)]);
+    let newlyActiveDays;
+    if (usageSlug === "tokentracker-usage-summary") {
+      // The cloud counts a day as active once any device uploaded a row for
+      // it. Days this device had already uploaded rows for are active there;
+      // a day only its pending rows touch is counted as new. (Another device
+      // may have made it active already; the window clamp bounds that.)
+      const timeZoneContext = getTimeZoneContext(url);
+      const pendingDays = new Set(delta.after.map((row) => rowDayKey(row, timeZoneContext)));
+      const earliest = delta.after.reduce((min, row) => (row.hour_start < min ? row.hour_start : min), delta.after[0].hour_start);
+      const horizon = new Date(Date.parse(earliest) - 2 * 86400000).toISOString();
+      const uploadedDays = new Set();
+      for (const hourStart of delta.uploadedHourStarts) {
+        if (hourStart >= horizon) uploadedDays.add(rowDayKey({ hour_start: hourStart }, timeZoneContext));
+      }
+      newlyActiveDays = (from, to) => {
+        let count = 0;
+        for (const day of pendingDays) if (day && day >= from && day <= to && !uploadedDays.has(day)) count += 1;
+        return count;
+      };
+    }
+    return mergeAccountPayload(usageSlug, cloud, plus, minus, { newlyActiveDays });
+  }
+
   // Every transient reason is prefixed "transient-"; clients only need the
   // prefix, so new reasons can be added without a client change.
   function classifyAccountFallback(err) {
@@ -1682,6 +2056,10 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
     if (!refreshToken) return ACCOUNT_FALLBACK_SIGNED_OUT;
     if (cloudUsageRebuildPending()) return ACCOUNT_FALLBACK_CLOUD_REBUILD_PENDING;
     invalidateAfterAccountUpload();
+    // Taken before the cloud read starts; compared after it to detect an
+    // upload that overlapped the read (see overlayPendingUpload).
+    const includeLocalPending = !url.searchParams.get("device_id");
+    const uploadAtStart = includeLocalPending ? readUploadStateSync(qp) : null;
     const runtime = getRuntime();
     if (runtime.configurationError) return ACCOUNT_FALLBACK_SIGNED_OUT;
     const failureKey = `${runtime.baseUrl}\0${refreshToken}`;
@@ -1717,6 +2095,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           baseUrl: runtime.baseUrl || DEFAULT_BASE_URL,
           anonKey: runtime.anonKey,
           refreshToken,
+          preferCloudflare: true,
           timeoutMs: requestTimeoutMs,
           onSessionRefreshed: (session) => {
             getRuntime();
@@ -1769,6 +2148,18 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         rememberAccountViewFailure(failureKey);
         return "transient-upstream";
       }
+      let body = out.data;
+      try {
+        if (includeLocalPending) body = await overlayPendingUpload(usageSlug, url, out.data, uploadAtStart);
+      } catch (error) {
+        // The cloud aggregate is still correct, just behind: serve it as is.
+        if (getRuntime().debug) console.warn("[LocalAPI] pending-upload overlay failed:", error?.message || error);
+      }
+      if (body === ACCOUNT_FALLBACK_UPLOAD_IN_PROGRESS) return body;
+      getRuntime();
+      if (sessionAtStart !== getCloudAccountSessionGeneration()) {
+        throw Object.assign(new Error("Account session changed"), { code: "auth_session_changed" });
+      }
       if (!getCloudSyncPref()) return ACCOUNT_FALLBACK_CLOUD_SYNC_OFF;
       if (cloudPrefAtStart !== cloudSyncPrefGeneration) {
         json(res, { error: "Cloud sync preference changed", code: "CLOUD_SYNC_CHANGED" }, 409);
@@ -1784,7 +2175,7 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         "Cache-Control": "no-store",
         "X-TokenTracker-Account-View": "1",
       });
-      res.end(JSON.stringify(out.data));
+      res.end(JSON.stringify(body));
       return "served";
     } catch (e) {
       const currentSession = getCloudAccountSessionGeneration();
@@ -1947,7 +2338,9 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       if (String(req.method).toUpperCase() !== "GET") { json(res, { error: "Method Not Allowed" }, 405); return true; }
       const descriptor = { baseUrl: normalizeInstanceBaseUrl(selectedRuntime.baseUrl) || "",
         anonKey: selectedRuntime.configurationError ? null : selectedRuntime.anonKey,
-        dashboardUrl: normalizeInstanceBaseUrl(selectedRuntime.dashboardUrl) || "", configurationError: selectedRuntime.configurationError };
+        dashboardUrl: normalizeInstanceBaseUrl(selectedRuntime.dashboardUrl) || "", configurationError: selectedRuntime.configurationError,
+        sessionMigration: process.env.TOKENTRACKER_SESSION_MIGRATION === "1",
+        cloudflareReads: dataBaseUrlFor(selectedRuntime.baseUrl) === CLOUDFLARE_API_URL };
       const value = JSON.stringify(descriptor).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
       res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
       res.end(`window.__TOKENTRACKER_RUNTIME_CONFIG__=${value};`);
@@ -2081,6 +2474,13 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
       try {
         const targetUrl = `${insforgeBase.replace(/\/$/, "")}${p}${url.search || ""}`;
         const proxyHeaders = buildProxyHeaders(req.headers);
+        // This server already verified the dashboard's loopback origin. The upstream
+        // receives a server request; the local WebView port is not a hosted web origin.
+        delete proxyHeaders.origin;
+        delete proxyHeaders.referer;
+        // Negotiate only codecs supported by this Node runtime. Chrome also
+        // advertises zstd, which embedded Node 22 cannot decode.
+        delete proxyHeaders["accept-encoding"];
         // Browser cookies survive changes to the loopback server's backend.
         // Only this instance's captured cookies can be relayed, including when
         // switching from a custom instance back to the official service.
@@ -2280,8 +2680,10 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
           return true;
         }
         const allowRelayCapture = proxyRes.status < 400;
+        // fetch has already decoded gzip/br. The upstream byte count and
+        // encoding no longer describe the body returned on loopback.
         const responseHeaders = [...proxyRes.headers.entries()]
-          .filter(([k]) => !["transfer-encoding", "connection"].includes(k.toLowerCase()))
+          .filter(([k]) => !["transfer-encoding", "connection", "content-encoding", "content-length"].includes(k.toLowerCase()))
           .map(([k, v]) => {
             if (k.toLowerCase() === "set-cookie") {
               const rewritten = v.replace(/;\s*[Dd]omain=[^;]*/g, "; Domain=localhost");
@@ -2762,79 +3164,15 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
 
     // --- usage-summary ---
     if (p === "/functions/tokentracker-usage-summary") {
-      const from = url.searchParams.get("from") || "";
-      const to = url.searchParams.get("to") || "";
-      const timeZoneContext = getTimeZoneContext(url);
       const { rows, scope, excludedSources } = await scopedQueueRows(qp, url);
-      const allDaily = await aggregateByDay(rows, timeZoneContext);
-      const daily = allDaily.filter((d) => d.day >= from && d.day <= to);
-      const totals = daily.reduce(
-        (acc, r) => {
-          acc.total_tokens += r.total_tokens;
-          acc.billable_total_tokens += r.billable_total_tokens;
-          acc.total_cost_usd += r.total_cost_usd || 0;
-          acc.input_tokens += r.input_tokens;
-          acc.output_tokens += r.output_tokens;
-          acc.cached_input_tokens += r.cached_input_tokens;
-          acc.cache_creation_input_tokens += r.cache_creation_input_tokens;
-          acc.reasoning_output_tokens += r.reasoning_output_tokens;
-          acc.conversation_count += r.conversation_count;
-          return acc;
-        },
-        { total_tokens: 0, billable_total_tokens: 0, total_cost_usd: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0 },
-      );
-      const totalCost = totals.total_cost_usd;
-
-      const todayParts = getZonedParts(new Date(), timeZoneContext);
-      const todayStr = formatPartsDayKey(todayParts) || new Date().toISOString().slice(0, 10);
-
-      const shiftDay = (dayStr, delta) => {
-        const d = new Date(`${dayStr}T00:00:00Z`);
-        d.setUTCDate(d.getUTCDate() + delta);
-        return d.toISOString().slice(0, 10);
-      };
-      const collectDays = (n) => {
-        const out = [];
-        for (let i = n - 1; i >= 0; i--) {
-          const ds = shiftDay(todayStr, -i);
-          const dd = allDaily.find((x) => x.day === ds);
-          if (dd) out.push(dd);
-        }
-        return out;
-      };
-      const sumDays = (days) =>
-        days.reduce((a, r) => {
-          a.billable_total_tokens += r.billable_total_tokens;
-          a.conversation_count += r.conversation_count;
-          return a;
-        }, { billable_total_tokens: 0, conversation_count: 0 });
-
-      const l7 = collectDays(7);
-      const l30 = collectDays(30);
-      const l7t = sumDays(l7);
-      const l30t = sumDays(l30);
-      const l7fromStr = shiftDay(todayStr, -6);
-      const l30fromStr = shiftDay(todayStr, -29);
-
-      json(res, {
-        from, to, days: daily.length, scope, excluded_sources: excludedSources,
-        totals: { ...totals, total_cost_usd: totalCost.toFixed(6) },
-        rolling: {
-          last_7d: { from: l7fromStr, to: todayStr, active_days: l7.length, totals: l7t },
-          last_30d: { from: l30fromStr, to: todayStr, active_days: l30.length, totals: l30t, avg_per_active_day: l30.length > 0 ? Math.round(l30t.billable_total_tokens / l30.length) : 0 },
-        },
-      });
+      json(res, withUsageScope(await buildUsageSummaryPayload(rows, url), scope, excludedSources));
       return true;
     }
 
     // --- usage-daily ---
     if (p === "/functions/tokentracker-usage-daily") {
-      const from = url.searchParams.get("from") || "";
-      const to = url.searchParams.get("to") || "";
-      const timeZoneContext = getTimeZoneContext(url);
       const { rows, scope, excludedSources } = await scopedQueueRows(qp, url);
-      const daily = (await aggregateByDay(rows, timeZoneContext)).filter((d) => d.day >= from && d.day <= to);
-      json(res, { from, to, scope, excluded_sources: excludedSources, data: daily });
+      json(res, withUsageScope(await buildUsageDailyPayload(rows, url), scope, excludedSources));
       return true;
     }
 
@@ -2945,12 +3283,9 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         const afterBuildCacheKey = sessionsResponseCacheKey(cacheParams);
         const body = JSON.stringify({ from, to, ...result });
         const afterSerializeCacheKey = sessionsResponseCacheKey(cacheParams);
-        const incomplete = Boolean(sessions.sidecarReadFailed) ||
-          (Array.isArray(sessions.incompleteDirs) && sessions.incompleteDirs.length > 0) ||
-          result.skipped_files !== 0;
         const cacheable = Boolean(afterBuildCacheKey) &&
           afterBuildCacheKey === afterSerializeCacheKey &&
-          !incomplete;
+          result.data_health.status !== "partial";
         const entry = rememberSessionsResponse(cacheable ? afterBuildCacheKey : null, Buffer.from(body));
         await sendSessionsResponse(req, res, entry);
       } catch (error) {
@@ -2971,158 +3306,15 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
 
     // --- usage-heatmap ---
     if (p === "/functions/tokentracker-usage-heatmap") {
-      const weeks = parseInt(url.searchParams.get("weeks") || "52", 10);
-      const timeZoneContext = getTimeZoneContext(url);
       const { rows, scope, excludedSources } = await scopedQueueRows(qp, url);
-      const daily = await aggregateByDay(rows, timeZoneContext);
-      const todayParts = getZonedParts(new Date(), timeZoneContext);
-      const todayStr = formatPartsDayKey(todayParts) || new Date().toISOString().slice(0, 10);
-      const end = new Date(`${todayStr}T00:00:00Z`);
-      const start = new Date(end);
-      start.setUTCDate(start.getUTCDate() - weeks * 7 + 1);
-      const from = start.toISOString().slice(0, 10);
-      const to = end.toISOString().slice(0, 10);
-      const byDay = new Map(daily.map((d) => [d.day, d]));
-
-      const allValues = daily.map((d) => d.billable_total_tokens).filter((v) => v > 0);
-      const maxValue = allValues.length > 0 ? Math.max(...allValues) : 0;
-      const calcLevel = (v) => {
-        if (v <= 0) return 0;
-        if (maxValue === 0) return 1;
-        const r = v / maxValue;
-        if (r <= 0.25) return 1;
-        if (r <= 0.5) return 2;
-        if (r <= 0.75) return 3;
-        return 4;
-      };
-
-      // Build cells and group into weeks (array of 7-cell arrays) for the dashboard
-      const cells = [];
-      const cursor = new Date(start);
-      while (cursor <= end) {
-        const day = cursor.toISOString().slice(0, 10);
-        const data = byDay.get(day);
-        const billable = data?.billable_total_tokens || 0;
-        cells.push({ day, total_tokens: data?.total_tokens || 0, billable_total_tokens: billable, level: calcLevel(billable), models: data?.models || null });
-        cursor.setUTCDate(cursor.getUTCDate() + 1);
-      }
-      const weeksArr = [];
-      for (let i = 0; i < cells.length; i += 7) {
-        weeksArr.push(cells.slice(i, i + 7));
-      }
-
-      let totalCostUsd = 0;
-      for (const d of daily) {
-        if (d.day >= from && d.day <= to) {
-          totalCostUsd += d.total_cost_usd || 0;
-        }
-      }
-
-      json(res, { 
-        from, 
-        to, 
-        scope, 
-        excluded_sources: excludedSources, 
-        week_starts_on: "sun", 
-        active_days: cells.filter((c) => c.billable_total_tokens > 0).length, 
-        streak_days: 0, 
-        weeks: weeksArr,
-        total_cost_usd: totalCostUsd
-      });
+      json(res, withUsageScope(await buildUsageHeatmapPayload(rows, url), scope, excludedSources));
       return true;
     }
 
     // --- usage-model-breakdown ---
     if (p === "/functions/tokentracker-usage-model-breakdown") {
-      const from = url.searchParams.get("from") || "";
-      const to = url.searchParams.get("to") || "";
-      const timeZoneContext = getTimeZoneContext(url);
-      const { rows: scopedRows, scope, excludedSources } = await scopedQueueRows(qp, url);
-      const pricingRevision = getPricingRevision();
-      const bySource = new Map();
-      let processed = 0;
-      for (const row of scopedRows) {
-        if (++processed % AGGREGATION_BATCH_ROWS === 0) await yieldToRequests();
-        if (!row.hour_start) continue;
-        const day = rowDayKey(row, timeZoneContext);
-        if (day < from || day > to) continue;
-        const src = row.source || "unknown";
-        const mdl = row.model || "unknown";
-        if (!bySource.has(src))
-          bySource.set(src, { source: src, source_scope: getSourceScope(src), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0, total_cost_usd: "0" }, models: new Map() });
-        const sa = bySource.get(src);
-        sa.totals.total_tokens += row.total_tokens || 0;
-        sa.totals.billable_total_tokens += row.billable_total_tokens ?? row.total_tokens ?? 0;
-        sa.totals.input_tokens += row.input_tokens || 0;
-        sa.totals.output_tokens += row.output_tokens || 0;
-        sa.totals.cached_input_tokens += row.cached_input_tokens || 0;
-        sa.totals.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
-        sa.totals.reasoning_output_tokens += row.reasoning_output_tokens || 0;
-        // Request-only sources (#948: credit-billed transcripts that report no
-        // tokens) carry their activity solely as conversation_count — thread it
-        // through so the dashboard can surface "0 tokens / N requests".
-        sa.totals.conversation_count += row.conversation_count || 0;
-        if (!sa.models.has(mdl))
-          sa.models.set(mdl, { model: mdl, model_id: mdl, pricing: getModelPricingInfo(mdl, { source: src }), totals: { total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0, total_cost_usd: "0" } });
-        const ma = sa.models.get(mdl);
-        if (hasUnknownBackendCost(row)) ma.pricing = getModelPricingInfo(mdl, row);
-        const coverage = normalizeCostCoverage(row.cost_coverage);
-        const reportedCost = coverage ? coverage.reported_events > 0 : ["grok", "cline"].includes(src) && Number(row.total_cost_usd) > 0;
-        const costSource = reportedCost && coverage?.missing_events > 0 ? "mixed"
-          : coverage?.allocated_events > 0 ? "allocated" : reportedCost ? "provider_reported" : "model_pricing";
-        if (coverage?.allocated_events > 0) ma.has_allocated_cost = true;
-        ma.cost_source = ma.cost_source && ma.cost_source !== costSource ? "mixed" : costSource;
-        ma.totals.total_tokens += row.total_tokens || 0;
-        ma.totals.billable_total_tokens += row.billable_total_tokens ?? row.total_tokens ?? 0;
-        ma.totals.input_tokens += row.input_tokens || 0;
-        ma.totals.output_tokens += row.output_tokens || 0;
-        ma.totals.cached_input_tokens += row.cached_input_tokens || 0;
-        ma.totals.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
-        ma.totals.reasoning_output_tokens += row.reasoning_output_tokens || 0;
-        ma.totals.conversation_count += row.conversation_count || 0;
-        // Price each row, exactly as aggregateByDay does for the hero (#653).
-        // computeRowCost is not linear for models with a Fast tier or
-        // long-context rates: priority_* / long_context_* mark a subset of the
-        // base columns rather than adding volume, so they survive only while the
-        // row is intact. Summing the base columns first and pricing once silently
-        // dropped every premium — same tokens, fewer dollars than the hero.
-        ma.totals.total_cost_usd = Number(ma.totals.total_cost_usd || 0) + computeRowCost(row);
-        // Surface the Fast/Ultrafast split (issue 886): per-tier cost allocation
-        // plus the observed subset token columns. Tier costs and the implicit
-        // standard tier (total minus both) always add up to total_cost_usd.
-        const tierCosts = computeRowTierCosts(row);
-        ma.totals.priority_cost_usd = Number(ma.totals.priority_cost_usd || 0) + tierCosts.priority;
-        ma.totals.ultrafast_cost_usd = Number(ma.totals.ultrafast_cost_usd || 0) + tierCosts.ultrafast;
-        for (const prefix of SPEED_TIER_SUBSET_PREFIXES) {
-          for (const field of SPEED_TIER_SUBSET_TOKEN_FIELDS) {
-            const key = `${prefix}${field}`;
-            ma.totals[key] = (ma.totals[key] || 0) + (Number(row[key]) || 0);
-          }
-        }
-      }
-      if (pricingRevision !== getPricingRevision()) return handleLocalApi(req, res, url);
-
-      const sources = Array.from(bySource.values()).map((s) => {
-        s.models = Array.from(s.models.values())
-          .map((m) => ({
-            ...m,
-            totals: {
-              ...m.totals,
-              total_cost_usd: Number(m.totals.total_cost_usd || 0).toFixed(6),
-              priority_cost_usd: Number(m.totals.priority_cost_usd || 0).toFixed(6),
-              ultrafast_cost_usd: Number(m.totals.ultrafast_cost_usd || 0).toFixed(6),
-            },
-          }))
-          .sort((a, b) => b.totals.total_tokens - a.totals.total_tokens);
-        const sourceCost = s.models.reduce((sum, m) => sum + Number(m.totals.total_cost_usd), 0);
-        s.totals.total_cost_usd = sourceCost.toFixed(6);
-        return s;
-      });
-
-      json(res, {
-        from, to, days: 0, scope, excluded_sources: excludedSources, sources,
-        pricing: { model: "per-model", pricing_mode: "per_token_type", source: "litellm", effective_from: new Date().toISOString().slice(0, 10) },
-      });
+      const { rows, scope, excludedSources } = await scopedQueueRows(qp, url);
+      json(res, withUsageScope(await buildUsageModelBreakdownPayload(rows, url), scope, excludedSources));
       return true;
     }
 
@@ -3735,47 +3927,15 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
 
     // --- usage-hourly (stub for day-view) ---
     if (p === "/functions/tokentracker-usage-hourly") {
-      const day = url.searchParams.get("day") || new Date().toISOString().slice(0, 10);
-      const timeZoneContext = getTimeZoneContext(url);
       const { rows, scope, excludedSources } = await scopedQueueRows(qp, url);
-      const data = await aggregateHourlyByDay(rows, day, timeZoneContext);
-      json(res, { day, scope, excluded_sources: excludedSources, data });
+      json(res, withUsageScope(await buildUsageHourlyPayload(rows, url), scope, excludedSources));
       return true;
     }
 
     // --- usage-monthly (stub for trend view) ---
     if (p === "/functions/tokentracker-usage-monthly") {
-      const from = url.searchParams.get("from") || "";
-      const to = url.searchParams.get("to") || "";
-      const timeZoneContext = getTimeZoneContext(url);
       const { rows, scope, excludedSources } = await scopedQueueRows(qp, url);
-      const byMonth = new Map();
-      let processed = 0;
-      for (const row of rows) {
-        if (++processed % AGGREGATION_BATCH_ROWS === 0) await yieldToRequests();
-        if (!row.hour_start) continue;
-        const day = rowDayKey(row, timeZoneContext);
-        if (!day || day < from || day > to) continue;
-        const month = day.slice(0, 7);
-        if (!byMonth.has(month))
-          byMonth.set(month, { month, total_tokens: 0, billable_total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, cache_creation_input_tokens: 0, reasoning_output_tokens: 0, conversation_count: 0 });
-        const a = byMonth.get(month);
-        a.total_tokens += row.total_tokens || 0;
-        a.billable_total_tokens += row.billable_total_tokens ?? row.total_tokens ?? 0;
-        a.input_tokens += row.input_tokens || 0;
-        a.output_tokens += row.output_tokens || 0;
-        a.cached_input_tokens += row.cached_input_tokens || 0;
-        a.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
-        a.reasoning_output_tokens += row.reasoning_output_tokens || 0;
-        a.conversation_count += row.conversation_count || 0;
-
-        if (!a.models) {
-          a.models = {};
-        }
-        const model = row.model || "unknown";
-        a.models[model] = (a.models[model] || 0) + (row.total_tokens || 0);
-      }
-      json(res, { from, to, scope, excluded_sources: excludedSources, data: Array.from(byMonth.values()).sort((a, b) => a.month.localeCompare(b.month)) });
+      json(res, withUsageScope(await buildUsageMonthlyPayload(rows, url), scope, excludedSources));
       return true;
     }
 
@@ -4066,6 +4226,35 @@ function createLocalApiHandler({ queuePath, serverVersion = null, trackerDataDir
         generated_at: new Date().toISOString(),
         achievements: computeLocalAchievements(queueRows, projectRows, { timeZoneContext }),
       });
+      return true;
+    }
+
+    if (p === "/functions/tokentracker-t3-quota") {
+      if (!t3QuotaSource) {
+        json(res, { error: "Quota source is disabled" }, 404);
+      } else if (req.method !== "GET") {
+        res.setHeader("Allow", "GET");
+        json(res, { error: "Method Not Allowed" }, 405);
+      } else if (!isT3QuotaAuthorized(req.headers?.authorization, t3QuotaSource)) {
+        json(res, { error: "Unauthorized" }, 401);
+      } else {
+        try {
+          const { getUsageLimits, USAGE_LIMITS_PROVIDER_IDS } = require("./usage-limits");
+          const snapshot = await getUsageLimits({
+            home: os.homedir(),
+            trackerDir: trackerDataDir,
+            env: process.env,
+            platform: process.platform,
+            hiddenProviders: USAGE_LIMITS_PROVIDER_IDS.filter((id) => id !== "kimi"),
+            providerTimeoutMs: 6500,
+          });
+          const report = buildT3QuotaResponse(snapshot.kimi, t3QuotaSource.providerInstanceId);
+          if (report) json(res, report);
+          else json(res, { error: "Fresh Kimi quota unavailable" }, 503);
+        } catch {
+          json(res, { error: "Fresh Kimi quota unavailable" }, 503);
+        }
+      }
       return true;
     }
 

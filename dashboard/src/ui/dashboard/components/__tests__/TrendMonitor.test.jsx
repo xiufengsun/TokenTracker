@@ -1,5 +1,6 @@
 import React from "react";
-import { act, fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The zoom modal pulls in use-trend-data (a .ts hook imported with a .js
@@ -29,6 +30,29 @@ describe("getTrendMonitorScale", () => {
 describe("TrendMonitor", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("links a pinned daily observation and its model to filtered sessions", () => {
+    const onSessionDrilldown = vi.fn((event) => event.preventDefault());
+    const rows = [{ day: "2026-11-24", total_tokens: 300, models: { "gpt-test": 300 } }];
+    render(<MemoryRouter>
+      <TrendMonitor period="week" rows={rows} onSessionDrilldown={onSessionDrilldown} />
+    </MemoryRouter>);
+    const bar = screen.getByRole("button", { name: /Nov/ });
+    fireEvent.mouseEnter(bar);
+    expect(screen.queryByRole("link")).toBeNull();
+    fireEvent.keyDown(bar, { key: "Enter" });
+    const day = screen.getByRole("link", { name: "View related sessions" });
+    expect(day).toHaveTextContent("Sessions");
+    expect(day.parentElement).toHaveTextContent("Nov 24, 2026");
+    expect(document.activeElement).toBe(day);
+    expect(day.getAttribute("href")).toBe("/sessions?from=2026-11-24&to=2026-11-24&sort=tokens");
+    const model = screen.getByRole("link", { name: "View sessions for gpt-test" });
+    expect(model.getAttribute("href")).toContain("&model=gpt-test");
+    fireEvent.click(model);
+    expect(onSessionDrilldown).toHaveBeenCalledOnce();
+    fireEvent.keyDown(day, { key: "Escape" });
+    expect(document.activeElement).toBe(bar);
   });
 
   it("keeps normal bars visible when a single day is an outlier", () => {

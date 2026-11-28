@@ -204,6 +204,17 @@ describe("SessionsPage", () => {
     expect(document.body.textContent).not.toContain("{time}");
   });
 
+  it("shows confirmed scan gaps without implying that model prices are unavailable", async () => {
+    getSessions.mockResolvedValue({
+      ...response,
+      data_health: { status: "partial", skipped_units: 2, sources: [{ source: "grok", status: "partial", failed_units: 2 }] },
+    });
+    render(<SessionsPage />);
+    fireEvent.click(await screen.findByText(copy("sessions.coverage.partial")));
+    expect(screen.getByText(copy("usage.evidence.coverage", { skipped: 2 }))).toBeVisible();
+    expect(screen.getByText(/2 scan units could not be read/)).toBeVisible();
+  });
+
   it("shows unknown-only Claude session cost as Unpriced instead of free", async () => {
     getSessions.mockResolvedValue({ ...response, session_count: 1, returned_count: 1,
       sessions: [{ ...response.sessions[0], cost_usd: 0, cost_is_partial: true }] });
@@ -759,6 +770,22 @@ describe("SessionsPage", () => {
     expect(await screen.findByText("Fix authentication flow")).toBeInTheDocument();
     expect(screen.getByText("Debug local proxy")).toBeInTheDocument();
     await waitFor(() => expect(getSessions).toHaveBeenCalledTimes(2));
+  });
+
+  it("includes all casing variants in a model drilldown", async () => {
+    window.history.replaceState(null, "", "/sessions?model=GPT-5.6-SOL&sort=tokens");
+    const sessions = [
+      makeThreadSession({ title: "First model spelling", model: "gpt-5.6-sol", own_total_tokens: 100 }),
+      makeThreadSession({ title: "Second model spelling", model: " GPT-5.6-SOL ", own_total_tokens: 200, session_hash: "second-spelling" }),
+      response.sessions[0],
+    ];
+    getSessions.mockResolvedValue({ ...response, sessions });
+    render(<SessionsPage />);
+    await screen.findByText("First model spelling");
+    const rows = screen.getAllByRole("button", { name: /View statistics for/ });
+    expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual([
+      "View statistics for Second model spelling", "View statistics for First model spelling",
+    ]);
   });
 
   it("filters whole mixed model sessions and recomputes their full own consumption", async () => {

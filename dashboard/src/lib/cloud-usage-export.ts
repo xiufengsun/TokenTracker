@@ -1,5 +1,6 @@
 import { resolveAuthAccessToken, isValidJwtShape, type AuthTokenProvider } from "./auth-token";
-import { functionUrlFor, fetchFunctionResponse } from "./function-url";
+import { dataBaseUrlFor, functionUrlFor, fetchFunctionResponse } from "./function-url";
+import { CLOUDFLARE_API_URL } from "./insforge-deployment-config.mjs";
 import { getInsforgeRemoteUrl, getInsforgeAnonKey } from "./insforge-config";
 import { saveCloudUsageExport } from "./native-bridge.js";
 
@@ -49,6 +50,7 @@ export async function fetchCloudUsageExport({ userId, auth, from, to, deviceId =
     throw new CloudUsageExportError("export_invalid_scope", 400);
   const baseUrl = getInsforgeRemoteUrl(), anonKey = getInsforgeAnonKey();
   if (!baseUrl) throw new CloudUsageExportError("export_instance_changed", 409);
+  const dataBaseUrl = dataBaseUrlFor(baseUrl);
   const check = () => {
     if (signal?.aborted) throw new CloudUsageExportError("export_cancelled", 409);
     assertCurrent();
@@ -60,7 +62,8 @@ export async function fetchCloudUsageExport({ userId, auth, from, to, deviceId =
     const token = await resolveAuthAccessToken(auth);
     check();
     tokenOwner(token || "", userId);
-    const url = new URL(functionUrlFor(baseUrl, slug));
+    const origin = slug === "tokentracker-billing" ? baseUrl : dataBaseUrl;
+    const url = new URL(functionUrlFor(origin, slug));
     for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
     const requestController = new AbortController();
     const abort = () => requestController.abort();
@@ -69,7 +72,8 @@ export async function fetchCloudUsageExport({ userId, auth, from, to, deviceId =
     try {
       const response = await fetchFunctionResponse(url.toString(), { method: "GET", cache: "no-store", redirect: "error",
         signal: requestController.signal,
-        headers: { Accept: "application/json", Authorization: "Bearer " + token, ...(anonKey ? { apikey: anonKey } : {}) } }, fetchImpl);
+        headers: { Accept: "application/json", Authorization: "Bearer " + token,
+          ...(anonKey && origin !== CLOUDFLARE_API_URL ? { apikey: anonKey } : {}) } }, fetchImpl);
       check();
       if (!response.ok) throw new CloudUsageExportError(response.status === 401 ? "export_auth_required"
         : response.status === 402 || response.status === 403 ? "export_access_denied" : "export_failed", response.status);
@@ -103,7 +107,7 @@ export async function fetchCloudUsageExport({ userId, auth, from, to, deviceId =
     return result;
   }).sort((a: { day: string }, b: { day: string }) => a.day.localeCompare(b.day));
   check();
-  return { schema: "tokentracker.cloud-usage.v1", metadata: { source: "cloud", backend_origin: new URL(baseUrl).origin,
+  return { schema: "tokentracker.cloud-usage.v1", metadata: { source: "cloud", backend_origin: new URL(dataBaseUrl).origin,
     exported_at: new Date().toISOString(), timezone: "UTC", requested_range: { from, to },
     effective_range: { from: data.from, to: data.to }, device_scope: deviceId ? "selected" : "all",
     aggregation: "daily_all_providers", cost_currency: "USD", cost_basis: "estimated", row_count: rows.length }, rows };

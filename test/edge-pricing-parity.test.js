@@ -133,7 +133,7 @@ test("Grok 4.7 and Grok 4.7 Build Fast are explicitly priced on the edge too", (
   // Without explicit keys these ids only reached the right numbers through
   // the "grok-4.7" / "grok-4.7"+fast fuzzy matchers, which would silently
   // follow any future edit to the Cursor entries instead of these SKUs.
-  const models = ["grok-4.7", "grok-4.7-build-fast"];
+  const models = ["grok-4.7", "grok-4.7-latest", "grok-4.7-build-fast"];
   for (const name of [CANONICAL, ...MIRRORS]) {
     const { code } = transformSync(extractBlock(name), { loader: "ts", target: "es2020" });
     const edgePricing = vm.runInNewContext(`${code}\ngetModelPricing;`);
@@ -172,7 +172,9 @@ test("canonical pricing block retains regression-prone entries and matcher order
     '"cursor-grok-4.7"',
     '"cursor-grok-4.7-fast"',
     '"grok-4.7"',
+    '"grok-4.7-latest"',
     '"grok-4.7-build-fast"',
+    '"qwen4-max-preview"',
     '"composer-2.5"',
     '"composer-2.5-fast"',
     '"gemini-4-argon"',

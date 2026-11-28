@@ -1296,7 +1296,7 @@ function localDataApiPlugin() {
   };
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, ROOT_DIR, "VITE_");
   const backendConfiguration = validateInsforgeBuildEnv(env);
   if (backendConfiguration.errorCode)
@@ -1339,7 +1339,7 @@ export default defineConfig(({ mode }) => {
       react(),
       richLinkMetaPlugin(),
       routeSeoPagesPlugin(),
-      localDataApiPlugin(),
+      ...(command === "serve" ? [localDataApiPlugin()] : []),
     ],
     ...(Object.keys(define).length ? { define } : {}),
     build: {

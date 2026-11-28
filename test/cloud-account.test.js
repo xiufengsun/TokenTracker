@@ -18,6 +18,24 @@ const {
   __resetCloudAccountCacheForTests,
 } = require("../src/lib/cloud-account");
 
+test("official Cloudflare account reads preserve the old bearer without falling back to InsForge", async () => {
+  const calls = [];
+  await assert.rejects(fetchAccountFunction({
+    slug: "tokentracker-account-summary",
+    anonKey: "public-anon",
+    accessToken: "legacy-access",
+    preferCloudflare: true,
+    fetchImpl: async (url, options) => {
+      calls.push([new URL(url).hostname, options]);
+      return jsonResponse({}, false, 503);
+    },
+  }), { status: 503 });
+  assert.deepEqual(calls.map(([host]) => host), ["api.tokentracker.cc"]);
+  assert.equal(calls[0][1].headers.apikey, undefined);
+  assert.equal(calls[0][1].headers.Authorization, "Bearer legacy-access");
+  assert.equal(calls[0][1].redirect, "error");
+});
+
 function b64url(obj) {
   return Buffer.from(JSON.stringify(obj)).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }

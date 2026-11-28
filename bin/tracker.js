@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /* eslint-disable no-console */
 
+process.env.TOKENTRACKER_SESSION_MIGRATION ??= '1';
+
 const { run } = require('../src/cli');
 const { stripDebugFlag } = require('../src/lib/debug-flags');
 const {

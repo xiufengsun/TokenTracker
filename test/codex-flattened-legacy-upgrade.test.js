@@ -108,3 +108,27 @@ test("#1052 legacy groups with named buckets still split and zero stale unknown"
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test("#1130 a partial legacy cursor resumes from the latest per-model queue rows", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tt-1130-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const queuePath = path.join(dir, "queue.jsonl");
+  const named = "gpt-5.6-sol";
+  const before = lines([[named, 12], ["unknown", 204458], [named, 51133406]].map(
+    ([model, n]) => ({ source: "codex", model, hour_start: HOUR2, ...totals(n) }),
+  ));
+  await fs.writeFile(queuePath, before);
+  let cursors = { hourly: { version: 3, buckets: {
+    [`codex|${named}|${HOUR2}`]: { totals: totals(96003), queuedKey: null },
+    [`codex|unknown|${HOUR2}`]: { totals: totals(108455), alignedModel: named },
+  }, groupQueued: { [`codex|${HOUR2}`]: "old" } } };
+  for (let run = 0; run < 2; run++) {
+    const result = await parseRolloutIncremental({ rolloutFiles: [], cursors, queuePath });
+    assert.equal(result.bucketsQueued, 0);
+    assert.equal(await fs.readFile(queuePath, "utf8"), before);
+    assert.equal(cursors.hourly.buckets[`codex|${named}|${HOUR2}`].totals.total_tokens, 51133406);
+    assert.equal(cursors.hourly.buckets[`codex|unknown|${HOUR2}`].totals.total_tokens, 204458);
+    assert.deepEqual(cursors.hourly.groupQueued, {});
+    cursors = JSON.parse(JSON.stringify(cursors));
+  }
+});

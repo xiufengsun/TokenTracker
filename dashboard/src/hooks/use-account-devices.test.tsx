@@ -17,10 +17,21 @@ describe("useAccountDevices", () => {
   it("feeds imported local devices into the existing device controls without cloud authentication", async () => {
     vi.mocked(readLocalUsageDevices).mockResolvedValue({ revision: 3,
       devices: [{ id: "local:laptop", device_name: "Laptop", total_tokens: 100 }], account_sources: [] });
-    const { result } = renderHook(() => useAccountDevices({ localView: true, from: "2026-10-01", to: "2026-10-31" }));
+    const { result, rerender } = renderHook(({ from }) =>
+      useAccountDevices({ localView: true, from, to: "2026-10-31" }), {
+      initialProps: { from: "2026-10-01" },
+    });
+    expect(result.current.localReady).toBe(false);
     await waitFor(() => expect(result.current.devices[0]?.id).toBe("local:laptop"));
     expect(result.current.revision).toBe(3);
+    expect(result.current.localReady).toBe(true);
     expect(fetchAccountDevices).not.toHaveBeenCalled();
+
+    vi.mocked(readLocalUsageDevices).mockRejectedValueOnce(new Error("Device lookup failed"));
+    rerender({ from: "2026-10-02" });
+    expect(result.current.localReady).toBe(false);
+    await waitFor(() => expect(result.current.error).toBe("Device lookup failed"));
+    expect(result.current.localReady).toBe(false);
   });
 
   it("returns devices in account view", async () => {

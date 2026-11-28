@@ -491,7 +491,15 @@ test("parseCommandCodeIncremental corrects an unversioned ledger even when file 
     assert.deepEqual(cursors.commandCode.messages[messageKey].totals, { input_tokens: 100, cached_input_tokens: 600, cache_creation_input_tokens: 50, output_tokens: 20 });
     assert.deepEqual(cursors.hourly.buckets[hourlyKey].totals, corrected);
     assert.deepEqual(cursors.projectHourly.buckets[projectBucketKey].totals, corrected);
-    assert.deepEqual(cursors.commandCode.files[filePath], { size, mtimeMs });
+    const cursorFile = cursors.commandCode.files[filePath];
+    assert.deepEqual(
+      { size: cursorFile.size, mtimeMs: cursorFile.mtimeMs },
+      { size, mtimeMs },
+    );
+    assert.equal(typeof cursorFile.ino, "number");
+    assert.equal(typeof cursorFile.ctimeMs, "number");
+    assert.equal(typeof cursorFile.nlink, "number");
+    assert.equal(typeof cursorFile.contentHash, "string");
     const currentStat = fs.statSync(filePath);
     assert.equal(currentStat.size, size);
     assert.equal(currentStat.mtimeMs, mtimeMs, "migration must not depend on a transcript rewrite");
@@ -672,6 +680,44 @@ test("parseCommandCodeIncremental reconciles a rewritten transcript (resume/comp
 
     const repeat = await parseCommandCodeIncremental({ sessionFiles: [filePath], cursors, queuePath });
     assert.equal(repeat.eventsAggregated, 0, "a serialized rerun adds nothing");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseCommandCodeIncremental rereads an equal-size rewrite with a preserved mtime", async () => {
+  const { dir, filePath } = makeTree({
+    sessionId: "sess-equal-size-rewrite",
+    lines: [
+      headerLine("sess-equal-size-rewrite"),
+      messageLine({ id: "m1", inputTokens: 1000, outputTokens: 100 }),
+    ],
+  });
+  const queuePath = path.join(dir, "queue.jsonl");
+  const cursors = {};
+
+  try {
+    await parseCommandCodeIncremental({ sessionFiles: [filePath], cursors, queuePath });
+    const before = fs.statSync(filePath);
+    const replacement = [
+      headerLine("sess-equal-size-rewrite"),
+      messageLine({ id: "m1", inputTokens: 2000, outputTokens: 100 }),
+    ].join("\n") + "\n";
+    assert.equal(Buffer.byteLength(replacement), before.size);
+    fs.writeFileSync(filePath, replacement, "utf8");
+    fs.utimesSync(filePath, before.atime, before.mtime);
+    const collision = fs.statSync(filePath);
+    Object.assign(cursors.commandCode.files[filePath], {
+      size: collision.size,
+      mtimeMs: collision.mtimeMs,
+      ino: collision.ino,
+      ctimeMs: collision.ctimeMs,
+      nlink: collision.nlink,
+    });
+
+    const result = await parseCommandCodeIncremental({ sessionFiles: [filePath], cursors, queuePath });
+    assert.equal(result.eventsAggregated, 1);
+    assert.equal(latestCommandCodeTokens(queuePath), 2100);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1304,7 +1350,6 @@ test("Command Code refreshes Unicode/whitespace-prefixed project headers through
       handle.read = async (...readArgs) => {
         const result = await read(...readArgs);
         headerReadBytes += result.bytesRead;
-        assert.equal(result.buffer.toString("utf8").includes(secret), false);
         return result;
       };
       return handle;
@@ -1322,7 +1367,7 @@ test("Command Code refreshes Unicode/whitespace-prefixed project headers through
     assert.equal(refreshed.projectBucketsQueued, 1);
     assert.equal(opens, 1);
     assert.ok(stats >= 1);
-    assert.ok(headerReadBytes > 0 && headerReadBytes <= headerBytes, "only the header byte range is read");
+    assert.ok(headerReadBytes > headerBytes, "content hashing also reads the transcript body");
     assert.deepEqual(commandCodeRows(options.projectQueuePath), [lifecycleProjectRow()]);
     assert.deepEqual(fs.readFileSync(options.queuePath), hourlyBytes);
     const currentStat = fs.statSync(filePath);
@@ -1540,7 +1585,7 @@ test("Command Code uses one descriptor for cold reads and short Unicode header r
     const repeat = await parseCommandCodeIncremental(options);
     assert.equal(repeat.recordsProcessed, 0);
     assert.equal(repeat.eventsAggregated, 0);
-    assert.deepEqual({ opens, fullReads, stats, closes }, { opens: 2, fullReads: 1, stats: 4, closes: 2 });
+    assert.deepEqual({ opens, fullReads, stats, closes }, { opens: 2, fullReads: 1, stats: 5, closes: 2 });
     assert.ok(reads > 1, "short reads must loop until the Unicode header is complete");
     assert.deepEqual(commandCodeRows(options.queuePath), [LIFECYCLE_ROW]);
     assert.deepEqual(commandCodeRows(options.projectQueuePath), [lifecycleProjectRow()]);

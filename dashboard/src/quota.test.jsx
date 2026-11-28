@@ -25,6 +25,20 @@ describe("desktop quota interactions", () => {
     expect(screen.queryByRole("meter")).not.toBeInTheDocument();
     expect(postMessage).toHaveBeenCalledWith("quota:collapse");
   });
+
+  it("keeps the last measured reading visible and labels it delayed after a provider timeout", () => {
+    let receive;
+    window.chrome = { webview: { postMessage: vi.fn(), addEventListener: (_, callback) => { receive = callback; }, removeEventListener: vi.fn() } };
+    render(<QuotaWidget />);
+    const sendContext = (limits) => act(() => receive({
+      data: { type: "quota:context", locale: "en", selected: ["codex:5h"], limits },
+    }));
+    sendContext({ codex: { configured: true, primary_window: { used_percent: 28 } } });
+    expect(screen.getByText("72")).toBeVisible();
+    sendContext({ codex: { configured: true, error: "timed out" } });
+    expect(screen.getByText("72")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveAccessibleName("Update delayed");
+  });
 });
 
 it("closes from compact and expanded views without expanding or opening the dashboard", () => {

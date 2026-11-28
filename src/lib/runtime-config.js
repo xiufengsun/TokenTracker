@@ -1,4 +1,5 @@
 const DEFAULT_BASE_URL = "https://srctyff5.us-east.insforge.app";
+const CLOUDFLARE_API_URL = "https://api.tokentracker.cc";
 // InsForge projects this product has retired. b46ug8xu was production until
 // the 2026-04-19 migration to srctyff5 (0.5.67, commit 73f461b8); init
 // preserves any persisted config.baseUrl, so installs initialized before the
@@ -17,6 +18,11 @@ const DEFAULT_HTTP_TIMEOUT_MS = 20_000;
 const DEFAULT_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3OC0xMjM0LTU2NzgtOTBhYi1jZGVmMTIzNDU2NzgiLCJlbWFpbCI6ImFub25AaW5zZm9yZ2UuY29tIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExNDU5NDd9.T0auta_IrVIh0uXW1bob5QSnzvsnJmN28r5XkSGEuQY";
 
+function dataBaseUrlFor(baseUrl) {
+  const origin = normalizeInstanceBaseUrl(baseUrl);
+  return origin === DEFAULT_BASE_URL ? CLOUDFLARE_API_URL : origin;
+}
+
 function resolveRuntimeConfig({ cli = {}, config = {}, env = process.env, defaults = {} } = {}) {
   // Older Windows test runs could leak their fixture HOME and persist
   // https://example.invalid into the user's real config.json. The test
@@ -34,7 +40,9 @@ function resolveRuntimeConfig({ cli = {}, config = {}, env = process.env, defaul
   const configBase = normalizeInstanceBaseUrl(persistedBaseUrl || DEFAULT_BASE_URL);
   const envBase = normalizeInstanceBaseUrl(env?.TOKENTRACKER_INSFORGE_BASE_URL || baseUrl.value);
   const defaultBase = normalizeInstanceBaseUrl(defaults.baseUrl || DEFAULT_BASE_URL);
-  const custom = selectedBase !== DEFAULT_BASE_URL;
+  const custom = selectedBase !== DEFAULT_BASE_URL && selectedBase !== CLOUDFLARE_API_URL;
+  // Even two official deployments keep separate sessions until the device explicitly signs in.
+  const requireTokenBinding = selectedBase !== DEFAULT_BASE_URL;
   const anonKey = pickString(
     cli.anonKey,
     configBase === selectedBase ? config.anonKey : undefined,
@@ -51,9 +59,10 @@ function resolveRuntimeConfig({ cli = {}, config = {}, env = process.env, defaul
   );
   const deviceToken = pickString(
     cli.deviceToken,
-    configBase === selectedBase && (!custom || normalizeInstanceBaseUrl(config.deviceTokenBaseUrl) === selectedBase)
+    configBase === selectedBase && (normalizeInstanceBaseUrl(config.deviceTokenBaseUrl) === selectedBase ||
+      (!requireTokenBinding && !config.deviceTokenBaseUrl))
       ? config.deviceToken : undefined,
-    envBase === selectedBase && (!custom || normalizeInstanceBaseUrl(env?.TOKENTRACKER_INSFORGE_BASE_URL) === selectedBase)
+    envBase === selectedBase && (!requireTokenBinding || normalizeInstanceBaseUrl(env?.TOKENTRACKER_INSFORGE_BASE_URL) === selectedBase)
       ? env?.TOKENTRACKER_DEVICE_TOKEN : undefined,
     defaultBase === selectedBase ? defaults.deviceToken : undefined,
     null,
@@ -79,8 +88,13 @@ function resolveRuntimeConfig({ cli = {}, config = {}, env = process.env, defaul
     : !normalizeInstanceBaseUrl(dashboardUrl.value) ? "invalid_dashboard_url"
     : unsafeKey ? "invalid_insforge_anon_key"
     : custom && !anonKey.value ? "custom_insforge_anon_key_required" : null;
+  // The selected legacy instance owns the stored credentials. Only the
+  // official cutover may carry that verified binding to the new service.
+  const migrateOfficialSession = selectedBase === DEFAULT_BASE_URL &&
+    env?.TOKENTRACKER_SESSION_MIGRATION === "1";
   return {
-    baseUrl: selectedBase || baseUrl.value,
+    baseUrl: migrateOfficialSession ? CLOUDFLARE_API_URL : selectedBase || baseUrl.value,
+    ...(migrateOfficialSession ? { sessionMigrationFrom: DEFAULT_BASE_URL } : {}),
     anonKey: unsafeKey ? null : anonKey.value,
     dashboardUrl: dashboardUrl.value,
     deviceToken: configurationError ? null : deviceToken.value,
@@ -234,10 +248,12 @@ function clampInt(value, min, max) {
 }
 
 module.exports = {
+  CLOUDFLARE_API_URL,
   DEFAULT_BASE_URL,
   DEFAULT_ANON_KEY,
   DEFAULT_DASHBOARD_URL,
   DEFAULT_HTTP_TIMEOUT_MS,
+  dataBaseUrlFor,
   resolveRuntimeConfig,
   isLegacyInsforgeBaseUrl,
   normalizeInstanceBaseUrl,

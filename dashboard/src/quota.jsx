@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ChevronDown, ChevronUp, GripHorizontal, Settings2, ArrowUpRight, Check, X } from "lucide-react";
 import { copy, setCopyLocale } from "./lib/copy";
-import { desktopQuotaRows, selectQuotaRows, mergeQuotaSnapshot, quotaPeriodLabel, quotaResetCountdown } from "./lib/desktop-quota.js";
+import { desktopQuotaRows, selectQuotaRows, mergeQuotaSnapshot, quotaPeriodLabel, quotaResetCountdown, quotaRunout } from "./lib/desktop-quota.js";
 import { limitProviderName } from "./lib/limits-providers.js";
 import "./quota.css";
 
@@ -33,10 +33,19 @@ export function QuotaWidget() {
   const label = row => quotaPeriodLabel(row, context.locale) || row.label || copy(row.labelKey);
   const rows = desktopQuotaRows(context.limits);
   const selected = Array.isArray(context.selected) ? context.selected : [];
-  const compact = selectQuotaRows(rows, selected);
-  const resetText = row => { return row.stale ? copy("quota.stale") : !Number.isFinite(row.resetMs) ? copy("quota.no_reset") : row.resetMs <= now ? copy("quota.awaiting") : copy("quota.reset_in", { time: quotaResetCountdown(row.resetMs, now, context.locale) }); };
-  const old = context.limits?.fetched_at && now - Date.parse(context.limits.fetched_at) > 180000;
-  const stale = context.failed || old || compact.some(row => row.stale);
+  const snapshotStale = context.failed || now - Date.parse(context.limits?.fetched_at) > 180000;
+  const compact = selectQuotaRows(rows, selected, now, snapshotStale);
+  const stale = snapshotStale || compact.some(row => row.stale);
+  const resetText = (row, absolute = false) => {
+    if (snapshotStale || row.stale) return copy("quota.stale");
+    if (!Number.isFinite(row.resetMs)) return copy("quota.no_reset");
+    if (row.resetMs <= now) return copy("quota.awaiting");
+    if (!absolute) return copy("quota.reset_in", { time: quotaResetCountdown(row.resetMs, now, context.locale) });
+    const time = new Intl.DateTimeFormat(context.locale || undefined, {
+      hour: "2-digit", minute: "2-digit", month: "short", day: "numeric",
+    }).format(new Date(row.resetMs));
+    return copy("quota.resets", { time });
+  };
   const toggle = () => { const next = !expanded; setExpanded(next); setSettings(false); send(next ? "quota:expand" : "quota:collapse"); };
   const pick = id => {
     const current = selected.length ? selected : compact.map(row => row.id);
@@ -63,7 +72,8 @@ export function QuotaWidget() {
           <div className="row-title"><span>{limitProviderName(row.provider)}</span><span className="window-label">{label(row)}</span></div>
           <div className="row-value"><strong>{remaining(row)}<small>{copy("quota.percent")}</small></strong><span>{copy("quota.remaining")}</span></div>
           <div className="quota-track" role="meter" aria-label={`${limitProviderName(row.provider)} ${label(row)}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={row.remaining}><span style={{ width: `${row.remaining}%` }} /></div>
-          <div className="reset">{row.stale ? copy("quota.stale") : Number.isFinite(row.resetMs) ? row.resetMs <= now ? copy("quota.awaiting") : copy("quota.resets", { time: new Intl.DateTimeFormat(context.locale || undefined, { hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" }).format(new Date(row.resetMs)) }) : copy("quota.no_reset")}</div>
+          <div className="reset">{resetText(row, true)}</div>
+          {!snapshotStale && quotaRunout(row, now) && <div className="reset">{copy("quota.runout")}</div>}
         </section>)}
         {!rows.length && <p className="quota-empty">{copy(context.limits ? "quota.empty" : "quota.loading")}</p>}
         {Boolean(rows.length) && !compact.length && !settings && <p className="quota-empty">{copy("quota.unavailable")}</p>}

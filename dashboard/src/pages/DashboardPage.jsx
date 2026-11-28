@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigationType } from "react-router-dom";
 import { useAccountView } from "../contexts/AccountViewContext.jsx";
 import { useActivityHeatmap } from "../hooks/use-activity-heatmap.js";
 import { useDashboardCardOrder } from "../hooks/use-dashboard-card-order.js";
@@ -69,6 +70,7 @@ import {
 } from "../lib/dashboard-refresh";
 
 const PERIODS = ["day", "week", "month", "total", "custom"];
+let trendReturnEntry = null;
 const DETAILS_DATE_KEYS = new Set(["day", "hour", "month"]);
 const DETAILS_PAGED_PERIODS = new Set(["day", "total", "custom"]);
 
@@ -360,9 +362,12 @@ export function DashboardPage({
   const tzOffsetMinutes = useMemo(() => getBrowserTimeZoneOffsetMinutes(), []);
   const mockNow = useMemo(() => getMockNow(), []);
   const cacheKey = publicMode ? null : auth?.userId || auth?.email || "default";
-  const [selectedPeriod, setSelectedPeriod] = useState("month");
-  const [customFrom, setCustomFrom] = useState(null);
-  const [customTo, setCustomTo] = useState(null);
+  const location = useLocation();
+  const navigationType = useNavigationType();
+  const [trendReturn] = useState(() => navigationType === "POP" && trendReturnEntry?.key === location.key ? trendReturnEntry : null);
+  const [selectedPeriod, setSelectedPeriod] = useState(trendReturn?.period ?? "month");
+  const [customFrom, setCustomFrom] = useState(trendReturn?.from ?? null);
+  const [customTo, setCustomTo] = useState(trendReturn?.to ?? null);
   const [customRangeOpen, setCustomRangeOpen] = useState(false);
   const period = screenshotMode ? "total" : selectedPeriod;
   const range = useMemo(() => {
@@ -391,7 +396,7 @@ export function DashboardPage({
     };
   }, []);
   const { devices: accountDevices, accountSources: accountDeviceSources, refresh: refreshAccountDevices,
-    loading: devicesLoading, revision: localUsageRevision } = useAccountDevices({
+    loading: devicesLoading, revision: localUsageRevision, localReady: localDevicesReady } = useAccountDevices({
     from,
     to,
     timeZone,
@@ -794,6 +799,29 @@ export function DashboardPage({
   }, [daily, period, trendRows, useDailyTrend]);
   const trendFromForDisplay = useDailyTrend ? from : trendFrom;
   const trendToForDisplay = useDailyTrend ? to : trendTo;
+  const canDrillIntoSessions = isLocalMode && !publicMode && !accountView && !mockEnabled && !screenshotMode &&
+    localDevicesReady && !selectedDevice && !activeDevices.some((device) => device.imported_at);
+  const rememberTrendLocation = useCallback((event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+    const chart = event.currentTarget.closest("[data-trend-chart]");
+    trendReturnEntry = {
+      key: location.key, period: selectedPeriod, from: customFrom, to: customTo,
+      y: chart?.getBoundingClientRect().top ?? 0,
+    };
+  }, [location.key, selectedPeriod, customFrom, customTo]);
+
+  useEffect(() => {
+    if (!trendReturn || trendReturnEntry !== trendReturn || trendLoading || !trendRowsForDisplay?.length) return;
+    const frame = window.requestAnimationFrame(() => {
+      const chart = document.querySelector("[data-trend-chart]");
+      if (!chart) return;
+      const delta = chart.getBoundingClientRect().top - trendReturn.y;
+      const scroller = chart.closest("#app-main-content") ?? window;
+      if (delta) scroller.scrollBy({ top: delta, behavior: "instant" });
+      trendReturnEntry = null;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [trendReturn, trendLoading, trendRowsForDisplay, canDrillIntoSessions]);
 
   function renderDetailCell(row, key) {
     if (row?.future) return "—";
@@ -1450,6 +1478,7 @@ export function DashboardPage({
       trendFromForDisplay={trendFromForDisplay}
       trendToForDisplay={trendToForDisplay}
       trendZoomConfig={trendZoomConfig}
+      onSessionDrilldown={canDrillIntoSessions ? rememberTrendLocation : null}
       usageFrom={from}
       usageTo={to}
       period={period}

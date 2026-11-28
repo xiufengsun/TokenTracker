@@ -1685,6 +1685,7 @@ limits.devin.setupHint.snippet_login,ui,LimitsPage,UsageLimitsPanel,devin_hint_s
 quota.title,ui,QuotaWidget,QuotaWidget,title,"Limits",,active
 quota.remaining,ui,QuotaWidget,QuotaWidget,remaining,"Remaining",,active
 quota.stale,ui,QuotaWidget,QuotaWidget,stale,"Update delayed",,active
+quota.runout,ui,QuotaWidget,QuotaWidget,runout,"May run out before reset at this pace",,active
 quota.drag,ui,QuotaWidget,QuotaWidget,drag,"Drag to move",,active
 quota.choose,ui,QuotaWidget,QuotaWidget,choose,"Choose limits",,active
 quota.collapse,ui,QuotaWidget,QuotaWidget,collapse,"Collapse",,active
@@ -1704,6 +1705,8 @@ quota.close_hint,ui,QuotaWidget,QuotaWidget,close_hint,"Close widget; reopen fro
 provider.display.workbuddy_ai,shared,*,*,name,"WorkBuddy AI",,active
 
 trend.monitor.pin_hint,dashboard,DashboardPage,TrendMonitor,hint,"Click a bar to pin and scroll details",,active
+trend.monitor.sessions,dashboard,DashboardPage,TrendMonitor,link,View related sessions,,active
+trend.monitor.model_sessions,dashboard,DashboardPage,TrendMonitor,link,View sessions for {{model}},,active
 cloud.nav,cloud,*,Cloud,text,"Cloud",,active
 cloud.page.eyebrow,cloud,*,Cloud,text,"TokenTracker Cloud",,active
 cloud.page.title,cloud,CloudPage,CloudPage,text,"Choose your plan",,active
@@ -2213,7 +2216,7 @@ usage.evidence.scope,ui,UsageDataDetails,UsageEvidence,scope,"This view contains
 usage.evidence.checked,ui,UsageDataDetails,UsageEvidence,checked,Last inventory check: {time},Coverage and cost provenance disclosure,active
 usage.evidence.latest,ui,UsageDataDetails,UsageEvidence,latest,Latest observed event: {time} (not a completeness cutoff),Coverage and cost provenance disclosure,active
 usage.evidence.complete,ui,UsageDataDetails,UsageEvidence,complete,Verified complete through: {time},Coverage and cost provenance disclosure,active
-usage.evidence.coverage,ui,UsageDataDetails,UsageEvidence,coverage,Skipped scan units: {skipped}. Malformed-record coverage is not measured.,Coverage and cost provenance disclosure,active
+usage.evidence.coverage,ui,UsageDataDetails,UsageEvidence,coverage,Skipped scan units: {{skipped}}. Malformed-record coverage is not measured.,Coverage and cost provenance disclosure,active
 usage.evidence.observed,ui,UsageDataDetails,UsageEvidence,observed,Observed; completeness not verified,Coverage and cost provenance disclosure,active
 usage.evidence.partial,ui,UsageDataDetails,UsageEvidence,partial,Partial scan,Coverage and cost provenance disclosure,active
 usage.evidence.not_observed,ui,UsageDataDetails,UsageEvidence,not_observed,No inventory observed; not proof of zero usage,Coverage and cost provenance disclosure,active
@@ -2226,7 +2229,9 @@ usage.evidence.unpriced,ui,UsageDataDetails,UsageEvidence,unpriced,No verified r
 usage.evidence.estimated,ui,UsageDataDetails,UsageEvidence,estimated,"API-equivalent estimate: uncached input, cache reads, cache writes and output use their model rates. Reasoning is not charged twice. This is not an actual bill.",Coverage and cost provenance disclosure,active
 usage.evidence.subscription,ui,UsageDataDetails,UsageEvidence,subscription,Grok Bot is subscription-product usage; no mapping to a public xAI model price is assumed.,Coverage and cost provenance disclosure,active
 usage.evidence.source,ui,UsageDataDetails,UsageEvidence,source,{source} — {status},Scan source and measured state,active
-usage.evidence.discovery,ui,UsageDataDetails,UsageEvidence,coverage,Directory discovery failures: {failed}. Paths and errors stay private.,Coverage and cost provenance disclosure,active
+usage.evidence.discovery,ui,UsageDataDetails,UsageEvidence,coverage,Directory discovery failures: {{failed}}. Paths and errors stay private.,Coverage and cost provenance disclosure,active
+sessions.coverage.partial,ui,SessionsPage,UsageDataDetails,summary,The session scan is incomplete,,active
+sessions.coverage.source,ui,SessionsPage,UsageDataDetails,source,{{source}} · {{failed}} scan units could not be read,,active
 nav.update_available,shared,*,SidebarUpdatePill,update_available,"Update to v{{version}}",,active
 nav.update_available_short,shared,*,SidebarUpdatePill,update_available_short,"Update",,active
 nav.update_available_title,shared,*,SidebarUpdatePill,update_available_title,"New version {{version}} available",,active

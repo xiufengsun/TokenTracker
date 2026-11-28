@@ -1,6 +1,6 @@
 # GPT-6.2 pricing and pricing-only rollout
 
-Official evidence retrieved 2026-11-18 (Asia/Shanghai):
+Official evidence retrieved 2026-11-18 (Asia/Shanghai), with Healthcare model configurations re-verified 2026-11-25 09:00 Asia/Singapore:
 
 - Announcement: https://openai.com/index/introducing-gpt-6-2-astra-sol/
 - Astra: https://developers.openai.com/api/docs/models/gpt-6.2-astra.md
@@ -10,8 +10,16 @@ Official evidence retrieved 2026-11-18 (Asia/Shanghai):
 The general-purpose API IDs covered are `gpt-6.2-astra` and `gpt-6.2-sol`.
 The official pricing page additionally confirms specialist `gpt-6.2-astra-law`
 under Legal model configurations; its Standard short/long rates equal Astra.
-No Fast/Ultrafast specialist price is published, so it does not inherit those
-multipliers. No dated snapshots,
+No Fast/Ultrafast specialist price is published for Law, so it does not inherit
+those multipliers. On 2026-11-24 OpenAI also published Healthcare model
+configurations. Official Standard short/long rates for `gpt-6.2-astra-healthcare`
+equal Astra, and `gpt-6.2-sol-healthcare` equal Sol. An official Fast table is
+published at exactly 2x Standard; no Ultrafast specialist price is published, so
+Healthcare does not inherit general Ultrafast promotions. Official promotional
+Standard pricing for these Healthcare IDs is available at least through
+December 31, 2026. Older `gpt-6-astra-healthcare` and `gpt-6.1-sol-healthcare`
+IDs remain unpriced: cache write is unpublished, and they must not inherit
+general Astra/Sol cache-write or Ultrafast rates. No dated snapshots,
 GPT-6.2 Terra/Luna/Pro/Codex SKUs or floating aliases are confirmed here.
 Provider prefixes and reasoning-effort decorations are lookup aliases, not claims
 of additional released API models. Unknown variants remain unpriced unless an
@@ -24,6 +32,8 @@ USD per million tokens, Standard short-context API-equivalent estimates:
 | gpt-6.2-astra | 8 | 0.40 | 40 | 10 | 20 |
 | gpt-6.2-sol | 2 | 0.10 | 10 | 2.50 | 5 |
 | gpt-6.2-astra-law | 8 | 0.40 | 40 | 10 | 20 |
+| gpt-6.2-astra-healthcare | 8 | 0.40 | 40 | 10 | 20 |
+| gpt-6.2-sol-healthcare | 2 | 0.10 | 10 | 2.50 | 5 |
 
 Above 272,000 **request input** tokens (cache included), input/cache rates double
 and output is 1.5x for the full request. Fast is 2x; Ultrafast is 3x through

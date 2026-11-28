@@ -1,6 +1,6 @@
 import React from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { Maximize2 } from "lucide-react";
+import { ChevronRight, Maximize2 } from "lucide-react";
 import { copy, getCopyLocale } from "../../../lib/copy";
 import { cn } from "../../../lib/cn";
 import { useCurrency } from "../../../hooks/useCurrency.js";
@@ -13,6 +13,8 @@ import {
   granularityFromPeriod,
 } from "../../../lib/trend-stats";
 import { TrendMonitorZoomModal } from "./TrendMonitorZoomModal";
+import { Link } from "react-router-dom";
+import { sessionModelKey, trendSessionsPath } from "../../../lib/sessions-insights";
 
 function interpolateQuantile(sortedValues, ratio) {
   if (!Array.isArray(sortedValues) || sortedValues.length === 0) return 0;
@@ -141,7 +143,7 @@ export function mergeModelSegments(models) {
     const value = Number(rawValue);
     if (!Number.isFinite(value) || value <= 0) continue;
     const name = String(rawName).trim() || "unknown";
-    const key = name.toLowerCase();
+    const key = sessionModelKey(name);
     const current = byKey.get(key);
     if (!current) {
       byKey.set(key, { name, value, displayWeight: value });
@@ -467,6 +469,7 @@ export function TrendMonitor({
   // drill-down without mutating the dashboard's state. Only used (and only
   // present) on the standalone card; null disables the maximize button.
   zoomConfig = null,
+  onSessionDrilldown = null,
 }) {
   const series = React.useMemo(
     () => (Array.isArray(rows) && rows.length ? rows : []),
@@ -508,6 +511,15 @@ export function TrendMonitor({
   const anchorBarRef = React.useRef(null);
   const sweepSideRef = React.useRef(null);
   const selectedBarRef = React.useRef(null);
+  const focusSessionLink = React.useRef(false);
+  const sessionLinkRef = React.useRef(null);
+  const sessionDay = onSessionDrilldown && pinned && granularity === "daily" &&
+    hoveredBar?.kind === "real" && hoveredBar.row?.day;
+
+  React.useLayoutEffect(() => {
+    if (sessionDay && focusSessionLink.current) sessionLinkRef.current?.focus({ preventScroll: true });
+    focusSessionLink.current = false;
+  }, [sessionDay]);
   const [isZoomOpen, setIsZoomOpen] = React.useState(false);
   const containerRef = React.useRef(null);
   const showBar = React.useCallback((e, row, value, segments, kind, displayValue) => {
@@ -568,6 +580,7 @@ export function TrendMonitor({
       return;
     }
     selectedBarRef.current = e.currentTarget;
+    focusSessionLink.current = e.type === "keydown";
     showBar(e, ...args);
     setPinned(true);
   }, [pinned, showBar]);
@@ -597,6 +610,9 @@ export function TrendMonitor({
     const dismiss = (event) => {
       if (event.type === "keydown" ? event.key !== "Escape" :
         tooltipRef.current?.contains(event.target) || selectedBarRef.current?.contains(event.target)) return;
+      if (event.type === "keydown" && tooltipRef.current?.contains(document.activeElement)) {
+        selectedBarRef.current?.focus({ preventScroll: true });
+      }
       setPinned(false);
       setHoveredBar(null);
     };
@@ -616,6 +632,7 @@ export function TrendMonitor({
   return (
     <div
       ref={containerRef}
+      data-trend-chart={onSessionDrilldown ? "" : undefined}
       className={cn(
         "relative",
         !embedded &&
@@ -767,10 +784,22 @@ export function TrendMonitor({
           >
             {!pinned && <p className="text-[10px] text-oai-gray-400">{copy("trend.monitor.pin_hint")}</p>}
             {/* 顶栏 */}
-            <div className="flex items-center justify-between border-b border-oai-gray-100 dark:border-oai-gray-800/80 pb-1.5">
+            <div className="flex items-center justify-between gap-2 border-b border-oai-gray-100 dark:border-oai-gray-800/80 pb-1.5">
               <span className="text-[11px] font-semibold text-oai-gray-500 dark:text-oai-gray-400">
                 {hoveredBar.timeLabel}
               </span>
+              {sessionDay && (
+                <Link
+                  ref={sessionLinkRef}
+                  to={trendSessionsPath(sessionDay)}
+                  onClick={onSessionDrilldown}
+                  aria-label={copy("trend.monitor.sessions")}
+                  className="-my-1 inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm py-1 text-[10px] leading-4 text-oai-gray-500 hover:text-oai-gray-800 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 dark:text-oai-gray-400 dark:hover:text-oai-gray-200"
+                >
+                  {copy("nav.sessions")}
+                  <ChevronRight aria-hidden="true" className="size-3 rtl:rotate-180" />
+                </Link>
+              )}
               {hoveredBar.kind === "predicted" && (
                 <span className="text-[9px] font-semibold uppercase tracking-wider text-oai-gray-400 dark:text-oai-gray-500">
                   {copy("trend.monitor.predicted")}
@@ -842,7 +871,11 @@ export function TrendMonitor({
                               className="font-medium text-oai-gray-750 dark:text-oai-gray-200 truncate max-w-[130px]"
                               title={name}
                             >
-                              {name}
+                              {sessionDay && type === "model" ? (
+                                <Link to={trendSessionsPath(sessionDay, name)} onClick={onSessionDrilldown}
+                                  aria-label={copy("trend.monitor.model_sessions", { model: name })}
+                                  className="underline decoration-oai-gray-300 underline-offset-2 hover:text-oai-gray-900 dark:decoration-oai-gray-600 dark:hover:text-oai-gray-100">{name}</Link>
+                              ) : name}
                             </span>
                             <div className="flex items-center gap-1.5 shrink-0">
                               <span

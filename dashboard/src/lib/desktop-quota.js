@@ -1,5 +1,5 @@
 import { PROVIDER_LIMIT_SPECS } from "../ui/dashboard/components/usage-limits-provider-specs.js";
-import { resetToMs, resolveWindowSeconds } from "./limit-pace.js";
+import { computePace, resetToMs, resolveWindowSeconds } from "./limit-pace.js";
 
 /** Use the dashboard's window definitions; never turn missing usage into zero. */
 export function desktopQuotaRows(snapshot) {
@@ -17,22 +17,45 @@ export function desktopQuotaRows(snapshot) {
         periodKey: window.key,
         remaining: 100 - Math.max(0, Math.min(100, raw)),
         resetMs: resetToMs(window.window?.[window.resetField || "reset_at"]),
-        stale: Boolean(data.error || data.stale || data.cached),
+        stale: Boolean(data.error || data.stale || data.cached || data.provenance?.stale),
       });
     }
   }
   return rows;
 }
 
-export function selectQuotaRows(rows, selected) {
+export function quotaRunout(row, now) {
+  if (row.stale || row.remaining <= 0) return null;
+  const pace = computePace({
+    windowSeconds: row.periodSeconds, resetMs: row.resetMs, now, usedPercent: 100 - row.remaining,
+  });
+  return pace.paceOver ? pace.runsOutEta : null;
+}
+
+export function selectQuotaRows(rows, selected, now = Date.now(), snapshotStale = false) {
   const pinned = selected.map(id => rows.find(row => row.id === id)).filter(Boolean);
   if (selected.length) return pinned;
-  const providers = new Set();
-  return rows.filter(row => {
-    if (providers.has(row.provider)) return false;
-    providers.add(row.provider);
-    return true;
-  }).slice(0, 2);
+  const priority = (row) => {
+    if (snapshotStale || row.stale || row.resetMs <= now) return 0;
+    if (row.remaining <= 10) return 2;
+    return quotaRunout(row, now) ? 1 : 0;
+  };
+  // Providers with an explicit default keep their own window selection.
+  const byProvider = new Map();
+  for (const row of rows) {
+    const preferred = PROVIDER_LIMIT_SPECS[row.provider]?.defaultQuotaKey;
+    const current = byProvider.get(row.provider);
+    const candidate = { row, priority: priority(row) };
+    if (!current || (preferred
+      ? row.id === `${row.provider}:${preferred}`
+      : candidate.priority > current.priority)) {
+      byProvider.set(row.provider, candidate);
+    }
+  }
+  const candidates = [...byProvider.values()];
+  const chosen = new Set([...candidates].sort((a, b) => b.priority - a.priority).slice(0, 2));
+  // Keep provider positions stable while the same two providers are selected.
+  return candidates.filter((candidate) => chosen.has(candidate)).map(({ row }) => row);
 }
 
 /** A provider failure must not erase its last known windows or look like a reset. */

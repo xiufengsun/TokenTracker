@@ -29,6 +29,30 @@ final class NativeQAProfileTests: XCTestCase {
         XCTAssertNil(NativeQAProfile.current)
     }
 
+    func testOAuthRehearsalIsIsolatedFromBillingAndProductionScheme() throws {
+        try withProfile { billing, _ in
+            let qa = NativeQAProfile(version: 1, runID: billing.runID, origin: billing.origin,
+                                     runDirectory: billing.runDirectory, serverChallenge: billing.serverChallenge,
+                                     realm: NativeQAProfile.oauthRealm, ownedOrderIDs: [])
+            try qa.validate()
+            let token = String(repeating: "q", count: 43)
+            let cb = URL(string: "tokentracker-qa://auth/callback?insforge_code=\(token)")!
+            XCTAssertEqual(qa.oauthCallbackCode(cb), token)
+            XCTAssertNil(billing.oauthCallbackCode(cb))
+            for raw in [cb.absoluteString.replacingOccurrences(of: "tokentracker-qa:", with: "tokentracker:"),
+                        cb.absoluteString + "&insforge_code=bad", cb.absoluteString + "#fragment"] {
+                XCTAssertNil(qa.oauthCallbackCode(URL(string: raw)!))
+            }
+            for provider in ["github", "google"] {
+                let start = "https://api-qa-tokentracker-migration-staging.sunxiufeng1992.workers.dev/api/auth/oauth/\(provider)?start=\(token)"
+                XCTAssertTrue(qa.permitsOAuthStart(URL(string: start)!))
+                XCTAssertFalse(billing.permitsOAuthStart(URL(string: start)!))
+                XCTAssertFalse(qa.permitsOAuthStart(URL(string: start + "&target=other")!))
+                XCTAssertFalse(qa.permitsOAuthStart(URL(string: start.replacingOccurrences(of: ".workers.dev", with: ".example.test"))!))
+            }
+        }
+    }
+
     func testAcceptsOnlyTheSeparateBundleAndPrivateOwnedDirectory() throws {
         try withProfile { profile, file in
             let loaded = try NativeQAProfile.load(at: file, bundleID: NativeQAProfile.bundleIdentifier)

@@ -1,0 +1,7 @@
+$ORIGIN tokentracker.cc.
+$TTL 600
+tokentracker.cc. 600 IN A 216.198.79.1 ; cf_tags=cf-proxied:false
+www.tokentracker.cc. 600 IN CNAME 08e7f6ccc5452a82.vercel-dns-017.com. ; cf_tags=cf-proxied:false
+tokentracker.cc. 600 IN TXT "google-site-verification=l0_62t_hGmKeAjvbT4eBu9kR1wP1MKrozS83eWXWP3I"
+aliyun.tokentracker.cc. 600 IN A 8.145.51.104 ; cf_tags=cf-proxied:false
+_waffo-challenge.tokentracker.cc. 600 IN TXT "waffo-verify=903841e63defcb31d752de6ca21a651b"

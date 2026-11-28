@@ -30,6 +30,7 @@ async function* physicalJsonlRecords(input, {
   invalidUtf8 = "throw",
   maxPhysicalBytes = Infinity,
   maxRecordBytes = Infinity,
+  mustContain = null,
 } = {}) {
   if (invalidUtf8 !== "throw" && invalidUtf8 !== "record") {
     throw new TypeError(`unsupported invalidUtf8 policy: ${invalidUtf8}`);
@@ -80,6 +81,10 @@ async function* physicalJsonlRecords(input, {
       physicalBytesRead += physicalBytes;
       start = newline + 1;
       newline = chunk.indexOf(0x0a, start);
+      if (mustContain && lineBuffer.indexOf(mustContain) === -1) {
+        yield { line: null, utf8Valid: null, oversized: false, physicalBytes, terminated: true };
+        continue;
+      }
       let line;
       try {
         line = decodePhysicalLine(lineBuffer, { stripCr: true });

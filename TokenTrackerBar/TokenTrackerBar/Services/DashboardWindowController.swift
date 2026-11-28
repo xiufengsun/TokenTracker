@@ -572,6 +572,18 @@ final class DashboardWindowController: NSObject, NSWindowDelegate, WKNavigationD
             return
         }
         if let profile = NativeQAProfile.current {
+            if profile.isOAuthRehearsal, mainFrame, let sourceURL, isLocalDashboardURL(sourceURL), sender === webView {
+                if name == "nativeOAuth", let raw = body as? String, let url = URL(string: raw), profile.permitsOAuthStart(url) {
+                    beginNativeOAuth()
+                    NSWorkspace.shared.open(url)
+                    return
+                }
+                if name == "nativeBridge", let message = body as? [String: Any],
+                   message["type"] as? String == "authCompleted", message.count == 1 {
+                    completeNativeOAuth()
+                    return
+                }
+            }
             guard name == "nativeBridge", mainFrame, let sourceURL, isLocalDashboardURL(sourceURL),
                   let message = body as? [String: Any], profile.permitsNativeMessage(message) else {
                 let rejected = body as? [String: Any]

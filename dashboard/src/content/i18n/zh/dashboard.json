@@ -1081,7 +1081,7 @@
   "usage.evidence.checked": "最近目录核验：{time}",
   "usage.evidence.latest": "最新观察到的事件：{time}（不是完整性截止时间）",
   "usage.evidence.complete": "已确认完整至：{time}",
-  "usage.evidence.coverage": "跳过的扫描单元：{skipped}。尚未统计所有损坏记录。",
+  "usage.evidence.coverage": "跳过的扫描单元：{{skipped}}。尚未统计所有损坏记录。",
   "usage.evidence.observed": "已观察；未确认完整性",
   "usage.evidence.partial": "扫描不完整",
   "usage.evidence.not_observed": "未观察到目录；不代表零用量",
@@ -1094,5 +1094,10 @@
   "usage.evidence.estimated": "API 等效估算：非缓存输入、缓存读取、缓存写入和输出分别按模型单价计算，推理不重复计费；这不是实际账单。",
   "usage.evidence.subscription": "Grok Bot 属于订阅产品用量；未假设其对应任何公开 xAI 模型单价。",
   "usage.evidence.source": "{source}：{status}",
-  "usage.evidence.discovery": "目录发现失败：{failed}。路径和错误详情保持私密。"
+  "usage.evidence.discovery": "目录发现失败：{{failed}}。路径和错误详情保持私密。",
+  "trend.monitor.sessions": "查看当天相关会话",
+  "trend.monitor.model_sessions": "查看 {{model}} 的相关会话",
+  "sessions.coverage.partial": "部分会话未能完整扫描",
+  "sessions.coverage.source": "{{source}} · 有 {{failed}} 个扫描单元未能读取",
+  "quota.runout": "按当前速度，额度可能在重置前用完"
 }

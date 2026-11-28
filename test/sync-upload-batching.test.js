@@ -33,6 +33,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const { readQueueBatch, drainQueueToCloud } = require("../src/commands/sync");
+const { CLOUDFLARE_API_URL, DEFAULT_BASE_URL } = require("../src/lib/runtime-config");
 
 const INGEST_STATE_LIMIT = 500; // edge contract: account_session_states.length <= 500
 const BATCH_SIZE = 200; // production default (cmdSync autoUploadDecision.batchSize)
@@ -62,6 +63,43 @@ function stateRecord(sessionId, { model = "model-a", bucketStart = "2027-01-10T1
 function bucketRow(hourStart, total = 50) {
   return { source: "trae-cn", model: "model-a", hour_start: hourStart, total_tokens: total, input_tokens: total, output_tokens: 0 };
 }
+
+test("the official ingest receipt controls automatic Cloudflare writes", async (t) => {
+  for (const scenario of [
+    { name: "enabled", ready: true, mirrors: true },
+    { name: "old InsForge response" },
+    { name: "disabled locally", ready: true, override: false },
+    { name: "explicit pilot", override: true, mirrors: true },
+    { name: "custom backend", ready: true, baseUrl: "https://custom.example" },
+    { name: "redirected receipt", ready: true, redirected: true },
+    { name: "Cloudflare unavailable", ready: true, mirrors: true, failMirror: true },
+  ]) {
+    await t.test(scenario.name, async (tt) => {
+      const { dir, queuePath, queueStatePath } = tempQueue("tt-sync-cloudflare-");
+      tt.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+      writeQueue(queuePath, [bucketRow("2027-01-10T10:00:00.000Z")]);
+      const mirrored = [];
+      tt.mock.method(globalThis, "fetch", async (url, init) => {
+        if (url === CLOUDFLARE_API_URL + "/functions/tokentracker-mirror-usage") {
+          mirrored.push(init.headers.Authorization);
+          if (scenario.failMirror) throw new Error("Cloudflare unavailable");
+          return new Response(null, { status: 204 });
+        }
+        assert.match(url, /\/tokentracker-ingest$/);
+        const response = Response.json(scenario.ready ? { inserted: 1, cloudflare_mirror_ready: true } : { inserted: 1 });
+        if (scenario.redirected) Object.defineProperty(response, "redirected", { value: true });
+        return response;
+      });
+      const result = await drainQueueToCloud({
+        baseUrl: scenario.baseUrl ?? DEFAULT_BASE_URL, deviceToken: "fixture-device-token",
+        queuePath, queueStatePath, mirrorUsageToCloudflare: scenario.override,
+      });
+      assert.equal(result.inserted, 1);
+      assert.equal(JSON.parse(fs.readFileSync(queueStatePath, "utf8")).offset, fs.statSync(queuePath).size);
+      assert.deepEqual(mirrored, scenario.mirrors ? ["Bearer fixture-device-token"] : []);
+    });
+  }
+});
 
 /**
  * Mock ingest that mirrors the REAL edge contract (payload caps + response

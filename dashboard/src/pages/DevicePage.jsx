@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { useInsforgeAuth } from "../contexts/InsforgeAuthContext";
 import { copy } from "../lib/copy";
-import { getOrCreateInsforgeClient } from "../lib/insforge-config";
+import { getInsforgeInstanceFingerprint, getInsforgeRemoteUrl } from "../lib/insforge-config";
+import { functionUrlFor } from "../lib/function-url";
 
 /**
  * /device — OAuth-style device flow approval page.
@@ -13,19 +14,6 @@ import { getOrCreateInsforgeClient } from "../lib/insforge-config";
  *
  * Deep-link: `…/device?user_code=XXXX-XXXX` pre-fills the input.
  */
-
-function buildGrantUrl() {
-  // The Insforge baseUrl drives both the SDK and the edge functions; reading
-  // from getOrCreateInsforgeClient() avoids hardcoding the production URL
-  // here (dev/staging may differ).
-  const client = getOrCreateInsforgeClient();
-  // SDK doesn't expose its baseUrl as a public field; fall back to the same
-  // VITE env var that initialized the client.
-  const baseUrl =
-    (import.meta.env && import.meta.env.VITE_INSFORGE_BASE_URL) ||
-    "https://srctyff5.us-east.insforge.app";
-  return `${baseUrl.replace(/\/$/, "")}/functions/tokentracker-device-flow-grant`;
-}
 
 function normalizeUserCode(s) {
   return (s || "").toUpperCase().replace(/\s+/g, "").replace(/[^A-Z0-9-]/g, "");
@@ -57,12 +45,14 @@ export default function DevicePage() {
     }
     setStatus({ kind: "working", message: copy("device.approval.action.approving") });
     try {
+      const baseUrl = getInsforgeRemoteUrl();
       const token = await auth.getAccessToken?.();
-      if (!token) {
+      if (!token || !baseUrl || getInsforgeInstanceFingerprint() !== baseUrl) {
         setStatus({ kind: "error", message: copy("device.approval.error.no_token") });
         return;
       }
-      const res = await fetch(buildGrantUrl(), {
+      const res = await fetch(functionUrlFor(baseUrl, "tokentracker-device-flow-grant"), {
+        redirect: "error",
         method: "POST",
         headers: {
           "Content-Type": "application/json",

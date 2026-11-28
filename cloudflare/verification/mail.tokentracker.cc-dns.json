@@ -1,0 +1,54 @@
+{
+  "zone": "tokentracker.cc",
+  "status": "active",
+  "activated_on": "2026-11-24T08:52:54.094254Z",
+  "nameservers": [
+    "josh.ns.cloudflare.com",
+    "sureena.ns.cloudflare.com"
+  ],
+  "domain": "mail.tokentracker.cc",
+  "return_path_domain": "cf-bounce.mail.tokentracker.cc",
+  "enabled": true,
+  "dns_status": "ready",
+  "records": [
+    {
+      "name": "cf-bounce.mail.tokentracker.cc",
+      "content": "route1.mx.cloudflare.net.",
+      "type": "MX",
+      "priority": 63,
+      "ttl": 1
+    },
+    {
+      "name": "cf-bounce.mail.tokentracker.cc",
+      "content": "route2.mx.cloudflare.net.",
+      "type": "MX",
+      "priority": 7,
+      "ttl": 1
+    },
+    {
+      "name": "cf-bounce.mail.tokentracker.cc",
+      "content": "route3.mx.cloudflare.net.",
+      "type": "MX",
+      "priority": 36,
+      "ttl": 1
+    },
+    {
+      "name": "cf-bounce.mail.tokentracker.cc",
+      "content": "\"v=spf1 include:_spf.mx.cloudflare.net ~all\"",
+      "type": "TXT",
+      "ttl": 1
+    },
+    {
+      "name": "cf-bounce._domainkey.mail.tokentracker.cc",
+      "content": "\"v=DKIM1; h=sha256; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAiweykoi+o48IOGuP7GR3X0MOExCUDY/BCRHoWBnh3rChl7WhdyCxW3jgq1daEjPPqoi7sJvdg5hEQVsgVRQP4DcnQDVjGMbASQtrY4WmB1VebF+RPJB2ECPsEDTpeiI5ZyUAwJaVX7r6bznU67g7LvFq35yIo4sdlmtZGV+i0H4cpYH9+3JJ78km4KXwaf9xUJCWF6nxeD+qG6Fyruw1Qlbds2r85U9dkNDVAS3gioCvELryh1TxKGiVTkg4wqHTyHfWsp7KD3WQHYJn0RyfJJu6YEmL77zonn7p2SRMvTMP3ZEXibnC9gz3nnhR6wcYL8Q7zXypKTMD58bTixDSJwIDAQAB\"",
+      "type": "TXT",
+      "ttl": 1
+    },
+    {
+      "name": "_dmarc.mail.tokentracker.cc",
+      "content": "\"v=DMARC1; p=reject;\"",
+      "type": "TXT",
+      "ttl": 1
+    }
+  ]
+}

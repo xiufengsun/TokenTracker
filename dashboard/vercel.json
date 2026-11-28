@@ -1,4 +1,5 @@
 {
+  "buildCommand": "VITE_INSFORGE_BASE_URL=https://api.tokentracker.cc VITE_TOKENTRACKER_SESSION_MIGRATION=1 npm run build",
   "routes": [
     {
       "src": "^/assets/(.*)$",
