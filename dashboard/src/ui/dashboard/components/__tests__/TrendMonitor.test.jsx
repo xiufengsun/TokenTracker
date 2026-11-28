@@ -43,6 +43,8 @@ describe("TrendMonitor", () => {
     expect(screen.queryByRole("link")).toBeNull();
     fireEvent.keyDown(bar, { key: "Enter" });
     const day = screen.getByRole("link", { name: "View related sessions" });
+    expect(day).toHaveTextContent("Sessions");
+    expect(day.parentElement).toHaveTextContent("Nov 24, 2026");
     expect(document.activeElement).toBe(day);
     expect(day.getAttribute("href")).toBe("/sessions?from=2026-11-24&to=2026-11-24&sort=tokens");
     const model = screen.getByRole("link", { name: "View sessions for gpt-test" });

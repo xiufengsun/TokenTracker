@@ -1,6 +1,6 @@
 import React from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { Maximize2 } from "lucide-react";
+import { ArrowRight, Maximize2 } from "lucide-react";
 import { copy, getCopyLocale } from "../../../lib/copy";
 import { cn } from "../../../lib/cn";
 import { useCurrency } from "../../../hooks/useCurrency.js";
@@ -784,10 +784,22 @@ export function TrendMonitor({
           >
             {!pinned && <p className="text-[10px] text-oai-gray-400">{copy("trend.monitor.pin_hint")}</p>}
             {/* 顶栏 */}
-            <div className="flex items-center justify-between border-b border-oai-gray-100 dark:border-oai-gray-800/80 pb-1.5">
+            <div className="flex items-center justify-between gap-2 border-b border-oai-gray-100 dark:border-oai-gray-800/80 pb-1.5">
               <span className="text-[11px] font-semibold text-oai-gray-500 dark:text-oai-gray-400">
                 {hoveredBar.timeLabel}
               </span>
+              {sessionDay && (
+                <Link
+                  ref={sessionLinkRef}
+                  to={trendSessionsPath(sessionDay)}
+                  onClick={onSessionDrilldown}
+                  aria-label={copy("trend.monitor.sessions")}
+                  className="-my-1 inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm py-1 text-[10px] leading-4 text-oai-gray-500 hover:text-oai-gray-800 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 dark:text-oai-gray-400 dark:hover:text-oai-gray-200"
+                >
+                  {copy("nav.sessions")}
+                  <ArrowRight aria-hidden="true" className="size-3 rtl:rotate-180" />
+                </Link>
+              )}
               {hoveredBar.kind === "predicted" && (
                 <span className="text-[9px] font-semibold uppercase tracking-wider text-oai-gray-400 dark:text-oai-gray-500">
                   {copy("trend.monitor.predicted")}
@@ -839,13 +851,6 @@ export function TrendMonitor({
                   </div>
                 )}
 
-              {sessionDay && (
-                <Link ref={sessionLinkRef} to={trendSessionsPath(sessionDay)} onClick={onSessionDrilldown}
-                  className="rounded-sm text-xs font-medium text-oai-brand focus-visible:outline focus-visible:outline-2">
-                  {copy("trend.monitor.sessions")}
-                </Link>
-              )}
-
               {hoveredBar.segments && hoveredBar.segments.length > 0 ? (
                 <div className="mt-1.5 border-t border-oai-gray-100 dark:border-oai-gray-800/60 pt-2 flex flex-col gap-1.5">
                   <div className="text-[10px] font-semibold text-oai-gray-400 dark:text-oai-gray-500 uppercase tracking-wider">
@@ -869,7 +874,7 @@ export function TrendMonitor({
                               {sessionDay && type === "model" ? (
                                 <Link to={trendSessionsPath(sessionDay, name)} onClick={onSessionDrilldown}
                                   aria-label={copy("trend.monitor.model_sessions", { model: name })}
-                                  className="underline decoration-oai-gray-300 underline-offset-2 hover:text-oai-brand">{name}</Link>
+                                  className="underline decoration-oai-gray-300 underline-offset-2 hover:text-oai-gray-900 dark:decoration-oai-gray-600 dark:hover:text-oai-gray-100">{name}</Link>
                               ) : name}
                             </span>
                             <div className="flex items-center gap-1.5 shrink-0">
