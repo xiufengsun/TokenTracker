@@ -16,7 +16,7 @@ import { useCurrency } from "../hooks/useCurrency";
 import { useLocale } from "../hooks/useLocale";
 import { isLocalDashboardHost } from "../lib/host-mode";
 import { isMockEnabled } from "../lib/mock-data";
-import { groupSessions, overlapsSessionDates, parseSessionFilters, scopeSessionsToRange, sessionDayKey, sessionModels, sortSessions, summarizeSessions } from "../lib/sessions-insights";
+import { groupSessions, overlapsSessionDates, parseSessionFilters, scopeSessionsToRange, sessionDayKey, sessionModelKey, sessionModels, sortSessions, summarizeSessions } from "../lib/sessions-insights";
 import { SessionDetailModal } from "../ui/dashboard/components/SessionDetailModal.jsx";
 import { SessionPerformance } from "../ui/dashboard/components/SessionPerformance.jsx";
 import { UsageDataDetails } from "../ui/dashboard/components/UsageDataDetails.jsx";
@@ -440,7 +440,7 @@ export function SessionsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [sourceFilter, setSourceFilter] = useState(initialFilters.source);
-  const [modelFilter, setModelFilter] = useState(initialFilters.model);
+  const [modelFilter, setModelFilter] = useState(() => sessionModelKey(initialFilters.model) || "all");
   const [rangeFilter, setRangeFilter] = useState(initialFilters.from || initialFilters.to ? "custom" : "all");
   const [customFrom, setCustomFrom] = useState(initialFilters.from);
   const [customTo, setCustomTo] = useState(initialFilters.to);
@@ -559,17 +559,23 @@ export function SessionsPage() {
       .map((key) => ({ value: key, label: key }));
   }, [data, allSessions]);
   const modelOptions = useMemo(() => {
-    if (Array.isArray(data?.facets?.models)) {
-      return data.facets.models.map((model) => ({ value: model, label: model }));
-    }
-    const models = new Set(legacyFilterOptionsRef.current.models);
-    for (const session of allSessions) {
-      for (const usage of sessionModels(session)) {
-        if (usage.model) models.add(usage.model);
+    let models = data?.facets?.models;
+    if (!Array.isArray(models)) {
+      const seen = new Set(legacyFilterOptionsRef.current.models);
+      for (const session of allSessions) {
+        for (const usage of sessionModels(session)) {
+          if (usage.model) seen.add(usage.model);
+        }
       }
+      models = [...seen].sort();
+      legacyFilterOptionsRef.current.models = models;
     }
-    legacyFilterOptionsRef.current.models = [...models];
-    return [...models].sort().map((model) => ({ value: model, label: model }));
+    const labels = new Map();
+    for (const model of models) {
+      const key = sessionModelKey(model);
+      if (key && !labels.has(key)) labels.set(key, model.trim());
+    }
+    return [...labels].map(([value, label]) => ({ value, label }));
   }, [data, allSessions]);
 
   // Typing stays responsive on long lists: the filter runs against a deferred
@@ -596,7 +602,7 @@ export function SessionsPage() {
     return scopedSessions.filter((row) => {
       if (sourceFilter !== "all" && row.source !== sourceFilter) return false;
       if (projectFilter !== "all" && row.project_key !== projectFilter) return false;
-      if (modelFilter !== "all" && !sessionModels(row).some((usage) => usage.model === modelFilter)) return false;
+      if (modelFilter !== "all" && !sessionModels(row).some((usage) => sessionModelKey(usage.model) === modelFilter)) return false;
       if (rangeFilter === "custom") {
         if (!overlapsSessionDates(row, customFrom, customTo)) return false;
       } else if (!overlapsRange(row, startMs)) return false;

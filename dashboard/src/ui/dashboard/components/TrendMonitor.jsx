@@ -14,7 +14,7 @@ import {
 } from "../../../lib/trend-stats";
 import { TrendMonitorZoomModal } from "./TrendMonitorZoomModal";
 import { Link } from "react-router-dom";
-import { trendSessionsPath } from "../../../lib/sessions-insights";
+import { sessionModelKey, trendSessionsPath } from "../../../lib/sessions-insights";
 
 function interpolateQuantile(sortedValues, ratio) {
   if (!Array.isArray(sortedValues) || sortedValues.length === 0) return 0;
@@ -143,7 +143,7 @@ export function mergeModelSegments(models) {
     const value = Number(rawValue);
     if (!Number.isFinite(value) || value <= 0) continue;
     const name = String(rawName).trim() || "unknown";
-    const key = name.toLowerCase();
+    const key = sessionModelKey(name);
     const current = byKey.get(key);
     if (!current) {
       byKey.set(key, { name, value, displayWeight: value });

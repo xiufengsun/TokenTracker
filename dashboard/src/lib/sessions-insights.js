@@ -90,6 +90,10 @@ export function sessionModels(session) {
   }];
 }
 
+export function sessionModelKey(model) {
+  return typeof model === "string" ? model.trim().toLowerCase() : "";
+}
+
 export function aggregateSessionPerformance(sessions) {
   const total = {
     estimated_output_tokens: 0,
@@ -150,9 +154,10 @@ export function sessionDateMs(session) {
 
 export function sortSessions(sessions, sort, model = "all") {
   const metric = sort === "cost" ? "cost_usd" : "total_tokens";
+  const modelKey = sessionModelKey(model);
   const values = sort === "recent" || model === "all" ? null : new Map(sessions.map((row) => [
     row,
-    sessionModels(row).filter((usage) => usage.model === model)
+    sessionModels(row).filter((usage) => sessionModelKey(usage.model) === modelKey)
       .reduce((total, usage) => total + finiteValue(usage[metric]), 0),
   ]));
   return [...sessions].sort((a, b) => {

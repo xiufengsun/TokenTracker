@@ -772,6 +772,22 @@ describe("SessionsPage", () => {
     await waitFor(() => expect(getSessions).toHaveBeenCalledTimes(2));
   });
 
+  it("includes all casing variants in a model drilldown", async () => {
+    window.history.replaceState(null, "", "/sessions?model=GPT-5.6-SOL&sort=tokens");
+    const sessions = [
+      makeThreadSession({ title: "First model spelling", model: "gpt-5.6-sol", own_total_tokens: 100 }),
+      makeThreadSession({ title: "Second model spelling", model: " GPT-5.6-SOL ", own_total_tokens: 200, session_hash: "second-spelling" }),
+      response.sessions[0],
+    ];
+    getSessions.mockResolvedValue({ ...response, sessions });
+    render(<SessionsPage />);
+    await screen.findByText("First model spelling");
+    const rows = screen.getAllByRole("button", { name: /View statistics for/ });
+    expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual([
+      "View statistics for Second model spelling", "View statistics for First model spelling",
+    ]);
+  });
+
   it("filters whole mixed model sessions and recomputes their full own consumption", async () => {
     const mixed = makeThreadSession({
       title: "Mixed models",

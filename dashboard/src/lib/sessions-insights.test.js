@@ -69,9 +69,12 @@ describe("session statistics", () => {
   });
 
   it("ranks a model drilldown by that model's usage within mixed sessions", () => {
-    const mixed = { session_hash: "mixed", total_tokens: 900, model_usage: [{ model: "target", total_tokens: 10 }] };
-    const focused = { session_hash: "focused", model: "target", total_tokens: 200 };
-    expect(sortSessions([mixed, focused], "tokens", "target")).toEqual([focused, mixed]);
+    const mixed = {
+      session_hash: "mixed", total_tokens: 900,
+      model_usage: [{ model: "target", total_tokens: 120 }, { model: "TARGET ", total_tokens: 100 }],
+    };
+    const focused = { session_hash: "focused", model: " TARGET", total_tokens: 200 };
+    expect(sortSessions([focused, mixed], "tokens", "Target")).toEqual([mixed, focused]);
     expect(parseSessionFilters("?sort=tokens").sort).toBe("tokens");
   });
 });

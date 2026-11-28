@@ -396,7 +396,7 @@ export function DashboardPage({
     };
   }, []);
   const { devices: accountDevices, accountSources: accountDeviceSources, refresh: refreshAccountDevices,
-    loading: devicesLoading, revision: localUsageRevision } = useAccountDevices({
+    loading: devicesLoading, revision: localUsageRevision, localReady: localDevicesReady } = useAccountDevices({
     from,
     to,
     timeZone,
@@ -800,7 +800,7 @@ export function DashboardPage({
   const trendFromForDisplay = useDailyTrend ? from : trendFrom;
   const trendToForDisplay = useDailyTrend ? to : trendTo;
   const canDrillIntoSessions = isLocalMode && !publicMode && !accountView && !mockEnabled && !screenshotMode &&
-    !selectedDevice && !activeDevices.some((device) => device.imported_at);
+    localDevicesReady && !selectedDevice && !activeDevices.some((device) => device.imported_at);
   const rememberTrendLocation = useCallback((event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
     const chart = event.currentTarget.closest("[data-trend-chart]");
@@ -815,8 +815,10 @@ export function DashboardPage({
     const frame = window.requestAnimationFrame(() => {
       const chart = document.querySelector("[data-trend-chart]");
       if (!chart) return;
+      const delta = chart.getBoundingClientRect().top - trendReturn.y;
+      const scroller = chart.closest("#app-main-content") ?? window;
+      if (delta) scroller.scrollBy({ top: delta, behavior: "instant" });
       trendReturnEntry = null;
-      window.scrollBy({ top: chart.getBoundingClientRect().top - trendReturn.y, behavior: "instant" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [trendReturn, trendLoading, trendRowsForDisplay, canDrillIntoSessions]);
