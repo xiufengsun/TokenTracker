@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { isDeepStrictEqual } = require("node:util");
 const { writeJsonAtomicSync } = require("./atomic-json");
 const { normalizeApiKey, resolveProviderKeyDir } = require("./provider-api-key-store");
 
@@ -263,11 +264,21 @@ async function fetchBilledDays(config, fetchImpl, nowMs) {
   return days;
 }
 
+// Quota caches live in this process. Give each observed change a new cache
+// partition, including when another process rotates a key of the same length.
+let lastConfig = null;
+let configRevision = 0;
 function readCreditLimitsConfig(options) {
   if (!resolveProviderKeyDir(options)) return null;
-  try { return readConfig(options); } catch {
-    return { error: "Invalid custom credit configuration." };
+  let config;
+  try { config = readConfig(options); } catch {
+    config = { error: "Invalid custom credit configuration." };
   }
+  if (!isDeepStrictEqual(lastConfig, config)) {
+    lastConfig = config;
+    configRevision += 1;
+  }
+  return config && { ...config, revision: configRevision };
 }
 
 async function fetchCustomCreditLimits({

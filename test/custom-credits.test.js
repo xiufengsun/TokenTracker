@@ -7,7 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
 const { createLocalApiHandler } = require("../src/lib/local-api");
-const { fetchCustomCreditLimits, saveConfig } = require("../src/lib/custom-credits");
+const { fetchCustomCreditLimits, saveConfig, readCreditLimitsConfig } = require("../src/lib/custom-credits");
 const { getUsageLimits, resetUsageLimitsCache, USAGE_LIMITS_PROVIDER_IDS } = require("../src/lib/usage-limits");
 
 const config = { gatewayBaseUrl: "https://gateway.example/api/v1/", apiKey: "test-key-one", dailyCreditLimit: 150 };
@@ -176,6 +176,20 @@ test("prefers billed cross-month history, distinguishes unknown from zero and fl
     { date: "2024-02-29", used_credits: 4.75, source: "reported", partial: true },
   ]);
   slots.forEach((slot) => assert.equal(result[slot], null));
+});
+
+test("assigns a process-local cache revision even when a key rotates back to an earlier value", (t) => {
+  const options = { trackerDir: tempDir(t) };
+  saveConfig(options, config);
+  const before = readCreditLimitsConfig(options).revision;
+  assert.equal(readCreditLimitsConfig(options).revision, before);
+  saveConfig(options, { ...config, apiKey: "test-key-two" });
+  const after = readCreditLimitsConfig(options).revision;
+  assert.notEqual(after, before);
+  saveConfig(options, config);
+  const restored = readCreditLimitsConfig(options).revision;
+  assert.notEqual(restored, before);
+  assert.notEqual(restored, after);
 });
 
 test("an account change bypasses old cached and in-flight custom data even from another process", async (t) => {

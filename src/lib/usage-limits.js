@@ -4726,8 +4726,7 @@ async function getUsageLimits(options = {}) {
   // processes. Bind cached and in-flight responses to the exact settings read.
   const customCreditsConfig = options.allowCustomCredits === false || hidden?.includes("customCredits")
     ? null : readCreditLimitsConfig(options);
-  const creditKey = customCreditsConfig
-    ? crypto.createHash("sha256").update(JSON.stringify(customCreditsConfig)).digest("hex") : null;
+  const creditKey = customCreditsConfig?.revision;
   const selection = usageLimitsSelectionKey(options) + (customOrigin ? `-claude:${customOrigin}` : "")
     + (creditKey ? `-credits:${creditKey}` : "");
   const cache = cacheBySelection[selection];
